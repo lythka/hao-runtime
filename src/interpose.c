@@ -23,6 +23,7 @@
  *    looks up.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/bridge.h"
 #include "hao/vafmt.h"
 #include <crt_externs.h>
@@ -785,7 +786,7 @@ static bool table_agrees(const char *name, int nfixed)
 /* Lookup order: signals, callback structs, GSS-API, libm (libm.c), Swift task entries (swiftmeta.c), objc_msgSend, then the
  * variadic tables (va_list variants, functions taking a va_list, integer variadics), the fixed
  * traps and the generic integer variadics. The generated tables leave out every name the
- * hand-written tables here handle (tools/gen_varargs.py), so a name is in at most one table. */
+ * hand-written tables here handle, so a name is in at most one table. */
 /* ABI repairs of libc++'s own functions (std::exception_ptr results through
  * x8): they apply to binds to native libc++ only. With libc++ loaded as a
  * guest image (runtime.c, guest_libcxx) arm64 code calls arm64 code and

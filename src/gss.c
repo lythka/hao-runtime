@@ -10,8 +10,8 @@
  * gss_test_oid_set_member, which then memcmps through the upper half of the elements pointer (SIGSEGV), and
  * guest code reading a native OID set (gss_indicate_mechs) or GSS_C_NT_* reads garbage.
  *
- * tools/gen_gss.py types every function and variable of those headers (src/gss_gen.inc). The guest only ever
- * sees arm64-layout objects:
+ * src/gss_gen.inc types every function and variable of those headers (its generator is not part of this
+ * repository). The guest only ever sees arm64-layout objects:
  *   - a native OID or OID set reaching the guest (output parameter, result, exported variable) is given a
  *     shadow in arm64 layout, one per native object, refreshed each time it crosses again; a shadow crossing
  *     back is replaced by its native object, so identity (pointer comparisons, release) is kept;
@@ -24,6 +24,7 @@
  *     calls back before it returns).
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/bridge.h"
 #include <dlfcn.h>
 #include <pthread.h>
@@ -215,7 +216,7 @@ static void trap_gss(hao_thread *t, uint64_t idx)
     iter_ctx ictx[2];
     int ni = 0;
     const uint64_t *sp = (const uint64_t *)(uintptr_t)c->x[31];
-    for (int k = 0; k < n; k++) a[k] = k < 8 ? c->x[k] : sp[k - 8];   /* stack parameters are 8 bytes (gen_gss.py) */
+    for (int k = 0; k < n; k++) a[k] = k < 8 ? c->x[k] : sp[k - 8];   /* stack parameters are 8 bytes (gss_gen.inc) */
     void *fn = native_fn[idx];
     L();
     for (int k = 0; k < n; k++) {

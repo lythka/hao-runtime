@@ -1,6 +1,7 @@
 /*
  * hao — std::string parameters of native C++ functions outside libc++
- * (plan kind 'Z', hao/bridge.h; the table from tools/gen_cxxstr.py).
+ * (plan kind 'Z', hao/bridge.h; the table is src/cxxstr_gen.inc, whose generator
+ * is not part of this repository).
  *
  * Apple arm64 libc++ uses the alternate string layout, x86_64 libc++ the
  * standard one (libc++ <string>, _LIBCPP_ABI_ALTERNATE_STRING_LAYOUT):
@@ -26,6 +27,7 @@
  * left as it was.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/bridge.h"
 #include <dlfcn.h>
 #include <stdio.h>
@@ -86,7 +88,7 @@ const char *hao_cxxstr_divergent(const char *name, const char *lib)
     if (strstr(d, "std::__1::basic_string<") || strstr(d, "std::__1::function<") || strstr(d, "stringstream<") ||
         strstr(d, "std::__1::basic_stringbuf<"))
         r = "a std::string, std::function or string stream (layout differs between arm64 and x86_64) in a native C++ "
-            "signature tools/gen_cxxstr.py does not type";
+            "signature cxxstr_gen.inc does not type";
     free(d);
     return r;
 }

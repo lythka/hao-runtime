@@ -1,6 +1,6 @@
 /*
  * hao — the arm64-only register-variant entry points of the runtimes
- * (src/regvar_gen.inc, tools/gen_regvariants.py): objc_retain_xN /
+ * (src/regvar_gen.inc, generated outside this repository): objc_retain_xN /
  * objc_release_xN (objc4 runtime/objc-abi.h, "#if __arm64__";
  * runtime/retain-release-helpers-arm64.s), swift_retain_xN, swift_release_xN,
  * swift_bridgeObjectRetain_xN, swift_bridgeObjectRelease_xN and
@@ -29,6 +29,7 @@
  * preserve_most alike; a release leaves the object in x0.
  */
 #include "hao/bridge.h"
+#include "hao/gen_stamp.h"
 #include "hao/runtime.h"
 #include <dlfcn.h>
 #include <stdatomic.h>

@@ -11,6 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
 #include "hao/bridge.h"
@@ -363,7 +364,7 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
     /* async function values for a native Swift function's async parameters (swiftmeta.c) */
     if (p && (p->flags & HAO_PLAN_ASYNCARG)) hao_swiftmeta_async_args(c);
     if (kind == HAO_IF_KIND_STACKPACK) {
-        /* Swift packed stack arguments (tools/gen_stackpack.py): Apple arm64 put the arguments
+        /* Swift packed stack arguments (interface-unit record kind K): Apple arm64 put the arguments
          * past x7 at their natural size, SysV wants one 8-byte slot each. hao_native_call copies
          * guest stack words to slots 2 onward, so build those words below the guest's frame (the
          * arguments zero-extended, the rest 0) and let it copy them from there. Native code
@@ -930,7 +931,7 @@ uint64_t hao_callback(hao_cb_frame *f)
  * log instead, subsystem "com.hao", category "diag": one public record per
  * line, a line longer than UNI_PIECE bytes cut into pieces, each but the last
  * ending in "\x1f" (log show --predicate 'subsystem == "com.hao"';
- * tools/bridge_worklist.py --unified). Lines the file took are not repeated
+ * the bridge worklist tool, not part of this repository, reads them). Lines the file took are not repeated
  * there. Not while PID 1 waits for the Data volume (diag_retry), and not past
  * the file's cap. os_log is not async-signal-safe (its first use allocates; a
  * full buffer or a preference refresh takes libtrace's locks), so no writer
@@ -1654,7 +1655,7 @@ static void fault_diag(int sig, uint64_t addr, ucontext_t *uc, int crit)
     } else
         dl_add(&l, "  [rsp]: %#llx is outside this thread's stacks\n", (unsigned long long)rsp);
     /* where rip is in its native image (a line of its own: the first line's
-     * format is tools/bridge_worklist.py's): a call to an import that the
+     * format is the bridge worklist tool's, not part of this repository): a call to an import that the
      * native library defines as data (a placeholder exported under a
      * function's name) executes that data, as it would natively */
     char seg[17], sect[17];
@@ -1947,7 +1948,7 @@ static void rep_add(char *rep, size_t cap, size_t *rn, dline *l)
     l->n = 0;
 }
 
-/* The report, one write: the first line is tools/bridge_worklist.py's */
+/* The report, one write: the first line is the bridge worklist tool's (not in this repository) */
 static void sigreturn_report(int sig, int err, ucontext_t *uc, uint64_t tok, uint64_t callee)
 {
     static char rep[4096];   /* the process dies after this; one report at a time */
@@ -2659,7 +2660,7 @@ static uint64_t unresolved_trap(const char *name)
     return hao_trap_address(copy, trap_unresolved, (uint64_t)(uintptr_t)copy);
 }
 
-/* Imports whose x86_64 function has another name (tools/gen_variants.py):
+/* Imports whose x86_64 function has another name (src/variants_gen.inc):
  * suffixes that are empty on arm64 (sys/cdefs.h __DARWIN_ONLY_64_BIT_INO_T,
  * __DARWIN_ONLY_VERS_1050: arm64 stat is x86_64 stat$INODE64, select is
  * select$1050) and arm64-only ones (Security's $LEGACYMAC). Every other

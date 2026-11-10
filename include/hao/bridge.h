@@ -58,7 +58,7 @@
  * HAO_PLAN_MASKED has an authoritative mask; every other plan gets the full
  * scan, as before typed plans existed.
  *
- * Generated thunk pairs (W2, tools/gen_bridge.py, src/thunks.c): a TYPED plan
+ * Generated thunk pairs (src/thunks.c; the generator is not part of this repository): a TYPED plan
  * with thunk_guest set is called through its pair instead of the register
  * bridge. hao_run continues at thunk_guest (an arm64e function with the
  * callee's own prototype, lowered by clang for AAPCS64) with the guest's
@@ -103,7 +103,7 @@ enum {
                             * hao_swift_fixed_abi): EXACT, no argument is guest code */
     HAO_BRS_OBJCIMP,       /* a native ObjC method's IMP called bare: its method's encoding, found from the
                             * call's receiver and selector (objc.c hao_objc_imp_types) */
-    HAO_BRS_CXXSTR,        /* cxxstr_gen.inc (tools/gen_cxxstr.py): std::string parameters converted (kind 'Z') */
+    HAO_BRS_CXXSTR,        /* cxxstr_gen.inc: std::string parameters converted (kind 'Z') */
     HAO_BRS_N
 };
 
@@ -267,7 +267,7 @@ void hao_thunk_native_args_mask(struct hao_thread *t, unsigned mask);
 unsigned hao_args_code_slots(struct hao_thread *t);
 
 /* cxxstr.c: native C++ functions outside libc++ that take a std::string
- * (tools/gen_cxxstr.py). A kind 'Z' plan's enc is 'P' (the arm64 function
+ * (src/cxxstr_gen.inc). A kind 'Z' plan's enc is 'P' (the arm64 function
  * returns this: a constructor or destructor) or '.', then one role per
  * integer argument register x0..x5: '-' none, 'r' const std::string&,
  * 'v' std::string by value (by address on both ABIs), 'w' std::string&
@@ -367,7 +367,7 @@ typedef struct {
  * it must describe (NULL: any). 0 = valid, v filled in; -1 = rejected with
  * the reason in why. Never reads outside buf[0..size). */
 int hao_ifunit_check(const void *buf, uint64_t size, const uint8_t *uuid, hao_if_view *v, char *why, size_t n);
-/* Record kind 'K' (tools/gen_stackpack.py): a Swift function whose Apple arm64 stack arguments
+/* Record kind 'K' (generated outside this repository): a Swift function whose Apple arm64 stack arguments
  * are packed at natural size. enc "OFF.W,OFF.W,..." names, for SysV slots 2, 3, ... (x6 and x7
  * take slots 0 and 1), the arm64 byte offset and width of the argument each carries. Returns the
  * number of slots (offsets and widths filled in), or -1 for an invalid layout. */
