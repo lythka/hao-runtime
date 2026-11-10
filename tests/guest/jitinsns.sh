@@ -1,6 +1,6 @@
 #!/bin/sh
 # Instructions the translator emits inline (atomics, bit fields, carry
-# arithmetic, division, bit reversal, constant chains): builds
+# arithmetic, division, bit reversal, constant chains, integer SIMD): builds
 # tests/guest/jitinsns.c for arm64e (guest) and arm64 (reference) and
 # compares the output of hao's JIT, interpreter, helper-only JIT and AOT runs
 # with the native one, line by line (one hash per instruction).

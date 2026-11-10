@@ -167,6 +167,12 @@ void x_shrd_ri(xbuf *b, int w, int dst, int src, uint8_t imm);
 void x_sse_rr(xbuf *b, int pfx, uint8_t op, int w, int dst, int src);
 void x_sse_rm(xbuf *b, int pfx, uint8_t op, int w, int reg, xmem m);
 void x_psllq_ri(xbuf *b, int xmm, uint8_t imm);   /* psllq xmm, imm8 (EFLAGS untouched) */
+/* x_sse_rr followed by an immediate byte (pshufd, pshuflw, ...). */
+void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm);
+/* Vector shift by an immediate: 66 0F op /digit ib with op 0x71 (words), 0x72
+ * (doublewords) or 0x73 (quadwords) and digit 2 (psrl), 4 (psra; not for
+ * quadwords) or 6 (psll). */
+void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int xmm, uint8_t imm);
 
 /* Inverse condition. */
 static inline int xcc_not(int cc) { return cc ^ 1; }

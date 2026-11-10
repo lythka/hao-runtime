@@ -413,6 +413,19 @@ void x_psllq_ri(xbuf *b, int x, uint8_t imm)
     enc_rr(b, P_66, 0, 0, OP2(0x0F, 0x73), 6, x);
     if (b->p != start) xb_u8(b, imm);
 }
+void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm)
+{
+    uint8_t *start = b->p;
+    x_sse_rr(b, pfx, op, 0, dst, src);
+    if (b->p != start) xb_u8(b, imm);
+}
+void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int x, uint8_t imm)
+{
+    if (op < 0x71 || op > 0x73 || (digit != 2 && digit != 4 && digit != 6) || (op == 0x73 && digit == 4)) { bad(b); return; }
+    uint8_t *start = b->p;
+    enc_rr(b, P_66, 0, 0, OP2(0x0F, op), digit, x);
+    if (b->p != start) xb_u8(b, imm);
+}
 void x_sse_rm(xbuf *b, int pfx, uint8_t op, int w, int reg, xmem m)
 {
     int p = sse_pfx(b, pfx);

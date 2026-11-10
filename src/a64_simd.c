@@ -1060,7 +1060,7 @@ static int simd_across(hao_cpu *c, uint32_t i)
     return 0;
 }
 
-static uint64_t adv_simd_expand_imm(unsigned op, unsigned cmode, unsigned imm8)
+uint64_t a64_simd_expand_imm(unsigned op, unsigned cmode, unsigned imm8)
 {
     uint64_t imm = 0;
     switch (cmode >> 1) {
@@ -1104,7 +1104,7 @@ static int simd_modimm(hao_cpu *c, uint32_t i)
         return 0;
     }
     if (op && cmode == 15 && !Q) return -1;   /* FMOV .1D immediate */
-    uint64_t imm = adv_simd_expand_imm(op, cmode, imm8);
+    uint64_t imm = a64_simd_expand_imm(op, cmode, imm8);
     hao_vreg r = c->v[rd];
     bool is_orr_bic = (cmode < 12 && (cmode & 1));
     if (is_orr_bic) {
