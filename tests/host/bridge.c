@@ -11,11 +11,14 @@
  *             later (a native block's signature); a typed plan is kept.
  *   tables    the interposer tables searched by bisection are sorted, and
  *             every name index (interpose.c) finds what a linear scan does.
+ *   stamp     the generated tables' source build (hao/gen_stamp.h) and this
+ *             system's are read; a different build is reported, not failed.
  *
  *   test_bridge [N]     prints one line per check; exit 0 only if all pass.
  */
 #include "hao/runtime.h"
 #include "hao/bridge.h"
+#include "hao/gen_stamp.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,6 +92,11 @@ int main(int argc, char **argv)
     char why[256];
     int bad = hao_interpose_selfcheck(why, sizeof why);
     printf("tables     %s  bisected tables sorted, name indexes agree with a scan%s%s\n", bad ? "FAIL" : "PASS", bad ? ": " : "", why);
+    char build[32];
+    bool same = hao_gen_stamp_check(build, sizeof build);
+    printf("stamp      %s  tables from macOS %s (%s), format %d; this system %s%s\n", build[0] ? "PASS" : "FAIL",
+           HAO_GEN_OS_VERSION, HAO_GEN_OS_BUILD, HAO_GEN_FORMAT, build[0] ? build : "unknown", same ? " (same)" : "");
+    if (!build[0]) fail = 1;
     if (bad) fail = 1;
     return fail;
 }

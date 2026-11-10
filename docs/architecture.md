@@ -54,6 +54,9 @@ them using the best description available for that function:
   that describe exported functions. The format and its validation are in
   `include/hao/bridge.h`, `src/ifunit.c` and `tools/hao_ifunit.py`. Generated
   tables are compiled into the runtime or installed under `/usr/lib/hao/if`.
+  The compiled-in tables (`src/NAME_gen.inc`) come from one macOS build,
+  named with their format in `include/hao/gen_stamp.h`; their generators are
+  not part of this repository. `hao -v` says when the running build differs.
 - Conservative inference from the guest's own code where nothing else applies.
 
 Each binding has a route: EXACT and TYPED describe how the call is placed;

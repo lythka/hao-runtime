@@ -1,12 +1,12 @@
 /*
  * hao — generated thunk pairs (hao/bridge.h).
  *
- * tools/gen_bridge.py writes one source per native function whose
- * signature the register bridge cannot carry, compiles it twice and links
- * the halves into one fat thunk library: the arm64e slice holds the guest
- * halves (_hao_gh_KEY: the function's own prototype lowered by clang for
- * AAPCS64), the x86_64 slice the native halves (_hao_nh_KEY: the same
- * prototype lowered for SysV). Interface-unit records name their pair by
+ * The thunk generator (not part of this repository) writes one source per
+ * native function whose signature the register bridge cannot carry,
+ * compiles it twice and links the halves into one fat thunk library:
+ * the arm64e slice holds the guest halves (_hao_gh_KEY: the function's
+ * own prototype lowered by clang for AAPCS64), the x86_64 slice the native
+ * halves (_hao_nh_KEY: the same prototype lowered for SysV). Interface-unit records name their pair by
  * KEY (HAO_IFR_THUNK); the key is a hash of the pair's source, so a record
  * and a library from different builds never meet on the wrong code: a key
  * the libraries do not have leaves the plan without a pair (its abi.c encoding

@@ -17,6 +17,8 @@
 #include "hao/bridge.h"
 #include "hao/vafmt.h"
 #include "hao/gmap.h"
+#include "hao/gen_stamp.h"
+#include <sys/sysctl.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <objc/runtime.h>
@@ -577,8 +579,26 @@ static uint64_t typed_at(uint64_t native)
     return identity_original ? (uint64_t)(uintptr_t)identity_original((const void *)(uintptr_t)native) : native;
 }
 
+/* The generated tables' source build against this system's (hao/gen_stamp.h). */
+bool hao_gen_stamp_check(char *running, size_t n)
+{
+    size_t len = n;
+    if (!n) return false;
+    if (sysctlbyname("kern.osversion", running, &len, NULL, 0) != 0 || !len) running[0] = 0;
+    running[n - 1] = 0;
+    return !strcmp(running, HAO_GEN_OS_BUILD);
+}
+
 static void init_once(void)
 {
+    if (hao_verbose) {
+        char build[32];
+        if (!hao_gen_stamp_check(build, sizeof build)) {
+            hao_diag_prefix(HAO_DIAG);
+            fprintf(HAO_DIAG, "generated tables describe macOS %s (%s), table format %d; this system is %s\n",
+                    HAO_GEN_OS_VERSION, HAO_GEN_OS_BUILD, HAO_GEN_FORMAT, build[0] ? build : "an unknown build");
+        }
+    }
     identity_original = (const void *(*)(const void *))dlsym(RTLD_DEFAULT, "hao_identity_original");
     hao_bridge_counting = hao_opt.bridge_stats || hao_opt.bridge_check;
     L();

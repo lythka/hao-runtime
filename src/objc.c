@@ -1277,7 +1277,8 @@ static void objcva_note(hao_thread *t, Class cls, SEL sel, uint64_t imp, const c
 /* The bridge's plan for a native IMP whose prologue says variadic with g fixed GPR and f fixed FP
  * arguments, for a method of encoding enc and selector sel: false (declined) when the encoding disagrees;
  * else the fixed GPR count, and the format's index and SDK family (fmt = last fixed, kind 0, when the
- * SDK declares none for sel). objcva_scan (tools/) runs it over whole libraries. */
+ * SDK declares none for sel). An offline scanner, not part of this
+ * repository, runs it over whole libraries. */
 bool hao_objcva_plan(int g, int f, const char *enc, const char *sel, int *ngp, int *fmt, char *fk)
 {
     int eg = -1, ef = -1;
