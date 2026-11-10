@@ -680,8 +680,9 @@ static uint64_t frame_pop(const hao_cb_frame *f, const hao_cpu *outer, int64_t m
 }
 
 /* A disagreement between the caller's frame and the signature, reported
- * once per guest function (HAO_BRIDGE_CHECK=1, boot argument
- * hao_bridge_check=1) to the diagnostics log, where hardware keeps it. */
+ * once per guest function (HAO_BRIDGE_CHECK=1; in a HAO_TEST_SWITCHES build
+ * also boot argument hao_bridge_check=1) to the diagnostics log, where
+ * hardware keeps it. */
 static void pop_disagrees(const hao_cb_frame *f, int64_t sig, const char *swhy, uint64_t fr)
 {
     enum { N = 512 };
@@ -902,9 +903,10 @@ uint64_t hao_callback(hao_cb_frame *f)
  * land whole at the file's end, so the lines of concurrent processes do not
  * tear. The file holds one boot: its first line names the boot session, and
  * a process that finds another boot's file renames it to console.log.0
- * (under an flock on the directory) and starts the new one. Root processes
- * create the directory (0755), the file (0644) and DIR/user (1777, sticky,
- * as /tmp). A process that may not write DIR/console.log (every non-root
+ * (under an flock on DIR/.lock, a 0600 file only the log's writer can open)
+ * and starts the new one. Root processes create the directory (0755), the
+ * file (0600: it holds register dumps and image bases) and DIR/user (1777,
+ * sticky, as /tmp). A process that may not write DIR/console.log (every non-root
  * one: GUI-session processes such as WindowManager, uid 248, whose
  * /dev/console is refused too) keeps its own log in DIR/user/<euid>/
  * console.log, with the same boot header, rotation and cap: it creates
@@ -1142,6 +1144,29 @@ static bool diag_before_data_volume(int dfd)
            !strcmp(m.f_mntonname, "/");
 }
 
+/* DIR/.lock open, or -1 with errno: the file whose flock serialises the
+ * check-rotate-create below. Only the log's writer can open it (0600, and
+ * it must be this process's own), so no other user can hold the lock: a
+ * lock on DIR itself (0755) could be taken by anyone, which delayed every
+ * process's start and lost its log. A process that may not write DIR gets
+ * EACCES here, as it did from console.log. */
+static int diag_lock_open(int dfd)
+{
+    int fd = -1;
+    for (int k = 0; k < 2 && fd < 0; k++) {
+        fd = openat(dfd, ".lock", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0 && errno == ENOENT) fd = openat(dfd, ".lock", O_RDONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (fd < 0 && errno != EEXIST) return -1;
+    }
+    struct stat st;
+    if (fd >= 0 && (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 077))) {
+        close(fd);
+        fd = -1;
+        errno = EACCES;
+    }
+    return fd;
+}
+
 /* DIR/console.log open for appending, this boot's; -1 with errno. mk: create the directory if absent. */
 static int diag_log_open(const char *dir, bool mk)
 {
@@ -1152,23 +1177,28 @@ static int diag_log_open(const char *dir, bool mk)
     if (diag_before_data_volume(dfd)) { close(dfd); errno = ENOENT; return -1; }
     char hdr[160], got[160];
     int hl = diag_boot_header(hdr, sizeof hdr);
-    /* the lock is held for a few system calls; a holder that is stopped must not stop every process's startup */
+    int lfd = diag_lock_open(dfd);
+    if (lfd < 0) { int le = errno; close(dfd); errno = le; return -1; }
+    /* the lock is held for a few system calls; a holder that is stopped (one of this user's own processes) must
+     * not stop every process's startup */
     bool locked = false;
-    for (int k = 0; k < 200 && !(locked = flock(dfd, LOCK_EX | LOCK_NB) == 0); k++) nanosleep(&(struct timespec){0, 1000000}, NULL);
-    if (!locked) { close(dfd); errno = EAGAIN; return -1; }
+    for (int k = 0; k < 200 && !(locked = flock(lfd, LOCK_EX | LOCK_NB) == 0); k++) nanosleep(&(struct timespec){0, 1000000}, NULL);
+    if (!locked) { close(lfd); close(dfd); errno = EAGAIN; return -1; }
     int fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_NOFOLLOW | O_CLOEXEC), e = errno;
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))) { close(fd); fd = -1; e = EINVAL; }
-    else if (fd >= 0 && (pread(fd, got, (size_t)hl, 0) != hl || memcmp(got, hdr, (size_t)hl))) {
+    /* register dumps and image bases: the owner's alone (a file an earlier hao made 0644 too, before it rotates) */
+    if (fd >= 0 && st.st_uid == geteuid() && (st.st_mode & 077)) fchmod(fd, 0600);
+    if (fd >= 0 && (pread(fd, got, (size_t)hl, 0) != hl || memcmp(got, hdr, (size_t)hl))) {
         /* another boot's file */
         close(fd);
         fd = -1;
         e = renameat(dfd, "console.log", dfd, "console.log.0") == 0 ? ENOENT : errno;
     }
     if (fd < 0 && e == ENOENT) {
-        fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+        fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         e = errno;
-        if (fd >= 0) { fchmod(fd, 0644); diag_write_all(fd, hdr, (size_t)hl); }
+        if (fd >= 0) { fchmod(fd, 0600); diag_write_all(fd, hdr, (size_t)hl); }
     }
     if (fd >= 0 && fstat(fd, &st) == 0) { diag_log_dev = st.st_dev; diag_log_ino = st.st_ino; }
     if (fd >= 0 && mk && mkdirat(dfd, "user", 0700) == 0) {
@@ -1176,7 +1206,7 @@ static int diag_log_open(const char *dir, bool mk)
         int ufd = openat(dfd, "user", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (ufd >= 0) { fchmod(ufd, 01777); close(ufd); }
     }
-    flock(dfd, LOCK_UN);
+    close(lfd);   /* releases the lock */
     close(dfd);
     errno = e;
     return fd;
@@ -2119,7 +2149,8 @@ void hao_install_fault_handler(void)
  *  - a dependency's install name is expanded like dyld does: @executable_path
  *    is the guest program's directory, @loader_path the directory of the
  *    image that names it, @rpath every LC_RPATH of that image and of the
- *    images that loaded it, down to the main executable;
+ *    images that loaded it, down to the main executable; in a set-ID
+ *    process, with dyld's restrictions for one (for_each_candidate);
  *  - each candidate path is tried as a native x86_64 library (dlopen), then,
  *    if it has no x86_64 slice, as a guest image (absolute OS paths under
  *    HAO_GUEST_ROOT when set);
@@ -2225,10 +2256,17 @@ static bool expand_prefix(hao_image *im, const char *in, char *out, size_t n)
  * @executable_path or @loader_path (a real path already). */
 typedef bool (*cand_fn)(const char *cand, bool os, void *ctx);
 
-/* Call fn for each path dyld would try for `name` as a dependency of `loader`. */
-static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, void *ctx)
+/* Call fn for each path dyld would try for `name` as a dependency of `loader`.
+ * In a set-ID process dyld expands no @executable_path, no @loader_path
+ * from the main executable's LC_RPATHs and no relative path
+ * (hao_dep_path_allowed, hao/aot.h): such a path is not tried, and *refused
+ * is dyld's reason for the last one. */
+static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, void *ctx, const char **refused)
 {
     char buf[2048];
+    int tier = hao_env_tier();
+    const char *why;
+    *refused = NULL;
     if (!strncmp(name, "@rpath/", 7)) {
         hao_image *seen[64];
         int nseen = 0;
@@ -2239,6 +2277,7 @@ static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, 
             seen[nseen++] = im;
             for (int r = 0; r < im->nrpaths; r++) {
                 char rp[1200];
+                if (!hao_dep_path_allowed(im->rpaths[r], true, !hao_main_image || im == hao_main_image, tier, &why)) { *refused = why; continue; }
                 if (!expand_prefix(im, im->rpaths[r], rp, sizeof rp)) continue;
                 if ((size_t)snprintf(buf, sizeof buf, "%s/%s", rp, name + 7) >= sizeof buf) continue;
                 if (fn(buf, im->rpaths[r][0] == '/', ctx)) return true;
@@ -2246,6 +2285,7 @@ static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, 
         }
         return false;
     }
+    if (!hao_dep_path_allowed(name, false, !hao_main_image || loader == hao_main_image, tier, &why)) { *refused = why; return false; }
     if (!expand_prefix(loader, name, buf, sizeof buf)) return false;
     return fn(buf, name[0] == '/', ctx);
 }
@@ -2477,7 +2517,15 @@ static void *open_library(hao_image *img, const char *name, bool cxx, hao_image 
 {
     struct try_ctx x = {img, NULL, NULL, cxx, tried, tn};
     if (tried && tn) tried[0] = 0;
-    for_each_candidate(img, name, try_candidate, &x);
+    const char *refused;
+    for_each_candidate(img, name, try_candidate, &x, &refused);
+    if (refused && !x.handle && !x.guest) {
+        if (tried && tn) {   /* as dyld's "tried:" list says it */
+            size_t l = strlen(tried);
+            snprintf(tried + l, tn - l, "%s'%s' (%s)", l ? ", " : "", name, refused);
+        }
+        if (hao_verbose) fprintf(stderr, "hao: %s: %s (set-ID process)\n", name, refused);
+    }
     *guest = x.guest;
     return x.handle ? x.handle : x.guest ? GUEST_DEP : MISSING_DEP;
 }

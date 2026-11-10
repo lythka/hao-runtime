@@ -33,7 +33,11 @@ static void test_tiers(void)
     g = f; g.ppid = 1;
     CHECK(hao_env_tier_for(&g) == HAO_ENV_OPEN, "user agent (ppid 1, uid 501) is OPEN");
     g = f; g.uid = g.euid = 0;
-    CHECK(hao_env_tier_for(&g) == HAO_ENV_OPEN, "root shell (ppid != 1) is OPEN");
+    CHECK(hao_env_tier_for(&g) == HAO_ENV_GUARDED, "root shell (ppid != 1) is GUARDED");
+    g = f; g.uid = g.euid = 0; g.gid = g.egid = 0; g.ppid = 77;
+    CHECK(hao_env_tier_for(&g) == HAO_ENV_GUARDED, "root under sudo or cron (any parent) is GUARDED");
+    g = f; g.uid = 0; g.euid = 501;
+    CHECK(hao_env_tier_for(&g) == HAO_ENV_SETUGID, "root that dropped only its effective uid is SETUGID");
     g = f; g.restricted = true;
     CHECK(hao_env_tier_for(&g) == HAO_ENV_GUARDED, "dyld-restricted is GUARDED");
     g = f; g.entitled = true;
@@ -45,22 +49,70 @@ static void test_tiers(void)
     g = f; g.setugid = true; g.distrust = -5;
     CHECK(hao_env_tier_for(&g) == HAO_ENV_SETUGID, "HAO_DISTRUST_ENV cannot raise trust");
 
-    static const char *code_or_path[] = {"HAO_CACHE", "HAO_GUEST_ROOT", "HAO_FLAGS", "HAO_AOT_LEARN", "HAO_NO_MSGSEND",
-                                         "HAO_NO_CLOSURES", "HAO_NO_SWIFTREG", "HAO_NO_BLOCK_THUNKS", "HAO_SOMETHING_NEW",
-                                         "HAO_IF_DIR", "HAO_DIAG_DIR", NULL};
-    static const char *diag[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_WATCHDOG", "HAO_BRIDGE_CHECK",
-                                 "HAO_BRIDGE_STATS", NULL};
-    static const char *off[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", "HAO_NO_IFUNITS", NULL};
-    for (const char **s = code_or_path; *s; s++) {
+    /* code, paths, checks, bridging, signal and memory behaviour: an ordinary user's process only */
+    static const char *open_only[] = {"HAO_CACHE", "HAO_GUEST_ROOT", "HAO_FLAGS", "HAO_AOT_LEARN", "HAO_NO_MSGSEND",
+                                      "HAO_NO_CLOSURES", "HAO_NO_SWIFTREG", "HAO_NO_BLOCK_THUNKS", "HAO_SOMETHING_NEW",
+                                      "HAO_IF_DIR", "HAO_DIAG_DIR", "HAO_TRUST_LIST", "HAO_ASYNC_CONTRACT_LIBRARY",
+                                      "HAO_NO_LIBVAL", "HAO_NO_VARSNIFF", "HAO_NO_IFUNITS", "HAO_NO_THUNKS",
+                                      "HAO_NATIVE_LIBCXX", "HAO_NO_FIXUP_THUNKS", "HAO_NO_STRUCT_THUNKS",
+                                      "HAO_NO_SWIFT_THUNKS", "HAO_NO_SWIFT_VALUES", "HAO_SWIFT_POP", "HAO_BRIDGE_CHECK",
+                                      "HAO_SIGRETURN_KERNEL", "HAO_NO_PROBE", "HAO_WATCHDOG", "HAO_JIT_CACHE_MB", NULL};
+    /* the same code by another engine, and printing: guarded too, never set-ID */
+    static const char *guarded[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", "HAO_VERBOSE",
+                                    "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", NULL};
+    static const char *test_only[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
+                                      "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", NULL};
+    for (const char **s = open_only; *s; s++) {
         CHECK(hao_env_switch_allowed(*s, HAO_ENV_OPEN), "%s allowed when OPEN", *s);
         CHECK(!hao_env_switch_allowed(*s, HAO_ENV_GUARDED), "%s ignored when GUARDED", *s);
         CHECK(!hao_env_switch_allowed(*s, HAO_ENV_SETUGID), "%s ignored when SETUGID", *s);
+        CHECK(!hao_env_test_switch(*s), "%s is not a test switch", *s);
     }
-    for (const char **s = diag; *s; s++) {
+    for (const char **s = guarded; *s; s++) {
+        CHECK(hao_env_switch_allowed(*s, HAO_ENV_OPEN), "%s allowed when OPEN", *s);
         CHECK(hao_env_switch_allowed(*s, HAO_ENV_GUARDED), "%s allowed when GUARDED", *s);
         CHECK(!hao_env_switch_allowed(*s, HAO_ENV_SETUGID), "%s ignored when SETUGID", *s);
     }
-    for (const char **s = off; *s; s++) CHECK(hao_env_switch_allowed(*s, HAO_ENV_SETUGID), "%s allowed when SETUGID", *s);
+    for (const char **s = test_only; *s; s++) {
+        CHECK(hao_env_test_switch(*s), "%s is a test switch", *s);
+        CHECK(hao_env_switch_allowed(*s, HAO_ENV_OPEN) == hao_test_switches, "%s when OPEN: read by a HAO_TEST_SWITCHES build only (%d)",
+              *s, hao_test_switches);
+        CHECK(!hao_env_switch_allowed(*s, HAO_ENV_GUARDED), "%s ignored when GUARDED", *s);
+        CHECK(!hao_env_switch_allowed(*s, HAO_ENV_SETUGID), "%s ignored when SETUGID", *s);
+    }
+
+    /* dependency paths: dyld's rule for a set-ID main executable, nothing refused elsewhere */
+    static const struct { const char *path; bool rpath, mainimg, setugid_ok; const char *why; } dp[] = {
+        {"/usr/lib/libz.1.dylib", false, true, true, NULL},
+        {"/opt/x/lib", true, true, true, NULL},
+        {"@rpath/libfoo.dylib", false, true, true, NULL},
+        {"@executable_path/libfoo.dylib", false, true, false, "@ path"},
+        {"@executable_path/libfoo.dylib", false, false, false, "@ path"},
+        {"@executable_path/../lib", true, true, false, "@ path"},
+        {"@executable_path", true, false, false, "@ path"},
+        {"@loader_path/libfoo.dylib", false, true, true, NULL},
+        {"@loader_path/libfoo.dylib", false, false, true, NULL},
+        {"@loader_path/../lib", true, false, true, NULL},
+        {"@loader_path/../lib", true, true, false, "@ path"},
+        {"@loader_path", true, true, false, "@ path"},
+        {"libfoo.dylib", false, true, false, "relative path"},
+        {"./libfoo.dylib", false, false, false, "relative path"},
+        {"../lib/libfoo.dylib", false, true, false, "relative path"},
+        {"lib", true, true, false, "relative path"},
+        {"../lib", true, false, false, "relative path"},
+        {"@executable_pathology/x", false, true, true, NULL},   /* not the variable: expands to nothing anyway */
+    };
+    for (size_t i = 0; i < sizeof dp / sizeof dp[0]; i++) {
+        const char *why = "unset";
+        CHECK(hao_dep_path_allowed(dp[i].path, dp[i].rpath, dp[i].mainimg, HAO_ENV_OPEN, &why) && !why,
+              "dep %s allowed when OPEN", dp[i].path);
+        CHECK(hao_dep_path_allowed(dp[i].path, dp[i].rpath, dp[i].mainimg, HAO_ENV_GUARDED, NULL), "dep %s allowed when GUARDED",
+              dp[i].path);
+        bool ok = hao_dep_path_allowed(dp[i].path, dp[i].rpath, dp[i].mainimg, HAO_ENV_SETUGID, &why);
+        CHECK(ok == dp[i].setugid_ok && (ok ? !why : why && strstr(why, dp[i].why)),
+              "dep %s (%s of %s) when SETUGID: %s (%s)", dp[i].path, dp[i].rpath ? "LC_RPATH" : "install name",
+              dp[i].mainimg ? "the main executable" : "a library", ok ? "allowed" : "refused", why ? why : "-");
+    }
 
     const char *own = "<plist><dict><key>com.apple.security.cs.allow-jit</key><true/>"
                       "<key>com.apple.security.cs.disable-library-validation</key><true/></dict></plist>";
@@ -89,7 +141,8 @@ static void test_dirs(void)
         {HAO_ENV_SETUGID, 0, "/Users/x", "/Users/x/evil", 2, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR}, NULL, "setuid root: system only, no write"},
         {HAO_ENV_SETUGID, 501, "/Users/x", NULL, 2, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR}, NULL, "setgid user: no user dir"},
         {HAO_ENV_GUARDED, 501, "/Users/x", NULL, 2, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR}, NULL, "entitled user process: no user dir"},
-        {HAO_ENV_OPEN, 0, NULL, NULL, 2, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR}, HAO_AOT_SYS_DIR, "root shell"},
+        {HAO_ENV_GUARDED, 0, "/var/root", "/var/root/c", 2, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR}, HAO_AOT_SYS_DIR,
+         "root shell: HAO_CACHE and its home ignored"},
         {HAO_ENV_OPEN, 501, NULL, NULL, 2, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR}, NULL, "user without a home: no write"},
         {HAO_ENV_OPEN, 501, "/Users/x", NULL, 3, {HAO_AOT_SYS_RO_DIR, HAO_AOT_SYS_DIR, "/Users/x/Library/Caches/hao"},
          "/Users/x/Library/Caches/hao", "ordinary user"},

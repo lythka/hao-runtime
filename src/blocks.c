@@ -52,9 +52,10 @@ enum {
 
 static uint64_t st_invokes, st_helpers, st_global, st_byref, st_healed;
 
-/* Off with HAO_NO_BLOCK_THUNKS=1 in the environment, or with the boot
- * argument hao_no_block_thunks=1 (every translated process reads it, so a
- * whole boot, PID 1 included, can be bisected without rebuilding). */
+/* Off with HAO_NO_BLOCK_THUNKS=1 in an ordinary process's environment, or,
+ * in a HAO_TEST_SWITCHES build, with the boot argument
+ * hao_no_block_thunks=1 (every translated process reads it, so a whole
+ * boot, PID 1 included, can be bisected). */
 static bool enabled(void)
 {
     return !hao_opt.no_block_thunks;

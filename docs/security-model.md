@@ -106,12 +106,60 @@ binary without its own `disable-library-validation`, hao:
 
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
-`DYLD_EXIT_REASON_DYLIB_MISSING`). `HAO_LIBVAL_USER=1` takes the user-space
-route on any kernel, for tests.
+`DYLD_EXIT_REASON_DYLIB_MISSING`). In a test build (`HAO_TEST_SWITCHES`),
+`HAO_LIBVAL_USER=1` takes the user-space route on any kernel.
+
+In a set-ID process hao searches for a guest's dependencies as dyld does for
+one: `@executable_path` is not expanded, `@loader_path` is not expanded in an
+`LC_RPATH` of the main executable, and relative install names and relative
+`LC_RPATH` entries are not tried. The caller of a set-ID program chooses its
+working directory and, with a hard link, the directory its path names.
 
 `tools/hao-embed` signs a platform or hardened program's stub with the
 hardened runtime, so dyld ignores `DYLD_*` variables for the stub as it does
 for the program.
+
+## Environment and boot arguments
+
+An embedded program runs with its own credentials and entitlements, and its
+environment comes from whoever started it. hao reads its `HAO_*` switches
+once, at startup, and honours them by how far the process's environment can
+be trusted:
+
+| Process | Switches honoured |
+|---|---|
+| Open: an ordinary user's process | all |
+| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS` |
+| Set-ID: credentials changed at exec | none |
+
+The guarded list holds only switches that run the same code through another
+of hao's engines or print. Everything that chooses code or a path
+(`HAO_CACHE`, `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_TRUST_LIST`,
+`HAO_ASYNC_CONTRACT_LIBRARY`, `HAO_DIAG_DIR`, the command-line options carried
+in `HAO_FLAGS`), turns a check off (`HAO_NO_LIBVAL`, `--allow-unsigned`) or
+changes how native calls, signals or memory behave is for open processes
+only. Root is guarded whatever started it: `sudo` and login sessions pass
+variables from users who are not root. With `-v`, hao names each switch it
+ignored.
+
+Boot arguments reach every process of a boot, set-ID programs and PID 1
+included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
+`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_no_aot=1`, `hao_no_chain=1`,
+`hao_jit_helpers_only=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
+`hao_verbose=N`. No boot argument turns library validation or the signature
+check off.
+
+A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
+never for a release image. It also reads the test switches
+(`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
+`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`) from an open
+process's environment, and the bridging and signal bring-up knobs as boot
+arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a
+process to the guarded or set-ID rules.
+
+With `hao_crash=1`, root processes log to `/private/var/log/hao/console.log`
+and other users to a directory of their own under it. The logs hold register
+dumps and image addresses, so each is readable by its owner only (0600).
 
 ## Identity
 

@@ -10,47 +10,65 @@
 
 hao_opts_t hao_opt;
 
-static const struct { const char *name; size_t off; } knobs[] = {
-    {"nx_stats", offsetof(hao_opts_t, nx_stats)},
-    {"crash_trace", offsetof(hao_opts_t, crash_trace)},
-    {"jit_helpers_only", offsetof(hao_opts_t, jit_helpers_only)},
-    {"no_aot", offsetof(hao_opts_t, no_aot)},
-    {"no_chain", offsetof(hao_opts_t, no_chain)},
-    {"no_msgsend", offsetof(hao_opts_t, no_msgsend)},
-    {"no_closures", offsetof(hao_opts_t, no_closures)},
-    {"no_swiftreg", offsetof(hao_opts_t, no_swiftreg)},
-    {"no_block_thunks", offsetof(hao_opts_t, no_block_thunks)},
-    {"no_fixup_thunks", offsetof(hao_opts_t, no_fixup_thunks)},
-    {"no_struct_thunks", offsetof(hao_opts_t, no_struct_thunks)},
-    {"aot_learn", offsetof(hao_opts_t, aot_learn)},
-    {"no_jit_memory", offsetof(hao_opts_t, no_jit_memory)},
-    {"bridge_check", offsetof(hao_opts_t, bridge_check)},
-    {"bridge_abort", offsetof(hao_opts_t, bridge_abort)},
-    {"no_varsniff", offsetof(hao_opts_t, no_varsniff)},
-    {"no_libval", offsetof(hao_opts_t, no_libval)},
-    {"bridge_stats", offsetof(hao_opts_t, bridge_stats)},
-    {"no_ifunits", offsetof(hao_opts_t, no_ifunits)},
-    {"no_swift_thunks", offsetof(hao_opts_t, no_swift_thunks)},
-    {"no_swift_values", offsetof(hao_opts_t, no_swift_values)},
-    {"native_libcxx", offsetof(hao_opts_t, native_libcxx)},
-    {"no_thunks", offsetof(hao_opts_t, no_thunks)},
-    {"sigreturn_kernel", offsetof(hao_opts_t, sigreturn_kernel)},
-    {"sigreturn_user", offsetof(hao_opts_t, sigreturn_user)},
-    {"no_probe", offsetof(hao_opts_t, no_probe)},
-    {"code_alias", offsetof(hao_opts_t, code_alias)},
-    {"libval_user", offsetof(hao_opts_t, libval_user)},
+/* A boot argument hao_<knob>=1 reaches every process of the boot, set-ID
+ * programs and PID 1 included, and stays set across restarts. So each knob
+ * says whether it may come from there:
+ *   BOOT_YES  what a guarded process may also take from its environment
+ *             (hao/aot.h): the engine and printing switches;
+ *   BOOT_DEV  bring-up switches that change how calls are bridged or signals
+ *             return: only in a HAO_TEST_SWITCHES build;
+ *   BOOT_NO   never: hao_no_libval would turn library validation off for
+ *             the whole system, aot_learn writes files from every process,
+ *             and the rest are the test switches. */
+enum { BOOT_NO, BOOT_DEV, BOOT_YES };
+static const struct { const char *name; size_t off; int boot; } knobs[] = {
+    {"nx_stats", offsetof(hao_opts_t, nx_stats), BOOT_YES},
+    {"crash_trace", offsetof(hao_opts_t, crash_trace), BOOT_YES},
+    {"jit_helpers_only", offsetof(hao_opts_t, jit_helpers_only), BOOT_YES},
+    {"no_aot", offsetof(hao_opts_t, no_aot), BOOT_YES},
+    {"no_chain", offsetof(hao_opts_t, no_chain), BOOT_YES},
+    {"no_msgsend", offsetof(hao_opts_t, no_msgsend), BOOT_DEV},
+    {"no_closures", offsetof(hao_opts_t, no_closures), BOOT_DEV},
+    {"no_swiftreg", offsetof(hao_opts_t, no_swiftreg), BOOT_DEV},
+    {"no_block_thunks", offsetof(hao_opts_t, no_block_thunks), BOOT_DEV},
+    {"no_fixup_thunks", offsetof(hao_opts_t, no_fixup_thunks), BOOT_DEV},
+    {"no_struct_thunks", offsetof(hao_opts_t, no_struct_thunks), BOOT_DEV},
+    {"aot_learn", offsetof(hao_opts_t, aot_learn), BOOT_NO},
+    {"no_jit_memory", offsetof(hao_opts_t, no_jit_memory), BOOT_NO},
+    {"bridge_check", offsetof(hao_opts_t, bridge_check), BOOT_DEV},
+    {"bridge_abort", offsetof(hao_opts_t, bridge_abort), BOOT_NO},
+    {"no_varsniff", offsetof(hao_opts_t, no_varsniff), BOOT_DEV},
+    {"no_libval", offsetof(hao_opts_t, no_libval), BOOT_NO},
+    {"bridge_stats", offsetof(hao_opts_t, bridge_stats), BOOT_YES},
+    {"no_ifunits", offsetof(hao_opts_t, no_ifunits), BOOT_DEV},
+    {"no_swift_thunks", offsetof(hao_opts_t, no_swift_thunks), BOOT_DEV},
+    {"no_swift_values", offsetof(hao_opts_t, no_swift_values), BOOT_DEV},
+    {"native_libcxx", offsetof(hao_opts_t, native_libcxx), BOOT_DEV},
+    {"no_thunks", offsetof(hao_opts_t, no_thunks), BOOT_DEV},
+    {"sigreturn_kernel", offsetof(hao_opts_t, sigreturn_kernel), BOOT_DEV},
+    {"sigreturn_user", offsetof(hao_opts_t, sigreturn_user), BOOT_NO},
+    {"no_probe", offsetof(hao_opts_t, no_probe), BOOT_DEV},
+    {"code_alias", offsetof(hao_opts_t, code_alias), BOOT_NO},
+    {"libval_user", offsetof(hao_opts_t, libval_user), BOOT_NO},
 };
 #define NKNOBS (sizeof knobs / sizeof knobs[0])
 
+static bool boot_knob_allowed(int boot)
+{
+    return boot == BOOT_YES || (boot == BOOT_DEV && hao_test_switches);
+}
+
 /* HAO_FLAGS / hao=FLAGS letters: v verbose, V more verbose (either alone
- * works), i interpreter, s statistics, u allow an unsigned guest. */
-static void apply_flags(hao_opts_t *o, const char *f)
+ * works), i interpreter, s statistics, and from HAO_FLAGS only (cli) u,
+ * allow an unsigned guest: the boot argument must not turn the signature
+ * check off. */
+static void apply_flags(hao_opts_t *o, const char *f, bool cli)
 {
     if (strchr(f, 'V')) o->verbose = 2;
     else if (strchr(f, 'v')) o->verbose = 1;
     if (strchr(f, 'i')) o->interp = true;
     if (strchr(f, 's')) o->stats = true;
-    if (strchr(f, 'u')) o->allow_unsigned = true;
+    if (cli && strchr(f, 'u')) o->allow_unsigned = true;
 }
 
 static void note_ignored(hao_opts_t *o, const char *name)
@@ -90,15 +108,16 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
             if (!eq) continue;
             *eq = 0;
             const char *key = tok, *val = eq + 1;
-            if (pid1 && !strcmp(key, "hao")) apply_flags(o, val);
+            if (pid1 && !strcmp(key, "hao")) apply_flags(o, val, false);
             else if (pid1 && !strcmp(key, "hao_verbose")) o->verbose = atoi(val);
             else if (!strncmp(key, "hao_", 4) && !strcmp(val, "1"))
                 for (size_t k = 0; k < NKNOBS; k++)
-                    if (!strcmp(key + 4, knobs[k].name)) *(bool *)((char *)o + knobs[k].off) = true;
+                    if (!strcmp(key + 4, knobs[k].name) && boot_knob_allowed(knobs[k].boot))
+                        *(bool *)((char *)o + knobs[k].off) = true;
         }
     }
     if (flags) {
-        if (hao_env_switch_allowed("HAO_FLAGS", tier)) apply_flags(o, flags);
+        if (hao_env_switch_allowed("HAO_FLAGS", tier)) apply_flags(o, flags, true);
         else if (flags[0]) note_ignored(o, "HAO_FLAGS");
     }
     const char *v;

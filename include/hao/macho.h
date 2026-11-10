@@ -192,8 +192,8 @@ bool hao_codesig_parse(const uint8_t *blob, size_t len, hao_codesig *cs);
 bool hao_codesig_library_validated(const hao_codesig *cs);
 enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
 /* The next image loaded is the main executable: its signature sets the
- * policy (enabled = false: off, boot argument hao_no_libval=1 or, in an
- * ordinary process, HAO_NO_LIBVAL=1). */
+ * policy (enabled = false: off, HAO_NO_LIBVAL=1 in an ordinary process;
+ * no boot argument turns it off). */
 void hao_libval_expect_main(bool enabled);
 /* The loader's gate, after an image's load commands validate and before it
  * is mapped; img->fd and the slice fields are set. 0 = may load, else -1

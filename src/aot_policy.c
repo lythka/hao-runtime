@@ -99,19 +99,29 @@ int hao_aot_check(const void *buf, uint64_t size, const hao_aot_expect *x, hao_a
 int hao_env_tier_for(const hao_proc_facts *f)
 {
     int t = HAO_ENV_OPEN;
-    if (f->pid == 1 || (f->euid == 0 && f->ppid == 1) || f->restricted || f->entitled) t = HAO_ENV_GUARDED;
+    /* Every root process, whoever started it: its environment may have come
+     * through sudo, a login session or a job's plist from someone who is not
+     * root, and what it would choose (code, paths, checks) runs as root. */
+    if (f->pid == 1 || f->euid == 0 || f->restricted || f->entitled) t = HAO_ENV_GUARDED;
     if (f->setugid || f->uid != f->euid || f->gid != f->egid) t = HAO_ENV_SETUGID;
     if (f->distrust > t) t = f->distrust > HAO_ENV_SETUGID ? HAO_ENV_SETUGID : f->distrust;
     return t;
 }
 
-/* Turn a feature off; the process still runs correctly (more slowly). */
-static const char *const off_switches[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", "HAO_NO_VARSNIFF",
-                                           "HAO_NO_IFUNITS", "HAO_NATIVE_LIBCXX", "HAO_NO_THUNKS",
-                                           "HAO_SIGRETURN_KERNEL", "HAO_NO_PROBE", NULL};
-/* Print diagnostics only (to the process's own stderr or the console). */
-static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_WATCHDOG", "HAO_BRIDGE_CHECK",
-                                            "HAO_BRIDGE_STATS", "HAO_CODE_ALIAS", NULL};
+/* Run the same guest code through a path every process already takes without
+ * the switch: no cache file (HAO_NO_AOT), the interpreter a full code cache
+ * or a process without executable memory falls back to (HAO_INTERP,
+ * HAO_JIT_HELPERS_ONLY), an exit not chained yet (HAO_NO_CHAIN). They change
+ * speed, not what is bound or how a native call is made. */
+static const char *const engine_switches[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", NULL};
+/* Print to the process's own stderr or the console. They bind nothing and
+ * turn nothing off (HAO_NX_STATS adds a thread that only prints). */
+static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", NULL};
+/* For hao's own tests: they replace a kernel answer or a resource limit with
+ * a chosen one, or make a diagnostic fatal. Read only by a build with
+ * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
+static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
+                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {
@@ -119,16 +129,65 @@ static bool listed(const char *const *l, const char *name)
     return false;
 }
 
-/* Everything not listed above (HAO_CACHE, HAO_TRUST_LIST, HAO_AOT_LEARN, HAO_GUEST_ROOT,
- * HAO_IF_DIR, HAO_FLAGS, HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG,
- * HAO_NO_BLOCK_THUNKS, HAO_NO_SWIFT_THUNKS, HAO_NO_JIT_MEMORY, HAO_BRIDGE_ABORT, HAO_SWIFT_POP, HAO_SIGRETURN_USER, ...) chooses code, paths or
- * bridging: OPEN only. HAO_DIAG_DIR is a diagnostic, but it names a directory a guarded (root) process would create a
- * file in: OPEN only too. */
+#ifdef HAO_TEST_SWITCHES
+const bool hao_test_switches = true;
+#else
+const bool hao_test_switches = false;
+#endif
+
+bool hao_env_test_switch(const char *name) { return listed(test_switches, name); }
+
+/* Everything not listed above is OPEN only, because it does one of:
+ *  - choose code or paths: HAO_CACHE, HAO_TRUST_LIST, HAO_AOT_LEARN, HAO_GUEST_ROOT, HAO_IF_DIR,
+ *    HAO_ASYNC_CONTRACT_LIBRARY, HAO_FLAGS, HAO_DIAG_DIR (a directory a root process would create a file in);
+ *  - turn a check off: HAO_NO_LIBVAL;
+ *  - change how native calls are made, so a correct program stops being one: HAO_NO_VARSNIFF (variadic natives
+ *    read their arguments from the wrong registers, varsniff.c), HAO_NO_IFUNITS and HAO_NO_THUNKS (calls fall to
+ *    the untyped bridge or are refused, bridge.c), HAO_NATIVE_LIBCXX (guest code meets a libc++ with another
+ *    std::string layout, runtime.c), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
+ *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
+ *    swiftresult.c);
+ *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the
+ *    frame, signals.c), HAO_NO_PROBE, HAO_WATCHDOG (takes SIGALRM and exits 124), HAO_JIT_CACHE_MB.
+ * A switch nobody listed is OPEN only too. SETUGID honours none: even an engine switch lets the caller slow a
+ * set-ID program by orders of magnitude, which widens every race in it. */
 bool hao_env_switch_allowed(const char *name, int tier)
 {
+    if (!hao_test_switches && listed(test_switches, name)) return false;
     if (tier <= HAO_ENV_OPEN) return true;
-    if (listed(off_switches, name)) return true;
-    return tier == HAO_ENV_GUARDED && listed(diag_switches, name);
+    return tier == HAO_ENV_GUARDED && (listed(engine_switches, name) || listed(diag_switches, name));
+}
+
+/* dyld's rule for a main executable that is set-user-ID or set-group-ID
+ * (AMFI clears AMFI_DYLD_OUTPUT_ALLOW_AT_PATH and ..._ALLOW_PATH_VARS, so
+ * ProcessConfig::Security has allowAtPaths and allowEnvVarsPath false;
+ * dyld/Loader.cpp):
+ *  - @executable_path is never expanded (Loader::expandAtExecutablePath:
+ *    "@executable_path not expanded due to security policy");
+ *  - @loader_path is not expanded in an LC_RPATH of the main executable; it
+ *    still is in a load command and in another image's LC_RPATH
+ *    (Loader::expandAtLoaderPath);
+ *  - an LC_RPATH that is a relative path is skipped
+ *    (Loader::forEachResolvedAtPathVar, rdar://81909581);
+ *  - an install name that is a relative path is refused (Loader::getLoader:
+ *    "relative path not allowed in hardened program", rdar://47682983).
+ * The caller of a set-ID program chooses its working directory and, through
+ * a hard link, the directory its path names, so these would let that caller
+ * choose the code. Absolute paths and @rpath/ itself (expanded through the
+ * LC_RPATHs this rule then filters) pass. */
+bool hao_dep_path_allowed(const char *path, bool from_rpath, bool main_image, int tier, const char **why)
+{
+    const char *w = NULL;
+    if (tier == HAO_ENV_SETUGID) {
+        if (!strncmp(path, "@executable_path", 16) && (path[16] == '/' || !path[16]))
+            w = "security policy does not allow @ path expansion";
+        else if (!strncmp(path, "@loader_path", 12) && (path[12] == '/' || !path[12])) {
+            if (from_rpath && main_image) w = "security policy does not allow @ path expansion";
+        } else if (path[0] != '/' && path[0] != '@')
+            w = "relative path not allowed in hardened program";
+    }
+    if (why) *why = w;
+    return !w;
 }
 
 bool hao_entitlements_foreign(const char *xml, size_t n)

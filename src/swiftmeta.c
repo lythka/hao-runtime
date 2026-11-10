@@ -59,8 +59,9 @@
  * to hao_callback_entry. hao_swiftmeta_island_target reads the guest address at
  * entry+2 and guest code that branches to an entry (a witness table slot
  * the runtime filled) is mapped back to the guest function by the
- * dispatcher (hao_guest_of_entry). Off with HAO_NO_SWIFT_THUNKS=1 (boot
- * argument hao_no_swift_thunks=1); no thunks without JIT memory.
+ * dispatcher (hao_guest_of_entry). Off with HAO_NO_SWIFT_THUNKS=1 (an
+ * ordinary process; boot argument hao_no_swift_thunks=1 in a
+ * HAO_TEST_SWITCHES build); no thunks without JIT memory.
  */
 #include "hao/runtime.h"
 #include "hao/bridge.h"

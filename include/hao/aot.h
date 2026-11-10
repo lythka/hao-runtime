@@ -69,16 +69,20 @@ uint64_t hao_aot_hash64(const void *p, size_t n, uint64_t seed);
 uint64_t hao_aot_guest_id(const void *mach_header, uint64_t avail, uint64_t slice_size);
 
 /* ------------------------------------------------- environment trust
- * OPEN:    an ordinary process. Every HAO_* switch is honoured.
- * GUARDED: PID 1, a root process started by launchd (a daemon), a process
- *          dyld treats as restricted, or one holding entitlements beyond
- *          hao's own. Its environment is not trusted to choose code or
- *          paths: only diagnostics and switches that turn features off.
+ * OPEN:    an ordinary user's process. Every HAO_* switch is honoured
+ *          (the test switches only in a HAO_TEST_SWITCHES build).
+ * GUARDED: PID 1, any process with effective uid 0, a process dyld treats
+ *          as restricted, or one holding entitlements beyond hao's own. Its
+ *          environment is not trusted to choose code, paths, checks or how
+ *          calls are bridged: only the engine switches (HAO_NO_AOT,
+ *          HAO_INTERP, HAO_NO_CHAIN, HAO_JIT_HELPERS_ONLY) and the printing
+ *          ones (HAO_VERBOSE, HAO_CRASH_TRACE, HAO_NX_STATS,
+ *          HAO_BRIDGE_STATS) are honoured.
  * SETUGID: credentials changed at exec (issetugid(), or uid != euid, or
- *          gid != egid). Only switches that turn features off; diagnostics
- *          would show the caller this process's layout.
- * Boot arguments (hao=, hao_verbose=, hao_no_aot=1, ...) are the trusted
- * channel for PID 1 and daemons. */
+ *          gid != egid). No switch is honoured, and dependency paths follow
+ *          dyld's rule for such a process (hao_dep_path_allowed).
+ * Boot arguments (hao=, hao_verbose=, and the hao_<knob>=1 that hao/opts.h
+ * lists) are the trusted channel for PID 1 and daemons. */
 enum { HAO_ENV_OPEN = 0, HAO_ENV_GUARDED = 1, HAO_ENV_SETUGID = 2 };
 
 typedef struct {
@@ -94,6 +98,17 @@ typedef struct {
 int hao_env_tier_for(const hao_proc_facts *f);
 /* May switch `name` be read from the environment at this tier? */
 bool hao_env_switch_allowed(const char *name, int tier);
+/* Was this hao built with HAO_TEST_SWITCHES (a test or bring-up build,
+ * never a release)? */
+extern const bool hao_test_switches;
+/* Is `name` one of the test switches (never read by a build without
+ * HAO_TEST_SWITCHES)? */
+bool hao_env_test_switch(const char *name);
+/* May a dependency path be expanded and tried at this tier? path is an
+ * install name (from_rpath false) or an LC_RPATH entry of the image that is
+ * (main_image) or is not the main executable. false: *why (if not NULL) is
+ * dyld's wording for the refusal. */
+bool hao_dep_path_allowed(const char *path, bool from_rpath, bool main_image, int tier, const char **why);
 /* Does an XML entitlements plist name any key outside hao's own? */
 bool hao_entitlements_foreign(const char *xml, size_t n);
 
@@ -107,7 +122,7 @@ typedef struct { char path[1024]; int kind; } hao_aot_dir;
 
 /* Directories to search, in order; returns how many. *write_idx is the
  * entry `hao --aot` writes to, or -1. hao_cache is HAO_CACHE (ignored
- * unless tier is OPEN; must be absolute, else nothing is used and why says
+ * unless tier is OPEN, so never read by root; must be absolute, else nothing is used and why says
  * so). pw_dir is the euid's home from the user database (never $HOME);
  * a user directory exists only for an OPEN process with 501 <= euid <
  * 0x80000000. */

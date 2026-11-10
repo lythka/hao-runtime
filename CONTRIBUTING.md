@@ -55,8 +55,15 @@ image works; those are tested on the target system.
   verdict; `--stats` prints translation statistics at exit; `--interp` runs
   without the JIT, which separates translator bugs from runtime bugs.
 - `HAO_FLAGS` sets the same switches for a process hao starts indirectly
-  (`v`, `V`, `i`, `s`, `u`). Environment switches are ignored in guarded and
-  set-ID processes.
+  (`v`, `V`, `i`, `s`, `u`). Which switches a process honours depends on its
+  tier (`docs/security-model.md`): debug as an ordinary user, because a root
+  process honours only the engine and printing switches (`HAO_VERBOSE=1`,
+  `HAO_INTERP=1`, ...; not `HAO_FLAGS`, so not `-v` either), and a set-ID
+  process none.
+- The scripts that use a test switch (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`,
+  `HAO_AOT_LIMIT_KB`, `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`,
+  `HAO_CODE_ALIAS`) need a build compiled with `-DHAO_TEST_SWITCHES`; a
+  release build ignores them.
 - `HAO_BRIDGE_CHECK=1` reports native-boundary mismatches, such as unbalanced
   native frames and results that differ from the signature. `HAO_NX_STATS=1`
   groups, by native caller and guest target, the native-to-guest calls that
