@@ -263,7 +263,7 @@ static void catl_build(hao_image *img)
 {
     uint64_t n, a = hao_image_section(img, NULL, "__objc_catlist", &n);
     free(catl.v);
-    catl.v = calloc(n / 8 * 5 + 1, sizeof *catl.v);
+    catl.v = hao_alloc_check(calloc(n / 8 * 5 + 1, sizeof *catl.v), "ObjC category list");
     catl.n = 0;
     for (uint64_t k = 0; k < n / 8; k++) {
         category_t *cat = *(category_t **)(uintptr_t)(a + 8 * k);
@@ -309,7 +309,7 @@ static uint64_t dsc_methods(hao_image *img, uint64_t p)
     uint32_t total = 0;
     for (int k = 0; k < n; k++) total += ((const method_list_t *)(uintptr_t)lists[k])->count;
     if (!n) return 0;
-    method_list_t *ml = calloc(1, sizeof *ml + 24 * (size_t)total);
+    method_list_t *ml = hao_alloc_check(calloc(1, sizeof *ml + 24 * (size_t)total), "ObjC method list");
     struct big_ctx b = {(uint64_t *)(ml + 1), 0};
     for (int k = 0; k < n; k++) for_each_method(lists[k], cb_big, &b);
     ml->entsize_flags = 24;   /* not uniqued, not sorted: the runtime fixes it up */
@@ -346,8 +346,7 @@ void hao_objc_prepare_generic_class(uint64_t metadata)
         if (!ro || (ro->flags & (1u << 31)) || !hao_image_for_addr(ro->baseMethods)) continue;
         if (ro->baseMethods & 1) continue;
         const method_list_t *old = (const method_list_t *)(uintptr_t)ro->baseMethods;
-        method_list_t *ml = calloc(1, sizeof *ml + 24ull * old->count);
-        if (!ml) continue;
+        method_list_t *ml = hao_alloc_check(calloc(1, sizeof *ml + 24ull * old->count), "ObjC method list");
         struct big_ctx b = {(uint64_t *)(ml + 1), 0};
         for_each_method(ro->baseMethods, cb_native_method, &b);
         ml->entsize_flags = 24;
@@ -365,7 +364,7 @@ static uint64_t dsc_properties(hao_image *img, uint64_t p)
     uint32_t total = 0;
     for (int k = 0; k < n; k++) total += ((const method_list_t *)(uintptr_t)lists[k])->count;
     if (!n) return 0;
-    method_list_t *pl = calloc(1, sizeof *pl + 16 * (size_t)total);
+    method_list_t *pl = hao_alloc_check(calloc(1, sizeof *pl + 16 * (size_t)total), "ObjC property list");
     uint64_t *d = (uint64_t *)(pl + 1);
     for (int k = 0; k < n; k++) {
         const method_list_t *l = (const method_list_t *)(uintptr_t)lists[k];
@@ -390,7 +389,7 @@ static uint64_t dsc_protocols(hao_image *img, uint64_t p)
     uint64_t total = 0;
     for (int k = 0; k < n; k++) total += ((const protocol_list_t *)(uintptr_t)lists[k])->count;
     if (!n) return 0;
-    protocol_list_t *nl = calloc(1, sizeof *nl + 8 * (size_t)total);
+    protocol_list_t *nl = hao_alloc_check(calloc(1, sizeof *nl + 8 * (size_t)total), "ObjC protocol list");
     for (int k = 0; k < n; k++) {
         const protocol_list_t *l = (const protocol_list_t *)(uintptr_t)lists[k];
         for (uint64_t j = 0; j < l->count; j++) {
@@ -566,7 +565,7 @@ static void note_class_load(class_t *cls, uint64_t imp)
 {
     if (nclass_loads == cap_class_loads) {
         cap_class_loads = cap_class_loads ? 2 * cap_class_loads : 64;
-        class_loads = realloc(class_loads, cap_class_loads * sizeof *class_loads);
+        class_loads = hao_alloc_check(realloc(class_loads, cap_class_loads * sizeof *class_loads), "ObjC +load list");
     }
     class_loads[nclass_loads].cls = (uint64_t)(uintptr_t)cls;
     class_loads[nclass_loads].imp = imp;
@@ -615,7 +614,7 @@ static void prepare_class(hao_image *img, class_t *cls, pending_list *pl, int de
 add:
     if (pl->n == pl->cap) {
         pl->cap = pl->cap ? 2 * pl->cap : 256;
-        pl->v = realloc(pl->v, pl->cap * sizeof *pl->v);
+        pl->v = hao_alloc_check(realloc(pl->v, pl->cap * sizeof *pl->v), "ObjC pending classes");
     }
     pl->v[pl->n++] = (pending_class){cls, ro && (ro->flags & RO_REALIZED) ? NULL : ro};
 }
@@ -784,7 +783,7 @@ static void defer_category(const category_t *cat, bool class_props)
     pthread_mutex_lock(&pend_lock);
     if (npend_cats == cap_pend_cats) {
         cap_pend_cats = cap_pend_cats ? 2 * cap_pend_cats : 16;
-        pend_cats = realloc(pend_cats, cap_pend_cats * sizeof *pend_cats);
+        pend_cats = hao_alloc_check(realloc(pend_cats, cap_pend_cats * sizeof *pend_cats), "ObjC pending categories");
     }
     pend_cats[npend_cats++] = (pending_cat){cat, cat->cls, class_props};
     __atomic_fetch_add(&npend_live, 1, __ATOMIC_RELEASE);
@@ -812,8 +811,7 @@ static void class_realized(uint64_t c, bool force)
     size_t n = 0;
     for (size_t k = 0; fresh && k < npend_cats; k++) {
         if (pend_cats[k].cls != c || !pend_cats[k].cat) continue;
-        pending_cat *m = realloc(mine, (n + 1) * sizeof *mine);
-        if (!m) break;
+        pending_cat *m = hao_alloc_check(realloc(mine, (n + 1) * sizeof *mine), "ObjC pending categories");
         mine = m;
         mine[n++] = pend_cats[k];
         pend_cats[k].cat = NULL;
@@ -916,7 +914,7 @@ void hao_objc_read_image(hao_image *img)
     }
     /* 2. protocols */
     a = hao_image_section(img, NULL, "__objc_protolist", &n);
-    pmap = realloc(pmap, (npmap + n / 8 + 1) * sizeof *pmap);
+    pmap = hao_alloc_check(realloc(pmap, (npmap + n / 8 + 1) * sizeof *pmap), "ObjC protocol map");
     for (uint64_t k = 0; k < n / 8; k++) {
         protocol_t *p = *(protocol_t **)(uintptr_t)(a + 8 * k);
         pmap[npmap].guest = (uint64_t)(uintptr_t)p;
@@ -1177,10 +1175,10 @@ static bool msgsend_variadic(hao_cpu *c, id recv, Class cls, SEL sel, IMP imp)
     case VA_ARRAY: case VA_DICT: {
         /* nil-terminated, first element in the last named argument */
         size_t n = 0, cap = 64;
-        uint64_t *v = malloc(cap * sizeof *v);
+        uint64_t *v = hao_alloc_check(malloc(cap * sizeof *v), "ObjC variadic collection");
         for (uint64_t e = a[named - 1]; ; e = sp[n - 1]) {
             if (kind == VA_ARRAY ? !e : (!(n & 1) && !e)) break;
-            if (n == cap) { cap *= 2; v = realloc(v, cap * sizeof *v); }
+            if (n == cap) { cap *= 2; v = hao_alloc_check(realloc(v, cap * sizeof *v), "ObjC variadic collection"); }
             v[n++] = e;
             if (n > (1u << 24)) break;
         }
@@ -1190,7 +1188,8 @@ static bool msgsend_variadic(hao_cpu *c, id recv, Class cls, SEL sel, IMP imp)
             c->x[0] = ((uint64_t (*)(id, SEL, const uint64_t *, unsigned long))vi)(recv, vs, v, n);
         } else {   /* objects and keys alternate */
             size_t pairs = n / 2;
-            uint64_t *objs = malloc((pairs + 1) * sizeof *objs), *keys = malloc((pairs + 1) * sizeof *keys);
+            uint64_t *objs = hao_alloc_check(malloc((pairs + 1) * sizeof *objs), "ObjC variadic collection"),
+                     *keys = hao_alloc_check(malloc((pairs + 1) * sizeof *keys), "ObjC variadic collection");
             for (size_t j = 0; j < pairs; j++) { objs[j] = v[2 * j]; keys[j] = v[2 * j + 1]; }
             c->x[0] = ((uint64_t (*)(id, SEL, const uint64_t *, const uint64_t *, unsigned long))vi)(recv, vs, objs, keys, pairs);
             free(objs);

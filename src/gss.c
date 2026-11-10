@@ -60,7 +60,7 @@ static uint64_t *pm_slot(pmap *m, uint64_t key, bool insert)
     if (insert && (m->n + 1) * 2 > m->cap) {
         pmap o = *m;
         m->cap = o.cap ? o.cap * 2 : 64;
-        m->k = calloc(m->cap, 8); m->v = calloc(m->cap, 8); m->n = 0;
+        m->k = hao_alloc_check(calloc(m->cap, 8), "GSS-API map"); m->v = hao_alloc_check(calloc(m->cap, 8), "GSS-API map"); m->n = 0;
         for (size_t i = 0; i < o.cap; i++)
             if (o.k[i] > TOMB) { *pm_slot(m, o.k[i], true) = o.v[i]; }
         free(o.k); free(o.v);
@@ -98,7 +98,7 @@ static uint64_t oid_to_guest_l(const noid *n)
     if (!n) return 0;
     goid *g = (goid *)(uintptr_t)pm_get(&oid_n2g, (uint64_t)(uintptr_t)n);
     if (!g) {
-        g = calloc(1, sizeof *g);
+        g = hao_alloc_check(calloc(1, sizeof *g), "GSS-API OIDs");
         *pm_slot(&oid_n2g, (uint64_t)(uintptr_t)n, true) = (uint64_t)(uintptr_t)g;
         *pm_slot(&oid_g2n, (uint64_t)(uintptr_t)g, true) = (uint64_t)(uintptr_t)n;
     }
@@ -117,9 +117,9 @@ static const noid *oid_to_native_l(uint64_t ga)
     for (struct interned *i = interned; i; i = i->next)
         if (i->n->length == g->length && (!g->length || !memcmp((const void *)(uintptr_t)i->n->elements, bytes, g->length)))
             return i->n;
-    struct interned *i = malloc(sizeof *i);
-    i->n = malloc(sizeof *i->n);
-    void *copy = malloc(g->length ? g->length : 1);
+    struct interned *i = hao_alloc_check(malloc(sizeof *i), "GSS-API OIDs");
+    i->n = hao_alloc_check(malloc(sizeof *i->n), "GSS-API OIDs");
+    void *copy = hao_alloc_check(malloc(g->length ? g->length : 1), "GSS-API OIDs");
     if (g->length) memcpy(copy, bytes, g->length);
     i->n->length = g->length;
     i->n->elements = (uint64_t)(uintptr_t)copy;
@@ -134,11 +134,11 @@ static uint64_t set_to_guest_l(const oset *n)
     if (!n) return 0;
     oset *g = (oset *)(uintptr_t)pm_get(&set_n2g, (uint64_t)(uintptr_t)n);
     if (!g) {
-        g = calloc(1, sizeof *g);
+        g = hao_alloc_check(calloc(1, sizeof *g), "GSS-API OID sets");
         *pm_slot(&set_n2g, (uint64_t)(uintptr_t)n, true) = (uint64_t)(uintptr_t)g;
         *pm_slot(&set_g2n, (uint64_t)(uintptr_t)g, true) = (uint64_t)(uintptr_t)n;
     }
-    goid *ge = realloc((void *)(uintptr_t)g->elements, (n->count ? n->count : 1) * sizeof *ge);
+    goid *ge = hao_alloc_check(realloc((void *)(uintptr_t)g->elements, (n->count ? n->count : 1) * sizeof *ge), "GSS-API OID sets");
     const noid *ne = (const noid *)(uintptr_t)n->elements;
     for (uint64_t k = 0; k < n->count; k++) ge[k] = (goid){ne[k].length, 0, ne[k].elements};
     g->count = n->count;
@@ -165,8 +165,8 @@ static oset *set_to_native_l(uint64_t ga, bool *tmp)
     uint64_t n = pm_get(&set_g2n, ga);
     if (n) return (oset *)(uintptr_t)n;
     const oset *g = (const oset *)(uintptr_t)ga;
-    oset *t = malloc(sizeof *t);
-    noid *e = malloc((g->count ? g->count : 1) * sizeof *e);
+    oset *t = hao_alloc_check(malloc(sizeof *t), "GSS-API OID sets");
+    noid *e = hao_alloc_check(malloc((g->count ? g->count : 1) * sizeof *e), "GSS-API OID sets");
     const goid *ge = (const goid *)(uintptr_t)g->elements;
     for (uint64_t k = 0; k < g->count; k++) e[k] = *oid_to_native_l((uint64_t)(uintptr_t)&ge[k]);
     t->count = g->count;
@@ -349,7 +349,7 @@ bool hao_gss_interpose(const char *name, uint64_t *addr)
     switch (kind) {
     case 'D': *addr = oid_to_guest_l(nv); break;
     case 'P': case 'Q': {
-        uint64_t *slot = malloc(8);
+        uint64_t *slot = hao_alloc_check(malloc(8), "GSS-API OID variables");
         *slot = kind == 'P' ? oid_to_guest_l(*(const noid *const *)nv) : set_to_guest_l(*(const oset *const *)nv);
         *addr = (uint64_t)(uintptr_t)slot;
         break;
@@ -358,7 +358,7 @@ bool hao_gss_interpose(const char *name, uint64_t *addr)
         const noid *ne = nv;
         int cnt = 0;
         while (cnt < 64 && ne[cnt].length) cnt++;
-        goid *ga = calloc((size_t)cnt + 1, sizeof *ga);
+        goid *ga = hao_alloc_check(calloc((size_t)cnt + 1, sizeof *ga), "GSS-API OID variables");
         for (int k = 0; k < cnt; k++) {
             ga[k] = (goid){ne[k].length, 0, ne[k].elements};
             *pm_slot(&oid_g2n, (uint64_t)(uintptr_t)&ga[k], true) = (uint64_t)(uintptr_t)&ne[k];
