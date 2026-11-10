@@ -2060,7 +2060,7 @@ static int fetch_block(uint64_t pc, hao_image *im, uint32_t *insns)
 static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
 {
     t->im = t->win ? NULL : hao_image_for_code(pc);
-    bool live = block_end_live(t, pc, insns, n);
+    bool live = n > 0 ? block_end_live(t, pc, insns, n) : true;   /* n == 0: the image was released under the fetch */
     for (int k = n - 1; k >= 0; k--) {
         t->live_out[k] = live;
         int e = flag_effect(insns[k]);
