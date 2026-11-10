@@ -23,11 +23,13 @@
 #include "hao/bridge.h"
 #include <dirent.h>
 #include <dlfcn.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#define MAX_TLIBS 16
-static struct { void *handle; hao_image *img; } tlibs[MAX_TLIBS];
+/* Written once by hao_thunks_init (startup, one thread), read afterwards. */
+typedef struct { void *handle; hao_image *img; } tlib;
+static tlib *tlibs;
 static int ntlibs;
 static uint64_t st_found, st_missing;
 
@@ -40,15 +42,17 @@ void hao_thunks_init(void)
     DIR *d = opendir(dir.path);
     if (!d) return;
     struct dirent *e;
-    char names[MAX_TLIBS][256];
-    int n = 0;
-    while ((e = readdir(d)) && n < MAX_TLIBS) {
+    char **names = NULL;
+    size_t n = 0, cap = 0;
+    while ((e = readdir(d))) {
         size_t l = strlen(e->d_name);
-        if (l > 7 && l < sizeof names[0] && e->d_name[0] != '.' && !strcmp(e->d_name + l - 7, ".thunks"))
-            snprintf(names[n++], sizeof names[0], "%s", e->d_name);
+        if (l <= 7 || e->d_name[0] == '.' || strcmp(e->d_name + l - 7, ".thunks")) continue;
+        if (n == cap) { cap = cap ? cap * 2 : 16; names = hao_alloc_check(realloc(names, cap * sizeof *names), "thunk library list"); }
+        names[n++] = hao_alloc_check(strdup(e->d_name), "thunk library list");
     }
     closedir(d);
-    for (int k = 0; k < n; k++) {
+    if (n) tlibs = hao_alloc_check(calloc(n, sizeof *tlibs), "thunk library list");
+    for (size_t k = 0; k < n; k++) {
         struct stat st;
         int fd = hao_aot_open_trusted(&dir, names[k], &st, why, sizeof why);
         if (fd < 0) {
@@ -57,7 +61,11 @@ void hao_thunks_init(void)
         }
         close(fd);
         char path[2048];
-        snprintf(path, sizeof path, "%s/%s", dir.path, names[k]);
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir.path, names[k]) >= sizeof path) {
+            hao_diag_prefix(HAO_DIAG);
+            fprintf(HAO_DIAG, "thunk library %s/%s: path too long, not loaded\n", dir.path, names[k]);
+            continue;
+        }
         void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
         if (!h) {
             hao_diag_prefix(HAO_DIAG);
@@ -76,6 +84,8 @@ void hao_thunks_init(void)
         ntlibs++;
         if (hao_verbose) fprintf(stderr, "hao: thunk library %s (guest half at %#llx)\n", path, (unsigned long long)im->base);
     }
+    for (size_t k = 0; k < n; k++) free(names[k]);
+    free(names);
 }
 
 bool hao_thunks_pair(const char *key, uint64_t *gh, uint64_t *nh)

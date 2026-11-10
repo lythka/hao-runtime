@@ -164,6 +164,11 @@ typedef struct { FILE *f; char *buf; size_t len; } hao_diag_blk;
 FILE *hao_diag_block(hao_diag_blk *b);
 void hao_diag_block_end(hao_diag_blk *b);
 void hao_diag_prefix(FILE *f);            /* "hao[prog:pid]: " */
+/* hao's own bookkeeping got no memory (`what` names the table): one
+ * diagnostic, then abort, never a table that silently lost an entry. Not in
+ * signal handlers. hao_alloc_check: p, or hao_oom(what) when p is NULL. */
+__attribute__((noreturn, cold)) void hao_oom(const char *what);
+static inline void *hao_alloc_check(void *p, const char *what) { if (!p) hao_oom(what); return p; }
 void hao_diag_guest_addr(FILE *f, uint64_t a);   /* " (image+off, file vmaddr V)" when a is guest code */
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 /* Load the main executable from fd, the open descriptor its launcher has
@@ -405,6 +410,7 @@ char hao_swift_async_result_kind(const char *sym);           /* "_$s...": 0 if n
 char hao_swift_async_kind_for_demangled(const char *d);
 void hao_swift_async_note_call(uint64_t ctx, char kind);     /* guest calls such a function, x22 = its context */
 uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0);   /* native resumes guest `target` */
+void hao_swiftcc_fork_child(void);
 static inline bool hao_swift_async_kind(char k) { return k == 'b' || k == 'h' || k == 'H' || k == 't' || k == 'T'; }
 /* fnslots.c */
 void hao_fnslots_image(hao_image *img);

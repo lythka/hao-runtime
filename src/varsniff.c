@@ -27,6 +27,7 @@
  * up on anything else, so an unrecognised function stays bound as before.
  */
 #include "hao/runtime.h"
+#include "hao/gmap.h"
 #include "hao/macho.h"
 #include "hao/opts.h"
 #include "hao/vafmt.h"
@@ -219,11 +220,10 @@ static int guest_format_types(uint64_t a, char *ty, int max, char *kind)
 
 /* ---- the trap */
 
-typedef struct { uint64_t fn; uint8_t ngp, nfp; char narrow; } vsniff;
-#define VS_MAX 2048
-static vsniff vs[VS_MAX];
-static const char *vs_name[VS_MAX];   /* the first import bound to each entry, for -vv trap traces */
-static unsigned nvs;
+/* One record per native function, never freed: its trap's argument. name is
+ * the first import bound to it, for -vv trap traces. */
+typedef struct { uint64_t fn; uint8_t ngp, nfp; char narrow; const char *name; } vsniff;
+static hao_gmap vs = HAO_GMAP_INIT(2, 1, 8, 24);   /* native fn -> vsniff *, under vs_lock */
 static pthread_mutex_t vs_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Call native variadic fn with the guest's arguments: x0..x(ngp-1) (ngp <= 8) and v0..v(nfp-1) fixed, the guest's
@@ -310,9 +310,9 @@ bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow
     return typed;
 }
 
-static void trap_varsniff(hao_thread *t, uint64_t idx)
+static void trap_varsniff(hao_thread *t, uint64_t rec)
 {
-    const vsniff *v = &vs[idx];
+    const vsniff *v = (const vsniff *)(uintptr_t)rec;
     hao_varsniff_call(t, v->fn, v->ngp, v->nfp, v->narrow, v->ngp - 1, 0);
 }
 
@@ -420,16 +420,20 @@ bool hao_varsniff_bind(const char *name, uint64_t native, uint64_t *addr)
     int ngp, nfp;
     if (!hao_varsniff_native(native, &ngp, &nfp)) return false;
     pthread_mutex_lock(&vs_lock);
-    unsigned k;
-    for (k = 0; k < nvs && vs[k].fn != native; k++) {}
-    if (k == nvs) {
-        if (nvs == VS_MAX) { pthread_mutex_unlock(&vs_lock); return false; }
-        vs[k] = (vsniff){native, (uint8_t)ngp, (uint8_t)nfp, hao_narrowret_kind_for_name(name)};
-        vs_name[k] = strdup(name);
-        __atomic_store_n(&nvs, nvs + 1, __ATOMIC_RELEASE);
-    }
+    bool fresh;
+    uint64_t *s = hao_gmap_claim1(&vs, native, &fresh);
+    /* an import left out would bind straight to the native variadic function */
+    if (!s) hao_oom("native variadic functions");
+    vsniff *v;
+    if (fresh) {
+        v = hao_alloc_check(malloc(sizeof *v), "native variadic functions");
+        *v = (vsniff){native, (uint8_t)ngp, (uint8_t)nfp, hao_narrowret_kind_for_name(name),
+                      hao_alloc_check(strdup(name), "native variadic functions")};
+        s[1] = (uint64_t)(uintptr_t)v;
+        hao_gmap_publish1(&vs, s, native);
+    } else v = (vsniff *)(uintptr_t)s[1];
     pthread_mutex_unlock(&vs_lock);
     if (hao_verbose) fprintf(stderr, "hao: %s: native variadic (%d fixed, %d fixed FP)\n", name, ngp, nfp);
-    *addr = hao_trap_address(vs_name[k], trap_varsniff, k);
+    *addr = hao_trap_address(v->name, trap_varsniff, (uint64_t)(uintptr_t)v);
     return true;
 }

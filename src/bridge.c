@@ -183,9 +183,9 @@ typedef struct {
     addr_ent *ax; uint32_t nax, cap;
     uint8_t *placed;                  /* bit per record: in ax */
 } native_lib;
-#define NLIBS 2048
-static native_lib libs[NLIBS];
-static int nlibs, units_loaded, units_rejected;
+/* mach header -> native_lib * (arena); written and read under bridge_lock */
+static hao_gmap libs = HAO_GMAP_INIT(2, 1, 8, 24);
+static int units_loaded, units_rejected;
 static bool units_on;
 static hao_aot_dir if_dir;
 
@@ -500,9 +500,14 @@ static const native_lib *lib_for(uint64_t base, const char *path)
     if (!units_on || !base) return NULL;
     L();
     native_lib *l = NULL;
-    for (int k = 0; k < nlibs && !l; k++) if (libs[k].base == base) l = &libs[k];
-    if (!l && nlibs < NLIBS) {
-        l = &libs[nlibs++];
+    bool fresh;
+    uint64_t *s = hao_gmap_claim1(&libs, base, &fresh);
+    if (s && !fresh) l = (native_lib *)(uintptr_t)s[1];
+    else {
+        /* a library left out would bind without its unit */
+        if (!s || !(l = arena_alloc(sizeof *l))) hao_oom("interface unit libraries");
+        s[1] = (uint64_t)(uintptr_t)l;
+        hao_gmap_publish1(&libs, s, base);
         l->base = base;
         l->path = arena_str(path);
         /* once per library, under the lock so that a concurrent first-call

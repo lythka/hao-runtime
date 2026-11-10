@@ -206,6 +206,7 @@ static void fork_child(void)
     hao_swiftmeta_fork_child();
     hao_swift_objects_fork_child();
     hao_swift_result_fork_child();
+    hao_swiftcc_fork_child();
     hao_swift_value_fork_child();
     hao_async_contract_fork_child();
     hao_varsniff_fork_child();
@@ -953,6 +954,13 @@ static char diag_dir[1024];
 static char diag_buf[16384];      /* hao_diag_file's line buffer */
 
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[%s:%d]: ", getprogname(), (int)getpid()); }
+
+void hao_oom(const char *what)
+{
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG, "%s: out of memory\n", what);
+    abort();
+}
 
 void hao_diag_guest_addr(FILE *f, uint64_t a)
 {
@@ -2214,16 +2222,28 @@ hao_image *hao_load_main_image(const char *path, int fd, char *err, size_t errle
     return img;
 }
 
-/* Images in load order (main executable first). */
-static int images_in_order(hao_image **out, int max)
+static int by_load_seq(const void *a, const void *b)
 {
-    int n = 0;
-    for (hao_image *im = hao_images_first(); im && n < max; im = hao_images_next(im)) {
-        int k = n++;
-        while (k > 0 && out[k - 1]->load_seq > im->load_seq) { out[k] = out[k - 1]; k--; }
-        out[k] = im;
+    uint32_t x = (*(hao_image *const *)a)->load_seq, y = (*(hao_image *const *)b)->load_seq;
+    return x < y ? -1 : x > y;
+}
+
+/* Every listed image in load order (main executable first), under
+ * lock_loads, in an array the caller frees; *count is its length. */
+static hao_image **images_in_order(size_t *count)
+{
+    size_t n = 0, cap = 0;
+    hao_image **out = NULL;
+    for (hao_image *im = hao_images_first(); im; im = hao_images_next(im)) {
+        if (n == cap) {
+            cap = cap ? cap * 2 : 64;
+            out = hao_alloc_check(realloc(out, cap * sizeof *out), "image list");
+        }
+        out[n++] = im;
     }
-    return n;
+    if (n > 1) qsort(out, n, sizeof *out, by_load_seq);
+    *count = n;
+    return out;
 }
 
 static void dir_of(const char *path, char *out, size_t n)
@@ -2741,9 +2761,12 @@ uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool 
     if (ordinal == -1 && guest_lookup(hao_main_image, name, &a, 0)) goto out;
     if (ordinal <= 0) {
         /* flat and weak-definition lookups: guest images in load order, then native */
-        hao_image *ims[256];
-        int n = images_in_order(ims, 256);
-        for (int k = 0; k < n; k++) if (guest_lookup(ims[k], name, &a, 0)) goto out;
+        size_t n;
+        hao_image **ims = images_in_order(&n);
+        bool hit = false;
+        for (size_t k = 0; k < n && !hit; k++) hit = guest_lookup(ims[k], name, &a, 0);
+        free(ims);
+        if (hit) goto out;
         if (interposed(name, &a, true) || native_sym(RTLD_DEFAULT, name, true, &a)) goto out;
     } else {
         void *h = dep_handle(img, ordinal);
@@ -2799,16 +2822,18 @@ static void init_tree(hao_image *im, int depth)
 void hao_run_initializers(void)
 {
     lock_loads();
-    hao_image *ims[1024];
-    int n, done = 0;
+    hao_image **ims;
+    size_t n, done = 0;
     for (;;) {
-        n = images_in_order(ims, 1024);
+        ims = images_in_order(&n);
         if (done >= n) break;
-        for (int k = done; k < n; k++)
+        for (size_t k = done; k < n; k++)
             for (int d = 0; d < ims[k]->ndeps; d++) (void)dep_handle(ims[k], d + 1);
+        free(ims);
         done = n;
     }
-    for (int k = 0; k < n; k++) init_tree(ims[k], 0);
+    for (size_t k = 0; k < n; k++) init_tree(ims[k], 0);
+    free(ims);
     launched = true;
     unlock_loads();
 }

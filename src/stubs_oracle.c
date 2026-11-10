@@ -15,6 +15,7 @@ void hao_opts_init(const char *flags) { (void)flags; }
 bool hao_bootarg_flag(const char *key) { (void)key; return false; }
 FILE *hao_diag_file;
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[oracle]: "); }
+void hao_oom(const char *what) { fprintf(stderr, "hao[oracle]: %s: out of memory\n", what); abort(); }
 void hao_crit_enter(void) {}
 void hao_crit_leave(void) {}
 int hao_crit_depth(void) { return 1; }
