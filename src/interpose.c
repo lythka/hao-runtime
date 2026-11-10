@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -378,6 +379,99 @@ static void trap_vfork(hao_thread *t, uint64_t a)
 {
     (void)a;
     t->cpu.x[0] = (uint64_t)(int64_t)fork();
+}
+
+/* ---- memory the guest maps executable holds arm64 code (a JIT's output).
+ * hao translates only registered images, so a call there must not run as
+ * x86 code: bind_bare (bridge.c) refuses targets in these ranges. Sorted,
+ * disjoint [lo, hi); written by the guest's mmap/mprotect/munmap, read on a
+ * first call of a bare address. Neither path runs in a signal handler. */
+typedef struct { uint64_t lo, hi; } xrange;
+static xrange *xr;
+static size_t nxr, capxr;
+static pthread_mutex_t xr_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void hao_interpose_fork_child(void) { xr_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+
+/* under xr_lock: drop [lo, hi) from the set, splitting a range it cuts */
+static void xr_cut(uint64_t lo, uint64_t hi)
+{
+    for (size_t k = 0; k < nxr; k++) {
+        if (xr[k].hi <= lo || xr[k].lo >= hi) continue;
+        if (xr[k].lo < lo && xr[k].hi > hi) {          /* split in two */
+            if (nxr == capxr) { capxr = capxr ? 2 * capxr : 16; xr = hao_alloc_check(realloc(xr, capxr * sizeof *xr), "guest executable ranges"); }
+            memmove(&xr[k + 2], &xr[k + 1], (nxr - k - 1) * sizeof *xr);
+            xr[k + 1] = (xrange){hi, xr[k].hi};
+            xr[k].hi = lo;
+            nxr++;
+            return;
+        }
+        if (xr[k].lo < lo) xr[k].hi = lo;
+        else if (xr[k].hi > hi) xr[k].lo = hi;
+        else { memmove(&xr[k], &xr[k + 1], (nxr - k - 1) * sizeof *xr); nxr--; k--; }
+    }
+}
+
+void hao_guest_vm_note(uint64_t a, uint64_t n, bool exec)
+{
+    if (!n || a + n < a) return;
+    uint64_t lo = a & ~(uint64_t)4095, hi = (a + n + 4095) & ~(uint64_t)4095;
+    hao_crit_enter();
+    pthread_mutex_lock(&xr_lock);
+    xr_cut(lo, hi);
+    if (exec) {
+        if (nxr == capxr) { capxr = capxr ? 2 * capxr : 16; xr = hao_alloc_check(realloc(xr, capxr * sizeof *xr), "guest executable ranges"); }
+        size_t k = 0;
+        while (k < nxr && xr[k].lo < lo) k++;
+        memmove(&xr[k + 1], &xr[k], (nxr - k) * sizeof *xr);
+        xr[k] = (xrange){lo, hi};
+        nxr++;
+    }
+    pthread_mutex_unlock(&xr_lock);
+    hao_crit_leave();
+}
+
+bool hao_guest_exec_mapped(uint64_t a)
+{
+    bool r = false;
+    hao_crit_enter();
+    pthread_mutex_lock(&xr_lock);
+    size_t lo = 0, hi = nxr;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (xr[mid].hi <= a) lo = mid + 1;
+        else if (xr[mid].lo > a) hi = mid;
+        else { r = true; break; }
+    }
+    pthread_mutex_unlock(&xr_lock);
+    hao_crit_leave();
+    return r;
+}
+
+/* arg: 0 mmap, 1 mprotect, 2 munmap; the native call with the guest's arguments, then the note */
+static void trap_vm(hao_thread *t, uint64_t which)
+{
+    hao_cpu *c = &t->cpu;
+    uint64_t a = c->x[0], n = c->x[1];
+    int prot = (int)c->x[2];
+    if (which == 0) {
+        void *p = mmap((void *)(uintptr_t)a, (size_t)n, prot, (int)c->x[3], (int)c->x[4], (off_t)c->x[5]);
+        c->x[0] = (uint64_t)(uintptr_t)p;
+        if (p != MAP_FAILED) {
+            int e = errno;
+            hao_guest_vm_note((uint64_t)(uintptr_t)p, n, (prot & PROT_EXEC) || ((int)c->x[3] & MAP_JIT));
+            errno = e;
+        }
+        return;
+    }
+    int r = which == 1 ? mprotect((void *)(uintptr_t)a, (size_t)n, prot) : munmap((void *)(uintptr_t)a, (size_t)n);
+    c->x[0] = (uint64_t)(int64_t)r;
+    if (!r) {
+        int e = errno;
+        /* mprotect without PROT_EXEC leaves a MAP_JIT region's code the guest's own all the same */
+        if (which == 2 || (prot & PROT_EXEC)) hao_guest_vm_note(a, n, which == 1);
+        errno = e;
+    }
 }
 
 /* xo_warn/xo_err family: text-mode output identical to BSD err(3).
@@ -732,6 +826,7 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
     {"_xo_warn", trap_xo_err, 2}, {"_xo_warnx", trap_xo_err, 0}, {"_xo_warn_c", trap_xo_err, 2 | 4},
     {"_execl", trap_execl, 0}, {"_execle", trap_execl, 1}, {"_execlp", trap_execl, 2},
     {"_vfork", trap_vfork, 0},
+    {"_mmap", trap_vm, 0}, {"_mprotect", trap_vm, 1}, {"_munmap", trap_vm, 2},
     {"_CFLog", trap_cflog, 0},
     {"__os_log_internal", trap_os_log_internal, 0},
 };

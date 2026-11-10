@@ -47,6 +47,16 @@ boundary, with runtime-sized values handled where the layout is proven.
 - Half precision does not model FZ16 or AHP.
 - Some FPSR flag differences remain for native-emitted operations with FZ.
 
+**Execution**
+- Only code in loaded guest images is translated. ARM64 code a program
+  generates at run time (a JIT writing to `MAP_JIT` or heap memory) does not
+  run: a call into memory the guest mapped or made executable with `mmap` or
+  `mprotect`, or into memory that is not executable on the host, stops the
+  program with a `bridge: REFUSED` diagnostic. Executable memory the guest
+  creates by other means (`mach_vm_*`, raw system calls) is not recognised,
+  and a call there runs as x86_64 code, as does a first call made from a guest
+  signal handler or a native call through a pointer to such code.
+
 **Loading**
 - Lazy binds are resolved eagerly; `dyld_stub_binder` is not implemented.
 - Threaded binds, text relocations and strong-definition coalescing are refused.

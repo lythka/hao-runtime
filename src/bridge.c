@@ -23,6 +23,8 @@
 #include <errno.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1446,9 +1448,41 @@ void hao_bridge_note_imp(uint64_t imp, const char *enc, uint64_t sel)
 /* First call of a native address no import bound (dlsym, a native function
  * pointer, a native block's invoke): by its address, the same sources as
  * hao_bridge_bind, then the ObjC runtime's record of it (type_by_objc);
- * dladdr names it (a label: reports, varsniff, the libc++ string-result rule). */
+ * dladdr names it (a label: reports, varsniff, the libc++ string-result rule).
+ * A target that is not host code fails closed (not_host_code). */
+static const char *not_host_code(uint64_t pc)
+{
+    /* arm64 code the guest generated (a JIT): hao translates registered images only */
+    if (hao_guest_exec_mapped(pc))
+        return "the target is in memory the guest mapped executable itself (arm64 code generated at run time, which hao does not run)";
+    /* the leaf entry: the shared cache is a submap whose outer entry reads r-- */
+    vm_region_submap_info_data_64_t info;
+    natural_t depth = 0;
+    for (;;) {
+        mach_vm_address_t a = pc;
+        mach_vm_size_t size = 0;
+        mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
+        kern_return_t kr = mach_vm_region_recurse(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &cnt);
+        if (kr != KERN_SUCCESS || a > pc) return "nothing is mapped at the target";
+        if (!info.is_submap || depth >= 8) break;
+        depth++;
+    }
+    if (!(info.protection & VM_PROT_EXECUTE))
+        return "the target is not executable host memory (guest code outside a loaded image, such as arm64 generated at run time, or data)";
+    return NULL;
+}
+
 static const hao_plan *bind_bare(hao_thread *t, uint64_t pc)
 {
+    const char *bad = not_host_code(pc);
+    if (bad) {
+        char label[32];
+        snprintf(label, sizeof label, "%#llx", (unsigned long long)pc);
+        hao_plan rp = {.native = pc, .argmask = HAO_BR_SCAN_ALL, .cls = HAO_BR_REFUSED, .flags = HAO_PLAN_DLADDR, .why = bad};
+        const hao_plan *p = publish(&rp, label);
+        if (!p) hao_bridge_refused(t, &rp);   /* never run it as x86 code, recorded or not */
+        return p;
+    }
     Dl_info di;
     uint64_t at = typed_at(pc);
     hao_crit_enter();          /* a guest signal handler waits until dyld's lock is free again */
