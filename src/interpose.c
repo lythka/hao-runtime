@@ -344,15 +344,20 @@ static void trap_execl(hao_thread *t, uint64_t kind)
 {
     hao_cpu *c = &t->cpu;
     const uint64_t *sp = (const uint64_t *)(uintptr_t)c->x[31];
-    const char *argv[1024];
-    int n = 0;
-    argv[n++] = (const char *)(uintptr_t)c->x[1];
-    int k = 0;
-    if (argv[0]) while ((argv[n] = (const char *)(uintptr_t)sp[k++]) && n < 1022) n++;
-    argv[n] = NULL;
+    /* arg0 in x1, the rest on the stack up to a NULL; execle's envp follows the NULL */
+    size_t n = 0, k = 0;
+    if (c->x[1]) { while (sp[n]) n++; k = n + 1; }
+    const char **argv = malloc((n + 2) * sizeof *argv);
+    if (!argv) { errno = ENOMEM; c->x[0] = (uint64_t)-1; return; }
+    argv[0] = (const char *)(uintptr_t)c->x[1];
+    for (size_t j = 0; j < n; j++) argv[j + 1] = (const char *)(uintptr_t)sp[j];
+    argv[c->x[1] ? n + 1 : 0] = NULL;
     char *const *envp = kind == 1 ? (char *const *)(uintptr_t)sp[k] : NULL;
     const char *path = (const char *)(uintptr_t)c->x[0];
     int r = kind == 1 ? execve(path, (char *const *)argv, envp) : kind == 2 ? execvp(path, (char *const *)argv) : execv(path, (char *const *)argv);
+    int e = errno;
+    free(argv);
+    errno = e;
     c->x[0] = (uint64_t)(int64_t)r;
 }
 

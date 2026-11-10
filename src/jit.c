@@ -224,7 +224,7 @@ static void block_commit(uint8_t *start, size_t len)
 }
 
 /* Warnings are noted under the lock and printed after it (no I/O inside). */
-enum { WARN_FULL = 1, WARN_OVERFLOW = 2, WARN_SIGS = 4 };
+enum { WARN_FULL = 1, WARN_OVERFLOW = 2, WARN_SIGS = 4, WARN_RMAP = 8 };
 static int warn_pending, warn_done;
 
 static void cache_exhausted(void)
@@ -245,20 +245,24 @@ static void jit_warn(void)
     }
     if (w & WARN_OVERFLOW) { hao_diag_prefix(f); fprintf(f, "a block's translation overflowed: it runs in the interpreter\n"); }
     if (w & WARN_SIGS) { hao_diag_prefix(f); fprintf(f, "signature thunk area full: typed callbacks get no new signature thunks (signatures go to the callback path)\n"); }
+    if (w & WARN_RMAP) { hao_diag_prefix(f); fprintf(f, "translated-block map incomplete: a signal in a later block reports its block's start, not the exact instruction\n"); }
 }
 
 /* Blocks by code address, for hao_jit_locate. The code cache is carved
  * upward only, so appending keeps the map sorted; writers hold jit_lock,
- * readers (signal handlers) take none. */
-#define RMAP_CAP (1u << 22)
+ * readers (signal handlers) take none. Every block starts 16-aligned, so
+ * one entry per 16 bytes of cache (reserved, touched as used) never fills. */
 typedef struct { uint64_t code, pc; } rment;
 static rment *rmap;
-static uint32_t rmap_n;
+static uint32_t rmap_n, rmap_cap;
 
 static void rmap_add(const void *code, uint64_t pc)
 {
     uint32_t n = rmap_n;
-    if (!rmap || n >= RMAP_CAP || (n && rmap[n - 1].code >= (uint64_t)(uintptr_t)code)) return;
+    if (!rmap || n >= rmap_cap || (n && rmap[n - 1].code >= (uint64_t)(uintptr_t)code)) {
+        __atomic_fetch_or(&warn_pending, WARN_RMAP, __ATOMIC_RELAXED);
+        return;
+    }
     rmap[n].code = (uint64_t)(uintptr_t)code;
     rmap[n].pc = pc;
     __atomic_store_n(&rmap_n, n + 1, __ATOMIC_RELEASE);
@@ -2490,8 +2494,9 @@ static void jit_init_once(void)
     cache_end = cache + size;
     table = jtab_new(TABLE_MIN_BITS);
     if (!table) { perror("hao: translation table"); abort(); }
-    rmap = mmap(NULL, RMAP_CAP * sizeof *rmap, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (rmap == MAP_FAILED) rmap = NULL;
+    rmap_cap = (uint32_t)(size / 16);
+    rmap = mmap(NULL, (size_t)rmap_cap * sizeof *rmap, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (rmap == MAP_FAILED) rmap = NULL;   /* rmap_add warns once */
     build_stubs();
     cache_ptr = cache + 4096;
     thunk_area = thunk_ptr = cache_ptr; cache_ptr += THUNK_AREA; thunk_end = cache_ptr;

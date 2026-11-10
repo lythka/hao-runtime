@@ -41,7 +41,9 @@
  * caller's frame geometry gives no exact value.
  */
 #include "hao/runtime.h"
+#include "hao/gmap.h"
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -677,36 +679,34 @@ bool hao_swift_fixed_abi(const char *sym)
     return !strncmp(buf, want, strlen(want));
 }
 
-/* guest continuations that receive a narrow result: address | kind << 56 */
-#define CONT_SLOTS 4096
-static uint64_t conts[CONT_SLOTS];
-static unsigned nconts;
+/* guest continuations that receive a narrow result: address -> kind. Lock-free
+ * reads; writers hold cont_lock (hao/gmap.h). */
+static hao_gmap conts = HAO_GMAP_INIT(2, 1, 8, 24);
+static pthread_mutex_t cont_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void hao_swiftcc_fork_child(void) { cont_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
 
 void hao_swift_async_note_call(uint64_t ctx, char kind)
 {
     if (!ctx || (ctx & 7)) return;
     uint64_t r = *(const uint64_t *)(uintptr_t)(ctx + 8) & 0x00007fffffffffffull;   /* ResumeParent (PAC stripped) */
-    if (!hao_image_for_code(r)) return;
-    uint64_t word = r | (uint64_t)(uint8_t)kind << 56;
-    for (uint32_t k = 0, h = (uint32_t)((r * 0x9E3779B97F4A7C15ull) >> 52) & (CONT_SLOTS - 1); k < CONT_SLOTS; k++, h = (h + 1) & (CONT_SLOTS - 1)) {
-        uint64_t cur = __atomic_load_n(&conts[h], __ATOMIC_ACQUIRE);
-        if ((cur & 0x00ffffffffffffffull) == r) return;
-        if (cur) continue;
-        if (__atomic_load_n(&nconts, __ATOMIC_RELAXED) >= CONT_SLOTS / 4 * 3) return;
-        uint64_t zero = 0;
-        if (__atomic_compare_exchange_n(&conts[h], &zero, word, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) { __atomic_fetch_add(&nconts, 1, __ATOMIC_RELAXED); return; }
-        if ((zero & 0x00ffffffffffffffull) == r) return;
-    }
+    if (!r || hao_gmap_get1(&conts, r) || !hao_image_for_code(r)) return;
+    bool fresh;
+    hao_crit_enter();
+    pthread_mutex_lock(&cont_lock);
+    uint64_t *s = hao_gmap_claim1(&conts, r, &fresh);
+    if (s && fresh) { s[1] = (uint8_t)kind; hao_gmap_publish1(&conts, s, r); }
+    pthread_mutex_unlock(&cont_lock);
+    hao_crit_leave();
+    /* a continuation left out would get an unextended narrow result */
+    if (!s) hao_oom("Swift async narrow-result continuations");
 }
 
 uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0)
 {
-    if (!__atomic_load_n(&nconts, __ATOMIC_RELAXED)) return x0;
-    for (uint32_t h = (uint32_t)((target * 0x9E3779B97F4A7C15ull) >> 52) & (CONT_SLOTS - 1);; h = (h + 1) & (CONT_SLOTS - 1)) {
-        uint64_t cur = __atomic_load_n(&conts[h], __ATOMIC_ACQUIRE);
-        if (!cur) return x0;
-        if ((cur & 0x00ffffffffffffffull) != target) continue;
-        switch ((char)(cur >> 56)) {   /* extended to 32 bits, as an Apple arm64 caller passes it */
+    const uint64_t *e = hao_gmap_get1(&conts, target);
+    if (e) {
+        switch ((char)e[1]) {   /* extended to 32 bits, as an Apple arm64 caller passes it */
         case 'b': return x0 & 1;
         case 'h': return (uint32_t)(int32_t)(int8_t)x0;
         case 'H': return (uint8_t)x0;
@@ -715,4 +715,5 @@ uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0)
         default: return x0;
         }
     }
+    return x0;
 }
