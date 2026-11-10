@@ -859,16 +859,15 @@ static void trap_swift_class_init(hao_thread *t, uint64_t k)
     if (k == 4) class_realized(c->x[1] == 0 ? c->x[0] : 0, true);
     else class_realized(cls, false);
 }
+static hao_name_index swift_cls_ix = HAO_NAME_INDEX(swift_cls_names, NULL);
 static bool objc_swift_interpose(const char *name, uint64_t *addr)
 {
-    for (unsigned k = 0; k < NSWIFT_CLS; k++) {
-        if (strcmp(name, swift_cls_names[k])) continue;
-        if (!swift_cls_fn[k]) swift_cls_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
-        if (!swift_cls_fn[k]) return false;
-        *addr = hao_trap_address(name, trap_swift_class_init, k);
-        return true;
-    }
-    return false;
+    long k = hao_name_find(&swift_cls_ix, name);
+    if (k < 0) return false;
+    if (!swift_cls_fn[k]) swift_cls_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
+    if (!swift_cls_fn[k]) return false;
+    *addr = hao_trap_address(name, trap_swift_class_init, (uint64_t)k);
+    return true;
 }
 
 void hao_objc_late_stats(uint64_t *deferred, uint64_t *attached, uint64_t *classes)
@@ -1551,31 +1550,35 @@ static const struct { const char *name; uint64_t kind; } imp_traps[] = {
     {"_method_getImplementation", IMP_OF_METHOD},
 };
 
+static hao_name_index imp_traps_ix = HAO_NAME_INDEX(imp_traps, NULL);
+
 bool hao_objc_interpose_imp(const char *name, uint64_t *addr)
 {
-#define t imp_traps
-    for (size_t k = 0; k < sizeof t / sizeof *t; k++)
-        if (!strcmp(name, t[k].name)) { *addr = hao_trap_address(name, trap_set_imp, t[k].kind); return true; }
+    long k = hao_name_find(&imp_traps_ix, name);
+    if (k >= 0) { *addr = hao_trap_address(name, trap_set_imp, imp_traps[k].kind); return true; }
     return objc_swift_interpose(name, addr);
-#undef t
 }
 
 /* objc_retain_xN / objc_release_xN: src/regvar.c */
 
+/* trap_msgsend's kinds: 0 objc_msgSend, 1 objc_msgSendSuper2, 2 objc_msgSendSuper */
+static const char *const msgsend_names[] = {"_objc_msgSend", "_objc_msgSendSuper2", "_objc_msgSendSuper"};
+static hao_name_index msgsend_ix = HAO_NAME_INDEX(msgsend_names, NULL);
+
 void hao_objc_interpose_names(hao_name_fn cb, void *ctx)
 {
-    if (!hao_opt.no_msgsend) { cb("_objc_msgSend", ctx); cb("_objc_msgSendSuper2", ctx); cb("_objc_msgSendSuper", ctx); }
-    for (size_t k = 0; k < sizeof imp_traps / sizeof *imp_traps; k++) cb(imp_traps[k].name, ctx);
-    for (unsigned k = 0; k < NSWIFT_CLS; k++) cb(swift_cls_names[k], ctx);
+    if (!hao_opt.no_msgsend) hao_name_each(&msgsend_ix, cb, ctx);   /* interpose.c asks hao_objc_interpose only then */
+    hao_name_each(&imp_traps_ix, cb, ctx);
+    hao_name_each(&swift_cls_ix, cb, ctx);
 }
 
 bool hao_objc_interpose(const char *name, uint64_t *addr)
 {
-    if (!strncmp(name, "_objc_msgSend", 13) && !sel_setarg) msgsend_init();
-    if (!strcmp(name, "_objc_msgSend")) { *addr = hao_trap_address(name, trap_msgsend, 0); return true; }
-    if (!strcmp(name, "_objc_msgSendSuper2")) { *addr = hao_trap_address(name, trap_msgsend, 1); return true; }
-    if (!strcmp(name, "_objc_msgSendSuper")) { *addr = hao_trap_address(name, trap_msgsend, 2); return true; }
-    return false;
+    long k = hao_name_find(&msgsend_ix, name);
+    if (k < 0) return false;
+    if (!sel_setarg) msgsend_init();
+    *addr = hao_trap_address(name, trap_msgsend, (uint64_t)k);
+    return true;
 }
 
 /* ----------------------------------------------- bare native IMPs

@@ -9,8 +9,10 @@
  *             a published entry must never read back missing or wrong.
  *   upgrade   an UNKNOWN entry point becomes TYPED when a source types it
  *             later (a native block's signature); a typed plan is kept.
- *   tables    the interposer tables searched by bisection are sorted, and
- *             every name index (interpose.c) finds what a linear scan does.
+ *   tables    the interposer tables searched by bisection are sorted, every
+ *             name index (interpose.c) finds what a linear scan does, and
+ *             every name hao_interpose_names lists is in an index that the
+ *             answering interposer searches.
  *   stamp     the generated tables' source build (hao/gen_stamp.h) and this
  *             system's are read; a different build is reported, not failed.
  *
@@ -91,7 +93,7 @@ int main(int argc, char **argv)
     if (!up) fail = 1;
     char why[256];
     int bad = hao_interpose_selfcheck(why, sizeof why);
-    printf("tables     %s  bisected tables sorted, name indexes agree with a scan%s%s\n", bad ? "FAIL" : "PASS", bad ? ": " : "", why);
+    printf("tables     %s  bisected tables sorted, name indexes agree with a scan and hold every listed name%s%s\n", bad ? "FAIL" : "PASS", bad ? ": " : "", why);
     char build[32];
     bool same = hao_gen_stamp_check(build, sizeof build);
     printf("stamp      %s  tables from macOS %s (%s), format %d; this system %s%s\n", build[0] ? "PASS" : "FAIL",

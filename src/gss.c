@@ -324,17 +324,16 @@ static void trap_gss(hao_thread *t, uint64_t idx)
 /* ---- import binding */
 static int name_cmp(const void *key, const void *ent) { return strcmp(key, *(const char *const *)ent); }
 
-void hao_gss_interpose_names(hao_name_fn cb, void *ctx)
-{
-    for (size_t k = 0; k < sizeof funcs / sizeof *funcs; k++) cb(funcs[k].name, ctx);
-}
+static hao_name_index funcs_ix = HAO_NAME_INDEX(funcs, NULL);
+
+void hao_gss_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&funcs_ix, cb, ctx); }
 
 bool hao_gss_interpose(const char *name, uint64_t *addr)
 {
     if (strncasecmp(name, "_gss", 4) && strncmp(name, "___gss", 6) && strncmp(name, "_krb5_gss", 9)) return false;
-    const void *f = bsearch(name, funcs, sizeof funcs / sizeof *funcs, sizeof *funcs, name_cmp);
-    if (f) {
-        size_t k = (size_t)((const char *)f - (const char *)funcs) / sizeof *funcs;
+    long fk = hao_name_find(&funcs_ix, name);
+    if (fk >= 0) {
+        size_t k = (size_t)fk;
         void *nf = dlsym(RTLD_DEFAULT, name + 1);
         if (!nf) return false;
         native_fn[k] = nf;

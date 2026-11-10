@@ -1544,25 +1544,21 @@ static const struct { const char *name; void **fn; hao_trap_fn trap; uint64_t ar
     {"_swift_generic_instantiateLayoutString", &nat_instantiate_ls[1], trap_instantiate_ls, 1},
 };
 
-void hao_swiftmeta_interpose_names(hao_name_fn cb, void *ctx)
-{
-    for (unsigned k = 0; k < sizeof swiftrt_traps / sizeof *swiftrt_traps; k++) cb(swiftrt_traps[k].name, ctx);
-}
+static hao_name_index swiftrt_ix = HAO_NAME_INDEX(swiftrt_traps, NULL);
+
+void hao_swiftmeta_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&swiftrt_ix, cb, ctx); }
 
 bool hao_swiftmeta_interpose(const char *name, uint64_t *addr)
 {
 #define tab swiftrt_traps
-    if (strncmp(name, "_swift_", 7)) return false;
-    for (unsigned k = 0; k < sizeof tab / sizeof *tab; k++) {
-        if (strcmp(name, tab[k].name)) continue;
-        /* without thunks only swift_getKeyPath, which binds shared-cache patterns' slots (data) */
-        if (hao_opt.no_swift_thunks && tab[k].trap != trap_get_keypath) return false;
-        if (!*tab[k].fn) *tab[k].fn = dlsym(RTLD_DEFAULT, name + 1);
-        if (!*tab[k].fn) return false;
-        *addr = hao_trap_address(name, tab[k].trap, tab[k].arg);
-        return true;
-    }
-    return false;
+    long k = hao_name_find(&swiftrt_ix, name);
+    if (k < 0) return false;
+    /* without thunks only swift_getKeyPath, which binds shared-cache patterns' slots (data) */
+    if (hao_opt.no_swift_thunks && tab[k].trap != trap_get_keypath) return false;
+    if (!*tab[k].fn) *tab[k].fn = dlsym(RTLD_DEFAULT, name + 1);
+    if (!*tab[k].fn) return false;
+    *addr = hao_trap_address(name, tab[k].trap, tab[k].arg);
+    return true;
 #undef tab
 }
 

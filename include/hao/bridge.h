@@ -233,12 +233,35 @@ extern uint64_t hao_objcva_imps, hao_objcva_calls, hao_objcva_untyped, hao_objcv
 void hao_bridge_fork_child(void);
 void hao_bridge_stats_atexit(void);
 /* Every name an interposer answers with a trap (interpose.c and the modules it
- * asks: signals, callbacks, swiftobjects, gss, libm, swiftmeta, objc), and
- * every name of the compiled-in tables (hao_tables_plan): cb(name, ctx) for
- * each; names are static strings. */
+ * asks: runtime, signals, callbacks, swiftobjects, gss, libm, swiftmeta,
+ * objc, regvar), and every name of the compiled-in tables (hao_tables_plan):
+ * cb(name, ctx) for each; names are static strings. */
 typedef void (*hao_name_fn)(const char *name, void *ctx);
 void hao_interpose_names(hao_name_fn cb, void *ctx);
 void hao_tables_names(hao_name_fn cb, void *ctx);
+/* A name-sorted index over a static table whose entries begin with their
+ * name (const char *), built at its first use (interpose.c). hao_name_find
+ * answers a name with the table's first entry of that name, as a linear scan
+ * would, or -1; hao_name_each lists the same names in table order, so an
+ * interposer whose lookup and names both go through one index cannot
+ * answer a name it does not list. keep (may be NULL) leaves entries out of
+ * both. Every index that has been used is checked by
+ * hao_interpose_selfcheck. */
+typedef struct hao_name_index {
+    const void *base;
+    size_t stride, n;
+    bool (*keep)(const void *e);
+    uint32_t *idx;                 /* NULL until built */
+    size_t len;
+    struct hao_name_index *next;   /* the built indexes */
+} hao_name_index;
+#define HAO_NAME_INDEX(t, keep) {(t), sizeof *(t), sizeof (t) / sizeof *(t), (keep), NULL, 0, NULL}
+long hao_name_find(hao_name_index *ix, const char *name);
+void hao_name_each(hao_name_index *ix, hao_name_fn cb, void *ctx);
+const char *hao_name_at(const hao_name_index *ix, size_t k);   /* entry k's name */
+/* The runtime's own interposer (runtime.c: __dyld_lazy_load). */
+bool hao_runtime_interpose(const char *name, uint64_t *addr);
+void hao_runtime_interpose_names(hao_name_fn cb, void *ctx);
 void hao_signal_interpose_names(hao_name_fn cb, void *ctx);
 void hao_callbacks_interpose_names(hao_name_fn cb, void *ctx);
 void hao_swift_objects_interpose_names(hao_name_fn cb, void *ctx);
