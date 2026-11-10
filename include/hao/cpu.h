@@ -167,6 +167,9 @@ bool a64_branch_reg_valid(uint32_t insn);
 bool a64_pac_valid(uint32_t insn);
 /* XPACI/XPACLRI (data = false) and XPACD (data = true) as Apple silicon EL0 strips. */
 uint64_t a64_xpac(uint64_t v, bool data);
+/* AdvSIMDExpandImm: the 64-bit pattern of a modified-immediate encoding
+ * (shared with the translator). */
+uint64_t a64_simd_expand_imm(unsigned op, unsigned cmode, unsigned imm8);
 /* SIMD/FP sub-interpreter; returns -1 if not an FP/SIMD encoding it knows. */
 int a64_exec_simd(hao_cpu *cpu, uint32_t insn, uint64_t pc);
 

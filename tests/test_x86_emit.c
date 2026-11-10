@@ -80,6 +80,14 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     {0x66, 0x2F, 0, 0, "comisd"}, {0, 0x2F, 0, 0, "comiss"}, {0x66, 0x6C, 0, 0, "punpcklqdq"}, {0x66, 0x6D, 0, 0, "punpckhqdq"},
     {0x66, 0x6E, 1, 1, "movq"}, {0x66, 0x6E, 0, 1, "movd"}, {0xF2, 0x2A, 1, 1, "cvtsi2sd"}, {0xF3, 0x2A, 1, 1, "cvtsi2ss"},
     {0x66, 0x7E, 0, 2, "movd"}, {0x66, 0x7E, 1, 2, "movq"},
+    /* Advanced SIMD integer forms */
+    {0x66, 0xFC, 0, 0, "paddb"}, {0x66, 0xFD, 0, 0, "paddw"}, {0x66, 0xFE, 0, 0, "paddd"}, {0x66, 0xD4, 0, 0, "paddq"},
+    {0x66, 0xF8, 0, 0, "psubb"}, {0x66, 0xF9, 0, 0, "psubw"}, {0x66, 0xFA, 0, 0, "psubd"}, {0x66, 0xFB, 0, 0, "psubq"},
+    {0x66, 0xDB, 0, 0, "pand"}, {0x66, 0xEB, 0, 0, "por"}, {0x66, 0x74, 0, 0, "pcmpeqb"}, {0x66, 0x75, 0, 0, "pcmpeqw"},
+    {0x66, 0x76, 0, 0, "pcmpeqd"}, {0x66, 0x64, 0, 0, "pcmpgtb"}, {0x66, 0x65, 0, 0, "pcmpgtw"}, {0x66, 0x66, 0, 0, "pcmpgtd"},
+    {0x66, 0xD8, 0, 0, "psubusb"}, {0x66, 0xD9, 0, 0, "psubusw"}, {0x66, 0xDE, 0, 0, "pmaxub"}, {0x66, 0xDA, 0, 0, "pminub"},
+    {0x66, 0xEE, 0, 0, "pmaxsw"}, {0x66, 0xEA, 0, 0, "pminsw"}, {0x66, 0xD5, 0, 0, "pmullw"}, {0x66, 0x60, 0, 0, "punpcklbw"},
+    {0x66, 0x62, 0, 0, "punpckldq"}, {0x66, 0x6F, 0, 0, "movdqa"}, {0xF3, 0x7E, 0, 0, "movq"}, {0x66, 0xF6, 0, 0, "psadbw"},
 };
 
 static xmem mems[256];
@@ -186,6 +194,17 @@ int main(int argc, char **argv)
     }
     for (int a = 0; a < 16; a++) {
         begin(); x_psllq_ri(&B, a, 60); end("psllq xmm%d, 60", a);
+        static const struct { uint8_t op; int digit; const char *mn; } sh[] = {
+            {0x71, 2, "psrlw"}, {0x71, 4, "psraw"}, {0x71, 6, "psllw"}, {0x72, 2, "psrld"}, {0x72, 4, "psrad"},
+            {0x72, 6, "pslld"}, {0x73, 2, "psrlq"}, {0x73, 6, "psllq"},
+        };
+        for (unsigned k = 0; k < sizeof sh / sizeof *sh; k++) {
+            begin(); x_sse_shift_ri(&B, sh[k].op, sh[k].digit, a, (uint8_t)(k + 1)); end("%s xmm%d, %u", sh[k].mn, a, k + 1);
+        }
+        for (int c = 0; c < 16; c += 5) {
+            begin(); x_sse_rri(&B, 0xF2, 0x70, a, c, 0); end("pshuflw %s, %s, 0", xmmn(a), xmmn(c));
+            begin(); x_sse_rri(&B, 0x66, 0x70, a, c, 0xEE); end("pshufd %s, %s, 238", xmmn(a), xmmn(c));
+        }
     }
     int32_t pimms[] = {0, 1, -1, 0x202, 0x7fffffff, (int32_t)0x80000000};
     for (unsigned i = 0; i < sizeof pimms / sizeof *pimms; i++) {
@@ -301,6 +320,10 @@ int main(int argc, char **argv)
         MUSTFAIL(x_lock_cmpxchg(&b, 16, xm(RCX, 0), RAX));
         MUSTFAIL(x_xchg_mr(&b, 0, xm(RCX, 0), RAX));
         MUSTFAIL(x_sse_rr(&b, 1, 0x6E, 1, 0, RAX));
+        MUSTFAIL(x_sse_rri(&b, 1, 0x70, 0, 1, 0));
+        MUSTFAIL(x_sse_shift_ri(&b, 0x73, 4, 0, 1));
+        MUSTFAIL(x_sse_shift_ri(&b, 0x70, 2, 0, 1));
+        MUSTFAIL(x_sse_shift_ri(&b, 0x71, 3, 0, 1));
         MUSTFAIL(x_sse_rm(&b, 0xF0, 0x10, 0, 0, xm(RCX, 0)));
         MUSTFAIL(x_mov_rr(&b, 1, 16, RAX));
         MUSTFAIL(x_mov_ri(&b, -3, 1));

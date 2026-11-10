@@ -1458,6 +1458,288 @@ static bool t_eor3_bcax(tctx *t, uint32_t i)
     return true;
 }
 
+/* ---- Advanced SIMD integer forms on SSE2.
+ * V registers live in memory; an instruction loads its operands into
+ * xmm0-xmm2 (unaligned moves: nothing here relies on hao_cpu's alignment),
+ * computes, and stores all 16 bytes of Vd, the upper half zero for a 64-bit
+ * vector or a scalar. SSE integer instructions leave EFLAGS alone. Only
+ * allocated encodings are taken, and only those with an SSE2 form; the rest
+ * (and every saturating form, which sets FPSR.QC) stay with the helper. */
+#define P(op, dst, src) x_sse_rr(&t->b, 0x66, op, 0, dst, src)
+static void vld(tctx *t, int xmm, unsigned r) { x_movdqu_ld(&t->b, xmm, VR(r)); }
+static void vst(tctx *t, unsigned rd, int xmm, int Q)
+{
+    if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, xmm, xmm);            /* movq xmm, xmm: clear the upper half */
+    x_movdqu_st(&t->b, VR(rd), xmm);
+}
+static void vzero(tctx *t, int xmm) { P(0xEF, xmm, xmm); }
+static void vones(tctx *t, int xmm) { P(0x76, xmm, xmm); }
+static void vnot(tctx *t, int xmm, int tmp) { vones(t, tmp); P(0xEF, xmm, tmp); }
+/* xmm = v in the low half and, if both, in the upper half too (rax scratch) */
+static void vconst(tctx *t, int xmm, uint64_t v, bool both)
+{
+    if (!v) { vzero(t, xmm); return; }
+    if (v == ~0ull && both) { vones(t, xmm); return; }
+    x_mov_ri(&t->b, RAX, v);
+    x_sse_rr(&t->b, 0x66, 0x6E, 1, xmm, RAX);                    /* movq xmm, rax */
+    if (both) P(0x6C, xmm, xmm);                                 /* punpcklqdq */
+}
+static xmem velem(unsigned r, int es, int idx) { return xm(RBX, CPU_OFF_V(r) + idx * es); }
+
+static const uint8_t padd[4] = {0xFC, 0xFD, 0xFE, 0xD4}, psub[4] = {0xF8, 0xF9, 0xFA, 0xFB};
+static const uint8_t pcmpeq[3] = {0x74, 0x75, 0x76}, pcmpgt[3] = {0x64, 0x65, 0x66};
+
+static bool t_simd_three_same(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 11);
+    unsigned rm = BITS(i, 20, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (op == 3) {                                               /* logical: size selects the operation */
+        if (!U) switch (size) {
+        case 0: vld(t, 0, rn); vld(t, 1, rm); P(0xDB, 0, 1); break;                             /* AND */
+        case 1: vld(t, 0, rm); vld(t, 1, rn); P(0xDF, 0, 1); break;                             /* BIC: ~m & n */
+        case 2: vld(t, 0, rn); if (rm != rn) { vld(t, 1, rm); P(0xEB, 0, 1); } break;           /* ORR, MOV */
+        default: vld(t, 0, rm); vnot(t, 0, 1); vld(t, 1, rn); P(0xEB, 0, 1); break;             /* ORN */
+        } else switch (size) {
+        case 0: vld(t, 0, rn); vld(t, 1, rm); P(0xEF, 0, 1); break;                             /* EOR */
+        case 1: vld(t, 0, rm); vld(t, 1, rn); P(0xEF, 1, 0); vld(t, 2, rd); P(0xDB, 1, 2); P(0xEF, 0, 1); break; /* BSL: m ^ ((m ^ n) & d) */
+        case 2: vld(t, 0, rd); vld(t, 1, rn); P(0xEF, 1, 0); vld(t, 2, rm); P(0xDB, 1, 2); P(0xEF, 0, 1); break; /* BIT: d ^ ((d ^ n) & m) */
+        default: vld(t, 0, rd); vld(t, 1, rn); P(0xEF, 1, 0); vld(t, 2, rm); P(0xDF, 2, 1); P(0xEF, 0, 2); break; /* BIF: d ^ ((d ^ n) & ~m) */
+        }
+        vst(t, rd, 0, Q);
+        return true;
+    }
+    if (size == 3 && !Q) return false;
+    switch (op) {
+    case 0x10:                                                   /* ADD / SUB */
+        vld(t, 0, rn); vld(t, 1, rm);
+        P(U ? psub[size] : padd[size], 0, 1);
+        break;
+    case 0x11:                                                   /* CMTST / CMEQ */
+        if (size == 3) return false;
+        vld(t, 0, rn); vld(t, 1, rm);
+        if (U) P(pcmpeq[size], 0, 1);
+        else { P(0xDB, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); vnot(t, 0, 1); }
+        break;
+    case 0x06:                                                   /* CMGT / CMHI: n -sat m != 0 */
+        if (size == 3 || (U && size == 2)) return false;
+        vld(t, 0, rn); vld(t, 1, rm);
+        if (!U) P(pcmpgt[size], 0, 1);
+        else { P(size ? 0xD9 : 0xD8, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); vnot(t, 0, 1); }
+        break;
+    case 0x07:                                                   /* CMGE: !(m > n) / CMHS: m -sat n == 0 */
+        if (size == 3 || (U && size == 2)) return false;
+        vld(t, 0, rm); vld(t, 1, rn);
+        if (!U) { P(pcmpgt[size], 0, 1); vnot(t, 0, 1); }
+        else { P(size ? 0xD9 : 0xD8, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); }
+        break;
+    case 0x0C: case 0x0D: {                                      /* SMAX/UMAX, SMIN/UMIN */
+        uint8_t o;
+        if (U && size == 0) o = op == 0x0C ? 0xDE : 0xDA;        /* pmaxub / pminub */
+        else if (!U && size == 1) o = op == 0x0C ? 0xEE : 0xEA;  /* pmaxsw / pminsw */
+        else return false;
+        vld(t, 0, rn); vld(t, 1, rm);
+        P(o, 0, 1);
+        break;
+    }
+    case 0x13:                                                   /* MUL, 16-bit lanes: pmullw */
+        if (U || size != 1) return false;
+        vld(t, 0, rn); vld(t, 1, rm);
+        P(0xD5, 0, 1);
+        break;
+    default: return false;
+    }
+    vst(t, rd, 0, Q);
+    return true;
+}
+
+static bool t_simd_two_misc(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 16, 12);
+    unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (op == 0x05) {
+        if (size) return false;                                  /* RBIT: helper */
+        vld(t, 0, rn);
+        if (U) vnot(t, 0, 1);                                    /* NOT */
+        else {
+            /* CNT, per byte: x -= x >> 1 & 0x55; x = (x & 0x33) + (x >> 2 & 0x33);
+             * x = x + (x >> 4) & 0x0f. The shifts are 16-bit; the masks drop
+             * the bits that crossed a byte boundary. */
+            vconst(t, 2, 0x5555555555555555ull, true);
+            P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x71, 2, 1, 1); P(0xDB, 1, 2); P(0xF8, 0, 1);
+            vconst(t, 2, 0x3333333333333333ull, true);
+            P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x71, 2, 1, 2); P(0xDB, 1, 2); P(0xDB, 0, 2); P(0xFC, 0, 1);
+            vconst(t, 2, 0x0f0f0f0f0f0f0f0full, true);
+            P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x71, 2, 1, 4); P(0xFC, 0, 1); P(0xDB, 0, 2);
+        }
+        vst(t, rd, 0, Q);
+        return true;
+    }
+    if (size == 3 && (!Q || op != 0x0B)) return false;           /* 64-bit lanes: NEG only (no pcmpgtq) */
+    switch (op) {
+    case 0x08:                                                   /* CMGT #0 / CMGE #0: !(0 > x) */
+        if (!U) { vld(t, 0, rn); vzero(t, 1); P(pcmpgt[size], 0, 1); }
+        else { vzero(t, 0); vld(t, 1, rn); P(pcmpgt[size], 0, 1); vnot(t, 0, 1); }
+        break;
+    case 0x09:                                                   /* CMEQ #0 / CMLE #0: !(x > 0) */
+        vld(t, 0, rn); vzero(t, 1);
+        if (!U) P(pcmpeq[size], 0, 1);
+        else { P(pcmpgt[size], 0, 1); vnot(t, 0, 1); }
+        break;
+    case 0x0A:                                                   /* CMLT #0: 0 > x */
+        if (U) return false;
+        vzero(t, 0); vld(t, 1, rn); P(pcmpgt[size], 0, 1);
+        break;
+    case 0x0B:                                                   /* NEG (ABS: helper) */
+        if (!U) return false;
+        vzero(t, 0); vld(t, 1, rn); P(psub[size], 0, 1);
+        break;
+    default: return false;
+    }
+    vst(t, rd, 0, Q);
+    return true;
+}
+
+/* UADDLV over bytes (with CNT, the population count of a register):
+ * psadbw against zero sums each half's bytes. */
+static bool t_simd_across(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (!BIT(i, 29) || BITS(i, 23, 22) || BITS(i, 16, 12) != 0x03) return false;
+    vld(t, 0, rn);
+    if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
+    vzero(t, 1);
+    P(0xF6, 0, 1);                                               /* psadbw */
+    if (Q) { x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0xEE); P(0xD4, 0, 1); }   /* add the upper half's sum */
+    vst(t, rd, 0, 0);
+    return true;
+}
+
+/* MOVI, MVNI, FMOV (vector, immediate), ORR and BIC (vector, immediate) */
+static bool t_simd_modimm(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), op = BIT(i, 29), cmode = BITS(i, 15, 12), rd = BITS(i, 4, 0);
+    unsigned imm8 = BITS(i, 18, 16) << 5 | BITS(i, 9, 5);
+    if (BIT(i, 11) || (op && cmode == 15 && !Q)) return false;   /* half-precision FMOV, reserved */
+    uint64_t imm = a64_simd_expand_imm(op, cmode, imm8);
+    if (cmode < 12 && (cmode & 1)) {
+        vconst(t, 1, imm, true);
+        vld(t, 0, rd);
+        if (op) { P(0xDF, 1, 0); vst(t, rd, 1, Q); }             /* BIC: ~imm & d */
+        else { P(0xEB, 0, 1); vst(t, rd, 0, Q); }                /* ORR */
+        return true;
+    }
+    if (op && cmode != 14 && cmode != 15) imm = ~imm;            /* MVNI */
+    vconst(t, 0, imm, Q);
+    vst(t, rd, 0, 1);
+    return true;
+}
+
+/* xmm0 = the low es bytes of rax in every lane of a 64-bit (upper half
+ * zero) or 128-bit vector */
+static void vdup_rax(tctx *t, int es, int Q)
+{
+    x_sse_rr(&t->b, 0x66, 0x6E, es == 8, 0, RAX);                /* movd / movq xmm0, rax */
+    if (es == 1) P(0x60, 0, 0);                                  /* punpcklbw: b0 b0 b1 b1 ... */
+    if (es <= 2) x_sse_rri(&t->b, 0xF2, 0x70, 0, 0, 0);          /* pshuflw: word 0 into words 0-3 */
+    if (es == 4) P(0x62, 0, 0);                                  /* punpckldq: d0 d0 0 0 */
+    if (Q) P(0x6C, 0, 0);                                        /* punpcklqdq */
+}
+
+/* DUP, INS, UMOV, SMOV: element accesses are plain loads and stores of the
+ * register's slot. */
+static bool t_simd_copy(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), op = BIT(i, 29), imm5 = BITS(i, 20, 16), imm4 = BITS(i, 14, 11);
+    unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (!(imm5 & 15)) return false;
+    int sz = __builtin_ctz(imm5), es = 1 << sz, idx = (int)(imm5 >> (sz + 1));
+    if (op) {                                                    /* INS (element) */
+        if (!Q) return false;
+        x_mov_ld(&t->b, es, RAX, velem(rn, es, (int)(imm4 >> sz)));
+        x_mov_st(&t->b, es, velem(rd, es, idx), RAX);
+        return true;
+    }
+    switch (imm4) {
+    case 0: case 1:                                              /* DUP (element), DUP (general) */
+        if (es == 8 && !Q) return false;
+        if (imm4) ldx(t, RAX, rn, 1, false);
+        else x_mov_ld(&t->b, es, RAX, velem(rn, es, idx));
+        vdup_rax(t, es, (int)Q);
+        vst(t, rd, 0, 1);
+        return true;
+    case 3:                                                      /* INS (general) */
+        if (!Q) return false;
+        ldx(t, RAX, rn, 1, false);
+        x_mov_st(&t->b, es, velem(rd, es, idx), RAX);
+        return true;
+    case 5:                                                      /* SMOV */
+        if (es > (Q ? 4 : 2)) return false;
+        x_movs_ld(&t->b, es, (int)Q, RAX, velem(rn, es, idx));
+        stx(t, rd, RAX, false);
+        return true;
+    case 7:                                                      /* UMOV */
+        if (Q ? es != 8 : es == 8) return false;
+        x_mov_ld(&t->b, es, RAX, velem(rn, es, idx));
+        stx(t, rd, RAX, false);
+        return true;
+    default: return false;
+    }
+}
+
+/* SHL, USHR, SSHR by an immediate, for the lane sizes SSE2 shifts (no
+ * bytes, no arithmetic 64-bit). A right shift by the lane size is in range
+ * on both sides: zero, or the sign in every bit. */
+static bool t_simd_shift(tctx *t, uint32_t i, bool scalar)
+{
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), immh = BITS(i, 22, 19), op = BITS(i, 15, 11);
+    unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (!immh) return false;
+    int es = 1 << (31 - __builtin_clz(immh)), bits = es * 8, immhb = (int)BITS(i, 22, 16);
+    if (scalar ? es != 8 : (es == 1 || (es == 8 && !Q))) return false;
+    uint8_t grp = es == 2 ? 0x71 : es == 4 ? 0x72 : 0x73;
+    if (op == 0x00) {                                            /* SSHR / USHR */
+        if (!U && es == 8) return false;
+        vld(t, 0, rn);
+        x_sse_shift_ri(&t->b, grp, U ? 2 : 4, 0, (uint8_t)(2 * bits - immhb));
+    } else if (op == 0x0A && !U) {                               /* SHL */
+        vld(t, 0, rn);
+        x_sse_shift_ri(&t->b, grp, 6, 0, (uint8_t)(immhb - bits));
+    } else
+        return false;
+    vst(t, rd, 0, scalar ? 0 : (int)Q);
+    return true;
+}
+
+/* The groups in a64_exec_simd's order (none of the masks overlap an
+ * earlier group of that decoder). */
+static bool t_simd(tctx *t, uint32_t i)
+{
+    if ((i & 0x9F200400) == 0x0E200400) return t_simd_three_same(t, i);
+    if ((i & 0x9F3E0C00) == 0x0E200800) return t_simd_two_misc(t, i);
+    if ((i & 0x9F3E0C00) == 0x0E300800) return t_simd_across(t, i);
+    if ((i & 0x9FF80400) == 0x0F000400) return t_simd_modimm(t, i);
+    if ((i & 0x9FE08400) == 0x0E000400) return t_simd_copy(t, i);
+    if ((i & 0x9F800400) == 0x0F000400) return t_simd_shift(t, i, false);
+    return false;
+}
+
+static bool t_simd_scalar(tctx *t, uint32_t i)
+{
+    if ((i & 0xFFE0FC00) == 0x5E000400) {                        /* DUP (element), scalar: MOV Dd, Vn.D[1] ... */
+        unsigned imm5 = BITS(i, 20, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+        if (!(imm5 & 15)) return false;
+        int sz = __builtin_ctz(imm5), es = 1 << sz, idx = (int)(imm5 >> (sz + 1));
+        if (es == 8) x_movq_ld(&t->b, 0, velem(rn, es, idx));
+        else if (es == 4) x_movd_ld(&t->b, 0, velem(rn, es, idx));
+        else { x_mov_ld(&t->b, es, RAX, velem(rn, es, idx)); x_sse_rr(&t->b, 0x66, 0x6E, 0, 0, RAX); }
+        x_movdqu_st(&t->b, VR(rd), 0);
+        return true;
+    }
+    if ((i & 0xDF800400) == 0x5F000400) return t_simd_shift(t, i, true);
+    return false;
+}
+#undef P
+
 /* returns: 0 = continue block, 1 = block ended */
 static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
 {
@@ -1496,9 +1778,11 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         break;
     case 0xF:
         if ((i & 0x5F000000) == 0x1E000000) ok = t_fp(t, i, pc);
+        else ok = t_simd_scalar(t, i);
         break;
     case 0x7:
         if ((i & 0xFFC08000) == 0xCE000000) ok = t_eor3_bcax(t, i);
+        else ok = t_simd(t, i);
         break;
     default: break;
     }
