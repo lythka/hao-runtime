@@ -478,7 +478,6 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
     extern void hao_commpage_init(void);
     hao_commpage_init();
     if (hao_opt.watchdog) { signal(SIGALRM, watchdog); alarm(hao_opt.watchdog); }
-    hao_interpose_init();
     hao_bridge_init();            /* plan table, interface units, hao_bridge_stats */
     /* The code cache (translated code and the native-callable thunks) is
      * mapped before the guest runs, also for --interp: a sandbox the guest

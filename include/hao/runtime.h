@@ -238,7 +238,6 @@ void hao_objc_read_image(hao_image *img);
 void hao_objc_run_loads(hao_image *img);
 
 /* interpose.c */
-void hao_interpose_init(void);
 bool hao_interpose_lookup(const char *name, uint64_t *addr);
 int hao_interpose_selfcheck(char *why, size_t n);   /* tests: table order and name indexes; 0 = sound */
 /* name is an ABI repair of a native C++ function (applies to native binds only) */

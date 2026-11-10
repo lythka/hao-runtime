@@ -2319,7 +2319,6 @@ static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, 
 
 static void *dep_handle(hao_image *img, int ord);
 static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr);
-static bool hao_runtime_interpose(const char *name, uint64_t *addr);
 
 /* An interposer answers the import with a trap (counted as a TYPED bind).
  * native: the import binds to a native definition. An ABI repair of a native
@@ -2328,7 +2327,7 @@ static bool hao_runtime_interpose(const char *name, uint64_t *addr);
 static bool interposed(const char *name, uint64_t *addr, bool native)
 {
     if (!native && hao_interpose_abi_repair(name)) return false;
-    if (!hao_runtime_interpose(name, addr) && !hao_interpose_lookup(name, addr)) return false;
+    if (!hao_interpose_lookup(name, addr)) return false;
     hao_bridge_bind_trap(name, HAO_BRS_TRAP);
     return true;
 }
@@ -2752,8 +2751,6 @@ static bool guest_lookup(hao_image *im, const char *name, uint64_t *addr, int de
     return false;
 }
 
-static bool hao_runtime_interpose(const char *name, uint64_t *addr);
-
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found)
 {
     uint64_t a = 0;
@@ -3003,8 +3000,18 @@ static void trap_dyld_lazy_load(hao_thread *t, uint64_t arg)
     abort();
 }
 
-static bool hao_runtime_interpose(const char *name, uint64_t *addr)
+/* The runtime's own traps, first in hao_interpose_lookup's order. */
+static const struct { const char *name; hao_trap_fn trap; } runtime_traps[] = {
+    {"__dyld_lazy_load", trap_dyld_lazy_load},
+};
+static hao_name_index runtime_ix = HAO_NAME_INDEX(runtime_traps, NULL);
+
+bool hao_runtime_interpose(const char *name, uint64_t *addr)
 {
-    if (!strcmp(name, "__dyld_lazy_load")) { *addr = hao_trap_address(name, trap_dyld_lazy_load, 0); return true; }
-    return false;
+    long k = hao_name_find(&runtime_ix, name);
+    if (k < 0) return false;
+    *addr = hao_trap_address(runtime_traps[k].name, runtime_traps[k].trap, 0);
+    return true;
 }
+
+void hao_runtime_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&runtime_ix, cb, ctx); }

@@ -158,11 +158,12 @@ static const struct { const char *name, *twin; } ld_twins[] = {
     {"_strtold", "strtod"}, {"_strtold_l", "strtod_l"}, {"_wcstold", "wcstod"}, {"_wcstold_l", "wcstod_l"},
 };
 
+static hao_name_index ld_twins_ix = HAO_NAME_INDEX(ld_twins, NULL);
+
 static const char *ld_twin(const char *name)
 {
-    for (size_t k = 0; k < sizeof ld_twins / sizeof *ld_twins; k++)
-        if (!strcmp(name, ld_twins[k].name)) return ld_twins[k].twin;
-    return NULL;
+    long k = hao_name_find(&ld_twins_ix, name);
+    return k < 0 ? NULL : ld_twins[k].twin;
 }
 
 static const struct { const char *name; int which; } fenv_fns[] = {
@@ -172,10 +173,9 @@ static const struct { const char *name; int which; } fenv_fns[] = {
     {"_feholdexcept", F_HOLD}, {"_feupdateenv", F_UPDATE},
 };
 
-void hao_libm_interpose_names(hao_name_fn cb, void *ctx)
-{
-    for (size_t k = 0; k < sizeof fenv_fns / sizeof *fenv_fns; k++) cb(fenv_fns[k].name, ctx);
-}
+static hao_name_index fenv_ix = HAO_NAME_INDEX(fenv_fns, NULL);
+
+void hao_libm_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&fenv_ix, cb, ctx); }
 
 bool hao_libm_interpose(const char *name, uint64_t *addr)
 {
@@ -189,8 +189,8 @@ bool hao_libm_interpose(const char *name, uint64_t *addr)
     }
     if (!strcmp(name, "__FE_DFL_ENV")) { *addr = (uint64_t)(uintptr_t)&dfl_env; return true; }
     if (!strcmp(name, "__FE_DFL_DISABLE_DENORMS_ENV")) { *addr = (uint64_t)(uintptr_t)&dfl_nodenorm_env; return true; }
-    if (strncmp(name, "_fe", 3)) return false;
-    for (size_t k = 0; k < sizeof fenv_fns / sizeof *fenv_fns; k++)
-        if (!strcmp(name, fenv_fns[k].name)) { *addr = hao_trap_address(fenv_fns[k].name, trap_fenv, (uint64_t)fenv_fns[k].which); return true; }
-    return false;
+    long k = hao_name_find(&fenv_ix, name);
+    if (k < 0) return false;
+    *addr = hao_trap_address(fenv_fns[k].name, trap_fenv, (uint64_t)fenv_fns[k].which);
+    return true;
 }

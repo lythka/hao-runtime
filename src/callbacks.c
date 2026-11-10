@@ -352,37 +352,36 @@ static bool enabled(void) { return !hao_opt.no_struct_thunks; }
 
 const char *hao_sigdb_enc(const char *name);   /* interpose.c */
 
+/* the Swift class-metadata allocators, by variant (trap_swift_class_metadata) */
+static const char *const swift_class_allocs[] = {"_swift_allocateGenericClassMetadata",
+                                                 "_swift_allocateGenericClassMetadataWithLayoutString"};
+static hao_name_index swift_class_ix = HAO_NAME_INDEX(swift_class_allocs, NULL), apis_ix = HAO_NAME_INDEX(apis, NULL);
+
 void hao_callbacks_interpose_names(hao_name_fn cb, void *ctx)
 {
-    cb("_swift_allocateGenericClassMetadata", ctx);
-    cb("_swift_allocateGenericClassMetadataWithLayoutString", ctx);
-    for (size_t k = 0; k < NAPIS; k++) cb(apis[k].name, ctx);
+    hao_name_each(&swift_class_ix, cb, ctx);
+    hao_name_each(&apis_ix, cb, ctx);
 }
 
 bool hao_callbacks_interpose(const char *name, uint64_t *addr)
 {
-    if (name[0] != '_') return false;
-    if (!strcmp(name, "_swift_allocateGenericClassMetadata") ||
-        !strcmp(name, "_swift_allocateGenericClassMetadataWithLayoutString")) {
+    long variant = hao_name_find(&swift_class_ix, name);
+    if (variant >= 0) {
         if (!enabled()) return false;
-        unsigned variant = strcmp(name, "_swift_allocateGenericClassMetadata") != 0;
         if (!swift_alloc_class_fn[variant]) swift_alloc_class_fn[variant] = dlsym(RTLD_DEFAULT, name + 1);
         if (!swift_alloc_class_fn[variant]) return false;
-        *addr = hao_trap_address(name, trap_swift_class_metadata, variant);
+        *addr = hao_trap_address(name, trap_swift_class_metadata, (uint64_t)variant);
         return true;
     }
-    for (size_t k = 0; k < NAPIS; k++) {
-        if (strcmp(name, apis[k].name)) continue;
-        if (!enabled()) return false;
-        /* the importing library is loaded by now (hao_resolve_import); a
-         * symbol this host lacks binds the ordinary way */
-        if (!native_fn[k]) native_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
-        if (!native_fn[k]) return false;
-        if (apis[k].sig && !(sig_enc[k] = hao_sigdb_enc(name))) return false;
-        *addr = hao_trap_address(apis[k].name, trap_cbstruct, k);
-        return true;
-    }
-    return false;
+    long k = hao_name_find(&apis_ix, name);
+    if (k < 0 || !enabled()) return false;
+    /* the importing library is loaded by now (hao_resolve_import); a
+     * symbol this host lacks binds the ordinary way */
+    if (!native_fn[k]) native_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
+    if (!native_fn[k]) return false;
+    if (apis[k].sig && !(sig_enc[k] = hao_sigdb_enc(name))) return false;
+    *addr = hao_trap_address(apis[k].name, trap_cbstruct, (uint64_t)k);
+    return true;
 }
 
 void hao_callbacks_stats(void)
