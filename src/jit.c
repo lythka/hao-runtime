@@ -89,6 +89,7 @@ static int (*jit_enter)(hao_cpu *, void *code);
 static uint64_t st_blocks, st_insns, st_native, st_helper, st_links, st_bytes, st_aot_blocks;
 static uint64_t st_sites, st_sites_unaligned, st_link_skips;   /* chainable exits emitted / not 4-aligned; links refused */
 static uint64_t st_fused;             /* instructions folded into the one before them (constant chains) */
+static uint64_t st_fl_exits, st_fl_unsaved;   /* direct exits reached with NZCV in EFLAGS / of those, left unsaved */
 static int jit_disabled_native;       /* HAO_JIT_HELPERS_ONLY=1: every insn via helper */
 
 /* ------------------------------------------------------------ tables */
@@ -285,6 +286,13 @@ typedef struct {
      * instructions; `skip` of them were folded into the current one */
     const uint32_t *insns;
     int n, skip;
+    /* where instructions beyond the block are read from, for the walk that
+     * decides whether an exit must save NZCV (flags_dead_at): the block's
+     * image, or the whole code of hao_jit_exec_code */
+    hao_image *im;
+    const uint32_t *win;
+    uint64_t win_base;
+    int win_n;
     /* AOT: direct-branch exits to resolve after all blocks are emitted */
     struct aot_link { uint32_t site; uint64_t target; } *links;
     int nlinks, caplinks;
@@ -374,10 +382,17 @@ static void exit_with(tctx *t, int reason)
     x_jmp_m(&t->b, xm(RBX, CPU_OFF_RT_EXIT));
 }
 
-/* direct branch exit: patchable jmp to a link stub */
+static bool exit_live(const tctx *t, uint64_t target);
+
+/* direct branch exit: patchable jmp to a link stub. NZCV still in EFLAGS
+ * is saved unless the code at the target replaces it before reading it. */
 static void exit_direct(tctx *t, uint64_t target)
 {
-    fl_materialize(t);
+    if (t->in_eflags && t->dirty) {
+        ST(st_fl_exits);
+        if (exit_live(t, target)) fl_materialize(t);
+        else ST(st_fl_unsaved);
+    }
     /* layout: jmp rel32 -> stub ; stub: mov rax,target; mov [pc],rax; mov eax,BRANCH; jmp exit
      * hao_jit_run_block rewrites the rel32 while other threads may be
      * executing this jmp (cross-modifying code). x86 fetches it whole only
@@ -498,6 +513,75 @@ static bool is_block_end(uint32_t i)
     if ((i & 0xFF000000) == 0xD4000000) return true;   /* SVC/BRK/HLT */
     if (i == 0) return true;
     return false;
+}
+
+/* The guest instruction at pc, if a block of this one's image (or of the
+ * code hao_jit_exec_code runs) can continue there. */
+static bool peek_insn(const tctx *t, uint64_t pc, uint32_t *insn)
+{
+    if (pc & 3) return false;
+    if (t->win) {
+        if (pc < t->win_base || pc >= t->win_base + 4u * (unsigned)t->win_n) return false;
+        *insn = t->win[(pc - t->win_base) / 4];
+        return true;
+    }
+    if (!t->im || hao_image_for_code(pc) != t->im) return false;
+    memcpy(insn, hao_code_ptr_im(t->im, pc), 4);
+    return true;
+}
+
+/*
+ * True when the code at pc writes NZCV before it reads it on every path a
+ * bounded walk can follow: straight-line code, B and BL to their target,
+ * CBZ/CBNZ/TBZ/TBNZ both ways. Anything else ends the walk with "live": a
+ * flag read, an indirect branch or return, a system instruction, a trap,
+ * the edge of the image, the budget.
+ *
+ * An exit to such a target leaves NZCV unsaved. The answer depends only on
+ * the image's code, so hao_jit_locate's re-emission and an AOT cache agree
+ * with the first translation. What it gives up: the stale cpu.flags is what
+ * a signal context shows for an interruption in the target before its
+ * first flag write (a fault in a load there, say), where the processor
+ * would show the old flags; guest code cannot read them, only a handler
+ * that inspects the context can. The same holds inside a block, where
+ * flags no later instruction reads are not saved before x86 clobbers them.
+ */
+static bool flags_dead_at(const tctx *t, uint64_t pc, int depth, int *budget)
+{
+    for (;;) {
+        uint32_t i;
+        if (--*budget < 0 || !peek_insn(t, pc, &i)) return false;
+        int e = flag_effect(i);
+        if (e & FL_READ) return false;
+        if (e & FL_WRITE) return true;
+        if ((i & 0x7C000000) == 0x14000000) { pc += (uint64_t)(sext(BITS(i, 25, 0), 26) * 4); continue; }
+        if ((i & 0x7E000000) == 0x34000000 || (i & 0x7E000000) == 0x36000000) {
+            uint64_t tg = pc + (uint64_t)(((i & 0x7E000000) == 0x34000000 ? sext(BITS(i, 23, 5), 19) : sext(BITS(i, 18, 5), 14)) * 4);
+            if (depth >= 2 || !flags_dead_at(t, tg, depth + 1, budget)) return false;
+        } else if (is_block_end(i))
+            return false;
+        pc += 4;
+    }
+}
+static bool exit_live(const tctx *t, uint64_t target)
+{
+    int budget = 48;
+    return !flags_dead_at(t, target, 0, &budget);
+}
+
+/* Whether NZCV is live after the last instruction of a block: at any of
+ * its direct exits, or always when it leaves another way. */
+static bool block_end_live(const tctx *t, uint64_t pc, const uint32_t *insns, int n)
+{
+    uint32_t i = insns[n - 1];
+    uint64_t last = pc + 4u * (unsigned)(n - 1);
+    if ((i & 0x7C000000) == 0x14000000) return exit_live(t, last + (uint64_t)(sext(BITS(i, 25, 0), 26) * 4));
+    if ((i & 0x7E000000) == 0x34000000 || (i & 0xFF000000) == 0x54000000)
+        return exit_live(t, last + (uint64_t)(sext(BITS(i, 23, 5), 19) * 4)) || exit_live(t, last + 4);
+    if ((i & 0x7E000000) == 0x36000000)
+        return exit_live(t, last + (uint64_t)(sext(BITS(i, 18, 5), 14) * 4)) || exit_live(t, last + 4);
+    if (!is_block_end(i)) return exit_live(t, last + 4);
+    return true;
 }
 
 /* ---- native translators: return true if handled */
@@ -1865,7 +1949,6 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
     }
     if ((i & 0x7E000000) == 0x34000000) {                       /* CBZ / CBNZ: jrcxz keeps flags */
         uint64_t target = pc + (uint64_t)(sext(BITS(i, 23, 5), 19) * 4);
-        fl_materialize(t);
         ldx(t, RCX, BITS(i, 4, 0), BIT(i, 31), false);
         size_t jz = x_jrcxz8(&t->b);
         size_t skip = x_jmp8(&t->b);         /* rcx != 0 */
@@ -1875,8 +1958,10 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         size_t zj = x_jmp32(&t->b);
         x_patch8(&t->b, skip, xb_len(&t->b));
         bool cbnz = BIT(i, 24);
-        /* NZ path */
+        /* NZ path; each exit saves NZCV if its target needs it */
+        bool saved_in = t->in_eflags, saved_dirty = t->dirty;
         exit_direct(t, cbnz ? target : pc + 4);
+        t->in_eflags = saved_in; t->dirty = saved_dirty;
         x_patch32(&t->b, zj, xb_len(&t->b));
         exit_direct(t, cbnz ? pc + 4 : target);
         ST(st_native);
@@ -1885,8 +1970,8 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
     if ((i & 0x7E000000) == 0x36000000) {                       /* TBZ / TBNZ */
         uint64_t target = pc + (uint64_t)(sext(BITS(i, 18, 5), 14) * 4);
         unsigned bit = BIT(i, 31) << 5 | BITS(i, 23, 19);
-        fl_materialize(t);
-        t->in_eflags = false;
+        if (t->in_eflags && t->dirty && (exit_live(t, pc + 4) || exit_live(t, target))) fl_materialize(t);
+        t->in_eflags = t->dirty = false;                        /* the test below replaces EFLAGS */
         x_mov_ld(&t->b, 1, RCX, xm(RBX, CPU_OFF_X(BITS(i, 4, 0)) + (int32_t)(bit / 8)));
         if (BITS(i, 4, 0) == 31) x_mov_ri(&t->b, RCX, 0);
         x_test_ri(&t->b, 0, RCX, 1 << (bit % 8));
@@ -1902,7 +1987,6 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         unsigned cond = BITS(i, 3, 0);
         if (cond >= 14) { exit_direct(t, target); ST(st_native); return 1; }
         fl_load(t);
-        fl_materialize(t);
         size_t j = x_jcc32(&t->b, a64_cond_to_xcc(cond));
         bool saved_in = t->in_eflags, saved_dirty = t->dirty;
         exit_direct(t, pc + 4);
@@ -1961,7 +2045,8 @@ static int fetch_block(uint64_t pc, hao_image *im, uint32_t *insns)
 /* Emit one block at the current position of t->b. */
 static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
 {
-    bool live = true;
+    t->im = t->win ? NULL : hao_image_for_code(pc);
+    bool live = block_end_live(t, pc, insns, n);
     for (int k = n - 1; k >= 0; k--) {
         t->live_out[k] = live;
         int e = flag_effect(insns[k]);
@@ -3221,13 +3306,15 @@ void hao_jit_stats(void)
     uint32_t maps_grows;
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
-            " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu\n",
+            " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu"
+            " flag_exits=%llu flag_exits_unsaved=%llu\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
             (unsigned long long)st_sites_unaligned, (unsigned long long)st_link_skips,
             __atomic_load_n(&table_used, __ATOMIC_RELAXED), table ? table->mask + 1 : 0, (unsigned long long)(st_table_bytes >> 10),
-            (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused);
+            (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
+            (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved);
 }
 
 /* Oracle support: run code[0..n) placed at guest address `base` from its
@@ -3244,9 +3331,9 @@ void hao_jit_stats(void)
  * refuses a libhao with a __thread_vars section). */
 typedef struct {
     uint8_t *scratch;
-    uint64_t last_pc;                          /* the block left in scratch */
-    int last_m;
-    uint32_t last_code[MAX_BLOCK_INSNS];
+    uint64_t last_pc, last_base;               /* the block left in scratch, and the code it was part of */
+    int last_m, last_n;
+    uint32_t last_code[2 * MAX_BLOCK_INSNS];
 } exec_state;
 static pthread_key_t exec_key;
 static pthread_once_t exec_once = PTHREAD_ONCE_INIT;
@@ -3285,15 +3372,20 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
         if (pc < base || pc > base + 4u * (unsigned)n || (pc & 3)) return -3;
         int k = (int)((pc - base) / 4), m = 0;
         while (k + m < n && m < MAX_BLOCK_INSNS) if (is_block_end(code[k + m++])) break;
-        /* the block left in scratch by the previous call is reused if identical */
-        if (pc != es->last_pc || m != es->last_m || memcmp(es->last_code, code + k, 4u * (unsigned)m)) {
+        /* the block left in scratch by the previous call is reused if it and
+         * the code around it (its exits look at their targets) are identical */
+        if (pc != es->last_pc || m != es->last_m || base != es->last_base || n != es->last_n ||
+            n > 2 * MAX_BLOCK_INSNS || memcmp(es->last_code, code, 4u * (unsigned)n)) {
             tctx t;
             memset(&t, 0, sizeof t);
+            t.win = code;
+            t.win_base = base;
+            t.win_n = n;
             xb_init(&t.b, tscratch, SCRATCH_SIZE);
             emit_block(&t, pc, code + k, m);
             if (t.b.overflow || t.b.bad) { es->last_m = 0; return -4; }
-            es->last_pc = pc; es->last_m = m;
-            memcpy(es->last_code, code + k, 4u * (unsigned)m);
+            es->last_pc = pc; es->last_m = m; es->last_base = base; es->last_n = n;
+            if (n <= 2 * MAX_BLOCK_INSNS) memcpy(es->last_code, code, 4u * (unsigned)n);
         }
         int r = jit_enter(c, tscratch);
         if (r != HAO_EXIT_BRANCH && r != HAO_EXIT_NONE) return r;

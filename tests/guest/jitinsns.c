@@ -101,6 +101,15 @@ REG2(t_movk6, "mov x2, x0\nmovk x2, #1\nmovk x2, #2, lsl #16\nmovk x2, #3, lsl #
 REG2(t_movk7, "mov x2, x0\nmovk w2, #0xffff\nmovk x2, #0x7777, lsl #48\nmovk x3, #1\nmovk x2, #0x1111, lsl #16")
 REG2(t_movz2, "mov w2, #0x10000\nmovk x2, #0xa, lsl #32\nmov x3, #0x20000\nmovk x3, #0xb\nadd x2, x2, x3\neor x2, x2, x0")
 
+/* NZCV across block exits: live through B, CBZ and TBZ to a reader, dead
+ * on one or both paths, rewritten in a loop */
+REG2(t_fl1, "cmp x0, x1\nb 1f\n1: cbz x1, 2f\nadd x2, x2, #1\n2: tbz x0, #3, 3f\nadd x2, x2, #2\n3: cset w3, hi\nadd x2, x2, x3")
+REG2(t_fl2, "adds x2, x0, x1\ncbz x1, 1f\nsubs x2, x2, #5\nb 2f\n1: ands x2, x2, x0\n2: nop")
+REG2(t_fl3, "cmp x0, x1\ntbz x1, #0, 1f\ncmp x1, x0\nb 2f\n1: cinc x2, x2, lo\n2: nop")
+REG2(t_fl4, "mov x2, #0\nand x9, x1, #7\n1: add x2, x2, x0\nsubs x9, x9, #1\nb.pl 1b")
+REG2(t_fl5, "cmp x0, x1\ncbz x0, 1f\nccmp x1, #3, #4, ne\n1: cset w2, eq")
+REG2(t_fl6, "cmp x0, x1\ntbnz x1, #63, 1f\nmul x2, x0, x1\nb 2f\n1: udiv x2, x0, x1\n2: csinc x2, x2, x0, ge")
+REG2(t_fl7, "cmn x0, x1\ncbnz x0, 1f\nmov x2, #7\n1: adc x2, x2, x1")
 #define ATOM(n, mn)                                    \
     MEM2(t_##n##b, mn "b w1, w2, [x0]")                \
     MEM2(t_##n##h, mn "h w1, w2, [x0]")                \
@@ -350,6 +359,7 @@ int main(void)
     R(rbit); R(rbitw); R(rev16); R(rev16w); R(rev32); R(ctz);
     R(bfi0); R(bfi1); R(bfi2); R(bfi3); R(bfi4); R(bfi5);
     R(bfxil0); R(bfxil1); R(bfxil2); R(bfxil3); R(bfxil4); R(bfc); R(bfcw);
+    R(fl1); R(fl2); R(fl3); R(fl4); R(fl5); R(fl6); R(fl7);
     R(movk); R(movkw); R(movk2); R(movn); R(movk3); R(movk4); R(movk5); R(movk6); R(movk7); R(movz2);
     RA(ldadd); RA(ldclr); RA(ldeor); RA(ldset); RA(ldsmax); RA(ldsmin); RA(ldumax); RA(ldumin);
     RA(swp); RA(ldaddr); RA(swpl); RA(cas);
