@@ -72,10 +72,45 @@ const char *hao_env_tier_name(int t)
     return t == HAO_ENV_OPEN ? "open" : t == HAO_ENV_GUARDED ? "guarded" : "setugid";
 }
 
+/*
+ * The switches of hao's own command line, as letters (the CLI's stage 1
+ * passes them to stage 2 apart from HAO_FLAGS, main.c). Each is honoured
+ * where the environment switch of the same effect is: -v and -vv as
+ * HAO_VERBOSE, --interp as HAO_INTERP, --stats and --allow-unsigned in an
+ * open process only. So a tier that ignores an inherited HAO_FLAGS does not
+ * drop the whole command line with it, and no letter does more here than
+ * the environment could. An allowed HAO_VERBOSE still decides the verbosity
+ * (the environment beats flags, hao/opts.h).
+ */
+static void cli_flags(const char *letters, int tier)
+{
+    static const struct { char c; const char *opt, *as; } sw[] = {
+        {'v', "-v", "HAO_VERBOSE"}, {'V', "-vv", "HAO_VERBOSE"}, {'i', "--interp", "HAO_INTERP"},
+        {'s', "--stats", NULL}, {'u', "--allow-unsigned", NULL}};
+    bool env_verbose = getenv("HAO_VERBOSE") != NULL;
+    for (size_t k = 0; k < sizeof sw / sizeof sw[0]; k++) {
+        if (!strchr(letters, sw[k].c) || (sw[k].c == 'v' && strchr(letters, 'V'))) continue;
+        if (!(sw[k].as ? hao_env_switch_allowed(sw[k].as, tier) : tier == HAO_ENV_OPEN)) {
+            size_t l = strlen(hao_opt.ignored);
+            snprintf(hao_opt.ignored + l, sizeof hao_opt.ignored - l, "%s%s", l ? "," : "", sw[k].opt);
+            continue;
+        }
+        switch (sw[k].c) {
+        case 'v': if (!env_verbose && hao_opt.verbose < 1) hao_opt.verbose = 1; break;
+        case 'V': if (!env_verbose && hao_opt.verbose < 2) hao_opt.verbose = 2; break;
+        case 'i': hao_opt.interp = true; break;
+        case 's': hao_opt.stats = true; break;
+        case 'u': hao_opt.allow_unsigned = true; break;
+        }
+    }
+}
+
 /* The switch snapshot: once per process, before any guest code or second
  * thread runs. If kern.bootargs cannot be read (a spawn-time sandbox), the
- * boot-argument knobs stay off. */
-void hao_opts_init(const char *flags)
+ * boot-argument knobs stay off. A switch this process's tier ignores is
+ * named whatever the verbosity: its caller asked for something that will
+ * not happen (an unsigned guest refused, a cache not used). */
+static void opts_init(const char *flags, const char *argv_flags)
 {
     if (hao_opt.ready) return;
     extern char **environ;
@@ -85,8 +120,9 @@ void hao_opts_init(const char *flags)
     if (sysctlbyname("kern.bootargs", ba, &n, NULL, 0) == 0) { ba[n] = 0; bp = ba; }
     int t = hao_env_tier();
     hao_opts_parse(&hao_opt, environ, flags, bp, getpid() == 1, t);
+    if (argv_flags) cli_flags(argv_flags, t);
     hao_code_alias_mode = hao_opt.code_alias;   /* hao/code.h: before any image loads */
-    if (hao_opt.verbose && hao_opt.ignored[0]) {
+    if (hao_opt.ignored[0]) {
         char list[sizeof hao_opt.ignored];
         snprintf(list, sizeof list, "%s", hao_opt.ignored);
         char *save = NULL;
@@ -94,3 +130,6 @@ void hao_opts_init(const char *flags)
             fprintf(HAO_DIAG, "hao: %s ignored (%s process)\n", s, hao_env_tier_name(t));
     }
 }
+
+void hao_opts_init(const char *flags) { opts_init(flags, NULL); }
+void hao_opts_init_cli(const char *flags, const char *argv_flags) { opts_init(flags, argv_flags); }

@@ -7,6 +7,8 @@
 #include "hao/native_bundle.h"
 #include "hao/bridge.h"
 #include <crt_externs.h>
+#include <errno.h>
+#include <libproc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +18,9 @@
 #include <mach-o/getsect.h>
 #include <mach-o/loader.h>
 #include <mach/vm_prot.h>
+#include <sys/param.h>
+#include <sys/proc_info.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 
 static void usage(void)
@@ -109,6 +114,14 @@ void hao_guest_image_init(hao_image *img)
  * guest never sees it in its environment, as natively. */
 #define HAO_TAG_ENV "OBJC_DISABLE_TAG_OBFUSCATION"
 
+/* 1: libobjc's obfuscator is zero (the exec passed the switch and libobjc
+ * took it); 0: tagged pointers are obfuscated; -1: no libobjc here. */
+static int plain_tags(void)
+{
+    const uintptr_t *obf = (const uintptr_t *)dlsym(RTLD_DEFAULT, "objc_debug_taggedpointer_obfuscator");
+    return obf ? *obf == 0 : -1;
+}
+
 static int oslog_is_guest(const void *p) { return hao_image_for_addr((uint64_t)(uintptr_t)p) != NULL; }
 /* [p, p+n) inside one segment of a guest image that its load commands map without write access
  * (__TEXT; a shared-cache image's read-only segments): what dyld calls immutable for its own images */
@@ -134,7 +147,51 @@ static int oslog_immutable(const void *p, size_t n)
     return 0;
 }
 
-static int run_guest(const char *path, int argc, char **argv, char **envp);
+static int run_guest(const char *path, int fd, int argc, char **argv, char **envp);
+
+/*
+ * The file this process runs, from the kernel: the device and inode of the
+ * vnode that backs the main executable's Mach-O header (proc_pidinfo's
+ * region information about this process), and that vnode's path as the
+ * kernel resolves it now (kpath; "" when it has none). Where the query is
+ * denied (a sandbox), the pair the kernel put in apple[] at exec answers
+ * ("executable_file=FSID,FILEID", which dyld reads for the same purpose; the
+ * device is the low word of the file system ID). Neither is a path the
+ * caller of exec chose. false: not known.
+ */
+static bool self_vnode(char **apple, dev_t *dev, ino_t *ino, char *kpath, size_t n)
+{
+    struct proc_regionwithpathinfo ri;
+    uint64_t hdr = (uint64_t)(uintptr_t)_NSGetMachExecuteHeader();
+    memset(&ri, 0, sizeof ri);
+    kpath[0] = 0;
+    if (proc_pidinfo(getpid(), PROC_PIDREGIONPATHINFO, hdr, &ri, sizeof ri) == (int)sizeof ri &&
+        ri.prp_prinfo.pri_address <= hdr && hdr - ri.prp_prinfo.pri_address < ri.prp_prinfo.pri_size &&
+        ri.prp_vip.vip_vi.vi_stat.vst_ino) {
+        *dev = (dev_t)ri.prp_vip.vip_vi.vi_stat.vst_dev;
+        *ino = (ino_t)ri.prp_vip.vip_vi.vi_stat.vst_ino;
+        ri.prp_vip.vip_path[sizeof ri.prp_vip.vip_path - 1] = 0;
+        snprintf(kpath, n, "%s", ri.prp_vip.vip_path);
+        return true;
+    }
+    for (char **a = apple; a && *a; a++) {
+        unsigned long long fsid, id;
+        char tail;
+        if (!strncmp(*a, "executable_file=", 16) && sscanf(*a + 16, "%llx,%llx%c", &fsid, &id, &tail) == 2 && id) {
+            *dev = (dev_t)(uint32_t)fsid;
+            *ino = (ino_t)id;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* path names that file now */
+static bool names_vnode(const char *path, dev_t dev, ino_t ino)
+{
+    struct stat st;
+    return path && path[0] && stat(path, &st) == 0 && st.st_dev == dev && st.st_ino == ino;
+}
 
 static int self_path(char *out, size_t n)
 {
@@ -155,13 +212,6 @@ static void dyld_abs_path(const char *path, char *out, size_t n)
     if (path[0] == '/' || !getcwd(cwd, sizeof cwd)) { snprintf(out, n, "%s", path); return; }
     while (path[0] == '.' && path[1] == '/') path += 2;
     snprintf(out, n, "%s/%s", cwd, path);
-}
-
-/* The two paths name one file (realpath of each). */
-static bool same_file(const char *a, const char *b)
-{
-    char ra[1100], rb[1100];
-    return realpath(a, ra) && realpath(b, rb) && !strcmp(ra, rb);
 }
 
 static int aot_main(int argc, char **argv)
@@ -186,31 +236,38 @@ static int aot_main(int argc, char **argv)
  * guest. libhao_identity.dylib (linked by hao, so its dyld interposers apply
  * process-wide while the main executable stays dyld image 0) presents the
  * guest's path and its carried sections to native code.
+ *
+ * Anyone can start hao as its own second stage, so the hand-off carries a
+ * path and switches and no trust: stage 2 opens the file, checks the
+ * guest's signature on that descriptor (guest_sig.c) and loads the image
+ * from it. Stage 1 checks nothing.
  */
 int hao_cli_main(int argc, char **argv, char **envp)
 {
     if (argc >= 3 && !strcmp(argv[1], "--aot")) return aot_main(argc, argv);
     /* HAO_EXEC is stage 1's hand-off to stage 2, which stage 1 runs with
-     * argv[0] = the program. A HAO_EXEC that does not name argv[0] was not
-     * set by stage 1: drop it and start at stage 1. */
+     * argv[0] = the program: it is the absolute path stage 1 made of that
+     * argv[0]. Any other HAO_EXEC was not set by stage 1 for this exec:
+     * drop it and start at stage 1. (The comparison is of the two strings,
+     * not of the files they name: a program that does not exist is still
+     * stage 2's to report, not a reason to read its arguments as hao's.) */
     const char *path = getenv("HAO_EXEC");
-    if (path && (argc < 1 || path[0] != '/' || !same_file(argv[0], path))) {
+    char own[1100] = "";
+    if (path && argc >= 1 && argv[0]) dyld_abs_path(argv[0], own, sizeof own);
+    if (path && (path[0] != '/' || strcmp(own, path) != 0)) {
         unsetenv("HAO_EXEC");
         path = NULL;
     }
     if (!path) {
-        /* HAO_FLAGS has one meaning everywhere: the letters v, V, i, s, u
-         * (opts.c). The options add to an inherited HAO_FLAGS, and stage 2
-         * reads the union. HaoExec's "#! /usr/libexec/hao --" line makes the
+        /* The options go to stage 2 as letters (v, V, i, s, u, as in
+         * HAO_FLAGS) in HAO_EXEC_FLAGS, apart from an inherited HAO_FLAGS:
+         * stage 2 honours each where its tier honours the environment
+         * switch of the same effect, while HAO_FLAGS is all or nothing
+         * (trust.c). HaoExec's "#! /usr/libexec/hao --" line makes the
          * routed file argv[i] after "--", so a file named like an option is
          * still the program. */
         static const char letters[] = "vVisu";
         bool on[sizeof letters - 1] = {false};
-        const char *inherited = getenv("HAO_FLAGS");
-        for (const char *c = inherited ? inherited : ""; *c; c++) {
-            const char *l = strchr(letters, *c);
-            if (l && *l) on[l - letters] = true;
-        }
         int i = 1;
         for (; i < argc && argv[i][0] == '-'; i++) {
             if (!strcmp(argv[i], "-v")) on[0] = true;
@@ -226,21 +283,11 @@ int hao_cli_main(int argc, char **argv, char **envp)
         for (size_t k = 0, n = 0; k < sizeof on; k++) if (on[k]) flags[n++] = letters[k];
         char self[1100];
         if (self_path(self, sizeof self) != 0) { fprintf(stderr, "hao: cannot find own path\n"); return 126; }
-        /* The guest's path as dyld would present it had the kernel run the
-         * program; the signature check and stage 2 compare real paths. */
-        char abs[1100], prog[1100];
+        /* The guest's path as dyld would present it had the kernel run the program. */
+        char abs[1100];
         dyld_abs_path(argv[i], abs, sizeof abs);
-        if (!realpath(abs, prog)) snprintf(prog, sizeof prog, "%s", abs);
-        /* This process has hao's code identity, not the guest's: check the
-         * guest's own signature (guest_sig.c) here, in stage 1, which execs
-         * away the Security framework it loads. Stage 2 gets the checked
-         * file's identity and refuses to load any other file. */
-        hao_opts_init(flags);
-        char id[64];
-        if (hao_guest_sig_enforce(prog, id, sizeof id) != 0) return 126;
-        setenv("HAO_EXEC_ID", id, 1);
         setenv("HAO_EXEC", abs, 1);
-        setenv("HAO_FLAGS", flags, 1);
+        setenv("HAO_EXEC_FLAGS", flags, 1);
         setenv(HAO_TAG_ENV, "YES", 1);
         execv(self, argv + i);
         perror("hao: re-exec");
@@ -248,27 +295,38 @@ int hao_cli_main(int argc, char **argv, char **envp)
     }
     char guest_path[1100];
     snprintf(guest_path, sizeof guest_path, "%s", path);
-    hao_opts_init(getenv("HAO_FLAGS"));
-    bool checked = hao_guest_sig_expect(getenv("HAO_EXEC_ID"));
+    hao_opts_init_cli(getenv("HAO_FLAGS"), getenv("HAO_EXEC_FLAGS"));
     unsetenv("HAO_EXEC");
-    unsetenv("HAO_EXEC_ID");
+    unsetenv("HAO_EXEC_FLAGS");
     unsetenv("HAO_FLAGS");
     unsetenv(HAO_TAG_ENV);
-    if (!checked) {
+    /* a hand-off stage 1 did not make may lack the switch */
+    if (plain_tags() == 0) {
         hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "%s: no signature check from hao's first stage; refusing to run\n", guest_path);
+        fprintf(HAO_DIAG, "%s: started without " HAO_TAG_ENV " (not by `hao PROGRAM`): ObjC tagged pointers are "
+                "obfuscated, which translated ObjC and Swift code does not handle\n", guest_path);
+    }
+    /* This process has hao's code identity, not the guest's, and nothing
+     * before this point is evidence about the file: check the guest's own
+     * signature here (guest_sig.c), on the descriptor run_guest hands to
+     * the loader. */
+    int fd = open(guest_path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "open %s: %s\n", guest_path, strerror(errno));
         return 126;
     }
+    if (hao_guest_sig_enforce(fd, guest_path) != 0) return 126;
     /* The kernel named this process after hao's file. Its long name (p_name:
      * proc_name, proc_pidinfo's pbi_name) is settable, as setprogname does:
      * give it the program file's own name, as an exec of the program would.
      * p_comm stays "hao". */
-    char real[1100];
-    const char *base = realpath(guest_path, real) ? real : guest_path;
+    char real[MAXPATHLEN];
+    const char *base = fcntl(fd, F_GETPATH, real) == 0 ? real : guest_path;
     base = strrchr(base, '/') ? strrchr(base, '/') + 1 : base;
     int procname[2] = {CTL_KERN, KERN_PROCNAME};
     sysctl(procname, 2, NULL, NULL, (void *)base, strlen(base));
-    return run_guest(guest_path, argc, argv, envp);
+    return run_guest(guest_path, fd, argc, argv, envp);
 }
 
 /*
@@ -285,7 +343,21 @@ int hao_cli_main(int argc, char **argv, char **envp)
  * see one exec per spawn, as natively. Otherwise (a native parent) one
  * re-exec sets it; it execs the path the kernel was given (apple[]
  * "executable_path="), so the process name and dyld's executable path stay
- * what the caller's exec made them.
+ * what the caller's exec made them. If that path no longer names this file
+ * (a link repointed since the exec), it execs the vnode's own path as the
+ * kernel resolves it, and never another file.
+ *
+ * A process whose credentials changed at exec (set-user-ID, set-group-ID)
+ * does not re-exec: a second exec by path would hand the caller, who may
+ * own a link in that path, the choice of what runs with those credentials,
+ * and where issetugid() is set libobjc ignores its environment, so the
+ * switch could not take effect anyway. Such a program runs with obfuscated
+ * tagged pointers unless its stub is marked __hao_noreexec
+ * (docs/security-model.md, limitations).
+ *
+ * The ARM slice is read from a descriptor proven to be the file the kernel
+ * is running (self_vnode), never from whatever the executable's path names
+ * by the time it is opened.
  */
 /*
  * PID 1 (launchd) starts with no descriptors: hao's own diagnostics go to
@@ -324,14 +396,22 @@ static void pid1_report(void)
 
 int hao_self_main(int argc, char **argv, char **envp, char **apple)
 {
-    char self[1100], exe[1100];
+    char exe[1100], vpath[MAXPATHLEN], self[64];
     int pid1 = getpid() == 1;
     if (pid1) pid1_setup();
     uint32_t esz = sizeof exe;
-    if (_NSGetExecutablePath(exe, &esz) != 0 || self_path(self, sizeof self) != 0) {
+    if (_NSGetExecutablePath(exe, &esz) != 0) {
         fprintf(stderr, "hao: cannot find own path\n");
         return 126;
     }
+    dev_t dev = 0;
+    ino_t ino = 0;
+    if (!self_vnode(apple, &dev, &ino, vpath, sizeof vpath)) {
+        fprintf(stderr, "hao: %s: the kernel does not say which file this process runs; refusing to run\n", exe);
+        return 126;
+    }
+    /* the re-exec's loop guard: this file, whatever path reaches it */
+    snprintf(self, sizeof self, "%llu:%llu", (unsigned long long)dev, (unsigned long long)ino);
     const char *kpath = exe;
     for (char **a = apple; a && *a; a++)
         if (!strncmp(*a, "executable_path=", 16) && (*a)[16]) { kpath = *a + 16; break; }
@@ -343,28 +423,54 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     unsigned long marker = 0;
     int noreexec = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
                                   "__hao_noreexec", &marker) != NULL;
-    /* The exec passed the switch and libobjc took it (an issetugid process
-     * ignores the environment): no re-exec. */
-    const uintptr_t *obf = (const uintptr_t *)dlsym(RTLD_DEFAULT, "objc_debug_taggedpointer_obfuscator");
-    int plain_tags = obf && *obf == 0;
+    /* 1: the exec passed the switch and libobjc took it: no re-exec. */
+    int tags = plain_tags();
+    bool setid = issetugid() || getuid() != geteuid() || getgid() != getegid();
     /* PID 1 does not re-exec: dyld's PID-1 bootstrap (Preboot, cryptex
      * graft) runs once, and launchd itself does not touch ObjC objects. */
-    if (!pid1 && !noreexec && !plain_tags && (!stage || strcmp(stage, self) != 0)) {
-        setenv("HAO_SELF", self, 1);
-        setenv(HAO_TAG_ENV, "YES", 1);
-        extern char **environ;
-        execve(kpath, argv, environ);
-        /* exec refused (e.g. resource limits): run with obfuscated tags */
-        fprintf(stderr, "hao: %s: re-exec failed; tagged pointers stay obfuscated\n", self);
+    if (!pid1 && !noreexec && !setid && tags != 1) {
+        if (!stage || strcmp(stage, self) != 0) {
+            const char *target = names_vnode(kpath, dev, ino) ? kpath : names_vnode(vpath, dev, ino) ? vpath : NULL;
+            int e = ENOENT;
+            if (target) {
+                setenv("HAO_SELF", self, 1);
+                setenv(HAO_TAG_ENV, "YES", 1);
+                extern char **environ;
+                execve(target, argv, environ);
+                e = errno;
+            }
+            /* exec refused (e.g. resource limits), or no path names this file any more: run with obfuscated tags */
+            fprintf(stderr, "hao: %s: re-exec failed (%s); ObjC tagged pointers stay obfuscated, which translated "
+                    "ObjC and Swift code does not handle\n", exe, strerror(e));
+        } else if (tags == 0) {
+            /* re-exec'd (or started with HAO_SELF naming this file), and libobjc still obfuscates */
+            fprintf(stderr, "hao: %s: ObjC tagged pointers are still obfuscated after the re-exec with " HAO_TAG_ENV
+                    ", which translated ObjC and Swift code does not handle\n", exe);
+        }
     }
     unsetenv("HAO_SELF");
     unsetenv(HAO_TAG_ENV);
     hao_opts_init(getenv("HAO_FLAGS"));
     if (pid1) pid1_report();
-    return run_guest(exe, argc, argv, envp);
+    /* exe is the path the exec was given, made absolute. What it names now
+     * need not be what the kernel started: load only this process's own file. */
+    int fd = open(exe, O_RDONLY | O_CLOEXEC);
+    struct stat st;
+    if (fd < 0) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "open %s: %s\n", exe, strerror(errno));
+        return 126;
+    }
+    if (fstat(fd, &st) != 0 || st.st_dev != dev || st.st_ino != ino) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "%s no longer names the file this process runs; refusing to load its ARM code from another file\n", exe);
+        return 126;
+    }
+    return run_guest(exe, fd, argc, argv, envp);
 }
 
-static int run_guest(const char *path, int argc, char **argv, char **envp)
+/* fd: the open main executable, checked by the caller; the loader takes it. */
+static int run_guest(const char *path, int fd, int argc, char **argv, char **envp)
 {
     g_argc = argc; g_argv = argv; g_envp = envp;
     hao_opts_init(NULL);          /* the front end already took the snapshot */
@@ -392,18 +498,16 @@ static int run_guest(const char *path, int argc, char **argv, char **envp)
     void (*identity_lookup)(hao_identity_lookup_fn) =
         (void (*)(hao_identity_lookup_fn))dlsym(RTLD_DEFAULT, "hao_identity_set_image_lookup");
     if (identity_lookup) identity_lookup(hao_identity_guest_image);
-    char err[512];
-    hao_image *img = hao_load_main_image(path, err, sizeof err);
+    /* the real path of the file being loaded: the kernel's path for this
+     * descriptor, not a second resolution of PATH (the loader closes fd) */
+    char err[512], real[MAXPATHLEN];
+    if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
+    hao_image *img = hao_load_main_image(path, fd, err, sizeof err);
     if (!img) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "%s\n", err); return 126; }
-    if (!hao_guest_sig_matches(img)) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "%s: the file changed between its signature check and loading; refusing to run\n", path);
-        return 126;
-    }
     /* PATH is absolute and unresolved, as dyld presents the main executable */
     extern char hao_guest_exec_path[1024], hao_guest_image_path[1024];
     snprintf(hao_guest_exec_path, sizeof hao_guest_exec_path, "%s", path);
-    if (!realpath(path, hao_guest_image_path)) snprintf(hao_guest_image_path, sizeof hao_guest_image_path, "%s", path);
+    snprintf(hao_guest_image_path, sizeof hao_guest_image_path, "%s", real);
     /* native lookups on the main executable's header fall back to the guest's
      * mapped image (src/process_identity.c, linked by hao and hao-stub) */
     void (*identity_image)(const void *) = (void (*)(const void *))dlsym(RTLD_DEFAULT, "hao_identity_image");

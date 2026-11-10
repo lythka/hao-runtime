@@ -246,7 +246,7 @@ for m in "" --interp; do
     else bad "J$m snapshot: rc=$rc out=$(cat "$OUT/j.out") blocks=$b"; fi
 done
 # no switch is read with getenv outside the snapshot and the hand-offs
-g=$(grep -n 'getenv(' "$repo"/src/*.c | grep -vE '^[^:]*/(trust|process_identity)\.c:|getenv\("HAO_(EXEC|EXEC_ID|SELF|FLAGS)"\)')
+g=$(grep -n 'getenv(' "$repo"/src/*.c | grep -vE '^[^:]*/(trust|process_identity)\.c:|getenv\("HAO_(EXEC|EXEC_FLAGS|SELF|FLAGS)"\)')
 [ -z "$g" ] && pass "J2 getenv only in the snapshot and the HAO_EXEC/HAO_SELF/HAO_FLAGS hand-offs" || bad "J2 stray getenv: $g"
 
 # --- K: the guest image's descriptor is closed after loading
