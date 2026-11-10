@@ -21,6 +21,11 @@ ARCH      := -arch x86_64 -mmacosx-version-min=$(MACOS_MIN)
 # gives the same bytes in any checkout, worktree or rebuild.
 export ZERO_AR_DATE := 1
 REPRO     := -ffile-prefix-map=$(CURDIR)=.
+# TEST_SWITCHES=1: a build that reads the test-only switches (HAO_LIBVAL_USER,
+# HAO_SIGRETURN_USER, ...; src/aot_policy.c). Never the build that ships.
+ifdef TEST_SWITCHES
+REPRO     += -DHAO_TEST_SWITCHES
+endif
 WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CFLAGS    := $(ARCH) -std=gnu11 -O2 -g $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
@@ -245,8 +250,10 @@ test: unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mu
 CHECK_J ?= 8
 test-guest: all $(FUZZERS)
 	B=$(abspath $(B)) J=$(CHECK_J) tests/check.sh
+# The guest scripts exercise test-only switches, so the gate runs them on a
+# TEST_SWITCHES build in its own directory; the default build stays as shipped.
 check: test
-	$(MAKE) B=$(B) test-guest
+	$(MAKE) B=$(B)-ts TEST_SWITCHES=1 test-guest
 
 # Fuzzing (tests/fuzz/README.md): ASan + trace-pc-guard targets driven by
 # tests/fuzz/driver.c (the toolchain has no libFuzzer runtime). `make fuzz`

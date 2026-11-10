@@ -77,6 +77,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -315,7 +316,10 @@ static bool pages_valid(int fd, uint64_t slice_off, const sig_info *s, const hao
         return false;
     }
     enum { CHUNK = 1 << 20 };                        /* a multiple of both page sizes */
-    uint8_t *buf = malloc(CHUNK);
+    /* mapped, not malloc'd: this runs in the guest's process, and a freed
+     * 1 MiB heap block would stay in its footprint for the process's life */
+    uint8_t *buf = mmap(NULL, CHUNK, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (buf == MAP_FAILED) buf = NULL;
     if (!buf) { snprintf(why, n, "out of memory"); return false; }
     const uint8_t *slots = s->cd + h->hashOffset;
     bool ok = true;
@@ -342,7 +346,7 @@ static bool pages_valid(int fd, uint64_t slice_off, const sig_info *s, const hao
         }
         at += want;
     }
-    free(buf);
+    munmap(buf, CHUNK);
     return ok;
 }
 

@@ -168,6 +168,9 @@ Both fail the same way at b5dfc26 and are marked `xfail`:
   `guest wrote Three case 2, native read 0`,
   `native wrote Three case 2, guest read 2` where native arm64 reads 0, 2
   and 3 respectively.
+- `guest/oslog` passes on the `TEST_SWITCHES` build the gate uses (8 of 8) but fails on the
+  default build (5 of 8): there, as described next, the Swift program's records do not compose.
+  The cause of the difference between the two builds is not known yet.
 - `guest/oslog`: the C program's 24 records match on every route, but every
   `oslogswift` record (Logger, `os_log()`, `os_signpost()` from Swift) is
   `<compose failure [UUID]>` under JIT, `--interp` and AOT; the `oldstub`
