@@ -32,6 +32,15 @@ Runs as root inside an image builder (pure Python, no developer tools):
      removed, since hao would only read and reject it; install.json
      aot_caches records the count, bytes and removals.
   5. Writes SYSTEM/usr/lib/hao/install.json.
+Every name a manifest supplies ("path", "stub", "file", a bound "file") is a
+relative path under SYSTEM or PAYLOAD by the rule of tools/hao_release.py
+(relative, safe): not absolute, no "..", no backslash or NUL, already
+normalised. One that is not fails the install before anything is written.
+No such name, and no file of PAYLOAD/root, is read or written through a
+symbolic link: a link among the directories of the path, in PAYLOAD/root,
+or where a file is to be written is an error, found before the first write
+where the payload alone decides it (a link in place of a program to embed
+counts as a missing program, as before).
 Exit 1 on any error or if a path the payload requires was not embedded: the
 manifest's "required" list (empty for a runtime-only payload), or for
 payloads that predate it, sbin/launchd and usr/libexec/xpcproxy.
@@ -39,7 +48,9 @@ payloads that predate it, sbin/launchd and usr/libexec/xpcproxy.
 import hashlib
 import json
 import os
+import posixpath
 import shutil
+import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,24 +60,105 @@ import hao_fat  # noqa: E402
 LEGACY_REQUIRED = ["sbin/launchd", "usr/libexec/xpcproxy"]
 
 
+class Unsafe(Exception):
+    """A name or file the installer refuses: the install fails."""
+
+
+def relative(name):
+    """NAME's components if it is a relative path by the rule of
+    hao_release.relative (this file ships to the image builder without
+    hao_release.py, so the rule is repeated; tests/tools/test_install.py holds
+    the two to the same answers): a non-empty string, not absolute, without
+    "..", backslash or NUL, and already normalised. Unsafe otherwise."""
+    if not isinstance(name, str) or not name:
+        raise Unsafe("empty or non-string path %r" % (name,))
+    if name.startswith("/") or "\\" in name or "\0" in name or name == "." or \
+            ".." in name.split("/") or posixpath.normpath(name) != name:
+        raise Unsafe("unsafe path %r (must be relative, normalised, without ..)" % name)
+    return name.split("/")
+
+
+def inside(root, name, final_link=False):
+    """ROOT/NAME for a relative NAME none of whose components under ROOT is a
+    symbolic link; Unsafe otherwise. final_link=True leaves the last
+    component to the caller (which must not follow it)."""
+    parts = relative(name)
+    p = root
+    for k, part in enumerate(parts):
+        p = os.path.join(p, part)
+        if os.path.islink(p) and not (final_link and k == len(parts) - 1):
+            raise Unsafe("%s: %s is a symbolic link" % (name, "/".join(parts[:k + 1])))
+    return p
+
+
+def open_nofollow(path, create=False):
+    """PATH opened for writing in place (same inode), never through a
+    symbolic link and only if it is a regular file; Unsafe otherwise."""
+    flags = os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_CREAT if create else 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError as x:
+        raise Unsafe("%s: not written (%s)" % (path, "a symbolic link" if os.path.islink(path) else x.strerror))
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise Unsafe("%s: not written (not a regular file)" % path)
+    return os.fdopen(fd, "wb")
+
+
 def install_tree(src, dst):
-    count = 0
+    """Copy the regular files of SRC onto DST. The whole tree is checked
+    before the first write: Unsafe for a symbolic link or special file in
+    SRC, or a symbolic link or non-directory/non-file in the way in DST."""
+    if os.path.islink(src) or not os.path.isdir(src):
+        raise Unsafe("payload root is not a directory")
+    new_dirs, copies = [], []
     for base, dirs, files in os.walk(src):
         rel = os.path.relpath(base, src)
-        target_dir = os.path.normpath(os.path.join(dst, rel))
-        if not os.path.isdir(target_dir):
-            os.makedirs(target_dir, mode=0o755)
-            if os.geteuid() == 0:
-                os.chown(target_dir, 0, 0)
-        for name in files:
+        for name in dirs + files:
             s = os.path.join(base, name)
-            d = os.path.join(target_dir, name)
-            shutil.copyfile(s, d)
-            os.chmod(d, os.stat(s).st_mode & 0o7777)
-            if os.geteuid() == 0:
+            r = name if rel == "." else os.path.join(rel, name)
+            d = inside(dst, r)
+            if os.path.islink(s):
+                raise Unsafe("payload root/%s is a symbolic link" % r)
+            if name in dirs:
+                if os.path.lexists(d) and not os.path.isdir(d):
+                    raise Unsafe("%s exists and is not a directory" % r)
+                new_dirs.append(d)
+            else:
+                if not os.path.isfile(s) or (os.path.lexists(d) and not os.path.isfile(d)):
+                    raise Unsafe("%s is not a regular file (payload or SYSTEM)" % r)
+                copies.append((s, d))
+    root = os.geteuid() == 0
+    for d in new_dirs:
+        if not os.path.isdir(d):
+            os.mkdir(d, 0o755)
+            if root:
                 os.chown(d, 0, 0)
-            count += 1
-    return count
+    for s, d in copies:
+        with open(s, "rb") as fs, open_nofollow(d, create=True) as fd:
+            fd.truncate()
+            shutil.copyfileobj(fs, fd)
+            os.fchmod(fd.fileno(), os.stat(s).st_mode & 0o7777)
+            if root:
+                os.fchown(fd.fileno(), 0, 0)
+    return len(copies)
+
+
+def manifest_names(embed, replace):
+    """Check every path the manifests name (relative) before the install
+    touches SYSTEM; Unsafe names the first bad one."""
+    for what, man, keys in (("embed", embed, ("path", "stub")), ("replace", replace, ("path", "file"))):
+        try:
+            for e in man["files"] if man is not None else []:
+                for k in keys:
+                    relative(e[k])
+                for b in e.get("bound", []):
+                    if "file" in b:
+                        relative(b["file"])
+        except Unsafe as x:
+            raise Unsafe("%s/manifest.json: %s" % (what, x))
+        except (KeyError, TypeError, AttributeError) as x:
+            raise Unsafe("%s/manifest.json: malformed (%s: %s)" % (what, type(x).__name__, x))
 
 
 AOT_DIRS = ["usr/lib/hao/aot", "private/var/db/hao"]
@@ -79,6 +171,11 @@ def ensure_aot_dirs(system, errors):
     for rel in AOT_DIRS:
         d = os.path.join(system, rel)
         parent = os.path.dirname(d)
+        try:
+            inside(system, os.path.dirname(rel))
+        except Unsafe as x:
+            errors.append("%s (%s)" % (rel, x))
+            continue
         if not os.path.isdir(parent) or os.path.islink(parent):
             done.append(rel + " (skipped: no " + os.path.relpath(parent, system) + ")")
             continue
@@ -109,15 +206,10 @@ def macho_uuid(path):
         mo = open(path, "rb").read()
         if mo[:4] != b"\xcf\xfa\xed\xfe":
             return None
-        ncmds, off = int.from_bytes(mo[16:20], "little"), 32
-        for _ in range(ncmds):
-            cmd, size = int.from_bytes(mo[off:off + 4], "little"), int.from_bytes(mo[off + 4:off + 8], "little")
+        for cmd, off, size in hao_fat.load_commands(mo, path):
             if cmd == 0x1B:   # LC_UUID
-                return mo[off + 8:off + 24].hex()
-            if size < 8:
-                return None
-            off += size
-    except OSError:
+                return mo[off + 8:off + 24].hex() if size >= 24 else None
+    except (OSError, ValueError):
         pass
     return None
 
@@ -171,20 +263,22 @@ def check_bound(system, e, stub):
                     slot, "is bound" if have else "is empty", "bound" if b else "not bound")
             if not b or "section" in b:
                 continue   # nothing bound, or the stub's own carried __info_plist (in result_sha256)
-            f = os.path.join(system, b["file"])
+            f = inside(system, b["file"])
             if not os.path.isfile(f):
                 return "bound %s missing" % b["file"]
             blob = open(f, "rb").read()
             if hashlib.sha256(blob).hexdigest() != b["sha256"] or \
                     any(hao_codesig.digest(t, blob) != h for t, h in have.items()):
                 return "bound %s differs from the one the stub binds" % b["file"]
+    except Unsafe as x:
+        return str(x)
     except (KeyError, TypeError, ValueError) as x:
         return "bad bound entry or stub signature: %s" % x
     return None
 
 
 def write_in_place(path, data):
-    with open(path, "r+b") as f:
+    with open_nofollow(path) as f:
         f.write(data)
         f.truncate()
         f.flush()
@@ -192,20 +286,36 @@ def write_in_place(path, data):
 
 
 def main():
-    system, payload = sys.argv[1], sys.argv[2]
-    installed = install_tree(os.path.join(payload, "root"), system)
+    try:
+        return install(os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2]))
+    except Unsafe as x:
+        print("hao: error: install refused:", x, flush=True)
+        return 1
+
+
+def install(system, payload):
     manifest = json.load(open(os.path.join(payload, "embed", "manifest.json")))
+    rman = os.path.join(payload, "replace", "manifest.json")
+    replace = json.load(open(rman)) if os.path.exists(rman) else None
+    manifest_names(manifest, replace)
+    record_path = inside(system, "usr/lib/hao/install.json")
+    installed = install_tree(os.path.join(payload, "root"), system)
     done, already, native, missing, errors, bound = [], [], [], [], [], []
     for e in manifest["files"]:
         if e["path"] in done or e["path"] in missing:
             continue  # listed twice (payloads built before hao-embed skipped repeats)
-        target = os.path.join(system, e["path"])
+        try:
+            target = inside(system, e["path"], final_link=True)
+            stub_path = inside(os.path.join(payload, "embed"), e["stub"])
+        except Unsafe as x:
+            errors.append("%s (%s; not embedded)" % (e["path"], x))
+            continue
         if not os.path.isfile(target) or os.path.islink(target):
             missing.append(e["path"])
             continue
         data = open(target, "rb").read()
         translate = e.get("mode") == "translate"
-        stub = open(os.path.join(payload, "embed", e["stub"]), "rb").read()
+        stub = open(stub_path, "rb").read()
         why = check_bound(system, e, stub)
         if why:
             errors.append(e["path"] + " (" + why + "; not embedded)")
@@ -230,11 +340,15 @@ def main():
         write_in_place(target, merged)
         done.append(e["path"])
     replaced = []
-    rman = os.path.join(payload, "replace", "manifest.json")
-    for e in (json.load(open(rman))["files"] if os.path.exists(rman) else []):
-        target = os.path.join(system, e["path"])
+    for e in (replace["files"] if replace is not None else []):
+        try:
+            target = inside(system, e["path"])
+            new_path = inside(os.path.join(payload, "replace"), e["file"])
+        except Unsafe as x:
+            errors.append("%s (%s; not replaced)" % (e["path"], x))
+            continue
         data = open(target, "rb").read() if os.path.isfile(target) else b""
-        new = open(os.path.join(payload, "replace", e["file"]), "rb").read()
+        new = open(new_path, "rb").read()
         if hashlib.sha256(new).hexdigest() != e["result_sha256"]:
             errors.append(e["path"] + " (replacement file corrupt)")
         elif hashlib.sha256(data).hexdigest() == e["result_sha256"]:
@@ -255,11 +369,10 @@ def main():
               "bundle_bound": sum(p in done for p in bound),
               "missing": missing, "replaced": replaced, "aot_dirs": aot_dirs, "aot_caches": aot_caches, "errors": errors,
               "stub_sha256": manifest["stub_sha256"]}
-    rec = os.path.join(system, "usr/lib/hao/install.json")
-    with open(rec, "w") as f:
-        json.dump(record, f, indent=1)
-        f.write("\n")
-    os.chmod(rec, 0o644)
+    with open_nofollow(record_path, create=True) as f:
+        f.truncate()
+        f.write((json.dumps(record, indent=1) + "\n").encode())
+        os.fchmod(f.fileno(), 0o644)
     print(f"hao: installed {installed} runtime files; embedded {len(done)} executables; "
           f"{sum(p in done for p in bound)} bind their bundle's Info.plist; kept {len(native)} native; {len(missing)} missing; replaced {replaced}; AOT dirs {aot_dirs}; "
           f"AOT caches {aot_caches['caches']} ({aot_caches['bytes'] >> 20} MB, {len(aot_caches['removed_stale'])} stale removed); "

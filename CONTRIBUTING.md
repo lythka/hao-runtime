@@ -38,6 +38,7 @@ Further targets:
 | `make fuzz`, `make fuzz-smoke` | parser fuzzing ([tests/fuzz/README.md](tests/fuzz/README.md)) |
 | `OUT=dir tests/tools/run.sh` | embedding, identity, installation and AOT payload tools |
 | `python3.14 -B -m unittest discover -s tests/tools -p test_release.py` | release assembly |
+| `python3 -I tests/tools/test_install.py` | installer path rules (also run by `tests/tools/run.sh`) |
 | `python3.14 tools/check_distribution.py` | every tracked file is in `distribution/runtime-files.txt` |
 
 The scripts under `tests/guest/`, `tests/host/`, `tests/objc/` and

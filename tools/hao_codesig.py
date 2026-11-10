@@ -21,6 +21,8 @@ import hashlib
 import plistlib
 import struct
 
+import hao_fat
+
 LC_CODE_SIGNATURE = 0x1D
 CSMAGIC_EMBEDDED_SIGNATURE = 0xFADE0CC0
 CSMAGIC_CODEDIRECTORY = 0xFADE0C02
@@ -37,25 +39,30 @@ DLV = "com.apple.security.cs.disable-library-validation"
 DYLD_ENV = "com.apple.security.cs.allow-dyld-environment-variables"
 
 
+def signature_range(mo):
+    """(offset, size) from the last LC_CODE_SIGNATURE of a thin 64-bit
+    Mach-O, None without one; ValueError if the load commands are malformed
+    (hao_fat.load_commands) or the command is too short to hold the range."""
+    sig = None
+    for cmd, off, size in hao_fat.load_commands(mo, "Mach-O"):
+        if cmd == LC_CODE_SIGNATURE:
+            if size < 16:
+                raise ValueError("Mach-O: short LC_CODE_SIGNATURE")
+            sig = struct.unpack_from("<II", mo, off + 8)
+    return sig
+
+
 def info(mo):
     """dict(signed, flags, platform, team, entitlements) of a thin 64-bit
     little-endian Mach-O, or None if it is not one. Malformed signatures
     read as unsigned."""
     if len(mo) < 32 or struct.unpack_from("<I", mo)[0] != 0xFEEDFACF:
         return None
-    ncmds, sizeofcmds = struct.unpack_from("<II", mo, 16)
     out = {"signed": False, "flags": 0, "platform": 0, "team": None, "entitlements": {}}
-    off, end = 32, min(len(mo), 32 + sizeofcmds)
-    sig = None
-    for _ in range(ncmds):
-        if off + 8 > end:
-            break
-        cmd, size = struct.unpack_from("<II", mo, off)
-        if size < 8:
-            break
-        if cmd == LC_CODE_SIGNATURE and size >= 16:
-            sig = struct.unpack_from("<II", mo, off + 8)
-        off += size
+    try:
+        sig = signature_range(mo)
+    except ValueError:
+        return out
     if not sig or sig[0] + sig[1] > len(mo) or sig[1] < 12:
         return out
     blob = mo[sig[0]:sig[0] + sig[1]]
@@ -123,17 +130,7 @@ def code_directories(mo):
     ValueError if the signature is malformed; [] if there is none."""
     if len(mo) < 32 or struct.unpack_from("<I", mo)[0] != 0xFEEDFACF:
         raise ValueError("not a thin 64-bit Mach-O")
-    ncmds, sizeofcmds = struct.unpack_from("<II", mo, 16)
-    off, end, sig = 32, min(len(mo), 32 + sizeofcmds), None
-    for _ in range(ncmds):
-        if off + 8 > end:
-            raise ValueError("load commands overrun")
-        cmd, size = struct.unpack_from("<II", mo, off)
-        if size < 8:
-            raise ValueError("bad cmdsize")
-        if cmd == LC_CODE_SIGNATURE and size >= 16:
-            sig = struct.unpack_from("<II", mo, off + 8)
-        off += size
+    sig = signature_range(mo)
     if not sig:
         return []
     base, size = sig

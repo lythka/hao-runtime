@@ -11,6 +11,20 @@ any other exception is a crash. Results must also be consistent: every slice lie
 inside the input, and a combined file parses back to the same slices plus
 the stub. Crashing inputs are written to DIR (default ./) as
 crash-<sha>. With only FILE arguments each file is run once.
+
+The same inputs go through the other pure-Python packaging readers, which
+must return or refuse with their one error type and never hang (the 2 s
+alarm) or raise anything else:
+  tools/hao_macho.py    Image (load commands, exports trie, each import
+                        table: chained fixups, bind opcodes, symbol table),
+                        file_slices and Cache, on every slice and the file
+  tools/hao_codesig.py  info never raises; code_directories, special_slots
+                        and bind_special_slots raise only ValueError
+  tools/hao_ifunit.py   macho_uuid_of and read raise only Bad; read runs
+                        again with the size and payload hash made valid, so
+                        mutations reach the record rules (seeds: corpus/ifunit)
+  tools/hao-install.py  macho_uuid returns a UUID or None
+  kext/stamp_identity.py  commands (the shared walk at an offset)
 """
 import argparse
 import hashlib
@@ -19,13 +33,21 @@ import random
 import signal
 import struct
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
+import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
+import hao_ifunit  # noqa: E402
+import hao_macho  # noqa: E402
 from importlib.machinery import SourceFileLoader  # noqa: E402
 
-embed = SourceFileLoader("hao_embed", os.path.join(os.path.dirname(hao_fat.__file__), "hao-embed")).load_module()
+TOOLS = os.path.dirname(hao_fat.__file__)
+embed = SourceFileLoader("hao_embed", os.path.join(TOOLS, "hao-embed")).load_module()
+install = SourceFileLoader("hao_install", os.path.join(TOOLS, "hao-install.py")).load_module()
+stamp = SourceFileLoader("stamp_identity", os.path.join(TOOLS, "..", "kext", "stamp_identity.py")).load_module()
+SCRATCH = None   # one file, rewritten per input, for the readers that take a path
 
 STUB = (struct.pack("<IIIIIIII", hao_fat.MH_MAGIC_64, hao_fat.CPU_X86_64, 3, 2, 0, 0, 0, 0) + b"\0" * 32)
 
@@ -58,6 +80,84 @@ def check(data):
             f(data)
         except ValueError:
             pass
+    check_readers(data, sl)
+
+
+def refuses(error, f, *args):
+    """f(*args), or None where it refuses with its documented error type; anything else propagates as a finding"""
+    try:
+        return f(*args)
+    except error:
+        return None
+
+
+def check_image(mo, what):
+    """hao_macho.Image over one thin Mach-O: every table, each import route"""
+    im = refuses(ValueError, hao_macho.Image, lambda o, n: mo[o:o + n], 0, what)
+    if im is None:
+        return
+    for name, kind in (refuses(ValueError, im.exports) or {}).items():
+        assert isinstance(name, str) and kind[0] in ("def", "reexport", "resolver")
+    # imports() takes the first table present: chained fixups, bind opcodes, then the symbol table
+    for drop in ((), ("fixups",), ("fixups", "dyldinfo")):
+        for attr in drop:
+            setattr(im, attr, None)
+        for o, name, weak in refuses(ValueError, im.imports) or []:
+            assert isinstance(o, int) and isinstance(name, str) and isinstance(weak, bool)
+    im.section_of(im.base)
+
+
+def check_codesig(mo):
+    i = hao_codesig.info(mo)   # documented: None for a non-Mach-O, malformed reads as unsigned; never raises
+    assert i is None or set(i) == {"signed", "flags", "platform", "team", "entitlements"}
+    hao_codesig.library_validated(i), hao_codesig.dyld_env_blocked(i)
+    for cd, hash_type, hash_size, nspecial, hash_off in refuses(ValueError, hao_codesig.code_directories, mo) or []:
+        assert 0 <= cd and cd + hash_off <= len(mo) and hash_size * nspecial <= hash_off, "CodeDirectory outside the file"
+    for slot in (hao_codesig.CSSLOT_INFOSLOT, hao_codesig.CSSLOT_RESOURCEDIR):
+        for h in (refuses(ValueError, hao_codesig.special_slots, mo, slot) or {}).values():
+            assert len(h) in hao_codesig.HASH_SIZES.values()
+    out = refuses(ValueError, hao_codesig.bind_special_slots, mo, {1: b"plist", 3: None})
+    assert out is None or len(out) == len(mo), "binding a slot changed the size"
+
+
+def check_ifunit(data):
+    refuses(hao_ifunit.Bad, hao_ifunit.macho_uuid_of, data)
+    refuses(hao_ifunit.Bad, hao_ifunit.read, data)
+    if len(data) >= hao_ifunit.HDR.size:   # as tests/fuzz/fuzz_ifunit.c: reach the rules behind the size and hash
+        d = bytearray(data)
+        struct.pack_into("<QQ", d, 48, len(d), hao_ifunit.hash64(bytes(d[hao_ifunit.HDR.size:])))
+        got = refuses(hao_ifunit.Bad, hao_ifunit.read, bytes(d))
+        if got:
+            assert len(got[0]) == 32 and all(isinstance(r[0], str) for r in got[1])
+
+
+def check_readers(data, sl):
+    for k, (_, _, payload) in enumerate((sl or [])[:8]):
+        mo = bytes(payload)
+        check_image(mo, "slice %d" % k)
+        check_codesig(mo)
+    if not sl:
+        check_image(data, "input")
+        check_codesig(data)
+    check_ifunit(data)
+    for off in (0, 4096):
+        for cmd, o, size in refuses(ValueError, lambda: list(stamp.commands(data, off))) or []:
+            assert size >= 8 and off + 32 <= o and o + size <= len(data), "load command outside the file"
+    if SCRATCH:
+        with open(SCRATCH, "wb") as f:
+            f.write(data)
+        for cpu, sub, off in hao_macho.file_slices(SCRATCH):
+            assert 0 <= cpu < 1 << 32 and 0 <= sub < 256 and off >= 0
+        u = install.macho_uuid(SCRATCH)
+        assert u is None or len(u) == 32
+        if data[:7] == b"dyld_v1":
+            cache = refuses(ValueError, hao_macho.Cache, SCRATCH)
+            if cache:
+                for p, _ in cache.paths[:16]:
+                    refuses(ValueError, cache.image, p)
+                for m in cache.files:
+                    m.close()
+    hao_macho.SECT_INSTR.clear()
 
 
 INTERESTING = [0, 1, 2, 0x7F, 0x80, 0xFF, 0x100, 0x1000, 0x4000, 0xFFFF, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF,
@@ -107,6 +207,9 @@ def main():
     ap.add_argument("--artifacts", default="./")
     ap.add_argument("inputs", nargs="+")
     a = ap.parse_args()
+    global SCRATCH
+    scratch_dir = tempfile.TemporaryDirectory(prefix="hao-fuzz-")
+    SCRATCH = os.path.join(scratch_dir.name, "input")
     corpus, dirs = [], 0
     for p in a.inputs:
         if os.path.isdir(p):

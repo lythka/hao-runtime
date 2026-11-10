@@ -30,7 +30,10 @@ RECORDS.tsv, one exported symbol per line ('#' comments; '-' for an empty field)
            _hao_gh_KEY / _hao_nh_KEY of a thunk library (tools/gen_bridge.py); class TYPED,
            kind - or A (A: enc is the abi.c equivalent, used with HAO_NO_THUNKS=1)
 """
-import struct, sys
+import os, struct, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hao_fat  # noqa: E402
 
 MAGIC = b'HAOIF01\0'
 VERSION = 2
@@ -89,32 +92,28 @@ class Bad(Exception):
 
 def macho_uuid(path):
     """LC_UUID of the x86_64 slice (or of a thin x86_64 file)"""
-    data = open(path, 'rb').read()
-    off = 0
-    magic = struct.unpack_from('>I', data, 0)[0]
-    if magic in (0xcafebabe, 0xcafebabf):
-        n = struct.unpack_from('>I', data, 4)[0]
-        wide = magic == 0xcafebabf
-        for k in range(n):
-            if wide:
-                cpu, _, o, _, _, _ = struct.unpack_from('>iiQQII', data, 8 + 32 * k)
-            else:
-                cpu, _, o, _, _ = struct.unpack_from('>iiIII', data, 8 + 20 * k)
-            if cpu == 0x01000007:
-                off = o
-                break
-        else:
-            raise Bad('%s: no x86_64 slice' % path)
-    m, cpu, _, _, ncmds, _, _, _ = struct.unpack_from('<IiiIIIII', data, off)
-    if m != 0xfeedfacf or cpu != 0x01000007:
-        raise Bad('%s: not an x86_64 Mach-O' % path)
-    p = off + 32
-    for _ in range(ncmds):
-        cmd, size = struct.unpack_from('<II', data, p)
-        if cmd == 0x1b:
-            return data[p + 8:p + 24].hex()
-        p += size
-    raise Bad('%s: no LC_UUID' % path)
+    return macho_uuid_of(open(path, 'rb').read(), path)
+
+
+def macho_uuid_of(data, what='Mach-O'):
+    """macho_uuid for a file's bytes; Bad for anything that is not a well-formed x86_64 Mach-O with an LC_UUID"""
+    sl = hao_fat.slices(data)
+    if sl is None:
+        raise Bad('%s: not a Mach-O' % what)
+    mo = next((p for cpu, _, p in sl if cpu == hao_fat.CPU_X86_64), None)
+    if mo is None:
+        raise Bad('%s: %s' % (what, 'no x86_64 slice' if bytes(data[:3]) == b'\xca\xfe\xba' else 'not an x86_64 Mach-O'))
+    if len(mo) < 32 or struct.unpack_from('<I', mo)[0] != hao_fat.MH_MAGIC_64:
+        raise Bad('%s: not an x86_64 Mach-O' % what)
+    try:
+        for cmd, off, size in hao_fat.load_commands(mo, what):
+            if cmd == 0x1b:
+                if size < 24:
+                    raise Bad('%s: short LC_UUID' % what)
+                return bytes(mo[off + 8:off + 24]).hex()
+    except ValueError as e:
+        raise Bad(str(e))
+    raise Bad('%s: no LC_UUID' % what)
 
 
 def cxxstr_enc_ok(e):
@@ -248,7 +247,10 @@ def read(data, want_uuid=None, *, allow_legacy_code=False):
     if st[0] or st[-1]: raise Bad('string table not NUL-delimited')
 
     def gs(o):
-        return st[o:st.index(b'\0', o)].decode() if o else ''
+        try:
+            return st[o:st.index(b'\0', o)].decode() if o else ''
+        except UnicodeDecodeError:
+            raise Bad('string at %d is not UTF-8' % o)
     out, prev = [], None
     for k in range(n):
         no, eo, wo, to, am, cls, kind, flags, rm, rsv = REC.unpack_from(data, HDR.size + k * REC.size)

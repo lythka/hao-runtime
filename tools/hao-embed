@@ -182,26 +182,9 @@ def executable_arm_only(data):
     return eligible(data, False)
 
 
-def load_commands(mo, what="Mach-O"):
-    """(cmd, offset, cmdsize) of each load command of a thin 64-bit Mach-O.
-    Programs come from the image being built, so this checks what it reads:
-    ValueError if a command is shorter than 8 bytes or runs past
-    sizeofcmds or the file."""
-    if len(mo) < 32:
-        raise ValueError(f"{what}: truncated header")
-    ncmds, sizeofcmds = int.from_bytes(mo[16:20], "little"), int.from_bytes(mo[20:24], "little")
-    end = 32 + sizeofcmds
-    if end > len(mo) or ncmds > sizeofcmds // 8:
-        raise ValueError(f"{what}: load commands overrun the file")
-    off = 32
-    for _ in range(ncmds):
-        if off + 8 > end:
-            raise ValueError(f"{what}: load command past sizeofcmds")
-        cmd, size = int.from_bytes(mo[off:off + 4], "little"), int.from_bytes(mo[off + 4:off + 8], "little")
-        if size < 8 or off + size > end:
-            raise ValueError(f"{what}: bad cmdsize {size}")
-        yield cmd, off, size
-        off += size
+# (cmd, offset, cmdsize) of each load command of a thin 64-bit Mach-O. Programs
+# come from the image being built, so the walk checks what it reads (ValueError).
+load_commands = hao_fat.load_commands
 
 
 def macho_minos(path):
