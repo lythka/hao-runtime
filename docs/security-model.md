@@ -116,14 +116,37 @@ The list exists because an x86_64 kernel accepts only CodeDirectories with
 cannot answer for Apple arm64 code on Intel. It also means the check needs no
 daemon, which matters for programs that launchd starts before `trustd`.
 
-### Check and load the same file
+### Check and load the same bytes
 
 The launcher runs in two stages. The first only re-executes hao with the
 guest's arguments and the ObjC tagged-pointer switch. The second, which is
-the guest's process, opens the file, applies the checks above to that
-descriptor and maps the image from the same descriptor. Security.framework,
-where it is asked, opens the path itself; its answer counts only for the
-cdhash hao computed on the descriptor.
+the guest's process, opens the file, takes the slice it will run once,
+applies the checks above to those bytes and builds the image from them.
+Security.framework, where it is asked, opens the path itself; its answer
+counts only for the cdhash hao computed on the bytes it took.
+
+Natively the kernel validates each page of a signed image as it pages it
+in. Nothing does that for pages hao maps as data, so hao must not read a
+guest file twice: whoever may write the file could change it between the
+check and the load. How the slice is taken depends on who can change the
+file:
+
+| File | How its slice is taken |
+|---|---|
+| Someone other than root may change it: not owned by root, or writable by its group or by others, or with an ACL, or on a volume that is not local | Read once into memory. The mach header, load commands, signature, hashed pages, linkedit data and segments all come from that copy; rewriting the file during or after the load changes nothing in the process |
+| Only root can change it (the system's own files; every file of a sealed system volume) | Mapped. Its pages are shared with every process that maps the file, as natively |
+
+A copied image shares no memory with its file or with other processes. It
+costs its slice's size in anonymous memory, per process, for as long as it
+is loaded: 7.2 MB more peak footprint for an 8.4 MB library and 66 MB for a
+67 MB one, measured; the time to load them did not change. Guest libraries
+are taken the same way as the main executable.
+
+The loader also bounds what a guest file may claim: 4 MiB of load commands,
+256 MiB for an exports trie, chained fixups, a legacy dyld stream or
+function starts, 4 MiB for a lazy-load record. The first segment must be
+readable and hold the mach header and every load command, and a fat header
+must name the cpusubtype its slice's own header has.
 
 What the first stage passes in the environment is a hint and carries no
 trust: `HAO_EXEC` is the path, `HAO_EXEC_FLAGS` the command line's switches.
@@ -254,10 +277,9 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 
 ## Known limitations
 
-- hao checks and maps a guest through one descriptor, but the two are not
-  atomic: a file rewritten in place by someone who may write it, between the
-  check and the mapping or before hao reads a page it has not translated yet,
-  is not caught.
+- A guest file that only root can change is mapped, not copied. If root
+  rewrites such a file in place while hao loads it, hao does not notice;
+  natively the kernel would kill the process at the changed page.
 - HaoExec hands hao a path, not the file the kernel examined, and hao opens
   it again. Routing grants nothing, so a path that names another file by then
   only runs that file under the same checks.
@@ -286,6 +308,6 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - A process that may not fork (a sandbox that denies `process-fork`) cannot
   ask Security.framework about a main executable: a guest whose signer only
   that route can give is refused there.
-- The stub's own-file check and the fork that asks Security.framework were
-  tested under Rosetta on an Apple-silicon host. Neither has been run on an
-  Intel kernel yet.
+- The stub's own-file check, the fork that asks Security.framework and the
+  loading of a guest file from a copy were tested under Rosetta on an
+  Apple-silicon host. None has been run on an Intel kernel yet.

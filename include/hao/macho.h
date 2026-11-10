@@ -23,7 +23,9 @@ typedef struct hao_image hao_image;
 
 /* Resolve an import. ordinal: 1..n = dependency index+1, 0 = self,
  * -1 = main executable, -2 = flat, -3 = weak lookup.
- * Return the address to store; set *found=false if unresolved. */
+ * Return the address to store; set *found=false if unresolved. name is
+ * valid for the call only (it lies in the image's fixups, which the loader
+ * gives back when the load ends): a resolver that keeps it copies it. */
 typedef uint64_t (*hao_resolver)(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 
 struct hao_image {
@@ -116,6 +118,55 @@ extern bool hao_island_reserve;
 /* the bytes of island room for an image with nfstarts_bound function starts at most */
 uint64_t hao_island_room(uint64_t nfstarts_bound);
 
+/*
+ * The slice of a guest file that an image is built from, as bytes that do
+ * not change while hao uses them. hao checks a guest's code signature itself
+ * (libval.c, guest_sig.c) and builds the image afterwards. If the two read
+ * the file separately, whoever may write the file can change it in between:
+ * the kernel validates a native image page by page as it pages it in, and
+ * nothing does that for pages hao maps as data. So the slice is taken once,
+ * and the mach header, the load commands, the signature, every hashed page,
+ * the linkedit blobs and the segments all come from bytes:
+ *  - copied: a file that somebody other than root may change. The slice was
+ *    read once into anonymous memory, and the image's segments are made of
+ *    that memory (whole pages are handed over, not copied again). The image
+ *    then shares no page with the file or with another process: it costs
+ *    the slice's size for as long as it is loaded, in memory that can be
+ *    compressed but not dropped (measured: 7.2 MB more peak footprint for an
+ *    8.4 MB library, 66 MB for a 67 MB one; load time unchanged);
+ *  - not copied: a file only root can change (root owns it, no group or
+ *    other write bit, no ACL, on a local volume: the system's own files).
+ *    bytes is the file, mapped, and the segments are mapped from the file
+ *    as before, shared with every process that maps it.
+ * fd stays the file for what the kernel is asked about it (F_ADDFILESIGS_INFO,
+ * F_CHECK_LV, F_GETSIGSINFO); the slice does not own it.
+ */
+typedef struct hao_slice {
+    int fd;
+    uint64_t dev, ino;          /* the file (st_dev, st_ino) */
+    uint64_t off, size;         /* the slice in the file */
+    const uint8_t *bytes;       /* the slice, [0, size) */
+    bool copied;
+    uint32_t cpusubtype;        /* the mach header's */
+    uint32_t filetype, flags;   /* the mach header's */
+    const uint8_t *cmds;        /* the load commands, in bytes, validated (hao_macho_check_cmds) */
+    uint32_t ncmds, sizeofcmds;
+    int nsegs;                  /* LC_SEGMENT_64 commands */
+} hao_slice;
+/* The slice the loader runs (arm64e, else arm64) of the regular file open on
+ * fd; NULL with why filled if there is none or its header or load commands
+ * are malformed. */
+hao_slice *hao_slice_open(int fd, char *why, size_t n);
+void hao_slice_close(hao_slice *sl);
+/* Leave sl for the loader: the next hao_load_image_fd_cb of sl->fd builds the
+ * image from it instead of opening the slice again, and closes it. For a
+ * caller that has checked these bytes and must load what it checked
+ * (hao_guest_sig_enforce). */
+void hao_slice_hand(hao_slice *sl);
+/* The loader's unit tests: 1 maps every file, 2 copies every file (0: by
+ * what the file's owner, mode, ACL and volume say). */
+extern int hao_slice_test_path;
+
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply
  * fixups. The file is untrusted: every offset, size and count is validated
  * against the slice, its linkedit blobs and the reserved region. Returns
@@ -129,8 +180,9 @@ hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_
                              size_t errlen);
 /* The same from fd, an open descriptor of the file, instead of opening path
  * (which then only names the image): for a caller that has checked that
- * descriptor and must load what it checked. The image owns fd from here on;
- * it is closed whether the load succeeds or fails. */
+ * descriptor and must load what it checked (the slice it left with
+ * hao_slice_hand, if any). The image owns fd from here on; it is closed
+ * whether the load succeeds or fails. */
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                                 char *err, size_t errlen);
 /* Native bundle fallback: recheck ARM-only MH_BUNDLE on the descriptor used
@@ -180,12 +232,12 @@ typedef struct {
     char team[64];       /* the CodeDirectory's Team ID ("" none) */
     const char *by;      /* who vouched (signer asked) */
 } hao_imgsig;
-typedef int (*hao_imgsig_fn)(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype,
-                             uint32_t sig_off, uint32_t sig_size, const hao_range *exec, int nexec, bool signer,
-                             const char *team, hao_imgsig *out, char *why, size_t n);
-int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype,
-                        uint32_t sig_off, uint32_t sig_size, const hao_range *exec, int nexec, bool signer,
-                        const char *team, hao_imgsig *out, char *why, size_t n);
+typedef int (*hao_imgsig_fn)(const hao_slice *sl, const char *path, uint32_t sig_off, uint32_t sig_size,
+                             const hao_range *exec, int nexec, bool signer, const char *team, hao_imgsig *out,
+                             char *why, size_t n);
+int hao_guest_sig_image(const hao_slice *sl, const char *path, uint32_t sig_off, uint32_t sig_size,
+                        const hao_range *exec, int nexec, bool signer, const char *team, hao_imgsig *out,
+                        char *why, size_t n);
 /* The runtime hands libval.c hao's signature checker (guest_sig.c), and
  * whether to check signers in user space even where the kernel could
  * (HAO_LIBVAL_USER, tests). Without a checker (the loader's unit tests and
@@ -202,9 +254,9 @@ enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATF
  * no boot argument turns it off). */
 void hao_libval_expect_main(bool enabled);
 /* The loader's gate, after an image's load commands validate and before it
- * is mapped; img->fd and the slice fields are set. 0 = may load, else -1
- * with why filled. */
-int hao_libval_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char *why, size_t n);
+ * is mapped: sl is the slice the image is then built from. img->fd and the
+ * slice fields are set. 0 = may load, else -1 with why filled. */
+int hao_libval_image(hao_image *img, const hao_slice *sl, char *why, size_t n);
 int hao_libval_mode(void);
 const char *hao_libval_reason(void);
 

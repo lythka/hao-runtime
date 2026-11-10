@@ -202,14 +202,171 @@ static void legacy_tests(void)
 #undef BAD
 }
 
+/* ------------------------------------------------------------------ slices */
+
+static void note(bool ok, const char *what)
+{
+    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
+    ok ? passes++ : fails++;
+}
+
+static void put_file(const char *path, const uint8_t *d, size_t n, size_t len)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || write(fd, d, n) != (ssize_t)n || (len > n && ftruncate(fd, (off_t)len) != 0)) { perror(path); exit(2); }
+    close(fd);
+}
+
+/* overwrite [off, off+n) of the file in place (the same inode), as its owner can at any moment */
+static void scribble(const char *path, size_t off, size_t n)
+{
+    uint8_t *junk = malloc(n);
+    memset(junk, 0xa5, n);
+    int fd = open(path, O_WRONLY);
+    if (fd < 0 || pwrite(fd, junk, n, (off_t)off) != (ssize_t)n || fsync(fd) != 0) { perror(path); exit(2); }
+    close(fd);
+    free(junk);
+}
+
+/*
+ * The image is built from bytes taken once (hao_slice): a file its owner
+ * rewrites in place after the load, or between the moment a caller takes
+ * the slice to check it and the load, does not reach the image. What a
+ * private mapping shows of a file rewritten later is the kernel's choice
+ * (POSIX leaves it open), so only files nobody but root can change are
+ * mapped; the "note" line reports what this kernel did, and is not a pass
+ * or a failure.
+ */
+static void slice_tests(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln, const uint8_t *fat, size_t fn)
+{
+    char path[1100], err[512] = "";
+    snprintf(path, sizeof path, "%s/slice.bin", scratch);
+    size_t text = (size_t)rd32(seed, find_cmd(seed, LC_SEGMENT_64, "__TEXT") + 48);   /* __TEXT filesize: the file's first page */
+
+    /* both ways of taking the slice build the same image */
+    for (int way = 1; way <= 2; way++) {
+        hao_slice_test_path = way;
+        const struct { const char *name; const uint8_t *d; size_t n; } f[] = {{"exec-arm64e", seed, n}, {"lib-arm64e", lib, ln},
+                                                                               {"fat-x86_64-arm64e", fat, fn}};
+        for (size_t k = 0; k < sizeof f / sizeof f[0]; k++) {
+            char what[200];
+            snprintf(what, sizeof what, "seed %s loads from %s", f[k].name, way == 1 ? "the mapped file" : "a copy of the file");
+            expect(what, f[k].d, f[k].n, NULL);
+        }
+        put_file(path, seed, n, n);
+        hao_image *img = hao_load_image(path, resolver, err, sizeof err);
+        bool same = img && !memcmp((const void *)(uintptr_t)img->base, seed, text);
+        if (img) scribble(path, 0, text);
+        bool kept = img && !memcmp((const void *)(uintptr_t)img->base, seed, text);
+        if (way == 2) note(same && kept, "file rewritten in place after the load: the image keeps the bytes it was built from");
+        else printf("note mapped file rewritten in place after the load: on this kernel the image %s\n",
+                    !same ? "did not load" : kept ? "kept its bytes" : "shows the new bytes");
+        if (img) hao_unload_image(img);
+    }
+    hao_slice_test_path = 0;
+
+    /* a caller checks the slice, the file changes, the loader builds the image: from the slice the caller left */
+    put_file(path, seed, n, n);
+    int fd = open(path, O_RDONLY);
+    hao_slice *sl = fd >= 0 ? hao_slice_open(fd, err, sizeof err) : NULL;
+    bool ok = sl && sl->copied && sl->size == n && !memcmp(sl->bytes, seed, n);
+    if (sl) {
+        scribble(path, 0, n);
+        hao_slice_hand(sl);
+        hao_image *img = hao_load_image_fd_cb(path, fd, resolver, NULL, NULL, err, sizeof err);
+        ok = ok && img && !memcmp((const void *)(uintptr_t)img->base, seed, text);
+        if (img) hao_unload_image(img);
+    }
+    note(ok, "file rewritten between the caller's check and the load: the image is built from the slice the caller checked");
+    /* without a slice left for it, the loader takes its own: the rewritten file does not load as the seed */
+    put_file(path, seed, n, n);
+    fd = open(path, O_RDONLY);
+    scribble(path, 0, n);
+    hao_image *img = hao_load_image_fd_cb(path, fd, resolver, NULL, NULL, err, sizeof err);
+    note(!img && strstr(err, "no arm64/arm64e slice") == NULL && strstr(err, "Mach-O"), "a rewritten file with no slice left for the loader is read as it is now");
+    if (img) hao_unload_image(img);
+
+    /* a user's own file is copied by rule: owner, mode, ACL, volume */
+    put_file(path, seed, n, n);
+    fd = open(path, O_RDONLY);
+    sl = hao_slice_open(fd, err, sizeof err);
+    note(sl && sl->copied == (getuid() != 0), "a file its owner may write is copied, not mapped");
+    hao_slice_close(sl);
+    close(fd);
+    fd = open("/usr/lib/dyld", O_RDONLY);
+    if (fd >= 0) {
+        sl = hao_slice_open(fd, err, sizeof err);
+        note(sl && !sl->copied, "a root-owned system file (/usr/lib/dyld) is mapped, not copied");
+        hao_slice_close(sl);
+        close(fd);
+    }
+}
+
+/* A synthetic image (as legacy_case's) whose fields the caps and the header rule are tried on. */
+static void layout_case(const char *what, int variant, const char *want)
+{
+    enum { SIZE = 0x3000 };
+    size_t file_len = SIZE;
+    uint8_t *d = calloc(1, SIZE);
+    struct mach_header_64 mh = {.magic = MH_MAGIC_64, .cputype = CPU_TYPE_ARM64, .filetype = MH_DYLIB, .ncmds = 4,
+                                .sizeofcmds = 3 * sizeof(struct segment_command_64) + sizeof(struct linkedit_data_command)};
+    size_t cursor = sizeof mh;
+    for (unsigned k = 0; k < 3; k++) {
+        struct segment_command_64 sg = {.cmd = LC_SEGMENT_64, .cmdsize = sizeof sg, .vmaddr = 0x100000000ull + k * 0x1000,
+                                        .vmsize = 0x1000, .fileoff = k * 0x1000, .filesize = 0x1000,
+                                        .maxprot = VM_PROT_READ | VM_PROT_WRITE, .initprot = VM_PROT_READ | (k == 1 ? VM_PROT_WRITE : 0)};
+        strcpy(sg.segname, k == 0 ? "__TEXT" : k == 1 ? "__DATA" : "__LINKEDIT");
+        if (k == 0 && variant == 1) sg.initprot = 0;                          /* the header's segment: not readable */
+        if (k == 0 && variant == 2) sg.filesize = sizeof mh + 8;             /* ... ends inside the load commands */
+        if (k == 0 && variant == 3) { sg.fileoff = 0x1000; }                  /* ... is not the file's start */
+        memcpy(d + cursor, &sg, sizeof sg);
+        cursor += sizeof sg;
+    }
+    struct linkedit_data_command ld = {.cmd = LC_DYLD_EXPORTS_TRIE, .cmdsize = sizeof ld, .dataoff = 0x2000, .datasize = 8};
+    if (variant == 4) { ld.cmd = LC_LAZY_LOAD_DYLIB_INFO; ld.datasize = (4u << 20) + 8; file_len = 0x2000 + ld.datasize; }
+    if (variant == 5) { ld.datasize = (256u << 20) + 8; file_len = 0x2000 + (size_t)ld.datasize; }
+    if (variant == 6) { ld.cmd = LC_DYLD_CHAINED_FIXUPS; ld.datasize = (256u << 20) + 8; file_len = 0x2000 + (size_t)ld.datasize; }
+    if (variant == 7) { ld.cmd = LC_FUNCTION_STARTS; ld.datasize = (256u << 20) + 8; file_len = 0x2000 + (size_t)ld.datasize; }
+    memcpy(d + cursor, &ld, sizeof ld);
+    if (variant == 8) { mh.sizeofcmds = (4u << 20) + 8; file_len = (5u << 20); }   /* more load commands than any image has */
+    memcpy(d, &mh, sizeof mh);
+    char path[1100], err[512] = "";
+    snprintf(path, sizeof path, "%s/layout.bin", scratch);
+    put_file(path, d, SIZE, file_len);            /* longer files are sparse */
+    free(d);
+    /* the sparse giants are mapped, not read: the caps are the same either way */
+    hao_slice_test_path = file_len > (64u << 20) ? 1 : 0;
+    hao_image *img = hao_load_image(path, resolver, err, sizeof err);
+    hao_slice_test_path = 0;
+    bool ok = want ? !img && strstr(err, want) : img != NULL;
+    if (img) hao_unload_image(img);
+    printf("%s layout: %s%s%s\n", ok ? "PASS" : "FAIL", what, ok ? "" : ": ", ok ? "" : (img ? "loaded" : err));
+    ok ? passes++ : fails++;
+}
+
+static void layout_tests(void)
+{
+    layout_case("the synthetic image loads", 0, NULL);
+    layout_case("the mach header's segment is not readable", 1, "is not readable");
+    layout_case("the first segment ends inside the load commands", 2, "does not hold the");
+    layout_case("the first segment is not the start of the file", 3, "mach header is not mapped");
+    layout_case("a lazy-load record over 4 MiB", 4, "lazy-load info of");
+    layout_case("an exports trie over 256 MiB", 5, "exports trie of");
+    layout_case("chained fixups over 256 MiB", 6, "chained fixups of");
+    layout_case("function starts over 256 MiB", 7, "function starts of");
+    layout_case("load commands over 4 MiB", 8, "bytes of load commands");
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3) { fprintf(stderr, "usage: test_macho CORPUS_DIR SCRATCH_DIR\n"); return 2; }
     snprintf(corpus, sizeof corpus, "%s", argv[1]);
     snprintf(scratch, sizeof scratch, "%s", argv[2]);
     legacy_tests();
+    layout_tests();
     size_t n, ln, fn;
     uint8_t *seed = slurp("exec-arm64e", &n), *lib = slurp("lib-arm64e", &ln), *fat = slurp("fat-x86_64-arm64e", &fn);
+    slice_tests(seed, n, lib, ln, fat, fn);
     uint8_t *d = malloc(n + 0x10000);
 #define FRESH() memcpy(d, seed, n)
 
@@ -294,6 +451,10 @@ int main(int argc, char **argv)
         memcpy(x, fat, fn);
         big = __builtin_bswap32(__builtin_bswap32(rd32(fat, 8 + 20 + 8)) - 0x10); memcpy(x + 8 + 20 + 8, &big, 4);
         expect("fat slice not page aligned", x, fn, "not page aligned");
+        /* the fat header is outside every signature: its subtype must be the slice's own */
+        memcpy(x, fat, fn);
+        big = __builtin_bswap32(0); memcpy(x + 8 + 20 + 4, &big, 4);            /* arm64e slice named arm64 (subtype 0) */
+        expect("fat header names another cpusubtype than the slice's header", x, fn, "fat header names cpusubtype");
         free(x);
     }
 
