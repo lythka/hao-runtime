@@ -53,9 +53,10 @@
  *        CMS-signed guests that are neither listed nor registrable.
  *
  * The check runs in the process that runs the guest (the CLI's stage 2), on
- * the descriptor the loader then maps the image from: nothing a caller puts
- * in the environment or in argv stands in for it, and no path is opened
- * twice. Everything but the Security.framework step needs only libc and
+ * the bytes the loader then builds the image from (the slice is taken once
+ * from the open file, hao/macho.h hao_slice): nothing a caller puts in the
+ * environment or in argv stands in for it, no path is opened twice and no
+ * byte is read twice. Everything but the Security.framework step needs only libc and
  * CommonCrypto. That step runs in a fork of this process, which exits with
  * the answer (sec_ask): the frameworks it loads (with dlopen; libhao does
  * not link them) are not loaded into the guest's process for this check,
@@ -300,10 +301,13 @@ static bool sig_parse(const uint8_t *sb, size_t len, sig_info *s, char *why, siz
 #undef BAD
 }
 
-/* Every page hash of [0, code_limit) of the slice. exec (nexec ranges of
- * slice offsets, may be NULL): *bad_exec is set when a page that does not
- * match its hash overlaps one of them (an executable segment). */
-static bool pages_valid(int fd, uint64_t slice_off, const sig_info *s, const hao_range *exec, int nexec, bool *bad_exec,
+/* Every page hash of [0, code_limit) of the slice at bytes, which the
+ * caller has checked to hold code_limit bytes: the memory the image is then
+ * built from (hao_slice), so the pages hashed here are the pages that run.
+ * exec (nexec ranges of slice offsets, may be NULL): *bad_exec is set when
+ * a page that does not match its hash overlaps one of them (an executable
+ * segment). */
+static bool pages_valid(const uint8_t *bytes, const sig_info *s, const hao_range *exec, int nexec, bool *bad_exec,
                         char *why, size_t n)
 {
     const cd_hdr *h = &s->h;
@@ -314,36 +318,19 @@ static bool pages_valid(int fd, uint64_t slice_off, const sig_info *s, const hao
                  (unsigned long long)s->code_limit);
         return false;
     }
-    enum { CHUNK = 1 << 20 };                        /* a multiple of both page sizes */
-    uint8_t *buf = malloc(CHUNK);
-    if (!buf) { snprintf(why, n, "out of memory"); return false; }
     const uint8_t *slots = s->cd + h->hashOffset;
-    bool ok = true;
-    for (uint64_t at = 0; at < s->code_limit && ok;) {
-        size_t want = (size_t)(s->code_limit - at < CHUNK ? s->code_limit - at : CHUNK), got = 0;
-        while (got < want) {
-            ssize_t r = pread(fd, buf + got, want - got, (off_t)(slice_off + at + got));
-            if (r < 0 && errno == EINTR) continue;
-            if (r <= 0) { snprintf(why, n, "cannot read the code at %#llx", (unsigned long long)(at + got)); ok = false; break; }
-            got += (size_t)r;
+    for (uint64_t at = 0, i = 0; at < s->code_limit; at += page, i++) {
+        size_t len = s->code_limit - at < page ? (size_t)(s->code_limit - at) : (size_t)page;
+        uint8_t d[CS_HASH_MAX_];
+        md(h->hashType, bytes + at, len, d);
+        if (memcmp(d, slots + i * h->hashSize, h->hashSize)) {
+            snprintf(why, n, "page %llu (offset %#llx) does not match its hash", (unsigned long long)i, (unsigned long long)at);
+            for (int k = 0; bad_exec && k < nexec; k++)
+                if (at < exec[k].end && at + len > exec[k].off) *bad_exec = true;
+            return false;
         }
-        for (size_t p = 0; ok && p < want; p += page) {
-            uint64_t i = (at + p) / page;
-            size_t len = want - p < page ? want - p : (size_t)page;
-            uint8_t d[CS_HASH_MAX_];
-            md(h->hashType, buf + p, len, d);
-            if (memcmp(d, slots + i * h->hashSize, h->hashSize)) {
-                snprintf(why, n, "page %llu (offset %#llx) does not match its hash", (unsigned long long)i,
-                         (unsigned long long)(at + p));
-                ok = false;
-                for (int k = 0; bad_exec && k < nexec; k++)
-                    if (at + p < exec[k].end && at + p + len > exec[k].off) *bad_exec = true;
-            }
-        }
-        at += want;
     }
-    free(buf);
-    return ok;
+    return true;
 }
 
 /* -------------------------------------------- signer: trusted cdhash list */
@@ -641,37 +628,20 @@ static int sec_ask(const char *path, uint32_t subtype, const sig_info *s, bool *
 
 /* ------------------------------------------------------------- policy */
 
-/* The slice's LC_CODE_SIGNATURE (*sig_size 0: none), after checking that
- * nothing the loader maps lies past code_limit except the signature: called
- * twice, first without a code limit (to find the signature). */
-static bool slice_layout(int fd, uint64_t slice_off, uint64_t slice_size, uint32_t *sig_off, uint32_t *sig_size,
-                         char *why, size_t n)
+/* The slice's LC_CODE_SIGNATURE (*sig_size 0: none), in its validated load
+ * commands. */
+static bool slice_layout(const hao_slice *sl, uint32_t *sig_off, uint32_t *sig_size, char *why, size_t n)
 {
-    struct mach_header_64 mh;
     *sig_off = *sig_size = 0;
-    if (slice_size < sizeof mh || pread(fd, &mh, sizeof mh, (off_t)slice_off) != sizeof mh || mh.magic != MH_MAGIC_64 ||
-        mh.cputype != CPU_TYPE_ARM64) {
-        snprintf(why, n, "bad arm64 mach header");
-        return false;
-    }
-    if (mh.sizeofcmds > slice_size - sizeof mh) { snprintf(why, n, "load commands overrun the slice"); return false; }
-    uint8_t *cmds = malloc(mh.sizeofcmds ? mh.sizeofcmds : 1);
-    if (!cmds || pread(fd, cmds, mh.sizeofcmds, (off_t)(slice_off + sizeof mh)) != (ssize_t)mh.sizeofcmds ||
-        hao_macho_check_cmds(cmds, mh.sizeofcmds, mh.ncmds, NULL, why, n) != 0) {
-        if (cmds && !why[0]) snprintf(why, n, "short load commands");
-        free(cmds);
-        return false;
-    }
-    const uint8_t *p = cmds;
-    for (uint32_t k = 0; k < mh.ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+    const uint8_t *p = sl->cmds;
+    for (uint32_t k = 0; k < sl->ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
         const struct load_command *lc = (const void *)p;
         if (lc->cmd != LC_CODE_SIGNATURE) continue;
         const struct linkedit_data_command *cs = (const void *)p;
         *sig_off = cs->dataoff;
         *sig_size = cs->datasize;
     }
-    free(cmds);
-    if (*sig_size && ((uint64_t)*sig_off + *sig_size > slice_size || *sig_size > CS_MAX_BLOB_)) {
+    if (*sig_size && ((uint64_t)*sig_off + *sig_size > sl->size || *sig_size > CS_MAX_BLOB_)) {
         snprintf(why, n, "code signature [%#x, +%#x) outside the slice", *sig_off, *sig_size);
         return false;
     }
@@ -686,8 +656,10 @@ static double now_us(void)
 }
 
 /* The policy for the file open on fd, which the caller then hands to the
- * loader (hao_load_main_image): every byte read here and every byte mapped
- * there comes through this one descriptor. path names the file in
+ * loader (hao_load_main_image). The slice is taken once here (hao_slice:
+ * read into memory, unless only root can change the file) and left for the
+ * loader, which builds the image from those bytes: what is checked is what
+ * runs, whatever happens to the file meanwhile. path names the file in
  * diagnostics and is what Security.framework opens (sec_verdict).
  * 0: run it; -1: refused (diagnostic printed). */
 int hao_guest_sig_enforce(int fd, const char *path)
@@ -712,18 +684,20 @@ int hao_guest_sig_enforce(int fd, const char *path)
     int rc = 0;
     char why[600] = "", w2[400] = "";
     const char *kind = "valid", *by = "";         /* the verdict and who gave it */
-    uint8_t *blob = NULL;
+    const uint8_t *blob = NULL;
     sig_info s;
     memset(&s, 0, sizeof s);
     bool apple = false, foreign = false;
-    uint64_t slice_off = 0, slice_size = 0;
-    uint32_t subtype = 0, sig_off = 0, sig_size = 0;
-    if (!hao_macho_choose_slice(fd, (uint64_t)st.st_size, &slice_off, &slice_size, &subtype, w2, sizeof w2)) {
-        snprintf(why, sizeof why, "no arm64 code to check (%s)", w2);
+    uint32_t sig_off = 0, sig_size = 0;
+    hao_slice *sl = hao_slice_open(fd, w2, sizeof w2);
+    if (!sl) {
+        snprintf(why, sizeof why, "no arm64 code to run (%s)", w2);
         rc = -1;
         goto out;
     }
-    if (!slice_layout(fd, slice_off, slice_size, &sig_off, &sig_size, w2, sizeof w2)) {
+    const uint64_t slice_off = sl->off, slice_size = sl->size;
+    const uint32_t subtype = sl->cpusubtype;
+    if (!slice_layout(sl, &sig_off, &sig_size, w2, sizeof w2)) {
         snprintf(why, sizeof why, "code signature invalid (%s)", w2);
         rc = -1;
         goto out;
@@ -738,12 +712,7 @@ int hao_guest_sig_enforce(int fd, const char *path)
         }
         goto out;
     }
-    blob = malloc(sig_size);
-    if (!blob || pread(fd, blob, sig_size, (off_t)(slice_off + sig_off)) != (ssize_t)sig_size) {
-        snprintf(why, sizeof why, "cannot read the code signature");
-        rc = -1;
-        goto out;
-    }
+    blob = sl->bytes + sig_off;
     if (!sig_parse(blob, sig_size, &s, w2, sizeof w2)) {
         snprintf(why, sizeof why, "code signature invalid (%s)", w2);
         rc = -1;
@@ -758,7 +727,7 @@ int hao_guest_sig_enforce(int fd, const char *path)
         rc = -1;
         goto out;
     }
-    if (!pages_valid(fd, slice_off, &s, NULL, 0, NULL, w2, sizeof w2)) {
+    if (!pages_valid(sl->bytes, &s, NULL, 0, NULL, w2, sizeof w2)) {
         snprintf(why, sizeof why, "code signature invalid (%s)", w2);
         rc = -1;
         goto out;
@@ -821,10 +790,12 @@ int hao_guest_sig_enforce(int fd, const char *path)
                 foreign ? "; its entitlements are not carried (embed it to keep them)" : "");
     }
 out:
-    free(blob);
     if (rc) {
         hao_diag_prefix(f);
         fprintf(f, "%s: %s; refusing to run\n", path, why);
+        hao_slice_close(sl);
+    } else {
+        hao_slice_hand(sl);                        /* the loader builds the image from the bytes checked here */
     }
     return rc;
 }
@@ -844,25 +815,22 @@ out:
  * 0: valid (out filled); -1: not (why; out->bad_exec when a page of an
  * executable segment does not match its hash).
  */
-int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype,
-                        uint32_t sig_off, uint32_t sig_size, const hao_range *exec, int nexec, bool signer,
-                        const char *team, hao_imgsig *out, char *why, size_t n)
+int hao_guest_sig_image(const hao_slice *sl, const char *path, uint32_t sig_off, uint32_t sig_size,
+                        const hao_range *exec, int nexec, bool signer, const char *team, hao_imgsig *out,
+                        char *why, size_t n)
 {
     memset(out, 0, sizeof *out);
     char w2[400] = "";
     int rc = -1;
     sig_info s;
-    uint8_t *blob = NULL;
+    const uint64_t slice_size = sl->size;
+    const uint32_t subtype = sl->cpusubtype;
     if (!sig_size) { snprintf(why, n, "not code signed"); return -1; }
     if ((uint64_t)sig_off + sig_size > slice_size || sig_size > CS_MAX_BLOB_) {
         snprintf(why, n, "code signature [%#x, +%#x) outside the slice", sig_off, sig_size);
         return -1;
     }
-    blob = malloc(sig_size);
-    if (!blob || pread(fd, blob, sig_size, (off_t)(slice_off + sig_off)) != (ssize_t)sig_size) {
-        snprintf(why, n, "cannot read the code signature");
-        goto out;
-    }
+    const uint8_t *blob = sl->bytes + sig_off;
     if (!sig_parse(blob, sig_size, &s, w2, sizeof w2)) { snprintf(why, n, "code signature invalid (%s)", w2); goto out; }
     if (s.code_limit < sig_off || s.code_limit > slice_size ||
         slice_size > (s.code_limit > (uint64_t)sig_off + sig_size ? s.code_limit : (uint64_t)sig_off + sig_size)) {
@@ -870,7 +838,7 @@ int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t s
                  (unsigned long long)s.code_limit, (unsigned long long)slice_size, sig_off);
         goto out;
     }
-    if (!pages_valid(fd, slice_off, &s, exec, nexec, &out->bad_exec, w2, sizeof w2)) {
+    if (!pages_valid(sl->bytes, &s, exec, nexec, &out->bad_exec, w2, sizeof w2)) {
         snprintf(why, n, "code signature invalid (%s)", w2);
         goto out;
     }
@@ -895,6 +863,5 @@ int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t s
     out->team_ok = team_ok;
     out->by = "Security.framework";
 out:
-    free(blob);
     return rc;
 }

@@ -285,7 +285,10 @@ uint64_t hao_trap_address(const char *name, hao_trap_fn fn, uint64_t arg)
     else if (!e || ntraps >= TRAP_SLOTS - 1) warn = true;
     else {
         slot = ntraps++;
-        traps[slot].name = name; traps[slot].arg = arg;
+        /* an own copy: an import's name lies in its image's fixups, which the loader reads in the
+         * slice and gives back when the load ends (macho.c) */
+        const char *own = strdup(name);
+        traps[slot].name = own ? own : "(trap)"; traps[slot].arg = arg;
         __atomic_store_n(&traps[slot].fn, fn, __ATOMIC_RELEASE);
         e[2] = slot;
         hao_gmap_publish(&trap_index, e, key);

@@ -25,8 +25,9 @@
  *    process and mapped file (non-platform) have different Team IDs" in a
  *    process signed with disable-library-validation);
  *  - guest images (arm64 dylibs hao maps as data, which the kernel never
- *    validates as code), on the descriptor the loader then reads the image
- *    from (check_image below): every page hash, checked by hao (guest_sig.c),
+ *    validates as code), on the bytes the loader then builds the image
+ *    from (check_image below; the slice is taken once, hao/macho.h hao_slice):
+ *    every page hash, checked by hao (guest_sig.c),
  *    whatever the policy; then the loader attaches the slice's signature to
  *    the vnode (F_ADDFILESIGS_INFO, the cdhash must be hao's) and asks the
  *    kernel whether this process may map it (F_CHECK_LV). If the kernel
@@ -183,15 +184,11 @@ static bool find_sig(const uint8_t *cmds, uint32_t ncmds, uint64_t slice, uint32
     return false;
 }
 
-static void decide(hao_image *img, const uint8_t *cmds, uint32_t ncmds)
+static void decide(const hao_slice *sl)
 {
     hao_codesig cs = {0};
     uint32_t off = 0, size = 0;
-    if (find_sig(cmds, ncmds, img->slice_size, &off, &size) && size <= (64u << 20)) {
-        uint8_t *b = malloc(size);
-        if (b && pread(img->fd, b, size, (off_t)(img->slice_off + off)) == (ssize_t)size) hao_codesig_parse(b, size, &cs);
-        free(b);
-    }
+    if (find_sig(sl->cmds, sl->ncmds, sl->size, &off, &size)) hao_codesig_parse(sl->bytes + off, size, &cs);
     integrity = true;
     main_platform = cs.platform != 0;
     snprintf(main_team, sizeof main_team, "%s", cs.team_id);
@@ -305,9 +302,10 @@ static const char *lv_rule(const hao_imgsig *g)
  *     (all of Apple's) takes the user-space route. So does a same-team
  *     library the kernel refuses because the process's Team ID is hao's.
  */
-static int check_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char *k, size_t kn)
+static int check_image(hao_image *img, const hao_slice *sl, char *k, size_t kn)
 {
-    uint32_t off = 0, size = 0;
+    const uint8_t *cmds = sl->cmds;
+    uint32_t ncmds = sl->ncmds, off = 0, size = 0;
     bool sig = find_sig(cmds, ncmds, img->slice_size, &off, &size);
     bool lv = mode == HAO_LIBVAL_KERNEL || mode == HAO_LIBVAL_PLATFORM;
     if (!sig) {
@@ -320,8 +318,7 @@ static int check_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char
     snprintf(route, sizeof route, "integrity");
     hao_imgsig g;
     char w[400] = "";
-    if (verifier(img->fd, img->path, img->slice_off, img->slice_size, img->cpusubtype, off, size, ex, nex, false, NULL, &g, w,
-                 sizeof w) != 0) {
+    if (verifier(sl, img->path, off, size, ex, nex, false, NULL, &g, w, sizeof w) != 0) {
         if (g.bad_exec) {
             char msg[700];
             snprintf(msg, sizeof msg, "%s: %s: a page of an executable segment; killed as the kernel kills it natively", img->path, w);
@@ -367,8 +364,7 @@ static int check_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char
         }
     }
     snprintf(route, sizeof route, "user space%s, %u KiB pages", force_user ? " (HAO_LIBVAL_USER)" : "", 1u << (g.page_shift - 10));
-    if (verifier(img->fd, img->path, img->slice_off, img->slice_size, img->cpusubtype, off, size, ex, nex, true,
-                 main_team[0] ? main_team : NULL, &g, w, sizeof w) != 0) {
+    if (verifier(sl, img->path, off, size, ex, nex, true, main_team[0] ? main_team : NULL, &g, w, sizeof w) != 0) {
         snprintf(k, kn, "%s", w);
         return -1;
     }
@@ -380,17 +376,19 @@ static int check_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char
     return -1;
 }
 
-int hao_libval_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char *why, size_t n)
+int hao_libval_image(hao_image *img, const hao_slice *sl, char *why, size_t n)
 {
+    const uint8_t *cmds = sl->cmds;
+    uint32_t ncmds = sl->ncmds;
     if (expect_main) {
         expect_main = false;
-        if (mode == HAO_LIBVAL_UNDECIDED) decide(img, cmds, ncmds);
+        if (mode == HAO_LIBVAL_UNDECIDED) decide(sl);
         return 0;
     }
     char k[500], u[48];
     int r;
     route[0] = 0;
-    if (verifier && integrity) r = check_image(img, cmds, ncmds, k, sizeof k);
+    if (verifier && integrity) r = check_image(img, sl, k, sizeof k);
     else if (mode == HAO_LIBVAL_KERNEL || mode == HAO_LIBVAL_PLATFORM) r = kernel_check(img, cmds, ncmds, k, sizeof k);
     else return 0;
     snprintf(img->libval_route, sizeof img->libval_route, "%s", route);

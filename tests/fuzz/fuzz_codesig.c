@@ -12,10 +12,9 @@
 hao_opts_t hao_opt;
 FILE *hao_diag_file;
 void hao_diag_prefix(FILE *f) { (void)f; }
-bool hao_macho_choose_slice(int fd, uint64_t fsize, uint64_t *off, uint64_t *size, uint32_t *sub, char *why, size_t n)
-{ (void)fd; (void)fsize; (void)off; (void)size; (void)sub; (void)why; (void)n; abort(); }
-int hao_macho_check_cmds(const uint8_t *cmds, uint32_t sizeofcmds, uint32_t ncmds, int *nsegs, char *why, size_t n)
-{ (void)cmds; (void)sizeofcmds; (void)ncmds; (void)nsegs; (void)why; (void)n; abort(); }
+hao_slice *hao_slice_open(int fd, char *why, size_t n) { (void)fd; (void)why; (void)n; abort(); }
+void hao_slice_close(hao_slice *sl) { (void)sl; abort(); }
+void hao_slice_hand(hao_slice *sl) { (void)sl; abort(); }
 bool hao_entitlements_foreign(const char *xml, size_t n) { (void)xml; (void)n; abort(); }
 int hao_aot_open_trusted(const hao_aot_dir *d, const char *name, struct stat *st, char *why, size_t n)
 { (void)d; (void)name; (void)st; (void)why; (void)n; abort(); }

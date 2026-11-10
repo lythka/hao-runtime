@@ -28,6 +28,14 @@
 #    print the same lines and die the same way;
 #  - pages: the ad hoc library signed with 4 KiB and with 16 KiB pages, and a
 #    tampered 4 KiB one, under plain and hardened programs.
+# Then a guest file rewritten in place while hao loads it (tests/guest/
+# libvalswap.c, inserted into hao, rewrites it after hao has read it and
+# before the image's first segment is mapped), which is what the owner of a
+# file can do at any moment: the ad hoc library with a twin that returns
+# another value, a user's copy of the platform library with the tampered
+# one under a hardened program, the main executable with another program,
+# and the library rewritten by the running program itself before its first
+# call into it (tests/guest/libvallate.c). What runs must be what was checked.
 # Then the embedded form (hao-embed --host-test), and DYLD_INSERT_LIBRARIES
 # reaching the embedded program exactly when it reaches the native one.
 #   OUT=dir HAO=/abs/build/hao [B=build] [T=60] [MODES="jit interp aot"] [PATHS="kernel user list"]
@@ -219,6 +227,94 @@ for v in plain runtime; do
     grep -q . "$OUT/tampered-$v.native.out" && { echo "FAIL native: the tampered library ran ($v)"; fail=1; }
 done
 grep -q "Library not loaded" "$OUT/strong-runtime.native.err" || { echo "FAIL native: dyld launched strong-runtime"; fail=1; }
+
+# --- a guest file rewritten in place between hao's check and its mapping
+RW=$OUT/rw; rm -rf "$RW"; mkdir -p "$RW"
+rwok=1
+clang -arch x86_64 -O1 -dynamiclib -o "$RW/swap.dylib" "$here/libvalswap.c" && sign "$RW/swap.dylib" || rwok=0
+for t in good evil; do
+    clang -arch arm64 -arch arm64e -dynamiclib -O1 -DGUEST $([ $t = evil ] && echo -DGVALUE=666) \
+        -install_name @rpath/libgplug.dylib -o "$RW/$t.dylib" "$here/libvalplug.c" && sign "$RW/$t.dylib" || rwok=0
+    printf '#include <stdio.h>\nint main(void) { puts("main: %s"); return 0; }\n' $t >"$RW/main.$t.c"
+    for a in arm64 arm64e; do clang -arch $a -O1 -o "$RW/main.$t.$a" "$RW/main.$t.c" && sign "$RW/main.$t.$a" || rwok=0; done
+done
+cp "$RW/good.dylib" "$RW/libgplug.dylib"
+cat >"$RW/code.c" <<'EOF'
+#include <ptrauth.h>
+#include <stdio.h>
+extern void *IOHIDEventProcessorFactory(void *, void *) __attribute__((weak_import));
+int main(void)
+{
+    if (!IOHIDEventProcessorFactory) { printf("platform library: missing\n"); return 0; }
+    const unsigned char *p = ptrauth_strip((const unsigned char *)IOHIDEventProcessorFactory, ptrauth_key_function_pointer);
+    printf("platform library: loaded, its first instruction is %02x%02x%02x%02x\n", p[0], p[1], p[2], p[3]);
+    return 0;
+}
+EOF
+for a in arm64 arm64e; do
+    clang -arch $a -O1 -o "$RW/strong.$a" "$OUT/strong.c" "$RW/libgplug.dylib" -Wl,-rpath,@executable_path && sign "$RW/strong.$a" || rwok=0
+    clang -arch $a -O1 -o "$RW/late.$a" "$here/libvallate.c" "$RW/libgplug.dylib" -Wl,-rpath,@executable_path && sign "$RW/late.$a" || rwok=0
+    clang -arch $a -O1 -o "$RW/code.$a" "$RW/code.c" -Wl,-weak_library,"$PLATLIB" &&
+        install_name_tool -change "$PLATLIB" "$RW/plat.dylib" "$RW/code.$a" 2>/dev/null && sign -o runtime "$RW/code.$a" || rwok=0
+done
+[ $rwok = 1 ] || { echo "FAIL building the rewrite cases"; fail=1; }
+# Two files hold the same bytes. Read, not mapped: the kernel kills a platform tool (cmp) that maps a file
+# whose pages no longer match the signature it holds for that file.
+samebytes() { [ "$(cat "$1" | shasum -a 256)" = "$(cat "$2" | shasum -a 256)" ]; }
+# swapcase LABEL FILE GOOD EVIL NATIVE-PROGRAM HAO-PROGRAM [PATHS]: FILE starts as GOOD (a new file each run:
+# the kernel keeps a file's signature with its vnode) and is rewritten with EVIL while hao loads it. The output
+# and status must be the native run's with GOOD, and FILE must hold EVIL afterwards (the rewrite happened).
+swapcase() {
+    local label=$1 file=$2 good=$3 evil=$4 nat=$5 gst=$6 paths=${7:-$PATHS}
+    rm -f "$file"; cp "$good" "$file"
+    (cd "$RW" && timeout -s KILL "$T" "$nat") >"$RW/$label.native.out" 2>"$RW/$label.native.err"
+    local nrc=$?
+    echo "native $label: rc $nrc: $(tr '\n' ';' <"$RW/$label.native.out")"
+    for mode in $MODES; do
+        [ $mode = aot ] && continue
+        for path in $paths; do
+            local o=$RW/$label.$mode.$path env=(env HAO_NO_AOT=1) flag=()
+            [ $mode = interp ] && flag=(--interp)
+            case $path in
+            user) env+=(HAO_LIBVAL_USER=1) ;;
+            list) env+=(HAO_LIBVAL_USER=1 HAO_TRUST_LIST="$OUT/trust/list") ;;
+            esac
+            rm -f "$file"; cp "$good" "$file"
+            (cd "$RW" && timeout -s KILL "$T" "${env[@]}" DYLD_INSERT_LIBRARIES="$RW/swap.dylib" SWAP_FILE="$file" SWAP_WITH="$evil" \
+                "$HAO" ${flag[@]+"${flag[@]}"} "$gst") >"$o.out" 2>"$o.err"
+            local rc=$?
+            if ! samebytes "$file" "$evil"; then
+                echo "FAIL $label $mode $path: the file was not rewritten while hao loaded it (the case shows nothing)"; fail=1
+            elif [ $rc = $nrc ] && cmp -s "$RW/$label.native.out" "$o.out"; then
+                echo "PASS $label $mode $path: rewritten after the check; what ran is what was checked (rc $rc)"
+            else
+                echo "FAIL $label $mode $path (rc $rc, native $nrc): $(tr '\n' ';' <"$o.out") $(head -c 300 "$o.err")"; fail=1
+            fi
+        done
+    done
+}
+if [ $rwok = 1 ]; then
+    swapcase rewritten-library "$RW/libgplug.dylib" "$RW/good.dylib" "$RW/evil.dylib" "$RW/strong.arm64" "$RW/strong.arm64e"
+    # not the user path: Security.framework refuses a bundle's executable copied out of its bundle (it seals the
+    # bundle's Info.plist), so the copy never loads there; the list path is the user-space route for it
+    swapcase rewritten-platform-copy "$RW/plat.dylib" "$PLATLIB" "$OUT/platt.dylib" "$RW/code.arm64" "$RW/code.arm64e" \
+        "$(echo " $PATHS " | sed 's/ user / /')"
+    swapcase rewritten-main "$RW/main" "$RW/main.good.arm64e" "$RW/main.evil.arm64e" "$RW/main.good.arm64" "$RW/main"
+    grep -q "strong libgplug: 7" "$RW/rewritten-library.native.out" && grep -q "first instruction" "$RW/rewritten-platform-copy.native.out" ||
+        { echo "FAIL native: the rewrite cases' programs did not run"; fail=1; }
+    # the running program rewrites its library, then calls into it for the first time (an image built
+    # from a copy cannot change; a private mapping of the file kept its bytes too on the kernels tried)
+    for mode in $MODES; do
+        [ $mode = aot ] && continue
+        flag=(); [ $mode = interp ] && flag=(--interp)
+        rm -f "$RW/libgplug.dylib"; cp "$RW/good.dylib" "$RW/libgplug.dylib"
+        got=$(cd "$RW" && timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" ${flag[@]+"${flag[@]}"} "$RW/late.arm64e" "$RW/libgplug.dylib" "$RW/evil.dylib" 2>&1; echo "rc=$?")
+        if samebytes "$RW/libgplug.dylib" "$RW/evil.dylib" && [ "$got" = "late libgplug: 7
+rc=0" ]; then echo "PASS library rewritten by the running program before its first call ($mode): the loaded code runs"
+        else echo "FAIL library rewritten by the running program ($mode): $got"; fail=1; fi
+    done
+    rm -f "$RW/libgplug.dylib"; cp "$RW/good.dylib" "$RW/libgplug.dylib"
+fi
 
 # embedded form: the stub runs the program's own arm64e slice
 if [ -x "$repo/tools/hao-embed" ] && [ -f "$B/hao-stub" ]; then
