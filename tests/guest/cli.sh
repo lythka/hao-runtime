@@ -162,10 +162,15 @@ if [ "$(arch -x86_64 sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ] && lip
         "${NT[@]}" "$HAO" -v /bin/ls -d /
     # HAO_LIBVAL_USER: the signer as on a kernel that cannot hold the signature. Security.framework
     # answers in a child of the process that runs the guest, which trusts the child's exit status only.
-    run "the same slice, signer from Security.framework in a child" 0 "Apple signature (Security.framework)" \
-        env HAO_LIBVAL_USER=1 "$HAO" -v /bin/ls -d /
-    run "the same, trustd unreachable: refused" 126 "the cdhash is in no trusted cdhash list" \
-        "${NT[@]}" env HAO_LIBVAL_USER=1 "$HAO" /bin/ls -d /
+    # HAO_LIBVAL_USER is a test switch: only a build with -DHAO_TEST_SWITCHES reads it.
+    if env HAO_LIBVAL_USER=1 "$HAO" /bin/ls -d / 2>&1 | grep -q "HAO_LIBVAL_USER ignored"; then
+        echo "SKIP signer from Security.framework in a child (needs a HAO_TEST_SWITCHES build)"
+    else
+        run "the same slice, signer from Security.framework in a child" 0 "Apple signature (Security.framework)" \
+            env HAO_LIBVAL_USER=1 "$HAO" -v /bin/ls -d /
+        run "the same, trustd unreachable: refused" 126 "the cdhash is in no trusted cdhash list" \
+            "${NT[@]}" env HAO_LIBVAL_USER=1 "$HAO" /bin/ls -d /
+    fi
 fi
 AT=$FS/usr/bin/dserr
 if [ -f "$AT" ]; then
