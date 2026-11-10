@@ -7,7 +7,7 @@ file:
 |---|---|---|
 | `fuzz_macho` | `src/macho.c`: slice choice, load commands, segment mapping, chained fixups, exports trie, function starts | a Mach-O file (odd-sized inputs are mapped only; even-sized ones also bind) |
 | `fuzz_typeenc` | `src/abi.c` type-encoding parser (`parse_sig`, `parse_type`), under ASan and UBSan | an ObjC/block type encoding |
-| `fuzz_codesig` | `src/guest_sig.c` embedded-signature parser (`sig_parse`: superblob index, CodeDirectories, hash ranking, sealed special slots), under ASan and UBSan | a code-signature superblob |
+| `fuzz_codesig` | `src/libval.c` embedded-signature reader (`hao_codesig_parse`: superblob index, CodeDirectories, hash ranking, sealed special slots), under ASan and UBSan | a code-signature superblob |
 | `fuzz_ifunit` | `src/ifunit.c` interface-unit parser (`hao_ifunit_check`, `hao_ifunit_find`), under ASan and UBSan; each input is checked as is and again with its payload hash recomputed, so mutations reach the record rules | an interface unit (`tools/hao_ifunit.py`) |
 | `fuzz_hao_fat.py` | the pure-Python packaging readers: `tools/hao_fat.py` (`slices`, `combine`, `replace_slice`, `load_commands`), hao-embed's Mach-O readers, `tools/hao_macho.py` (`Image`: load commands, exports trie, every import table; `file_slices`; `Cache`), `tools/hao_codesig.py`, `tools/hao_ifunit.py` (`macho_uuid_of`, `read`), and the load-command walks of `tools/hao-install.py` and `kext/stamp_identity.py`. Each must return or refuse with its one error type (`ValueError`; `Bad` for interface units) within 2 s | a fat or thin Mach-O, or an interface unit |
 

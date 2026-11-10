@@ -827,7 +827,7 @@ int hao_macho_check_cmds(const uint8_t *cmds, uint32_t sizeofcmds, uint32_t ncmd
     if (ncmds > sizeofcmds / sizeof(struct load_command)) CMDERR("%u load commands cannot fit in %u bytes", ncmds, sizeofcmds);
     const uint8_t *p = cmds;
     uint32_t left = sizeofcmds;
-    int nseg = 0;
+    int nseg = 0, nsig = 0;
     for (uint32_t k = 0; k < ncmds; k++) {
         if (left < sizeof(struct load_command)) CMDERR("load command %u past sizeofcmds", k);
         struct load_command lc;
@@ -856,6 +856,11 @@ int hao_macho_check_cmds(const uint8_t *cmds, uint32_t sizeofcmds, uint32_t ncmd
             break;
         case LC_UUID: need = sizeof(struct uuid_command); break;
         case LC_MAIN: need = sizeof(struct entry_point_command); break;
+        case LC_CODE_SIGNATURE:
+            /* one signature: every reader (hao_slice_open for libval.c and guest_sig.c, tools/hao_codesig.py)
+             * must mean the same one, and a second could put one in front of the check and another behind it */
+            if (++nsig > 1) CMDERR("more than one LC_CODE_SIGNATURE");
+            need = sizeof(struct linkedit_data_command); break;
         case LC_FUNCTION_STARTS: case LC_DYLD_CHAINED_FIXUPS: case LC_DYLD_EXPORTS_TRIE: case LC_LAZY_LOAD_DYLIB_INFO:
             need = sizeof(struct linkedit_data_command); break;
         case LC_DYLD_INFO: case LC_DYLD_INFO_ONLY: need = sizeof(struct dyld_info_command); break;
@@ -1018,6 +1023,13 @@ hao_slice *hao_slice_open(int fd, char *why, size_t n)
     sl->ncmds = mh.ncmds;
     sl->sizeofcmds = mh.sizeofcmds;
     if (hao_macho_check_cmds(sl->cmds, sl->sizeofcmds, sl->ncmds, &sl->nsegs, why, n) != 0) goto fail;
+    const uint8_t *p = sl->cmds;
+    for (uint32_t k = 0; k < sl->ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct linkedit_data_command *ld = (const void *)p;
+        if (ld->cmd != LC_CODE_SIGNATURE) continue;       /* at most one, of full size (hao_macho_check_cmds) */
+        sl->sig_off = ld->dataoff;
+        sl->sig_size = ld->datasize;
+    }
     return sl;
 fail:
     hao_slice_close(sl);

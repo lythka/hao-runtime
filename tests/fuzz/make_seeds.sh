@@ -31,15 +31,23 @@ hdr += struct.pack(">IIQQII", 0x01000007, 3, 0x1000 + len(body), 64, 12, 0)
 blob = hdr + b"\0" * (0x1000 - len(hdr)) + body + b"\xcf\xfa\xed\xfe" + b"\0" * 60
 open(d + "/fat64", "wb").write(blob)
 EOF
-# embedded code signatures: the linker's ad hoc one, and codesign's with
-# requirements, XML and DER entitlements (sealed special slots)
+# embedded code signatures: the linker's ad hoc one, codesign's with
+# requirements, XML and DER entitlements (sealed special slots), one with
+# two CodeDirectories (SHA-1 and SHA-256: the reader takes the higher rank),
+# and a hardened-runtime one with disable-library-validation
 printf '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>' > "$work/ents.plist"
 cp "$OUT/macho/exec-arm64e" "$work/signed"
 codesign -s - -f --entitlements "$work/ents.plist" "$work/signed" 2>/dev/null
-python3 - "$OUT/codesig" "$OUT/macho/exec-arm64e" "$work/signed" <<'PY'
+cp "$OUT/macho/exec-arm64e" "$work/signed2"
+codesign -s - -f --digest-algorithm=sha1,sha256 --entitlements "$work/ents.plist" "$work/signed2" 2>/dev/null
+printf '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.disable-library-validation</key><true/></dict></plist>' > "$work/dlv.plist"
+cp "$OUT/macho/exec-arm64e" "$work/signed3"
+codesign -s - -f -o runtime --entitlements "$work/dlv.plist" "$work/signed3" 2>/dev/null
+python3 - "$OUT/codesig" "$OUT/macho/exec-arm64e" "$work/signed" "$work/signed2" "$work/signed3" <<'PY'
 import struct, sys
 out = sys.argv[1]
-for name, p in (("linker-adhoc", sys.argv[2]), ("codesign-ents", sys.argv[3])):
+for name, p in (("linker-adhoc", sys.argv[2]), ("codesign-ents", sys.argv[3]), ("codesign-two-digests", sys.argv[4]),
+                ("codesign-runtime-dlv", sys.argv[5])):
     d = open(p, "rb").read()
     ncmds, o = struct.unpack_from("<I", d, 16)[0], 32
     for _ in range(ncmds):
