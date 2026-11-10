@@ -411,6 +411,11 @@ char hao_swift_async_kind_for_demangled(const char *d);
 void hao_swift_async_note_call(uint64_t ctx, char kind);     /* guest calls such a function, x22 = its context */
 uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0);   /* native resumes guest `target` */
 void hao_swiftcc_fork_child(void);
+/* interpose.c: a page the guest mapped or made executable itself (mmap,
+ * mprotect): arm64 code generated at run time, which hao does not run */
+bool hao_guest_exec_mapped(uint64_t a);
+void hao_guest_vm_note(uint64_t a, uint64_t n, bool exec);   /* the guest mapped [a, a+n): executable or not */
+void hao_interpose_fork_child(void);
 static inline bool hao_swift_async_kind(char k) { return k == 'b' || k == 'h' || k == 'H' || k == 't' || k == 'T'; }
 /* fnslots.c */
 void hao_fnslots_image(hao_image *img);

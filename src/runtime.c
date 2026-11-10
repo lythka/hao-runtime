@@ -207,6 +207,7 @@ static void fork_child(void)
     hao_swift_objects_fork_child();
     hao_swift_result_fork_child();
     hao_swiftcc_fork_child();
+    hao_interpose_fork_child();
     hao_swift_value_fork_child();
     hao_async_contract_fork_child();
     hao_varsniff_fork_child();
