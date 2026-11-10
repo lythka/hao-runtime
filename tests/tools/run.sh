@@ -5,8 +5,9 @@
 # tests/tools/bundle.sh (bundle main executables: Info.plist and resource seal bound) and
 # tests/tools/stubdeps.sh (the stub links the program's native dependencies; per-stub LC_UUIDs),
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
-# tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py) and
-# tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted).
+# tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
+# tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted) and
+# tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
 # Supply KC explicitly for read-only kernel collection checks; stamp cases
 # are skipped without it. Exit 1 if any case failed.
@@ -113,5 +114,9 @@ OUT=$OUT/platform B=$B X86_CACHE=$X86 "$here/platform.sh" || bad "tests/tools/pl
 OUT=$OUT/identity B=$B X86_CACHE=$X86 "$here/identity.sh" || bad "tests/tools/identity.sh"
 # --- AOT caches in the payload (hao-image-payload --aot) and as hao-install.py installs them
 OUT=$OUT/aotpayload X86_CACHE=$X86 "$here/aotpayload.sh" || bad "tests/tools/aotpayload.sh"
+# --- the packaging tools' signature reader and the runtime's give one answer (the fuzz corpus and mutations of it)
+if make -s -C "$repo" B="$B" "$B/test_macho" >"$OUT/codesig.build.log" 2>&1 &&
+   r=$(python3 -I "$here/test_codesig.py" "$B/test_macho" "$OUT" 2>&1); then pass "code signature readers: $r"
+else bad "code signature readers: ${r:-$(tail -3 "$OUT/codesig.build.log")}"; fi
 echo "tools: $fails failed"
 exit $((fails != 0))

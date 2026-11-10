@@ -220,7 +220,7 @@ $(B)/fuzz/fuzz_macho: tests/fuzz/fuzz_macho.c src/macho.c src/code.c src/libval.
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -o $@ tests/fuzz/fuzz_macho.c src/macho.c src/code.c src/libval.c $(B)/fuzz/driver.o && codesign -s - -f $@
 $(B)/fuzz/fuzz_typeenc: tests/fuzz/fuzz_typeenc.c src/abi.c $(wildcard include/hao/*.h) $(B)/fuzz/driver.o
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -Wno-unused-function -o $@ tests/fuzz/fuzz_typeenc.c $(B)/fuzz/driver.o && codesign -s - -f $@
-$(B)/fuzz/fuzz_codesig: tests/fuzz/fuzz_codesig.c src/guest_sig.c $(wildcard include/hao/*.h) $(B)/fuzz/driver.o
+$(B)/fuzz/fuzz_codesig: tests/fuzz/fuzz_codesig.c src/libval.c $(wildcard include/hao/*.h) $(B)/fuzz/driver.o
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -Wno-unused-function -o $@ tests/fuzz/fuzz_codesig.c $(B)/fuzz/driver.o && codesign -s - -f $@
 $(B)/fuzz/fuzz_ifunit: tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c include/hao/bridge.h include/hao/aot.h $(B)/fuzz/driver.o
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -o $@ tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c $(B)/fuzz/driver.o && codesign -s - -f $@

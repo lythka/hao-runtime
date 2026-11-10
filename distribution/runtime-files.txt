@@ -248,6 +248,8 @@ tests/fidelity/run.sh
 tests/fidelity/target.c
 tests/fuzz/README.md
 tests/fuzz/corpus/codesig/codesign-ents
+tests/fuzz/corpus/codesig/codesign-runtime-dlv
+tests/fuzz/corpus/codesig/codesign-two-digests
 tests/fuzz/corpus/codesig/linker-adhoc
 tests/fuzz/corpus/fat/fat32
 tests/fuzz/corpus/fat/fat64
@@ -645,6 +647,7 @@ tests/tools/stubdeps.sh
 tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
+tests/tools/test_codesig.py
 tests/tools/test_install.py
 tests/tools/test_release.py
 tests/translate/run.sh

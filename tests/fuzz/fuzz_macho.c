@@ -50,7 +50,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             uint8_t *b = malloc(size - k);
             memcpy(b, data + k, size - k);
             hao_codesig cs;
-            if (hao_codesig_parse(b, size - k, &cs)) (void)hao_codesig_library_validated(&cs);
+            char w[200];
+            if (hao_codesig_parse(b, size - k, &cs, w, sizeof w)) (void)hao_codesig_library_validated(&cs);
             free(b);
             break;
         }

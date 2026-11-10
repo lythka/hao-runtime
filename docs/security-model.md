@@ -85,6 +85,16 @@ loader maps or reads is hashed. This is necessary because hao maps guest
 mappings. The Info.plist, resource-directory and application slots name files
 outside the Mach-O; exec does not check them, and neither does hao.
 
+A slice has one signature and hao has one reader for it
+(`hao_codesig_parse` in `src/libval.c`). A slice with a second
+`LC_CODE_SIGNATURE` is not loaded, and a signature with two CodeDirectories
+of one hash type is invalid. Integrity, the checks of this section, the
+signer and the library-validation policy are all decided on the one
+CodeDirectory that reader chose, in the bytes the image is built from.
+`tools/hao_codesig.py` reads signatures for the packaging tools by the same
+rules; `tests/tools/test_codesig.py` requires the same verdict, cdhash and
+policy from both over the fuzz corpus and 8168 variations of it.
+
 ### Who signed it
 
 The first route that answers decides:
@@ -159,9 +169,12 @@ the same effect is: `-v` as `HAO_VERBOSE` and `--interp` as `HAO_INTERP`,
 ## Library validation
 
 hao's processes carry `disable-library-validation` because `libhao` is ad
-hoc signed. To give the guest the policy its own signature asks for, when the
-main executable's ARM slice is a platform, hardened-runtime or library-flag
-binary without its own `disable-library-validation`, hao:
+hoc signed. The policy is read from the main executable's ARM slice, from
+the CodeDirectory whose signature and page hashes hao has just verified on
+the bytes it loads; a main executable whose signature does not verify is not
+run, in the embedded form too. When that slice is a platform,
+hardened-runtime or library-flag binary without its own
+`disable-library-validation`, hao:
 
 - sets `CS_REQUIRE_LV` on the process once `libhao` is mapped, so the kernel
   refuses non-platform native libraries of another Team ID;
@@ -296,9 +309,11 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   is answered from the file `HAO_EXEC` names, unchecked. A file that fails
   the check never runs.
 - An embedded stub's signature does not cover the ARM slice. On a sealed
-  system volume this does not matter; for embedded programs on writable
-  volumes, hao does not yet check the ARM slice. It does check that the
-  slice comes from the stub's own file.
+  system volume this does not matter. Elsewhere hao checks that the slice
+  comes from the stub's own file and that the slice's own signature is
+  valid, but not yet that it is the slice the stub was made for: a file
+  whose ARM slice was replaced by another validly signed one runs that code
+  under the stub's identity and entitlements.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests

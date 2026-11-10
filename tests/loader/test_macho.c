@@ -7,6 +7,7 @@
  *   test_macho CORPUS_DIR SCRATCH_DIR
  */
 #include "hao/macho.h"
+#include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
 #include <mach-o/fixup-chains.h>
 #include <mach-o/loader.h>
@@ -66,6 +67,7 @@ static void expect(const char *what, const uint8_t *d, size_t n, const char *wan
 
 /* ------------------------------------------------- locating structures */
 static uint32_t rd32(const uint8_t *d, size_t o) { uint32_t v; memcpy(&v, d + o, 4); return v; }
+static uint32_t be32at(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 static void wr32(uint8_t *d, size_t o, uint32_t v) { memcpy(d + o, &v, 4); }
 static void wr64(uint8_t *d, size_t o, uint64_t v) { memcpy(d + o, &v, 8); }
 
@@ -357,9 +359,92 @@ static void layout_tests(void)
     layout_case("load commands over 4 MiB", 8, "bytes of load commands");
 }
 
+/* -------------------------------------------------------- code signatures */
+
+#define BE32(p, x) do { uint32_t _x = (x); (p)[0] = _x >> 24; (p)[1] = _x >> 16; (p)[2] = _x >> 8; (p)[3] = _x; } while (0)
+
+/* A well-formed signature: one SHA-256 CodeDirectory (identifier "t", no
+ * code slots, five special slots) and, with ents, an XML entitlements blob
+ * sealed in slot 5. Returns its size; the CodeDirectory is at *cd_at. */
+static size_t make_sig(uint8_t *b, uint32_t flags, uint8_t platform, const char *ents, size_t *cd_at)
+{
+    size_t el = ents ? strlen(ents) : 0, cdl = 88 + 5 * 32 + 2, nblob = ents ? 2 : 1, at = 12 + 8 * nblob;
+    size_t total = at + cdl + (ents ? 8 + el : 0);
+    memset(b, 0, total);
+    BE32(b, 0xfade0cc0); BE32(b + 4, (uint32_t)total); BE32(b + 8, (uint32_t)nblob);
+    BE32(b + 12, 0); BE32(b + 16, (uint32_t)at);
+    uint8_t *cd = b + at;
+    BE32(cd, 0xfade0c02); BE32(cd + 4, (uint32_t)cdl); BE32(cd + 8, 0x20400); BE32(cd + 12, flags);
+    BE32(cd + 16, 88 + 2 + 5 * 32);                 /* hashOffset: after the header, the identifier and the special slots */
+    BE32(cd + 20, 88);                              /* identOffset */
+    BE32(cd + 24, 5);                               /* nSpecialSlots */
+    cd[36] = 32; cd[37] = 2; cd[38] = platform; cd[39] = 12;
+    cd[88] = 't';
+    if (ents) {
+        uint8_t *e = cd + cdl;
+        BE32(b + 20, 5); BE32(b + 24, (uint32_t)(at + cdl));
+        BE32(e, 0xfade7171); BE32(e + 4, (uint32_t)(8 + el));
+        memcpy(e + 8, ents, el);
+        CC_SHA256(e, (CC_LONG)(8 + el), cd + 90);   /* slot -5 is the first of the five */
+    }
+    if (cd_at) *cd_at = at;
+    return total;
+}
+
+/* Reads a list of "b FILE" (a signature blob) and "m FILE" (a thin Mach-O)
+ * lines and prints, for each, what hao's one signature reader says: the
+ * verdict, and for a valid signature its cdhash and the policy fields.
+ * tests/tools/test_codesig.py compares the lines with tools/hao_codesig.py's. */
+static void codesig_line(const char *verdict, const hao_codesig *s)
+{
+    printf("%s", verdict);
+    if (s) {
+        printf(" ");
+        for (int k = 0; k < 20; k++) printf("%02x", s->cdhash[k]);
+        printf(" flags=0x%x platform=%u team=", s->flags, s->platform);
+        for (const char *t = s->team ? s->team : ""; *t; t++) printf("%02x", (uint8_t)*t);
+        printf(" dlv=%d lv=%d", s->dlv, hao_codesig_library_validated(s));
+    }
+    printf("\n");
+}
+
+static int codesig_report(const char *list)
+{
+    FILE *f = fopen(list, "r");
+    char line[2100], why[300];
+    if (!f) { perror(list); return 2; }
+    hao_slice_test_path = 2;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = 0;
+        const char *path = line + 2;
+        int fd = open(path, O_RDONLY);
+        struct stat st;
+        if (fd < 0 || fstat(fd, &st) != 0) { perror(path); return 2; }
+        if (line[0] == 'b') {
+            hao_codesig s;
+            uint8_t *b = malloc(st.st_size ? (size_t)st.st_size : 1);       /* exact size: ASan sees an overread */
+            if (read(fd, b, (size_t)st.st_size) != st.st_size) return 2;
+            bool ok = hao_codesig_parse(b, (size_t)st.st_size, &s, why, sizeof why);
+            codesig_line(ok ? "valid" : "invalid", ok ? &s : NULL);
+            free(b);
+        } else {
+            hao_slice *sl = hao_slice_open(fd, why, sizeof why);
+            if (!sl) codesig_line("refused", NULL);
+            else if (!sl->sig_size) codesig_line("unsigned", NULL);
+            else if (hao_slice_verify(sl, NULL, why, sizeof why) != 0) codesig_line("invalid", NULL);
+            else codesig_line("valid", &sl->sig);
+            hao_slice_close(sl);
+        }
+        close(fd);
+    }
+    fclose(f);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 3) { fprintf(stderr, "usage: test_macho CORPUS_DIR SCRATCH_DIR\n"); return 2; }
+    if (argc == 3 && !strcmp(argv[1], "--codesig")) return codesig_report(argv[2]);
+    if (argc != 3) { fprintf(stderr, "usage: test_macho CORPUS_DIR SCRATCH_DIR | test_macho --codesig LIST\n"); return 2; }
     snprintf(corpus, sizeof corpus, "%s", argv[1]);
     snprintf(scratch, sizeof scratch, "%s", argv[2]);
     legacy_tests();
@@ -533,58 +618,112 @@ int main(int argc, char **argv)
         if (img) hao_unload_image(img);
     }
 
-    /* code-signature reader (src/libval.c): the seed's linker signature, every
+    /* the one code-signature reader (src/libval.c): the seed's linker signature, every
      * truncation of it (exact-size copies, so ASan sees any overread), a
-     * corrupt index, and hand-built blobs with and without the
+     * corrupt index, and built signatures with and without the
      * disable-library-validation entitlement */
     FRESH();
     {
         size_t o = find_cmd(d, LC_CODE_SIGNATURE, NULL);
         uint32_t so = rd32(d, o + 8), ss = rd32(d, o + 12);
         hao_codesig cs;
-        bool ok = so + ss <= n && hao_codesig_parse(d + so, ss, &cs) && (cs.flags & 0x2) && !cs.platform && !cs.dlv &&
-                  !hao_codesig_library_validated(&cs);
+        char w[300];
+        bool ok = so + ss <= n && hao_codesig_parse(d + so, ss, &cs, w, sizeof w) && (cs.flags & 0x2) && !cs.platform && !cs.dlv &&
+                  !cs.team && !hao_codesig_library_validated(&cs);
         for (uint32_t k = 0; k < ss && k < 4096; k++) {
             uint8_t *t = malloc(k ? k : 1);
             memcpy(t, d + so, k);
-            hao_codesig_parse(t, k, &cs);
+            ok &= !hao_codesig_parse(t, k, &cs, w, sizeof w) || be32at(d + so + 4) <= k;
             free(t);
         }
         uint8_t *t = malloc(ss);
         memcpy(t, d + so, ss);
         t[8] = 0x7f;   /* count */
-        ok &= !hao_codesig_parse(t, ss, &cs);
+        ok &= !hao_codesig_parse(t, ss, &cs, w, sizeof w);
         memcpy(t, d + so, ss);
         t[16] = 0x7f;  /* first blob offset */
-        hao_codesig_parse(t, ss, &cs);
+        ok &= !hao_codesig_parse(t, ss, &cs, w, sizeof w);
         free(t);
-        printf("%s code signature: seed is ad hoc, not library-validated; truncated and corrupt blobs\n", ok ? "PASS" : "FAIL");
-        ok ? passes++ : fails++;
+        note(ok, "code signature: seed is ad hoc, not library-validated; truncated and corrupt blobs refused");
 
         static const char ents_t[] = "<plist><dict><key>com.apple.security.cs.disable-library-validation</key>\n\t<true/></dict></plist>";
         static const char ents_f[] = "<plist><dict><key>com.apple.security.cs.disable-library-validation</key><false/></dict></plist>";
+        uint8_t b[1024];
         for (int v = 0; v < 3; v++) {
-            const char *e = v == 1 ? ents_t : ents_f;
-            size_t el = strlen(e), cd = 52, total = 12 + 16 + cd + 8 + el;
-            uint8_t *b = calloc(1, total);
-#define BE32(p, x) do { uint32_t _x = (x); (p)[0] = _x >> 24; (p)[1] = _x >> 16; (p)[2] = _x >> 8; (p)[3] = _x; } while (0)
-            BE32(b, 0xfade0cc0); BE32(b + 4, (uint32_t)total); BE32(b + 8, 2);
-            BE32(b + 12, 0); BE32(b + 16, 28);
-            BE32(b + 20, 5); BE32(b + 24, (uint32_t)(28 + cd));
-            BE32(b + 28, 0xfade0c02); BE32(b + 32, (uint32_t)cd); BE32(b + 36, 0x20400);
-            BE32(b + 40, v == 2 ? 0x10000 : 0);   /* runtime */
-            b[28 + 38] = v == 2 ? 0 : 26;           /* platform identifier */
-            BE32(b + 28 + cd, 0xfade7171); BE32(b + 28 + cd + 4, (uint32_t)(8 + el));
-            memcpy(b + 28 + cd + 8, e, el);
-            bool p = hao_codesig_parse(b, total, &cs);
+            size_t total = make_sig(b, v == 2 ? 0x10000 : 0, v == 2 ? 0 : 26, v == 1 ? ents_t : ents_f, NULL);
+            uint8_t *x = malloc(total);
+            memcpy(x, b, total);
+            bool p = hao_codesig_parse(x, total, &cs, w, sizeof w);
             bool want_lv = v != 1;
-            bool good = p && cs.dlv == (v == 1) && hao_codesig_library_validated(&cs) == want_lv;
-            printf("%s code signature: %s\n", good ? "PASS" : "FAIL",
-                   v == 0 ? "platform, no DLV: library-validated" : v == 1 ? "platform with DLV <true/>: not validated"
-                                                                  : "runtime, DLV <false/>: library-validated");
-            good ? passes++ : fails++;
-            free(b);
+            note(p && cs.dlv == (v == 1) && hao_codesig_library_validated(&cs) == want_lv,
+                 v == 0 ? "code signature: platform, no DLV: library-validated" : v == 1 ? "code signature: platform with DLV <true/>: not validated"
+                                                                                : "code signature: runtime, DLV <false/>: library-validated");
+            free(x);
         }
+        /* what one reader must refuse, so that no other reading of the same signature exists */
+        size_t cd_at, total = make_sig(b, 0, 0, ents_t, &cd_at);
+        b[cd_at + 90] ^= 1;                                   /* the entitlements' special slot */
+        note(!hao_codesig_parse(b, total, &cs, w, sizeof w) && strstr(w, "does not match its hash"),
+             "code signature: entitlements that do not match their special slot refused");
+        total = make_sig(b, 0, 0, ents_t, &cd_at);
+        BE32(b + 20, 0x1234);                                 /* the entitlements blob under an unsealed slot type */
+        note(!hao_codesig_parse(b, total, &cs, w, sizeof w) && strstr(w, "is missing"),
+             "code signature: a sealed blob taken out of the index refused");
+        total = make_sig(b, 0, 0, NULL, &cd_at);
+        note(hao_codesig_parse(b, total, &cs, w, sizeof w) && !cs.ents && !cs.dlv, "code signature: no entitlements, none sealed: valid");
+        /* CodeDirectories of ranks SHA-256, SHA-1, SHA-1: the repeat is not of the best rank */
+        {
+            uint8_t s3[2048], one[512];
+            size_t l1 = make_sig(one, 0, 0, NULL, &cd_at), cdl = l1 - cd_at, at = 12 + 3 * 8;
+            memset(s3, 0, sizeof s3);
+            BE32(s3, 0xfade0cc0); BE32(s3 + 4, (uint32_t)(at + 3 * cdl)); BE32(s3 + 8, 3);
+            for (int k = 0; k < 3; k++) {
+                BE32(s3 + 12 + 8 * k, k ? 0x1000 + (uint32_t)k - 1 : 0); BE32(s3 + 16 + 8 * k, (uint32_t)(at + k * cdl));
+                memcpy(s3 + at + k * cdl, one + cd_at, cdl);
+                if (k) {                                      /* SHA-1: 20-byte slots, five special slots before hashOffset */
+                    uint8_t *c = s3 + at + k * cdl;
+                    c[36] = 20; c[37] = 1;
+                    BE32(c + 16, 88 + 2 + 5 * 20);
+                }
+            }
+            note(!hao_codesig_parse(s3, at + 3 * cdl, &cs, w, sizeof w) && strstr(w, "two CodeDirectories"),
+                 "code signature: a second CodeDirectory of a hash type that is not the best one refused");
+            BE32(s3 + 4, (uint32_t)(at + 2 * cdl)); BE32(s3 + 8, 2);
+            note(hao_codesig_parse(s3, at + 2 * cdl, &cs, w, sizeof w) && cs.hash_type == 2 && cs.cd == s3 + at,
+                 "code signature: SHA-256 and SHA-1 CodeDirectories: the SHA-256 one is used");
+        }
+    }
+
+    /* one LC_CODE_SIGNATURE: a second one, or one too short to hold its range, is not a loadable slice */
+    FRESH();
+    {
+        uint32_t ncmds = rd32(d, 16), sizeofcmds = rd32(d, 20);
+        size_t o = find_cmd(d, LC_CODE_SIGNATURE, NULL), end = 32 + sizeofcmds;
+        memcpy(d + end, d + o, 16);
+        wr32(d, end + 8, rd32(d, o + 8) + 16);      /* another range: the two readers of old took one each */
+        wr32(d, 16, ncmds + 1); wr32(d, 20, sizeofcmds + 16);
+        expect("two LC_CODE_SIGNATURE commands", d, n, "more than one LC_CODE_SIGNATURE");
+        FRESH();
+        wr32(d, o + 4, 8);                          /* cmdsize 8: its range would be read from the next command */
+        wr32(d, o + 8, 0x7f000001); wr32(d, o + 12, 8);   /* (the 8 bytes it gave up, as a command of their own) */
+        wr32(d, 16, ncmds + 1);
+        expect("LC_CODE_SIGNATURE too short for its range", d, n, "cmdsize 8 < 16");
+    }
+
+    /* the main executable's policy is read from its verified signature (decide): last, it is the process's */
+    FRESH();
+    {
+        size_t data = (size_t)rd32(seed, find_cmd(seed, LC_SEGMENT_64, "__DATA") + 40);
+        d[data + 0x800] ^= 1;                       /* a byte of __DATA no fixup touches */
+        hao_libval_expect_main(true);
+        expect("main executable with a page that does not match its hash: refused before its policy is read", d, n,
+               "does not match its hash");
+        note(hao_libval_mode() == HAO_LIBVAL_UNDECIDED, "a refused main executable decides nothing");
+        FRESH();
+        hao_libval_expect_main(true);
+        expect("main executable, ad hoc signed: loads", d, n, NULL);
+        note(hao_libval_mode() == HAO_LIBVAL_OFF && !strcmp(hao_libval_reason(), "neither platform nor hardened"),
+             "its policy: library validation off (neither platform nor hardened)");
     }
 
     printf("test_macho: %d passed, %d failed\n", passes, fails);
