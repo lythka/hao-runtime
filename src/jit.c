@@ -518,6 +518,17 @@ static bool is_block_end(uint32_t i)
     return false;
 }
 
+/* Whether a lies in one of im's code ranges: hao_image_for_code(a) == im
+ * (images do not overlap) without the walk of every image or the store to
+ * the lookup's process-wide hint, for the instruction-by-instruction reads
+ * of one image below. A released image has no ranges. */
+static bool im_has_code(const hao_image *im, uint64_t a)
+{
+    int n = __atomic_load_n(&im->ncode, __ATOMIC_ACQUIRE);
+    for (int k = 0; k < n; k++) if (a >= im->code_lo[k] && a < im->code_hi[k]) return true;
+    return false;
+}
+
 /* The guest instruction at pc, if a block of this one's image (or of the
  * code hao_jit_exec_code runs) can continue there. */
 static bool peek_insn(const tctx *t, uint64_t pc, uint32_t *insn)
@@ -528,7 +539,7 @@ static bool peek_insn(const tctx *t, uint64_t pc, uint32_t *insn)
         *insn = t->win[(pc - t->win_base) / 4];
         return true;
     }
-    if (!t->im || hao_image_for_code(pc) != t->im) return false;
+    if (!t->im || !im_has_code(t->im, pc)) return false;
     memcpy(insn, hao_code_ptr_im(t->im, pc), 4);
     return true;
 }
@@ -2038,7 +2049,7 @@ static int fetch_block(uint64_t pc, hao_image *im, uint32_t *insns)
     int n = 0;
     while (n < MAX_BLOCK_INSNS) {
         uint64_t a = pc + 4u * (unsigned)n;
-        if (hao_image_for_code(a) != im) break;
+        if (im ? !im_has_code(im, a) : hao_image_for_code(a) != NULL) break;
         memcpy(&insns[n], hao_code_ptr_im(im, a), 4);   /* hao/code.h */
         if (is_block_end(insns[n++])) break;
     }
@@ -3321,10 +3332,18 @@ static void rt_bind(hao_cpu *c, uint64_t *jc, void *helper)
     c->rt_jc = (uint64_t)(uintptr_t)jc;
 }
 
+/* host_scratch words of this file: the block the dispatcher's last chain
+ * step found for a pc, so that the entry that follows does not look the
+ * same pc up again. A pc -> code pair is valid for good (the cache is
+ * never flushed), so a stale pair is only unused. */
+#define SCRATCH_NEXT_PC   3
+#define SCRATCH_NEXT_CODE 4
+
 int hao_jit_run_block(hao_thread *th)
 {
     hao_cpu *c = &th->cpu;
-    void *code = lookup(c->pc);
+    void *code = c->host_scratch[SCRATCH_NEXT_PC] == c->pc && c->host_scratch[SCRATCH_NEXT_CODE]
+                     ? (void *)(uintptr_t)c->host_scratch[SCRATCH_NEXT_CODE] : lookup(c->pc);
     if (!code) {
         /* Once the cache is full, a miss is interpreted without the lock:
          * JIT exits leave NZCV materialised in hao_cpu, as a64_exec expects. */
@@ -3370,6 +3389,11 @@ int hao_jit_run_block(hao_thread *th)
             __atomic_fetch_add(&st_links, 1, __ATOMIC_RELAXED);
         } else if (next)
             __atomic_fetch_add(&st_link_skips, 1, __ATOMIC_RELAXED);
+        if (next) {
+            c->host_scratch[SCRATCH_NEXT_CODE] = 0;             /* a signal handler between the two stores finds no pair */
+            c->host_scratch[SCRATCH_NEXT_PC] = c->pc;
+            c->host_scratch[SCRATCH_NEXT_CODE] = (uint64_t)(uintptr_t)next;
+        }
     }
     return r;
 }
