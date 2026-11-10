@@ -106,7 +106,8 @@ The first route that answers decides:
    passes `codesign --verify --strict -R='anchor apple'` on the build host. hao
    reads the list only if root owns it and every directory above it, and
    nobody else can write them. `HAO_TRUST_LIST=/abs/file` adds a list in an
-   open-tier process, for tests.
+   open-tier process, for tests. A process reads the lists once, when it
+   first needs them, and keeps what it read.
 3. **Kernel**: `fcntl(F_ADDFILESIGS_INFO)` registers the slice's signature
    (AMFI validates the CMS with CoreTrust) and returns the cdhash the kernel
    chose, which must be hao's; `F_GETSIGSINFO` says whether it is a platform
@@ -185,6 +186,9 @@ hardened-runtime or library-flag binary without its own
 - checks each guest library's signature and page hashes as for the main
   executable. A bad page of an executable segment ends the process with
   SIGKILL and a CODESIGNING "Invalid Page" reason, as the kernel does natively.
+
+A signed image's pages are hashed once in its process, whichever of these
+routes then decides about it.
 
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with

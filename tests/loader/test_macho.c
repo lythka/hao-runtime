@@ -15,7 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int fails, passes;
@@ -391,6 +393,168 @@ static size_t make_sig(uint8_t *b, uint32_t flags, uint8_t platform, const char 
     return total;
 }
 
+/* ---------------------------------------------------- the loader's gate */
+
+/* Load d[0..n) as FILE in the scratch directory: the image, or NULL with err filled. */
+static hao_image *load_bytes(const char *file, const uint8_t *d, size_t n, char *err, size_t errlen)
+{
+    char path[1100];
+    snprintf(path, sizeof path, "%s/%s", scratch, file);
+    put_file(path, d, n, n);
+    err[0] = 0;
+    return hao_load_image(path, resolver, err, errlen);
+}
+
+static uint8_t *copy_of(const uint8_t *d, size_t n)
+{
+    uint8_t *c = malloc(n + 64);
+    memcpy(c, d, n);
+    return c;
+}
+
+/* the offset of the signature of a thin Mach-O */
+static size_t sig_at(const uint8_t *d) { return rd32(d, find_cmd(d, LC_CODE_SIGNATURE, NULL) + 8); }
+
+/* Run f in a child (library validation's policy is decided once per process); returns its failures and
+ * adds its passes. */
+typedef void gate_fn(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln);
+static int in_child(gate_fn *f, const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln, int *passed)
+{
+    int p[2];
+    if (pipe(p) != 0) exit(2);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(p[0]);
+        passes = fails = 0;
+        f(seed, n, lib, ln);
+        fflush(stdout);
+        int r[2] = {passes, fails};
+        if (write(p[1], r, sizeof r) != sizeof r) _exit(2);
+        _exit(0);
+    }
+    close(p[1]);
+    int r[2] = {0, 1}, st = 0;
+    if (read(p[0], r, sizeof r) != sizeof r) { r[0] = 0; r[1] = 1; }
+    close(p[0]);
+    waitpid(pid, &st, 0);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) { printf("FAIL the gate's test process ended with status %#x\n", st); r[1]++; }
+    *passed += r[0];
+    return r[1];
+}
+
+/* An ad hoc main executable: library validation off, integrity on. Every signed image is hashed once. */
+static void gate_plain(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    char err[512], path[1100];
+    uint8_t *d = copy_of(seed, n);
+    d[sig_at(d) - 1] ^= 1;                       /* the last hashed byte before the signature: __LINKEDIT, not code */
+    hao_libval_expect_main(true);
+    hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
+    note(!img && strstr(err, "does not match its hash"), "main executable with a page that does not match its hash: refused before its policy is read");
+    note(hao_libval_mode() == HAO_LIBVAL_UNDECIDED, "a refused main executable decides nothing");
+    free(d);
+
+    /* as the CLI does: the caller verifies the slice and leaves it for the loader; the loader's gate reads
+     * the policy from that verified signature without hashing the image again */
+    snprintf(path, sizeof path, "%s/main.bin", scratch);
+    put_file(path, seed, n, n);
+    int fd = open(path, O_RDONLY);
+    hao_slice *sl = fd >= 0 ? hao_slice_open(fd, err, sizeof err) : NULL;
+    unsigned before = hao_slice_verify_passes;
+    bool ok = sl && hao_slice_verify(sl, NULL, err, sizeof err) == 0 && hao_slice_verify(sl, NULL, err, sizeof err) == 0;
+    if (sl) hao_slice_hand(sl);
+    hao_libval_expect_main(true);
+    img = ok ? hao_load_image_fd_cb(path, fd, resolver, NULL, NULL, err, sizeof err) : NULL;
+    note(img && hao_slice_verify_passes == before + 1, "main executable checked before the load: hashed once in all");
+    note(hao_libval_mode() == HAO_LIBVAL_OFF && !strcmp(hao_libval_reason(), "neither platform nor hardened"),
+         "its policy: library validation off (neither platform nor hardened)");
+
+    before = hao_slice_verify_passes;
+    hao_image *l = load_bytes("lib.bin", lib, ln, err, sizeof err);
+    note(l && hao_slice_verify_passes == before + 1 && !strcmp(l->libval_route, "integrity"), "library: loads, hashed once (integrity)");
+    if (l) hao_unload_image(l);
+    d = copy_of(lib, ln);
+    d[sig_at(d) - 1] ^= 1;
+    l = load_bytes("lib.bin", d, ln, err, sizeof err);
+    note(!l && strstr(err, "not valid for use in process: code signature invalid (page") && strstr(err, "does not match its hash"),
+         "library with a data page that does not match its hash: not loaded");
+    memcpy(d, lib, ln);
+    wr32(d, find_cmd(d, LC_CODE_SIGNATURE, NULL) + 12, 0);        /* no signature */
+    l = load_bytes("lib.bin", d, ln, err, sizeof err);
+    note(l != NULL, "unsigned library, library validation off: loads");
+    if (l) hao_unload_image(l);
+    /* a page of an executable segment: the process dies as the kernel kills it natively */
+    memcpy(d, lib, ln);
+    d[(size_t)rd32(d, find_cmd(d, LC_SEGMENT_64, "__TEXT") + 72 + 48) + 1] ^= 1;   /* its first section: __text */
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        int nul = open("/dev/null", O_WRONLY);
+        dup2(nul, 2);
+        load_bytes("lib.bin", d, ln, err, sizeof err);
+        _exit(0);
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    note(WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL, "library with a code page that does not match its hash: the process is killed");
+    free(d);
+}
+
+static int signer_calls, signer_apple;
+static int fake_signer(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n)
+{
+    (void)path; (void)team; (void)why; (void)n;
+    signer_calls++;
+    memset(out, 0, sizeof *out);
+    if (!sl->sig.cd) return -1;                  /* asked about a signature nobody verified */
+    out->apple = signer_apple;
+    out->by = "the test";
+    return 0;
+}
+
+/* A hardened main executable (the seed's linker signature with the runtime flag: ad hoc, so only its
+ * cdhash changes): library validation on. The signer is asked in user space, as on a kernel that cannot
+ * hold the signature, and the image is still hashed once. */
+static void gate_hardened(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    char err[512];
+    uint8_t *d = copy_of(seed, n);
+    size_t so = sig_at(d), cd = so + be32at(d + so + 16);        /* the first index entry: the CodeDirectory */
+    d[cd + 13] |= 0x01;                                          /* flags (big-endian) |= 0x10000, runtime */
+    hao_libval_set_verifier(fake_signer, true, NULL);
+    hao_libval_expect_main(true);
+    hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
+    int m = hao_libval_mode();
+    note(img && (m == HAO_LIBVAL_KERNEL || m == HAO_LIBVAL_PLATFORM) && strstr(hao_libval_reason(), "runtime"),
+         "hardened main executable: library validation on");
+    free(d);
+
+    unsigned before = hao_slice_verify_passes;
+    signer_calls = 0; signer_apple = 1;
+    hao_image *l = load_bytes("lib.bin", lib, ln, err, sizeof err);
+    note(l && hao_slice_verify_passes == before + 1 && signer_calls == 1 && strstr(l->libval_route, "user space") &&
+         strstr(l->libval_route, "the test"), "library on the user-space route, signer says platform: loads, hashed once, signer asked once");
+    if (l) hao_unload_image(l);
+    before = hao_slice_verify_passes;
+    signer_calls = 0; signer_apple = 0;
+    l = load_bytes("lib.bin", lib, ln, err, sizeof err);
+    note(!l && hao_slice_verify_passes == before + 1 && signer_calls == 1 && strstr(err, "not valid for use in process"),
+         "the same library, signer says nobody: not loaded, hashed once");
+    d = copy_of(lib, ln);
+    d[sig_at(d) - 1] ^= 1;
+    signer_calls = 0;
+    l = load_bytes("lib.bin", d, ln, err, sizeof err);
+    note(!l && signer_calls == 0 && strstr(err, "does not match its hash"), "library that fails integrity: the signer is not asked");
+    memcpy(d, lib, ln);
+    wr32(d, find_cmd(d, LC_CODE_SIGNATURE, NULL) + 12, 0);
+    l = load_bytes("lib.bin", d, ln, err, sizeof err);
+    note(!l && strstr(err, "mapped file is not code signed"), "unsigned library, library validation on: not loaded");
+    free(d);
+    hao_libval_set_verifier(NULL, true, NULL);
+    l = load_bytes("lib.bin", lib, ln, err, sizeof err);
+    note(!l && strstr(err, "can say who signed it"), "no signer check in the process: a library that needs one is not loaded");
+}
+
 /* Reads a list of "b FILE" (a signature blob) and "m FILE" (a thin Mach-O)
  * lines and prints, for each, what hao's one signature reader says: the
  * verdict, and for a valid signature its cdhash and the policy fields.
@@ -710,21 +874,10 @@ int main(int argc, char **argv)
         expect("LC_CODE_SIGNATURE too short for its range", d, n, "cmdsize 8 < 16");
     }
 
-    /* the main executable's policy is read from its verified signature (decide): last, it is the process's */
-    FRESH();
-    {
-        size_t data = (size_t)rd32(seed, find_cmd(seed, LC_SEGMENT_64, "__DATA") + 40);
-        d[data + 0x800] ^= 1;                       /* a byte of __DATA no fixup touches */
-        hao_libval_expect_main(true);
-        expect("main executable with a page that does not match its hash: refused before its policy is read", d, n,
-               "does not match its hash");
-        note(hao_libval_mode() == HAO_LIBVAL_UNDECIDED, "a refused main executable decides nothing");
-        FRESH();
-        hao_libval_expect_main(true);
-        expect("main executable, ad hoc signed: loads", d, n, NULL);
-        note(hao_libval_mode() == HAO_LIBVAL_OFF && !strcmp(hao_libval_reason(), "neither platform nor hardened"),
-             "its policy: library validation off (neither platform nor hardened)");
-    }
+    /* the loader's gate (src/libval.c): the main executable's policy and each library, in processes of their own */
+    fflush(stdout);
+    fails += in_child(gate_plain, seed, n, lib, ln, &passes);
+    fails += in_child(gate_hardened, seed, n, lib, ln, &passes);
 
     printf("test_macho: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
