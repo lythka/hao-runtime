@@ -203,11 +203,15 @@ static void test_cond(void)
         for (unsigned nzcv = 0; nzcv < 16; nzcv++) {
             hao_cpu c;
             hao_set_nzcv(&c, nzcv);
-            CHECK(hao_nzcv(&c) == nzcv, "nzcv %#x does not round-trip through RFLAGS", nzcv);
-            CHECK(x86_holds(x, c.flags) == arm_holds(cond, nzcv),
-                  "cond %u nzcv %#x: x86 cc %d says %d, ARM says %d", cond, nzcv, x, x86_holds(x, c.flags), arm_holds(cond, nzcv));
+            CHECK(hao_nzcv(&c) == nzcv, "nzcv %#x does not round-trip through the flags image", nzcv);
+            /* the RFLAGS translated code has after restoring the image (unrelated bits set: they must not matter) */
+            uint64_t rf = hao_flags_to_rflags(c.flags, 0x8c1 ^ 0xfffff);
+            CHECK(hao_flags_from_rflags(rf) == c.flags, "image %#llx does not round-trip through RFLAGS", (unsigned long long)c.flags);
+            CHECK((c.flags & 0xff) <= 1, "image %#llx: low byte is not 0 or 1", (unsigned long long)c.flags);
+            CHECK(x86_holds(x, rf) == arm_holds(cond, nzcv),
+                  "cond %u nzcv %#x: x86 cc %d says %d, ARM says %d", cond, nzcv, x, x86_holds(x, rf), arm_holds(cond, nzcv));
             CHECK(hao_cond(nzcv, cond) == arm_holds(cond, nzcv), "hao_cond(%#x, %u)", nzcv, cond);
-            CHECK(x86_holds(xcc_not(x), c.flags) == !arm_holds(cond, nzcv), "xcc_not for cond %u", cond);
+            CHECK(x86_holds(xcc_not(x), rf) == !arm_holds(cond, nzcv), "xcc_not for cond %u", cond);
         }
     }
     CHECK(a64_cond_to_xcc(16) == -1 && a64_cond_to_xcc(~0u) == -1, "out-of-range cond");

@@ -25,24 +25,30 @@ typedef union {
 } __attribute__((aligned(16))) hao_vreg;
 
 /*
- * Flags are kept in x86 RFLAGS form so translated code can `push [flags];
- * popfq` / `pushfq; pop [flags]` without conversion:
- *   N -> SF (bit 7), Z -> ZF (bit 6), V -> OF (bit 11), C -> NOT CF (bit 0).
+ * Flags are kept as the two bytes x86 moves between EFLAGS and AX without
+ * the stack: the high byte is AH as LAHF leaves it (SF ZF 0 AF 0 PF 1 CF)
+ * and the low byte is AL as SETO leaves it (OF as 0 or 1). Translated code
+ * saves NZCV with `seto al; lahf; mov [flags], ax` and restores it with
+ * `movzx eax, word [flags]; add al, 0x7f; sahf` (the add overflows exactly
+ * when AL is 1, and SAHF leaves OF alone):
+ *   N -> SF (bit 15), Z -> ZF (bit 14), C -> NOT CF (bit 8), V -> OF (bit 0).
  * Carry is stored inverted because x86 SUB/CMP set CF as a borrow while ARM
  * sets C as NOT borrow: with that polarity ARM `cmp; b.hi` maps straight
  * onto x86 `cmp; ja`, and every ARM condition is one x86 condition
- * (see a64_cond.c).
+ * (see a64_cond.c). The low byte must be exactly 0 or 1; bits 16 and up are
+ * not flags and are ignored. This is not the RFLAGS layout: convert with
+ * hao_flags_from_rflags / hao_flags_to_rflags.
  */
-#define HAO_RF_CF  (1u << 0)
-#define HAO_RF_ZF  (1u << 6)
-#define HAO_RF_SF  (1u << 7)
-#define HAO_RF_OF  (1u << 11)
-#define HAO_RF_BASE 0x202u   /* reserved bit 1 + IF, as pushfq reports */
+#define HAO_FL_OF  (1u << 0)
+#define HAO_FL_CF  (1u << 8)
+#define HAO_FL_ZF  (1u << 14)
+#define HAO_FL_SF  (1u << 15)
+#define HAO_FL_BASE 0x200u   /* AH bit 1, as LAHF reports */
 
 typedef struct hao_cpu {
     uint64_t x[32];          /* 0x000: x0..x30, x[31] = SP */
     uint64_t pc;             /* 0x100 */
-    uint64_t flags;          /* 0x108: RFLAGS image, see above */
+    uint64_t flags;          /* 0x108: NZCV as the LAHF/SETO image, see above */
     uint64_t tpidr_el0;      /* 0x110 */
     uint64_t tpidrro_el0;    /* 0x118 */
     uint32_t fpcr;           /* 0x120: FPCR bits other than RMode/FZ (see a64_fpcr_read) */
@@ -61,7 +67,7 @@ typedef struct hao_cpu {
                               * low32 = original ARM word, high32 = internal tag */
     uint64_t rt_exit;        /* 0x188: exit stub */
     uint64_t rt_table;       /* 0x190: translation table */
-    uint64_t fcmp_flags[8];  /* 0x198: x86 ucomis (PF<<2|ZF<<1|CF) -> guest RFLAGS image */
+    uint64_t fcmp_flags[8];  /* 0x198: x86 ucomis (PF<<2|ZF<<1|CF) -> guest flags image */
     /* hao_native_call bookkeeping (bridge_x86_64.S): */
     uint64_t bridge_rsp;     /* 0x1D8: rsp at the native call instruction */
     uint64_t bridge_rbp;     /* 0x1E0: rbp there (balance check) */
@@ -121,13 +127,27 @@ enum {
 static inline unsigned hao_nzcv(const hao_cpu *c)
 {
     uint64_t f = c->flags;
-    return (unsigned)(((f >> 7) & 1) << 3 | ((f >> 6) & 1) << 2 | ((~f) & 1) << 1 | ((f >> 11) & 1));
+    return (unsigned)(((f >> 15) & 1) << 3 | ((f >> 14) & 1) << 2 | ((~f >> 8) & 1) << 1 | (f & 1));
 }
 
 static inline void hao_set_nzcv(hao_cpu *c, unsigned nzcv)
 {
-    c->flags = HAO_RF_BASE | ((nzcv & 8) ? HAO_RF_SF : 0) | ((nzcv & 4) ? HAO_RF_ZF : 0) |
-               ((nzcv & 2) ? 0 : HAO_RF_CF) | ((nzcv & 1) ? HAO_RF_OF : 0);
+    c->flags = HAO_FL_BASE | ((nzcv & 8) ? HAO_FL_SF : 0) | ((nzcv & 4) ? HAO_FL_ZF : 0) |
+               ((nzcv & 2) ? 0 : HAO_FL_CF) | ((nzcv & 1) ? HAO_FL_OF : 0);
+}
+
+/* The flags image of the SF, ZF, CF and OF of a host RFLAGS value (a signal
+ * that interrupted translated code while NZCV was in EFLAGS), and RFLAGS
+ * `rf` with those four taken from an image. */
+static inline uint64_t hao_flags_from_rflags(uint64_t rf)
+{
+    return HAO_FL_BASE | ((rf & 0x80) ? HAO_FL_SF : 0) | ((rf & 0x40) ? HAO_FL_ZF : 0) |
+           ((rf & 0x1) ? HAO_FL_CF : 0) | ((rf & 0x800) ? HAO_FL_OF : 0);
+}
+static inline uint64_t hao_flags_to_rflags(uint64_t image, uint64_t rf)
+{
+    return (rf & ~(uint64_t)0x8c1) | ((image & HAO_FL_SF) ? 0x80 : 0) | ((image & HAO_FL_ZF) ? 0x40 : 0) |
+           ((image & HAO_FL_CF) ? 0x1 : 0) | ((image & HAO_FL_OF) ? 0x800 : 0);
 }
 
 /* Evaluate an ARM condition (0..15) against NZCV. */

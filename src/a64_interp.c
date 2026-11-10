@@ -266,7 +266,7 @@ static int sysinsn(hao_cpu *c, uint32_t i)
         }
         if (crn == 4 && rt == 31) {           /* MSR (immediate) / flag manipulation */
             if (op1 == 0 && crm == 0 && op2 == 0) {                /* CFINV */
-                c->flags ^= HAO_RF_CF;
+                c->flags ^= HAO_FL_CF;
                 return 0;
             }
             if (op1 == 0 && crm == 0 && op2 == 1) {                /* XAFLAG */

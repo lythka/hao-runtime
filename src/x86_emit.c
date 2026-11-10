@@ -332,6 +332,9 @@ void x_pop_m(xbuf *b, xmem m) { enc_rm(b, 0, 0, 0, OP1(0x8F), 0, m); }
 void x_push_i32(xbuf *b, int32_t imm) { xb_u8(b, 0x68); xb_u32(b, (uint32_t)imm); }
 void x_pushfq(xbuf *b) { xb_u8(b, 0x9C); }
 void x_popfq(xbuf *b) { xb_u8(b, 0x9D); }
+void x_lahf(xbuf *b) { xb_u8(b, 0x9F); }
+void x_sahf(xbuf *b) { xb_u8(b, 0x9E); }
+void x_add_al_i8(xbuf *b, uint8_t imm) { xb_u8(b, 0x04); xb_u8(b, imm); }
 void x_cmc(xbuf *b) { xb_u8(b, 0xF5); }
 void x_stc(xbuf *b) { xb_u8(b, 0xF9); }
 void x_clc(xbuf *b) { xb_u8(b, 0xF8); }

@@ -5,7 +5,7 @@
  *   rbx      = hao_cpu * (guest registers live in memory: x[n] at [rbx+8n])
  *   rax..r11 = scratch
  *   EFLAGS   = guest NZCV while `fl.in_eflags` (N=SF Z=ZF V=OF, C = NOT CF)
- *   [rbx+FLAGS] = canonical NZCV (RFLAGS image) when not dirty
+ *   [rbx+FLAGS] = canonical NZCV (the LAHF/SETO image of hao/cpu.h) when not dirty
  *
  * Every block is entered through hao_jit_enter (callee-saved registers
  * saved, rsp 16-byte aligned) and leaves through the exit stub with the
@@ -317,14 +317,24 @@ static void gaddr(tctx *t, int reg, uint64_t addr)
     x_mov_ri(&t->b, reg, addr);
 }
 
-/* flags bookkeeping */
+/* Flags bookkeeping. Saving and restoring NZCV go through AX (LAHF/SAHF
+ * and SETO; see hao/cpu.h for the image): fl_materialize, fl_clobber and
+ * fl_load may clobber rax, so a translator calls them before it loads
+ * anything into rax. EFLAGS is left as it was by a save. */
 static void fl_materialize(tctx *t)
 {
     if (t->in_eflags && t->dirty) {
-        x_pushfq(&t->b);
-        x_pop_m(&t->b, FLAGS);
+        x_setcc(&t->b, XCC_O, RAX);
+        x_lahf(&t->b);
+        x_mov_st(&t->b, 2, FLAGS, RAX);
         t->dirty = false;
     }
+}
+/* EFLAGS = the NZCV of a flags image in eax (rax scratch) */
+static void fl_from_eax(tctx *t)
+{
+    x_add_al_i8(&t->b, 0x7f);                /* OF = (al == 1) */
+    x_sahf(&t->b);
 }
 /* about to clobber EFLAGS inside an instruction that does not define flags */
 static void fl_clobber(tctx *t)
@@ -339,8 +349,8 @@ static void fl_defined(tctx *t) { t->in_eflags = true; t->dirty = true; }
 static void fl_load(tctx *t)
 {
     if (!t->in_eflags) {
-        x_push_m(&t->b, FLAGS);
-        x_popfq(&t->b);
+        x_mov_ld(&t->b, 2, RAX, FLAGS);
+        fl_from_eax(t);
         t->in_eflags = true;
         t->dirty = false;
     }
@@ -398,10 +408,10 @@ static void exit_direct(tctx *t, uint64_t target)
     exit_with(t, HAO_EXIT_BRANCH);
 }
 
-/* indirect exit: target in RAX */
+/* indirect exit: target in RAX, NZCV already in memory (fl_materialize
+ * before the target was loaded) */
 static void exit_indirect(tctx *t)
 {
-    fl_materialize(t);
     x_mov_st(&t->b, 8, xm(RBX, CPU_OFF_PC), RAX);
     x_mov_mi(&t->b, 8, xm(RBX, CPU_OFF_SCRATCH0), 0);
     /* inline probe of the translation table (thash, then linear probing to
@@ -545,6 +555,8 @@ static bool t_addsub_ext(tctx *t, uint32_t i)
     int sf = BIT(i, 31), op = BIT(i, 30), S = BIT(i, 29);
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), opt = BITS(i, 15, 13), sh = BITS(i, 12, 10);
     if (sh > 4 || BITS(i, 23, 22)) return false;
+    bool lea = !S && !op && sh <= 3;
+    if (!S && !lea) fl_clobber(t);
     if (rm == 31) x_mov_ri(&t->b, RCX, 0);
     else switch (opt) {
     case 0: x_mov_ld(&t->b, 1, RCX, XR(rm)); break;
@@ -556,12 +568,11 @@ static bool t_addsub_ext(tctx *t, uint32_t i)
     default: x_movs_ld(&t->b, 4, 1, RCX, XR(rm)); break;
     }
     ldx(t, RAX, rn, sf, true);
-    if (!S && !op && sh <= 3) {
+    if (lea) {
         x_lea(&t->b, sf, RAX, xmi(RAX, RCX, 1 << sh, 0));
         stx(t, rd, RAX, true);
         return true;
     }
-    if (!S) fl_clobber(t);
     if (sh) x_shift_ri(&t->b, XSHL, 1, RCX, (uint8_t)sh);
     x_alu_rr(&t->b, op ? XSUB : XADD, sf, RAX, RCX);
     if (S) { if (!op) x_cmc(&t->b); fl_defined(t); stx(t, rd, RAX, false); }
@@ -813,13 +824,13 @@ static bool t_csel(tctx *t, uint32_t i)
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), cond = BITS(i, 15, 12), op2 = BITS(i, 11, 10);
     unsigned inv = BIT(i, 30);
     if (BIT(i, 29) || op2 > 1) return false;
+    if (cond < 14) fl_load(t);
     /* alternative value (flag-free arithmetic) */
     ldx(t, RAX, rm, sf, false);
     if (inv) x_unary(&t->b, XNOT, sf, RAX);
     if (op2) x_lea(&t->b, sf, RAX, xm(RAX, 1));
     if (cond >= 14) { ldx(t, RAX, rn, sf, false); stx(t, rd, RAX, false); return true; }
     ldx(t, RCX, rn, sf, false);
-    fl_load(t);
     x_cmov_rr(&t->b, a64_cond_to_xcc(cond), sf, RAX, RCX);
     if (!sf) x_mov_rr(&t->b, 0, RAX, RAX);
     stx(t, rd, RAX, false);
@@ -831,23 +842,21 @@ static bool t_ccmp(tctx *t, uint32_t i)
     int sf = BIT(i, 31), cmn = !BIT(i, 30);
     unsigned rn = BITS(i, 9, 5), cond = BITS(i, 15, 12), nzcv = BITS(i, 3, 0), rm = BITS(i, 20, 16);
     if (BIT(i, 10) || BIT(i, 4) || !BIT(i, 29)) return false;
+    if (cond < 14) fl_load(t);
     ldx(t, RAX, rn, sf, false);
     if (!BIT(i, 11)) ldx(t, RCX, rm, sf, false);
     size_t jfalse = 0, jend;
-    if (cond < 14) {
-        fl_load(t);
-        jfalse = x_jcc32(&t->b, xcc_not(a64_cond_to_xcc(cond)));
-    }
+    if (cond < 14) jfalse = x_jcc32(&t->b, xcc_not(a64_cond_to_xcc(cond)));
     if (BIT(i, 11)) x_alu_ri(&t->b, cmn ? XADD : XSUB, sf, RAX, (int32_t)rm);
     else x_alu_rr(&t->b, cmn ? XADD : XSUB, sf, RAX, RCX);
     if (cmn) x_cmc(&t->b);
     if (cond < 14) {
         jend = x_jmp32(&t->b);
         x_patch32(&t->b, jfalse, xb_len(&t->b));
-        uint32_t rf = HAO_RF_BASE | ((nzcv & 8) ? HAO_RF_SF : 0) | ((nzcv & 4) ? HAO_RF_ZF : 0) |
-                      ((nzcv & 2) ? 0 : HAO_RF_CF) | ((nzcv & 1) ? HAO_RF_OF : 0);
-        x_push_i32(&t->b, (int32_t)rf);
-        x_popfq(&t->b);
+        uint32_t fl = HAO_FL_BASE | ((nzcv & 8) ? HAO_FL_SF : 0) | ((nzcv & 4) ? HAO_FL_ZF : 0) |
+                      ((nzcv & 2) ? 0 : HAO_FL_CF) | ((nzcv & 1) ? HAO_FL_OF : 0);
+        x_mov_ri(&t->b, RAX, fl);
+        fl_from_eax(t);
         x_patch32(&t->b, jend, xb_len(&t->b));
     }
     fl_defined(t);
@@ -1157,7 +1166,7 @@ static bool t_ldst_reg(tctx *t, uint32_t i)
         else if (opt == 6) x_movs_ld(&t->b, 4, 1, RCX, XR(rm));
         else x_mov_ld(&t->b, 8, RCX, XR(rm));
         int scale = S ? bytes : 1;
-        if (scale == 16) { fl_clobber(t); x_shift_ri(&t->b, XSHL, 1, RCX, 4); scale = 1; }
+        if (scale == 16) { x_lea(&t->b, 1, RCX, xmi(XNONE, RCX, 8, 0)); scale = 2; }   /* index * 16, EFLAGS untouched */
         m = xmi(RAX, RCX, scale, 0);
     } else {
         return false;   /* SIMD encodings of the atomics/LDRAA space: UNDEFINED, helper */
@@ -1439,7 +1448,6 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         fp_load(t, 0, rn, dbl);
         if (BIT(i, 3)) x_sse_rr(&t->b, 0x66, 0xEF, 0, 1, 1);     /* pxor xmm1 (compare with zero) */
         else fp_load(t, 1, rm, dbl);
-        fl_clobber(t);
         /* FCMP: ucomis (IOC for signalling NaNs only); FCMPE: comis (any NaN) */
         x_sse_rr(&t->b, dbl ? 0x66 : 0, BIT(i, 4) ? 0x2F : 0x2E, 0, 0, 1);
         x_setcc(&t->b, XCC_P, RAX);
@@ -1458,9 +1466,10 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
     }
     if ((i & 0xFF200C00) == 0x1E200C00) {            /* FCSEL */
         unsigned cond = BITS(i, 15, 12);
+        if (cond < 14) fl_load(t);
         x_mov_ld(&t->b, dbl ? 8 : 4, RAX, VR(rm));
         x_mov_ld(&t->b, dbl ? 8 : 4, RCX, VR(rn));
-        if (cond < 14) { fl_load(t); x_cmov_rr(&t->b, a64_cond_to_xcc(cond), 1, RAX, RCX); }
+        if (cond < 14) x_cmov_rr(&t->b, a64_cond_to_xcc(cond), 1, RAX, RCX);
         else x_mov_rr(&t->b, 1, RAX, RCX);
         x_mov_st(&t->b, 8, VR(rd), RAX);
         x_mov_mi(&t->b, 8, xm(RBX, CPU_OFF_V(rd) + 8), 0);
@@ -1907,6 +1916,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         unsigned opc = BITS(i, 24, 21), op3 = BITS(i, 15, 10), rn = BITS(i, 9, 5);
         if (a64_branch_reg_valid(i)) {
             if (opc == 2 && op3) rn = 30;
+            fl_materialize(t);
             ldx(t, RAX, rn, 1, false);
             if (opc & 1) { gaddr(t, RCX, pc + 4); stx(t, 30, RCX, false); }
             exit_indirect(t);
@@ -3105,10 +3115,10 @@ bool hao_thunk_range(uint64_t *lo, uint64_t *hi)
 /* ucomis: greater 000, less 001 (CF), equal 010 (ZF), unordered 111 */
 static void init_fcmp(hao_cpu *c)
 {
-    for (int k = 0; k < 8; k++) c->fcmp_flags[k] = HAO_RF_BASE | HAO_RF_OF;  /* unordered: C=1 V=1 */
-    c->fcmp_flags[0] = HAO_RF_BASE;                                     /* C=1 */
-    c->fcmp_flags[1] = HAO_RF_BASE | HAO_RF_SF | HAO_RF_CF;             /* N=1, C=0 */
-    c->fcmp_flags[2] = HAO_RF_BASE | HAO_RF_ZF;                         /* Z=1, C=1 */
+    for (int k = 0; k < 8; k++) c->fcmp_flags[k] = HAO_FL_BASE | HAO_FL_OF;  /* unordered: C=1 V=1 */
+    c->fcmp_flags[0] = HAO_FL_BASE;                                     /* C=1 */
+    c->fcmp_flags[1] = HAO_FL_BASE | HAO_FL_SF | HAO_FL_CF;             /* N=1, C=0 */
+    c->fcmp_flags[2] = HAO_FL_BASE | HAO_FL_ZF;                         /* Z=1, C=1 */
 }
 
 /* The interpreter helper of translated code. It records the guest pc of

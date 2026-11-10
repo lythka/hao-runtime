@@ -131,6 +131,9 @@ void x_pop_m(xbuf *b, xmem m);
 void x_push_i32(xbuf *b, int32_t imm);  /* push imm32 (sign-extended to 64 bits) */
 void x_pushfq(xbuf *b);
 void x_popfq(xbuf *b);
+void x_lahf(xbuf *b);                   /* AH = SF ZF 0 AF 0 PF 1 CF */
+void x_sahf(xbuf *b);                   /* SF ZF AF PF CF = AH; OF untouched */
+void x_add_al_i8(xbuf *b, uint8_t imm); /* add al, imm8 */
 void x_cmc(xbuf *b);
 void x_stc(xbuf *b);
 void x_clc(xbuf *b);
