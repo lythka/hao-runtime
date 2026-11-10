@@ -760,11 +760,13 @@ void hao_tlv_setup(hao_image *img)
 
 bool hao_signal_interpose(const char *name, uint64_t *addr);
 
+static long find_sigdb(const char *name);   /* below, with the other name indexes */
+
 /* aggregate signature of an imported C function, or NULL */
 const char *hao_sigdb_enc(const char *name)
 {
-    for (size_t k = 0; sigdb[k].name; k++) if (!strcmp(name, sigdb[k].name)) return sigdb[k].enc;
-    return NULL;
+    long k = find_sigdb(name);
+    return k < 0 ? NULL : sigdb[k].enc;
 }
 
 /* A table's fixed-argument count against the native function's own va_start prologue: false when
@@ -831,56 +833,129 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
     {"__os_log_internal", trap_os_log_internal, 0},
 };
 
+/* Name indexes. The tables here are in source order (a hand-written part
+ * then generated ones); each gets a name-sorted index, built once, that a
+ * binary search answers with the first entry of a name, as the linear scans
+ * it replaces did. Entries `keep` rejects are left out. */
+typedef struct {
+    const void *base;
+    size_t stride, n;
+    bool (*keep)(const void *e);
+    uint32_t *idx;
+    size_t len;
+} name_index;
+
+#define NAME_INDEX(t, keep) {(t), sizeof *(t), sizeof (t) / sizeof *(t), (keep), NULL, 0}
+static const char *ix_name(const name_index *ix, size_t k)
+{
+    return *(const char *const *)(const void *)((const char *)ix->base + (size_t)k * ix->stride);
+}
+
+static int ix_cmp(void *ctx, const void *a, const void *b)
+{
+    const name_index *ix = ctx;
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    int r = strcmp(ix_name(ix, x), ix_name(ix, y));
+    return r ? r : (x > y) - (x < y);   /* the first entry of a name first */
+}
+
+static void ix_build(name_index *ix)
+{
+    ix->idx = hao_alloc_check(malloc((ix->n ? ix->n : 1) * sizeof *ix->idx), "interposer name index");
+    for (size_t k = 0; k < ix->n; k++) {
+        const void *e = (const char *)ix->base + k * ix->stride;
+        if (ix_name(ix, k) && (!ix->keep || ix->keep(e))) ix->idx[ix->len++] = (uint32_t)k;
+    }
+    qsort_r(ix->idx, ix->len, sizeof *ix->idx, ix, ix_cmp);
+}
+
+/* the first entry named `name`, or -1 */
+static long ix_find(const name_index *ix, const char *name)
+{
+    size_t lo = 0, hi = ix->len;
+    while (lo < hi) {   /* the first index entry not below name */
+        size_t mid = lo + (hi - lo) / 2;
+        if (strcmp(ix_name(ix, ix->idx[mid]), name) < 0) lo = mid + 1; else hi = mid;
+    }
+    return lo < ix->len && !strcmp(ix_name(ix, ix->idx[lo]), name) ? (long)ix->idx[lo] : -1;
+}
+
+static bool keep_vararg(const void *e) { return ((const vararg_map *)e)->vname != NULL; }
+
+static name_index ix_sigdb = NAME_INDEX(sigdb, NULL), ix_varargs = NAME_INDEX(varargs, keep_vararg),
+                  ix_vlists = NAME_INDEX(vlists, NULL), ix_intvars = NAME_INDEX(intvars, NULL),
+                  ix_fixed = NAME_INDEX(fixed, NULL), ix_gvars = NAME_INDEX(gvars, NULL);
+static name_index *const indexes[] = {&ix_sigdb, &ix_varargs, &ix_vlists, &ix_intvars, &ix_fixed, &ix_gvars};
+static pthread_once_t ix_once = PTHREAD_ONCE_INIT;
+
+static void ix_init(void)
+{
+    for (size_t k = 0; k < sizeof indexes / sizeof *indexes; k++) ix_build(indexes[k]);
+}
+
+static long find_in(name_index *ix, const char *name)
+{
+    pthread_once(&ix_once, ix_init);
+    return ix_find(ix, name);
+}
+
+static long find_sigdb(const char *name) { return find_in(&ix_sigdb, name); }
+
+/* The other modules' interposers, in lookup order, each with the names it answers. */
+extern bool hao_objc_interpose(const char *, uint64_t *);
+extern bool hao_objc_interpose_imp(const char *, uint64_t *);
+extern bool hao_regvar_interpose(const char *, uint64_t *);
+static bool objc_lookup(const char *name, uint64_t *addr)
+{
+    return (!hao_opt.no_msgsend && hao_objc_interpose(name, addr)) || hao_objc_interpose_imp(name, addr);
+}
+
+static const struct {
+    bool (*lookup)(const char *name, uint64_t *addr);
+    void (*names)(hao_name_fn cb, void *ctx);
+} modules[] = {
+    {hao_signal_interpose, hao_signal_interpose_names},
+    {hao_callbacks_interpose, hao_callbacks_interpose_names},
+    {hao_swift_objects_interpose, hao_swift_objects_interpose_names},
+    {hao_gss_interpose, hao_gss_interpose_names},
+    {hao_libm_interpose, hao_libm_interpose_names},
+    {hao_swiftmeta_interpose, hao_swiftmeta_interpose_names},
+    {objc_lookup, hao_objc_interpose_names},
+    {hao_regvar_interpose, hao_regvar_interpose_names},
+};
+
 /* Every name hao_interpose_lookup answers with a trap; bridge.c resolves them
  * to addresses, so a trap answers its function under every name. */
 void hao_interpose_names(hao_name_fn cb, void *ctx)
 {
-    hao_signal_interpose_names(cb, ctx);
-    hao_callbacks_interpose_names(cb, ctx);
-    hao_swift_objects_interpose_names(cb, ctx);
-    hao_gss_interpose_names(cb, ctx);
-    hao_libm_interpose_names(cb, ctx);
-    hao_swiftmeta_interpose_names(cb, ctx);
-    hao_objc_interpose_names(cb, ctx);
-    hao_regvar_interpose_names(cb, ctx);
-    for (size_t k = 0; k < sizeof varargs / sizeof *varargs; k++) if (varargs[k].vname) cb(varargs[k].name, ctx);
-    for (size_t k = 0; k < sizeof vlists / sizeof *vlists; k++) cb(vlists[k].name, ctx);
-    for (size_t k = 0; k < sizeof intvars / sizeof *intvars; k++) cb(intvars[k].name, ctx);
-    for (size_t k = 0; k < sizeof fixed / sizeof *fixed; k++) cb(fixed[k].name, ctx);
-    for (size_t k = 0; k < sizeof gvars / sizeof *gvars; k++) cb(gvars[k].name, ctx);
+    for (size_t k = 0; k < sizeof modules / sizeof *modules; k++) modules[k].names(cb, ctx);
+    pthread_once(&ix_once, ix_init);
+    for (size_t k = 1; k < sizeof indexes / sizeof *indexes; k++)   /* the trap tables (not sigdb) */
+        for (size_t j = 0; j < indexes[k]->n; j++) {
+            const void *e = (const char *)indexes[k]->base + j * indexes[k]->stride;
+            if (ix_name(indexes[k], j) && (!indexes[k]->keep || indexes[k]->keep(e))) cb(ix_name(indexes[k], j), ctx);
+        }
 }
 
 bool hao_interpose_lookup(const char *name, uint64_t *addr)
 {
-    if (hao_signal_interpose(name, addr)) return true;
-    if (hao_callbacks_interpose(name, addr)) return true;
-    if (hao_swift_objects_interpose(name, addr)) return true;
-    if (hao_gss_interpose(name, addr)) return true;
-    if (hao_libm_interpose(name, addr)) return true;
-    if (hao_swiftmeta_interpose(name, addr)) return true;
-    extern bool hao_objc_interpose(const char *, uint64_t *);
-    if (!hao_opt.no_msgsend && hao_objc_interpose(name, addr)) return true;
-    extern bool hao_objc_interpose_imp(const char *, uint64_t *);
-    if (hao_objc_interpose_imp(name, addr)) return true;
-    extern bool hao_regvar_interpose(const char *, uint64_t *);
-    if (hao_regvar_interpose(name, addr)) return true;
-    for (size_t k = 0; k < sizeof varargs / sizeof *varargs; k++)
-        if (varargs[k].vname && !strcmp(name, varargs[k].name)) {
-            if (!table_agrees(name, varargs[k].nfixed)) return false;
-            *addr = hao_trap_address(name, trap_vararg, k); return true; }
-    for (size_t k = 0; k < sizeof vlists / sizeof *vlists; k++)
-        if (!strcmp(name, vlists[k].name)) { *addr = hao_trap_address(name, trap_vlist, k); return true; }
-    for (size_t k = 0; k < sizeof intvars / sizeof *intvars; k++)
-        if (!strcmp(name, intvars[k].name)) { *addr = hao_trap_address(name, trap_intvar, k); return true; }
-    for (size_t k = 0; k < sizeof fixed / sizeof *fixed; k++)
-        if (!strcmp(name, fixed[k].name)) { *addr = hao_trap_address(fixed[k].name, fixed[k].fn, fixed[k].arg); return true; }
-    for (size_t k = 0; k < sizeof gvars / sizeof *gvars; k++)
-        if (!strcmp(name, gvars[k].name)) {
-            if (!table_agrees(name, gvars[k].nfixed)) return false;
-            gvar_narrow[k] = hao_narrowret_kind_for_name(name);
-            *addr = hao_trap_address(name, trap_gvar, k);
-            return true;
-        }
+    for (size_t k = 0; k < sizeof modules / sizeof *modules; k++)
+        if (modules[k].lookup(name, addr)) return true;
+    long k;
+    if ((k = find_in(&ix_varargs, name)) >= 0) {
+        if (!table_agrees(name, varargs[k].nfixed)) return false;
+        *addr = hao_trap_address(name, trap_vararg, (uint64_t)k);
+        return true;
+    }
+    if ((k = find_in(&ix_vlists, name)) >= 0) { *addr = hao_trap_address(name, trap_vlist, (uint64_t)k); return true; }
+    if ((k = find_in(&ix_intvars, name)) >= 0) { *addr = hao_trap_address(name, trap_intvar, (uint64_t)k); return true; }
+    if ((k = find_in(&ix_fixed, name)) >= 0) { *addr = hao_trap_address(fixed[k].name, fixed[k].fn, fixed[k].arg); return true; }
+    if ((k = find_in(&ix_gvars, name)) >= 0) {
+        if (!table_agrees(name, gvars[k].nfixed)) return false;
+        gvar_narrow[k] = hao_narrowret_kind_for_name(name);
+        *addr = hao_trap_address(name, trap_gvar, (uint64_t)k);
+        return true;
+    }
     return false;
 }
 
@@ -944,11 +1019,44 @@ int hao_tables_plan(const char *name, char *kind, const char **enc)
 {
     const char *e = sorted_enc(stackargs, sizeof stackargs / sizeof *stackargs, name);
     if (e) { *kind = 'A'; *enc = e; return HAO_BRS_STACKARGS; }
-    for (size_t k = 0; sigdb[k].name; k++)
-        if (!strcmp(name, sigdb[k].name)) { *kind = 'A'; *enc = sigdb[k].enc; return HAO_BRS_SIGDB; }   /* the signature path converts the result too */
+    long k = find_sigdb(name);
+    if (k >= 0) { *kind = 'A'; *enc = sigdb[k].enc; return HAO_BRS_SIGDB; }   /* the signature path converts the result too */
     char nk = hao_narrowret_kind_for_name(name);
     if (nk) { *kind = nk; *enc = NULL; return HAO_BRS_NARROWRET; }
     return 0;
 }
 
 void hao_interpose_init(void) {}
+
+/* For tests/host/bridge.c: the tables searched by bisection directly
+ * (stackargs, narrowrets) are strictly sorted, and every name index
+ * answers each name with the entry a linear scan finds. 0, or the number
+ * of problems (the first described in why). */
+int hao_interpose_selfcheck(char *why, size_t n)
+{
+    int bad = 0;
+    why[0] = 0;
+#define NOTE(...) do { if (!bad++) snprintf(why, n, __VA_ARGS__); } while (0)
+    for (size_t k = 1; k < sizeof stackargs / sizeof *stackargs; k++)
+        if (strcmp(stackargs[k - 1].name, stackargs[k].name) >= 0) NOTE("stackargs not sorted at %s", stackargs[k].name);
+    for (size_t k = 1; k < sizeof narrowrets / sizeof *narrowrets; k++)
+        if (strcmp(narrowrets[k - 1].name, narrowrets[k].name) >= 0) NOTE("narrowrets not sorted at %s", narrowrets[k].name);
+    pthread_once(&ix_once, ix_init);
+    for (size_t t = 0; t < sizeof indexes / sizeof *indexes; t++) {
+        const name_index *ix = indexes[t];
+        for (size_t k = 1; k < ix->len; k++)
+            if (ix_cmp((void *)ix, &ix->idx[k - 1], &ix->idx[k]) >= 0) NOTE("index %zu not sorted at %s", t, ix_name(ix, ix->idx[k]));
+        for (size_t k = 0; k < ix->n; k++) {
+            const char *nm = ix_name(ix, k);
+            if (!nm) continue;
+            long lin = -1;
+            for (size_t j = 0; j < ix->n && lin < 0; j++) {
+                const void *e = (const char *)ix->base + j * ix->stride;
+                if (ix_name(ix, j) && !strcmp(ix_name(ix, j), nm) && (!ix->keep || ix->keep(e))) lin = (long)j;
+            }
+            if (ix_find(ix, nm) != lin) NOTE("index %zu answers %s with entry %ld, a scan with %ld", t, nm, ix_find(ix, nm), lin);
+        }
+    }
+#undef NOTE
+    return bad;
+}

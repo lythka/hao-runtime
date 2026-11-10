@@ -9,6 +9,8 @@
  *             a published entry must never read back missing or wrong.
  *   upgrade   an UNKNOWN entry point becomes TYPED when a source types it
  *             later (a native block's signature); a typed plan is kept.
+ *   tables    the interposer tables searched by bisection are sorted, and
+ *             every name index (interpose.c) finds what a linear scan does.
  *
  *   test_bridge [N]     prints one line per check; exit 0 only if all pass.
  */
@@ -84,5 +86,9 @@ int main(int argc, char **argv)
               p2 == p1;
     printf("upgrade    %s  UNKNOWN -> TYPED 'B', kept against a second note\n", up ? "PASS" : "FAIL");
     if (!up) fail = 1;
+    char why[256];
+    int bad = hao_interpose_selfcheck(why, sizeof why);
+    printf("tables     %s  bisected tables sorted, name indexes agree with a scan%s%s\n", bad ? "FAIL" : "PASS", bad ? ": " : "", why);
+    if (bad) fail = 1;
     return fail;
 }
