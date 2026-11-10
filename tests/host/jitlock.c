@@ -54,8 +54,9 @@ static uint32_t *make_add_fns(size_t n)
 
 static hao_thread *new_thread(void)
 {
-    hao_thread *t = aligned_alloc(64, 4096);
-    memset(t, 0, 4096);
+    size_t n = (sizeof(hao_thread) + 63) & ~(size_t)63;   /* all of it: the JIT uses the thread's jump cache */
+    hao_thread *t = aligned_alloc(64, n);
+    memset(t, 0, n);
     return t;
 }
 

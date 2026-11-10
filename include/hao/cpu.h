@@ -66,7 +66,7 @@ typedef struct hao_cpu {
     uint64_t rt_helper;      /* 0x180: int helper(cpu, uint64_t descriptor, pc);
                               * low32 = original ARM word, high32 = internal tag */
     uint64_t rt_exit;        /* 0x188: exit stub */
-    uint64_t rt_table;       /* 0x190: translation table */
+    uint64_t rt_jc;          /* 0x190: this thread's jump cache (jit.c) */
     uint64_t fcmp_flags[8];  /* 0x198: x86 ucomis (PF<<2|ZF<<1|CF) -> guest flags image */
     /* hao_native_call bookkeeping (bridge_x86_64.S): */
     uint64_t bridge_rsp;     /* 0x1D8: rsp at the native call instruction */
@@ -76,7 +76,7 @@ typedef struct hao_cpu {
                               * beyond its return address (x86_64 swifttailcc
                               * `retq $N`), if that call was a guest tail call
                               * (guest x30 = HAO_RETURN_MAGIC); else 0 */
-    uint64_t rt_mask;        /* 0x1F8: rt_table's slot mask << 4 (jit.c: they name one table) */
+    uint64_t rt_probe;       /* 0x1F8: translation-table probe stub, for a jump-cache miss (jit.c) */
     hao_vreg v[32];          /* 0x200 */
     void    *thread;         /* 0x400: owning hao_thread */
 } hao_cpu;
@@ -90,9 +90,9 @@ typedef struct hao_cpu {
 #define CPU_OFF_V(n)   ((int32_t)(0x200 + 16 * (n)))
 #define CPU_OFF_RT_HELPER 0x180
 #define CPU_OFF_RT_EXIT   0x188
-#define CPU_OFF_RT_TABLE  0x190
+#define CPU_OFF_RT_JC     0x190
 #define CPU_OFF_FCMP      0x198
-#define CPU_OFF_RT_MASK   0x1F8
+#define CPU_OFF_RT_PROBE  0x1F8
 #define CPU_OFF_SCRATCH0  0x158   /* host_scratch[0]: an exit's chain site (jit.c) */
 /* Translated code (and AOT blobs, which freeze it) uses these offsets;
  * a layout change must update them and bump AOT_VERSION (jit.c). */
@@ -105,9 +105,9 @@ HAO_CPU_OFF(exit_insn, CPU_OFF_EXITI);
 HAO_CPU_OFF(host_scratch, CPU_OFF_SCRATCH0);
 HAO_CPU_OFF(rt_helper, CPU_OFF_RT_HELPER);
 HAO_CPU_OFF(rt_exit, CPU_OFF_RT_EXIT);
-HAO_CPU_OFF(rt_table, CPU_OFF_RT_TABLE);
+HAO_CPU_OFF(rt_jc, CPU_OFF_RT_JC);
 HAO_CPU_OFF(fcmp_flags, CPU_OFF_FCMP);
-HAO_CPU_OFF(rt_mask, CPU_OFF_RT_MASK);
+HAO_CPU_OFF(rt_probe, CPU_OFF_RT_PROBE);
 HAO_CPU_OFF(v, CPU_OFF_V(0));
 _Static_assert(__builtin_offsetof(hao_cpu, bridge_rsp) == 0x1D8, "cpu layout");
 _Static_assert(__builtin_offsetof(hao_cpu, native_pop) == 0x1F0, "cpu layout");
