@@ -5,7 +5,9 @@
 # ancestors except sticky ones (a scratch directory, not /tmp itself).
 # Builds tests/guest/hello.c for arm64e (exit 7) and checks that hao loads a
 # valid cache and rejects every untrusted or malformed one while still
-# running the program correctly. Also the other rules of the environment
+# running the program correctly. Case T is the twin: a file with the
+# program's mach header, load commands and LC_UUID but other code, whose
+# cache the program must not run. Also the other rules of the environment
 # tiers that need a running guest: dependency paths in a set-ID process (L)
 # and the diagnostics log's lock and mode (M). Prints PASS/FAIL per case;
 # exit 1 on FAIL.
@@ -126,9 +128,119 @@ patched C11b-version-4 "format version" hdr.version=4
 patched C12-guest-uuid "guest UUID differs" flip.uuid
 patched C12b-guest-id "guest load commands differ" hdr.guest_id=+1
 patched C12c-vmsize "vmsize" hdr.vmsize=+0x4000
+patched C12d-code-identity "guest code differs: this image's cdhash is" flip.code_id
+patched C12e-identity-hash-type "guest code differs" hdr.id_hash=+1
+patched C12f-identity-of-an-unsigned-guest "translated from an unsigned guest" hdr.id_kind=2
+patched C12g-identity-kind-unknown "unknown code identity kind" hdr.id_kind=9
 patched C13-link-target "target block" link.target=0:0xffff
 patched C13b-link-site "outside the code area" link.site=0:0xfffffff0
 patched C13c-link-site-moved "does not reach" link.site=0:+1
+
+# --- T: the twin. A file that copies the program's mach header, load
+# commands and LC_UUID but holds other code (here one instruction: exit 9
+# instead of 7) gives `hao --aot` everything a cache is named by. The program
+# must refuse the twin's cache, say why, and run its own code (rc 7); the
+# twin itself still loads it (rc 9), which shows the cache is otherwise good.
+TW=$OUT/twin; mkdir -p "$TW"
+ident=$(codesign -dv "$G" 2>&1 | sed -n 's/^Identifier=//p')
+# twin SRC DST: DST = SRC with `mov w0, #7` (the return value) made `mov w0, #9`
+twin() {
+    python3 -I - "$1" "$2" <<'EOF'
+import sys
+d = bytearray(open(sys.argv[1], "rb").read())
+old, new = bytes.fromhex("e0008052"), bytes.fromhex("20018052")     # mov w0, #7 / mov w0, #9
+if d.count(old) != 1:
+    sys.exit("twin: expected one `mov w0, #7`, found %d" % d.count(old))
+i = d.index(old)
+d[i:i + 4] = new
+open(sys.argv[2], "wb").write(d)
+EOF
+}
+# same_cmds A B: the two files have the same mach header and load commands (so the same LC_UUID)
+same_cmds() {
+    python3 -I - "$1" "$2" <<'EOF'
+import struct, sys
+a, b = (open(p, "rb").read() for p in sys.argv[1:3])
+n = 32 + struct.unpack_from("<I", a, 20)[0]
+sys.exit(0 if a[:4] == bytes.fromhex("cffaedfe") and a[:n] == b[:n] and len(a) == len(b) and a != b else 1)
+EOF
+}
+# T1: the twin keeps the program's signature, which no longer matches its code: no cache at all
+twin "$G" "$TW/hello.stolen-sig" && chmod 755 "$TW/hello.stolen-sig" || bad "T1 make twin"
+fresh "$OUT/t1"
+HAO_CACHE=$OUT/t1 timeout -s KILL "$T" "$HAO" --aot "$TW/hello.stolen-sig" >"$OUT/t1.err" 2>&1; rc=$?
+if same_cmds "$G" "$TW/hello.stolen-sig" && [ $rc != 0 ] && grep -q "code signature invalid (page .* does not match its hash): no cache written" "$OUT/t1.err" \
+   && [ -z "$(ls -A "$OUT/t1")" ]; then
+    pass "T1 twin with the program's signature: hao --aot refuses ($(sed 's/^hao-aot: [^:]*: //' "$OUT/t1.err" | head -1)), directory left empty"
+else bad "T1 twin with stolen signature: rc=$rc $(head -2 "$OUT/t1.err") dir: $(ls -A "$OUT/t1")"; fi
+# T2: the twin is signed again (ad hoc, same identifier: the signature keeps its size, so the load
+# commands stay the program's). Its cache is valid for the twin and must be refused by the program.
+cp "$TW/hello.stolen-sig" "$TW/hello.arm64e" && codesign -s - -f -i "$ident" "$TW/hello.arm64e" 2>/dev/null || bad "T2 sign twin"
+fresh "$OUT/t2"
+HAO_CACHE=$OUT/t2 timeout -s KILL "$T" "$HAO" --aot "$TW/hello.arm64e" >"$OUT/t2.gen" 2>&1; rc=$?
+if same_cmds "$G" "$TW/hello.arm64e" && [ $rc = 0 ] && [ "$(ls -A "$OUT/t2")" = "$NAME" ]; then
+    pass "T2 signed twin: same mach header, load commands and LC_UUID as the program, other code; hao --aot writes $NAME"
+else bad "T2 signed twin: rc=$rc same_cmds=$(same_cmds "$G" "$TW/hello.arm64e"; echo $?) $(head -2 "$OUT/t2.gen") dir: $(ls -A "$OUT/t2")"; fi
+env HAO_VERBOSE=1 HAO_CACHE="$OUT/t2" timeout -s KILL "$T" "$HAO" "$TW/hello.arm64e" >"$OUT/t2t.out" 2>"$OUT/t2t.err"; rc=$?
+[ $rc = 9 ] && grep -q "loaded:" "$OUT/t2t.err" && pass "T2 control: the twin loads its own cache and runs its own code (rc 9)" \
+    || bad "T2 control: rc=$rc $(grep AOT "$OUT/t2t.err" | head -2)"
+expect_reject T2-program-refuses-the-twins-cache "$OUT/t2" "guest code differs: this image's cdhash is [0-9a-f]\{40\} (hash type 2), the cache was translated from [0-9a-f]\{40\}"
+# T3: the same with unsigned files (run with --allow-unsigned): the identity is the hash of the mapped code
+U=$OUT/unsigned; mkdir -p "$U"
+clang -arch arm64e -O1 -Wl,-no_adhoc_codesign -o "$U/hello.arm64e" "$repo/tests/guest/hello.c" && twin "$U/hello.arm64e" "$U/twin.arm64e" \
+    && chmod 755 "$U/twin.arm64e" || bad "T3 build unsigned"
+fresh "$OUT/t3"
+HAO_CACHE=$OUT/t3 timeout -s KILL "$T" "$HAO" --aot "$U/hello.arm64e" >"$OUT/t3.gen" 2>&1; rc=$?
+env HAO_VERBOSE=1 HAO_CACHE="$OUT/t3" timeout -s KILL "$T" "$HAO" --allow-unsigned "$U/hello.arm64e" >"$OUT/t3.out" 2>"$OUT/t3.err"; rc2=$?
+[ $rc = 0 ] && [ $rc2 = 7 ] && grep -q "loaded:" "$OUT/t3.err" && pass "T3 unsigned program: its own cache (code-hash identity) loads, rc 7" \
+    || bad "T3 unsigned own cache: gen rc=$rc run rc=$rc2 $(head -1 "$OUT/t3.gen") $(grep AOT "$OUT/t3.err" | head -2)"
+fresh "$OUT/t3t"
+HAO_CACHE=$OUT/t3t timeout -s KILL "$T" "$HAO" --aot "$U/twin.arm64e" >"$OUT/t3t.gen" 2>&1; rc=$?
+env HAO_VERBOSE=1 HAO_CACHE="$OUT/t3t" timeout -s KILL "$T" "$HAO" --allow-unsigned "$U/hello.arm64e" >"$OUT/t3t.out" 2>"$OUT/t3t.err"; rc2=$?
+if same_cmds "$U/hello.arm64e" "$U/twin.arm64e" && [ $rc = 0 ] && [ $rc2 = 7 ] && [ "$(cat "$OUT/t3t.out")" = "$WANT" ] \
+   && grep -q "rejected: guest code differs: this image's code hash is" "$OUT/t3t.err" && ! grep -q "loaded:" "$OUT/t3t.err"; then
+    pass "T3 unsigned twin's cache: rejected ($(grep -o 'rejected: .*' "$OUT/t3t.err" | head -1 | cut -c11-)), rc 7"
+else bad "T3 unsigned twin: gen rc=$rc run rc=$rc2 $(grep -E 'AOT|rejected' "$OUT/t3t.err" | head -2)"; fi
+# T4: the kind of identity follows from the image, not from the file: the unsigned program's own
+# cache, relabelled as a signed guest's, is not taken
+UN=$(ls "$OUT/t3" | head -1)
+fresh "$OUT/t4"; $P "$OUT/t3/$UN" "$OUT/t4/$UN" hdr.id_kind=1
+env HAO_VERBOSE=1 HAO_CACHE="$OUT/t4" timeout -s KILL "$T" "$HAO" --allow-unsigned "$U/hello.arm64e" >"$OUT/t4.out" 2>"$OUT/t4.err"; rc=$?
+[ $rc = 7 ] && grep -q "rejected: translated from a code-signed guest; this image is not signed" "$OUT/t4.err" && ! grep -q "loaded:" "$OUT/t4.err" \
+    && pass "T4 an unsigned program's cache relabelled as a signed guest's: rejected ($(grep -o 'rejected: .*' "$OUT/t4.err" | head -1 | cut -c11-)), rc 7" \
+    || bad "T4: rc=$rc $(grep AOT "$OUT/t4.err" | head -2)"
+# T5: hao --aot leaves nothing but the cache behind (its private copy of the guest is gone)
+[ "$(ls -A "$C")" = "$NAME" ] && pass "T5 hao --aot leaves only $NAME in the cache directory" || bad "T5 leftovers: $(ls -A "$C")"
+# T6: the file is rewritten in place while hao --aot works on it (its owner flips it between the
+# program and the twin that keeps the program's signature). hao translates a private copy, so every
+# run either refuses (the copy caught the twin) or writes exactly the program's cache: never the
+# program's cdhash over the twin's code.
+cp "$G" "$TW/flip" && fresh "$OUT/t6"
+python3 -I - "$G" "$TW/hello.stolen-sig" "$TW/flip" <<'EOF' &
+import sys
+a, b = (open(p, "rb").read() for p in sys.argv[1:3])
+at = [i for i in range(len(a)) if a[i] != b[i]]
+lo, hi = at[0], at[-1] + 1
+f = open(sys.argv[3], "r+b", buffering=0)
+while True:
+    for v in (b, a):
+        f.seek(lo)
+        f.write(v[lo:hi])
+EOF
+flipper=$!
+wrote=0 refused=0 wrong=0
+for i in $(seq 60); do
+    rm -f "$OUT/t6/$NAME"
+    HAO_CACHE=$OUT/t6 timeout -s KILL "$T" "$HAO" --aot "$TW/flip" >"$OUT/t6.err" 2>&1; rc=$?
+    if [ -e "$OUT/t6/$NAME" ]; then
+        if [ $rc = 0 ] && cmp -s "$OUT/t6/$NAME" "$AOT"; then wrote=$((wrote + 1)); else wrong=$((wrong + 1)); fi
+    elif [ $rc != 0 ] && grep -q "code signature invalid" "$OUT/t6.err"; then refused=$((refused + 1))
+    else wrong=$((wrong + 1)); fi
+done
+kill $flipper 2>/dev/null; wait $flipper 2>/dev/null
+[ $wrong = 0 ] && [ "$(ls -A "$OUT/t6" | grep -vx "$NAME")" = "" ] \
+    && pass "T6 file rewritten in place during hao --aot, 60 runs: $wrote wrote the program's exact cache, $refused refused, 0 other" \
+    || bad "T6 rewritten in place: $wrote good, $refused refused, $wrong wrong; last: $(head -1 "$OUT/t6.err"); dir: $(ls -A "$OUT/t6")"
 
 # a cache written by another hao build: a copy of the build whose libhao
 # LC_UUID differs (one byte), as any rebuild with other code gives
@@ -253,6 +365,11 @@ g=$(grep -n 'getenv(' "$repo"/src/*.c | grep -vE '^[^:]*/(trust|process_identity
 clang -arch arm64e -O1 -o "$OUT/openfds.arm64e" "$repo/tests/guest/openfds.c" && codesign -s - -f "$OUT/openfds.arm64e" 2>/dev/null
 k=$(timeout -s KILL "$T" "$HAO" "$OUT/openfds.arm64e" 2>&1 | tail -1)
 [ "$k" = "0 descriptors on the program file" ] && pass "K guest image fd closed after load ($k)" || bad "K open image fd: $k"
+
+# --- L: the load-time harness (tests/aot/loadtime.c) builds and loads the valid cache
+clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/loadtime" "$here/loadtime.c" -L"$B" -lhao -Wl,-rpath,"$B" && codesign -s - -f "$OUT/loadtime" 2>/dev/null
+l=$(HAO_CACHE=$C timeout -s KILL "$T" "$OUT/loadtime" "$G" 5 2>/dev/null | tail -1)
+case $l in *": 5/5 loaded, min "*) pass "L loadtime: ${l#*: }" ;; *) bad "L loadtime: $l" ;; esac
 
 # --- F: the policy unit test
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/policy" "$here/policy.c" "$B/libhaocore.a" && codesign -s - -f "$OUT/policy" 2>/dev/null

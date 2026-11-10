@@ -36,6 +36,7 @@
 #include <pwd.h>
 #include <signal.h>
 #include <sys/acl.h>
+#include <mach-o/fat.h>
 #include <mach-o/loader.h>
 
 #define BITS(x, hi, lo) (((x) >> (lo)) & ((1u << ((hi) - (lo) + 1)) - 1))
@@ -1499,6 +1500,22 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
  * header field, entry and link. The file is read into memory, checked and
  * hashed there, and those same bytes are copied into the code cache, so a
  * file changed after the checks cannot slip in other code.
+ *
+ * Ownership says who wrote the cache, not what it was translated from: the
+ * LC_UUID, vmsize and load commands in its header are whatever the file
+ * given to `hao --aot` said. So the header also carries the code identity
+ * of that file (hao/aot.h HAO_AOT_ID_*), and hao_aot_check() compares it
+ * with the identity of the image being loaded (aot_image_id below):
+ *  - a signed image: the cdhash of the signature in its mapped __LINKEDIT.
+ *    `hao --aot` writes a cdhash only after guest_sig.c has checked every
+ *    page of the slice against that CodeDirectory, on a private copy of the
+ *    file that it also maps and translates (hao_aot_generate_file), so equal
+ *    cdhashes mean the cache was translated from the bytes this image's
+ *    signature covers: header, load commands and code;
+ *  - an unsigned image: a SHA-256 over its header, load commands and
+ *    executable segments as mapped, computed when a candidate cache names
+ *    this guest and this build. No system directory holds or serves such a
+ *    cache.
  */
 
 static uint64_t st_aot_rejected;
@@ -1652,12 +1669,136 @@ static uint8_t *aot_read_all(int fd, uint64_t size)
 
 static void aot_free_all(uint8_t *buf, uint64_t size) { if (buf) munmap(buf, size ? (size_t)size : 1); }
 
-static int aot_expect(hao_image *im, const uint8_t *gen, uint64_t *lo, uint64_t *hi, hao_aot_expect *x)
+/* ---- the code identity of a mapped image */
+
+/* [a, a+len) lies in one mapped segment of the image */
+static bool aot_mapped(const hao_image *im, uint64_t a, uint64_t len)
+{
+    for (uint32_t k = 0; k < im->n_identity_ranges; k++)
+        if (a >= im->identity_ranges[k][0] && a <= im->identity_ranges[k][1] && len <= im->identity_ranges[k][1] - a) return true;
+    return false;
+}
+
+/* bytes mapped at im->base in the segment that holds the mach header */
+static uint64_t aot_hdr_avail(const hao_image *im)
+{
+    for (uint32_t k = 0; k < im->n_identity_ranges; k++)
+        if (im->identity_ranges[k][0] <= im->base && im->base < im->identity_ranges[k][1]) return im->identity_ranges[k][1] - im->base;
+    return 0;
+}
+
+typedef struct {
+    uint32_t off, size;         /* LC_CODE_SIGNATURE: slice offset and size (size 0: unsigned) */
+    const uint8_t *at;          /* where the image maps the signature (NULL: in no mapped segment) */
+    uint64_t exec_end;          /* the highest slice offset an executable segment maps */
+    uint64_t cmds_len;          /* mach header and load commands: bytes at im->base */
+} aot_sig;
+
+/* What the image's own (mapped) load commands say about its signature.
+ * False when they are not mapped at im->base or are malformed. */
+static bool aot_image_sig(const hao_image *im, aot_sig *s)
+{
+    memset(s, 0, sizeof *s);
+    uint64_t avail = aot_hdr_avail(im);
+    struct mach_header_64 mh;
+    if (avail < sizeof mh) return false;
+    memcpy(&mh, (const void *)(uintptr_t)im->base, sizeof mh);
+    if (mh.magic != MH_MAGIC_64 || mh.sizeofcmds > avail - sizeof mh) return false;
+    s->cmds_len = sizeof mh + mh.sizeofcmds;
+    const uint8_t *cmds = (const uint8_t *)(uintptr_t)im->base + sizeof mh, *end = cmds + mh.sizeofcmds, *p = cmds;
+    const struct linkedit_data_command *cs = NULL;
+    for (uint32_t k = 0; k < mh.ncmds; k++) {
+        const struct load_command *lc = (const void *)p;
+        if ((size_t)(end - p) < sizeof *lc || lc->cmdsize < sizeof *lc || lc->cmdsize > (size_t)(end - p)) return false;
+        if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize < sizeof(struct segment_command_64)) return false;
+        if (lc->cmd == LC_CODE_SIGNATURE) {
+            if (cs || lc->cmdsize < sizeof *cs) return false;      /* two signatures: which one counts is not ours to pick */
+            cs = (const void *)p;
+        }
+        p += lc->cmdsize;
+    }
+    if (cs && cs->datasize) { s->off = cs->dataoff; s->size = cs->datasize; }
+    p = cmds;
+    for (uint32_t k = 0; k < mh.ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct segment_command_64 *sg = (const void *)p;
+        if (sg->cmd != LC_SEGMENT_64 || !sg->filesize || sg->filesize > UINT64_MAX - sg->fileoff) continue;
+        if ((sg->initprot & VM_PROT_EXECUTE) && sg->fileoff + sg->filesize > s->exec_end) s->exec_end = sg->fileoff + sg->filesize;
+        if (s->size && !s->at && s->off >= sg->fileoff && (uint64_t)s->off + s->size <= sg->fileoff + sg->filesize) {
+            uint64_t a = sg->vmaddr + im->slide + (s->off - sg->fileoff);
+            if (aot_mapped(im, a, s->size)) s->at = (const uint8_t *)(uintptr_t)a;
+        }
+    }
+    return true;
+}
+
+typedef struct { uint32_t kind, hash; uint8_t id[HAO_AOT_ID_LEN]; } aot_id;
+#define AOT_SIG_MAX (40u << 20)     /* xnu's CS_MAX_BLOB_SIZE, as guest_sig.c */
+
+/* The code identity of a mapped image, from the image alone: nothing here
+ * comes from a cache file or from what an earlier check reported.
+ * Signed: the cdhash of the signature the image maps (guest_sig.c parses a
+ * private copy; no page is hashed here: see the comment at the top of this
+ * section for why the cdhash is enough). Unsigned: SHA-256 over the mapped
+ * header, load commands and executable segments (hao_aot_code_id), read
+ * where hao reads guest code (hao/code.h). */
+static bool aot_image_id(const hao_image *im, aot_id *out, char *why, size_t n)
+{
+    aot_sig s;
+    memset(out, 0, sizeof *out);
+    if (!aot_image_sig(im, &s)) { snprintf(why, n, "this image's load commands are not mapped with its header, or are malformed"); return false; }
+    if (s.size) {
+        if (!s.at || s.size > AOT_SIG_MAX) { snprintf(why, n, "this image's code signature is not in a mapped segment"); return false; }
+        char w[300] = "out of memory";
+        uint8_t *blob = malloc(s.size), ht = 0;
+        bool ok = blob != NULL;
+        if (ok) {
+            memcpy(blob, s.at, s.size);
+            ok = hao_guest_sig_cdhash(blob, s.size, out->id, &ht, w, sizeof w);
+        }
+        free(blob);
+        if (!ok) { snprintf(why, n, "this image's code signature is invalid (%s)", w); return false; }
+        out->kind = HAO_AOT_ID_CDHASH;
+        out->hash = ht;
+        return true;
+    }
+    uint64_t lo[HAO_MAX_RANGES], hi[HAO_MAX_RANGES];
+    const uint8_t *code[HAO_MAX_RANGES];
+    int nc = im->ncode;
+    for (int k = 0; k < nc; k++) {
+        lo[k] = im->code_lo[k] - im->base;
+        hi[k] = im->code_hi[k] - im->base;
+        code[k] = hao_code_ptr_im(im, im->code_lo[k]);
+    }
+    hao_aot_code_id((const void *)(uintptr_t)im->base, s.cmds_len, lo, hi, code, nc, out->id);
+    out->kind = HAO_AOT_ID_CODE;
+    return true;
+}
+
+/* What the image expects of a cache. The kind of identity is known from the
+ * load commands; the identity itself (x->code_id) is left for the caller to
+ * compute when a file gets that far (hao_aot_check's HAO_AOT_NEED_ID). */
+static void aot_expect(hao_image *im, const uint8_t *gen, uint64_t *lo, uint64_t *hi, hao_aot_expect *x)
 {
     for (int k = 0; k < im->ncode; k++) { lo[k] = im->code_lo[k] - im->base; hi[k] = im->code_hi[k] - im->base; }
-    *x = (hao_aot_expect){im->uuid, gen, im->vmsize, hao_aot_guest_id((const void *)(uintptr_t)im->base, im->vmsize, im->slice_size),
-                          lo, hi, im->ncode};
-    return 0;
+    aot_sig s;
+    uint32_t kind = !aot_image_sig(im, &s) ? 0 : s.size ? HAO_AOT_ID_CDHASH : HAO_AOT_ID_CODE;
+    *x = (hao_aot_expect){im->uuid, gen, im->vmsize,
+                          hao_aot_guest_id((const void *)(uintptr_t)im->base, aot_hdr_avail(im), im->slice_size),
+                          lo, hi, im->ncode, kind, 0, NULL};
+}
+
+/* A directory every process trusts (hao/aot.h): by kind or canonical path,
+ * and, for a directory being written (dfd >= 0), by being the same directory
+ * as a system one under another name (a firmlink, another spelling). */
+static bool aot_dir_system(const hao_aot_dir *d, const char *canon, int dfd)
+{
+    static const char *const sys[] = {HAO_AOT_SYS_DIR, HAO_AOT_SYS_RO_DIR};
+    if (hao_aot_dir_is_system(d->kind, canon)) return true;
+    struct stat a, b;
+    if (dfd < 0 || fstat(dfd, &a) != 0) return false;
+    for (int k = 0; k < 2; k++)
+        if (stat(sys[k], &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) return true;
+    return false;
 }
 
 static void aot_reject(const char *dir, const char *name, const char *why)
@@ -1785,10 +1926,16 @@ bool hao_aot_load(hao_image *im)
     uint64_t lo[HAO_MAX_RANGES], hi[HAO_MAX_RANGES];
     hao_aot_expect x;
     aot_expect(im, gen, lo, hi, &x);
+    aot_id id;
     for (int d = 0; d < nd; d++) {
         struct stat st;
         int fd = hao_aot_open_trusted(&dirs[d], name, &st, why, sizeof why);
         if (fd < 0) { if (why[0]) aot_reject(dirs[d].path, name, why); continue; }
+        if (x.id_kind == HAO_AOT_ID_CODE && aot_dir_system(&dirs[d], dirs[d].path, -1)) {
+            close(fd);
+            aot_reject(dirs[d].path, name, "this image is not code signed; a system cache directory serves signed code only");
+            continue;
+        }
         if (!aot_fits((uint64_t)st.st_size, why, sizeof why)) {
             close(fd);
             __atomic_fetch_add(&st_aot_rejected, 1, __ATOMIC_RELAXED);
@@ -1800,7 +1947,21 @@ bool hao_aot_load(hao_image *im)
         close(fd);
         if (!buf) { aot_reject(dirs[d].path, name, st.st_size > (off_t)HAO_AOT_MAX_FILE ? "too large" : "cannot read it"); continue; }
         hao_aot_view v;
-        bool ok = hao_aot_check(buf, (uint64_t)st.st_size, &x, &v, why, sizeof why) == 0 && aot_install(im, &v, why, sizeof why);
+        int r = hao_aot_check(buf, (uint64_t)st.st_size, &x, &v, why, sizeof why);
+        if (r == HAO_AOT_NEED_ID) {
+            /* the file names this guest and this build: now the image's code
+             * identity, which every later directory's file is checked against too */
+            r = -1;
+            if (aot_image_id(im, &id, why, sizeof why)) {
+                if (id.kind != x.id_kind) snprintf(why, sizeof why, "this image's load commands changed while it was loaded");
+                else {
+                    x.id_hash = id.hash;
+                    x.code_id = id.id;
+                    r = hao_aot_check(buf, (uint64_t)st.st_size, &x, &v, why, sizeof why);
+                }
+            }
+        }
+        bool ok = r == 0 && aot_install(im, &v, why, sizeof why);
         uint32_t nb = ok ? v.hdr->nblocks : 0;
         uint64_t cs = ok ? v.hdr->code_size : 0;
         aot_free_all(buf, (uint64_t)st.st_size);
@@ -1896,7 +2057,8 @@ static bool write_all(int fd, const uint8_t *p, size_t n)
 
 /* Translate every reachable block of `im` into one position-independent
  * blob and write it to dfd/<uuid>.aot. */
-static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_aot_dir *d, const char *dir, bool verbose)
+static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_aot_dir *d, const char *dir, const aot_id *id,
+                        bool verbose)
 {
     int rc = -1, ofd = -1;
     bool oom = false;
@@ -2030,7 +2192,13 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     uint64_t lo_r[HAO_MAX_RANGES], hi_r[HAO_MAX_RANGES];
     hao_aot_expect x;
     aot_expect(im, gen, lo_r, hi_r, &x);
+    if (x.id_kind != id->kind) { fprintf(stderr, "hao-aot: %s: code identity of the wrong kind: no cache written\n", im->path); goto out; }
+    x.id_hash = id->hash;
+    x.code_id = id->id;
     h.guest_id = x.guest_id;
+    h.id_kind = id->kind;
+    h.id_hash = id->hash;
+    memcpy(h.code_id, id->id, sizeof h.code_id);
     h.nblocks = (uint32_t)nents;
     h.nlinks = (uint32_t)nl;
     h.code_size = xb_len(&t.b);
@@ -2061,10 +2229,15 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     ofd = -1;
     if (cr != 0 || renameat(dfd, tmp, dfd, name) != 0) { fprintf(stderr, "hao-aot: %s/%s: %s\n", dir, name, strerror(errno)); goto out; }
     tmp[0] = 0;
-    if (verbose)
-        fprintf(stderr, "hao-aot: %s: %zu blocks, %llu insns (%.1f%% translated natively, rest via interpreter helper), %zu/%d links, %zu KB code -> %s/%s\n",
+    if (verbose) {
+        char idx[2 * HAO_AOT_ID_LEN + 1];
+        int nb = id->kind == HAO_AOT_ID_CDHASH ? HAO_AOT_CDHASH_LEN : HAO_AOT_ID_LEN;
+        for (int k = 0; k < nb; k++) snprintf(idx + 2 * k, 3, "%02x", id->id[k]);
+        fprintf(stderr, "hao-aot: %s: %zu blocks, %llu insns (%.1f%% translated natively, rest via interpreter helper), %zu/%d links, "
+                "%zu KB code, bound to %s %s -> %s/%s\n",
                 im->path, nents, (unsigned long long)ninsns, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0.0,
-                nl, t.nlinks, (size_t)(h.code_size >> 10), dir, name);
+                nl, t.nlinks, (size_t)(h.code_size >> 10), id->kind == HAO_AOT_ID_CDHASH ? "cdhash" : "code hash (unsigned)", idx, dir, name);
+    }
     rc = 0;
     goto out;
 oom:
@@ -2077,20 +2250,137 @@ out:
 #undef PUSH
 }
 
-int hao_aot_generate_path(hao_image *im, bool verbose)
+/* A private copy of the guest file, in the directory the cache goes to
+ * (aot_open_dir_create checked that only this user, or root, can write
+ * there): created exclusively with mode 0600, so from its first byte nobody
+ * else can change it. Returns its descriptor, and its name in tmp. */
+static int aot_private_copy(const char *path, int dfd, char *tmp, size_t tn, char *why, size_t n)
 {
-    if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", im->path); return -1; }
+    enum { CHUNK = 1 << 20 };
+    int sfd = open(path, O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC), tfd = -1;
+    struct stat st;
+    uint8_t *buf = NULL;
+    tmp[0] = 0;
+    if (sfd < 0) { snprintf(why, n, "open %s: %s", path, strerror(errno)); return -1; }
+    if (fstat(sfd, &st) != 0 || !S_ISREG(st.st_mode)) { snprintf(why, n, "%s: not a regular file", path); goto fail; }
+    snprintf(tmp, tn, ".guest.%d.%08x", (int)getpid(), arc4random());
+    tfd = openat(dfd, tmp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (tfd < 0) { snprintf(why, n, "%s: cannot create a private copy: %s", path, strerror(errno)); tmp[0] = 0; goto fail; }
+    buf = malloc(CHUNK);
+    if (!buf || fchmod(tfd, 0600) != 0) { snprintf(why, n, "%s: cannot create a private copy", path); goto fail; }
+    /* Not a Mach-O or fat file (a script, a disk image named by mistake): its first page is
+     * all the loader needs to say so. */
+    uint64_t size = (uint64_t)st.st_size;
+    uint32_t magic = 0;
+    if (pread(sfd, &magic, 4, 0) != 4 || (magic != MH_MAGIC_64 && magic != FAT_CIGAM && magic != FAT_CIGAM_64)) size = size < 4096 ? size : 4096;
+    for (uint64_t off = 0; off < size;) {
+        uint64_t want = size - off;
+        ssize_t r = pread(sfd, buf, want < CHUNK ? (size_t)want : CHUNK, (off_t)off);
+        if (r < 0 && errno == EINTR) continue;
+        if (r == 0) break;                                /* it shrank: what is there is what gets checked */
+        if (r < 0 || !write_all(tfd, buf, (size_t)r)) { snprintf(why, n, "%s: cannot copy it: %s", path, strerror(errno)); goto fail; }
+        off += (uint64_t)r;
+    }
+    free(buf);
+    close(sfd);
+    return tfd;
+fail:
+    free(buf);
+    close(sfd);
+    if (tfd >= 0) close(tfd);
+    if (tmp[0]) unlinkat(dfd, tmp, 0);
+    return -1;
+}
+
+/*
+ * `hao --aot FILE`: translate FILE into dfd/<uuid>.aot.
+ *
+ * The cache will be run in place of FILE's code by every process that
+ * trusts this directory and loads an image with FILE's identity, so the
+ * identity written must be that of the very bytes translated, whoever owns
+ * FILE and whatever they do to it meanwhile. hao therefore copies FILE
+ * first and works on the copy alone: the copy is mapped (the loader reports
+ * which file it mapped), its signature is checked in full on the copy's
+ * descriptor (guest_sig.c: structure, CodeDirectory, every page hash), and
+ * the translator reads the mapping.
+ *
+ *  - Signed, and the signature validates: the identity is its cdhash. Who
+ *    signed it and what it is entitled to decide whether hao runs a
+ *    program, not what its code is; only an image with this cdhash ever
+ *    loads the cache.
+ *  - Signed, and it does not validate: no cache, anywhere. A cdhash would
+ *    name code the file does not hold.
+ *  - Unsigned: the identity is the code hash. Not into a system directory:
+ *    those serve every user and guarded processes, which run signed code
+ *    only, and the loader would have to hash the code on every load. In the
+ *    user's own or an explicit directory it is allowed: the user can write
+ *    any file there already, and only that user's ordinary processes read it.
+ */
+int hao_aot_generate_file(const char *path, bool verbose)
+{
     const uint8_t *gen = aot_gen();
     if (!gen) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return -1; }
     if (hao_env_tier() == HAO_ENV_SETUGID) { fprintf(stderr, "hao-aot: refused in a setuid/setgid process\n"); return -1; }
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
-    int w;
-    char why[512], canon[PATH_MAX];
+    int w, rc = -1;
+    char why[700], canon[PATH_MAX], tmp[64], tpath[PATH_MAX + 80], err[512];
     aot_dirs(dirs, &w, why, sizeof why);
     if (w < 0) { fprintf(stderr, "hao-aot: no trusted AOT cache directory%s%s\n", why[0] ? ": " : "", why); return -1; }
     int dfd = aot_open_dir_create(&dirs[w], canon, sizeof canon, why, sizeof why);
     if (dfd < 0) { fprintf(stderr, "hao-aot: %s rejected: %s\n", dirs[w].path, why); return -1; }
-    int rc = aot_generate(im, gen, dfd, &dirs[w], canon, verbose);
+    int tfd = aot_private_copy(path, dfd, tmp, sizeof tmp, why, sizeof why);
+    if (tfd < 0) { fprintf(stderr, "hao-aot: %s\n", why); close(dfd); return -1; }
+    snprintf(tpath, sizeof tpath, "%s/%s", canon, tmp);
+    hao_image *im = hao_map_image_only(tpath, err, sizeof err);
+    struct stat ts;
+    bool same = im && fstat(tfd, &ts) == 0 && im->dev == (uint64_t)ts.st_dev && im->ino == (uint64_t)ts.st_ino;
+    unlinkat(dfd, tmp, 0);
+    if (!im) {
+        /* the loader names the file it was given: say the user's */
+        const char *t = strstr(err, tpath);
+        if (t) fprintf(stderr, "hao-aot: %.*s%s%s\n", (int)(t - err), err, path, t + strlen(tpath));
+        else fprintf(stderr, "hao-aot: %s: %s\n", path, err);
+        goto out;
+    }
+    if (!same) { fprintf(stderr, "hao-aot: %s: its private copy was replaced before it was mapped: no cache written\n", path); goto out; }
+    snprintf(im->path, sizeof im->path, "%s", path);
+    if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); goto out; }
+    aot_sig s;
+    aot_id id;
+    if (!aot_image_sig(im, &s)) {
+        fprintf(stderr, "hao-aot: %s: its load commands are not mapped with its header, or are malformed: no cache written\n", path);
+        goto out;
+    }
+    if (s.size) {
+        hao_imgsig g;
+        if (hao_guest_sig_image(tfd, path, im->slice_off, im->slice_size, im->cpusubtype, s.off, s.size, NULL, 0, false, NULL, &g,
+                                why, sizeof why) != 0) {
+            fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why);
+            goto out;
+        }
+        /* every byte below the signature is page-hashed; the signature's own bytes are not all sealed */
+        if (s.exec_end > s.off) {
+            fprintf(stderr, "hao-aot: %s: an executable segment reaches into the code signature: no cache written\n", path);
+            goto out;
+        }
+        /* the identity as the loader will compute it, which must be the one just checked */
+        if (!aot_image_id(im, &id, why, sizeof why)) { fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why); goto out; }
+        if (id.kind != HAO_AOT_ID_CDHASH || id.hash != g.hash_type || memcmp(id.id, g.cdhash, sizeof g.cdhash) != 0) {
+            fprintf(stderr, "hao-aot: %s: the mapped signature is not the one checked: no cache written\n", path);
+            goto out;
+        }
+    } else {
+        if (aot_dir_system(&dirs[w], canon, dfd)) {
+            fprintf(stderr, "hao-aot: %s: not code signed: %s is a system cache directory, which holds caches for signed code only; "
+                    "no cache written\n", path, canon);
+            goto out;
+        }
+        if (!aot_image_id(im, &id, why, sizeof why)) { fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why); goto out; }
+    }
+    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, verbose);
+out:
+    if (im) hao_unload_image(im);     /* and with it the last reference to the private copy */
+    close(tfd);
     close(dfd);
     return rc;
 }

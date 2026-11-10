@@ -1,12 +1,14 @@
-"""patch.py IN OUT EDIT...: copy an AOT v5 cache (include/hao/aot.h) with edits.
+"""patch.py IN OUT EDIT...: copy an AOT v6 cache (include/hao/aot.h) with edits.
 
 After the edits the payload hash is recomputed (unless an edit says
 nohash), so each loader check can be tested on its own. Edits:
   hdr.FIELD=V        version, hdr_size, nblocks, nlinks, code_size, file_size,
-                     vmsize, guest_id, payload_hash
+                     vmsize, guest_id, payload_hash, id_kind, id_hash
   ent.FIELD=K:V      guest_off or code_off of entry K (V may be +N or -N)
   link.FIELD=K:V     site or target of link K
   flip.uuid  flip.gen  flip.code    flip one byte of that field / the first block
+  flip.code_id       flip one bit of the guest code identity (a cache translated
+                     from other code under the same UUID and load commands)
   plant              fill the code area (not the base slot, not link rel32s)
                      with int3, as an attacker's cache would carry its own code
   truncate=N         keep only the first N bytes (applied last)
@@ -15,9 +17,9 @@ nohash), so each loader check can be tested on its own. Edits:
 import struct
 import sys
 
-HDR = struct.Struct("<8sII16s16sQQIIQQQ")
+HDR = struct.Struct("<8sII16s16sQQIIQQQII32s")
 FIELDS = ["magic", "version", "hdr_size", "uuid", "gen", "vmsize", "guest_id", "nblocks", "nlinks",
-          "code_size", "file_size", "payload_hash"]
+          "code_size", "file_size", "payload_hash", "id_kind", "id_hash", "code_id"]
 M = (1 << 64) - 1
 
 
@@ -60,7 +62,7 @@ def main():
             truncate = int(e.split("=", 1)[1], 0)
         elif e.startswith("hdr."):
             k, v = e[4:].split("=", 1)
-            h[k] = value(h[k], v) & ((1 << 32) - 1 if k in ("version", "hdr_size", "nblocks", "nlinks") else M)
+            h[k] = value(h[k], v) & ((1 << 32) - 1 if k in ("version", "hdr_size", "nblocks", "nlinks", "id_kind", "id_hash") else M)
         elif e.startswith("ent.") or e.startswith("link."):
             kind, rest = e.split(".", 1)
             f, kv = rest.split("=", 1)
@@ -73,6 +75,8 @@ def main():
             h["uuid"] = bytes([h["uuid"][0] ^ 1]) + h["uuid"][1:]
         elif e == "flip.gen":
             h["gen"] = bytes([h["gen"][0] ^ 1]) + h["gen"][1:]
+        elif e == "flip.code_id":
+            h["code_id"] = bytes([h["code_id"][0] ^ 1]) + h["code_id"][1:]
         elif e == "flip.code":
             first = struct.unpack_from("<I", data, ents_at + 4)[0]
             data[code_at + first] ^= 0xff

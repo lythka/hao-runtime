@@ -7,6 +7,7 @@
  */
 #include "hao/aot.h"
 #include "hao/bridge.h"
+#include <CommonCrypto/CommonDigest.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -250,6 +251,8 @@ static void test_stat_rules(const char *tmp)
 static uint8_t gen[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 static uint8_t uuid[16] = {0xaa, 0xbb, 0xcc};
 static uint64_t rlo[1] = {0x4000}, rhi[1] = {0x8000};
+/* the guest's code identity: a cdhash (20 bytes, the rest zero) of hash type 2 (SHA-256) */
+static uint8_t cdhash[HAO_AOT_ID_LEN] = {0xc0, 0xde, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18};
 
 /* A valid file: 3 blocks at code 16/32/48, one link from block 0 to block 2. */
 static size_t build(uint8_t *f, hao_aot_expect *x)
@@ -263,6 +266,9 @@ static size_t build(uint8_t *f, hao_aot_expect *x)
     memcpy(h.gen, gen, 16);
     h.vmsize = 0x10000;
     h.guest_id = 0x1234;
+    h.id_kind = HAO_AOT_ID_CDHASH;
+    h.id_hash = 2;
+    memcpy(h.code_id, cdhash, sizeof h.code_id);
     h.nblocks = 3;
     h.nlinks = 1;
     h.code_size = 64;
@@ -279,7 +285,7 @@ static size_t build(uint8_t *f, hao_aot_expect *x)
     memcpy(q, code, sizeof code);
     h.payload_hash = hao_aot_hash64(f + sizeof h, (size_t)(h.file_size - sizeof h), 0);
     memcpy(f, &h, sizeof h);
-    *x = (hao_aot_expect){uuid, gen, 0x10000, 0x1234, rlo, rhi, 1};
+    *x = (hao_aot_expect){uuid, gen, 0x10000, 0x1234, rlo, rhi, 1, HAO_AOT_ID_CDHASH, 2, cdhash};
     return (size_t)h.file_size;
 }
 
@@ -322,6 +328,46 @@ static void test_format(void)
     MUT("header from another hao build", h->gen[15] ^= 1, 0, "another hao build");
     MUT("vmsize", h->vmsize += 0x1000, 0, "vmsize");
     MUT("guest load commands", h->guest_id ^= 1, 0, "load commands");
+    /* the code identity: a cache that names this guest in every other field
+     * (UUID, vmsize, load commands, build) but was translated from other code */
+    MUT("other code: one cdhash bit", h->code_id[0] ^= 1, 0, "guest code differs");
+    MUT("other code: last cdhash byte", h->code_id[HAO_AOT_CDHASH_LEN - 1] ^= 0x80, 0, "guest code differs");
+    MUT("other code: byte past the cdhash", h->code_id[HAO_AOT_ID_LEN - 1] = 1, 0, "guest code differs");
+    MUT("other code: zero identity", memset(h->code_id, 0, sizeof h->code_id), 0, "guest code differs");
+    MUT("other code, payload hash fixed", h->code_id[5] ^= 0x10, 1, "guest code differs");
+    MUT("same cdhash bytes, another hash type", h->id_hash = 1, 0, "guest code differs");
+    MUT("cache of an unsigned twin for a signed image", h->id_kind = HAO_AOT_ID_CODE, 0, "unsigned guest");
+    MUT("cache of a signed twin for an unsigned image", x.id_kind = HAO_AOT_ID_CODE, 0, "code-signed guest");
+    MUT("identity kind 0", h->id_kind = 0, 0, "unknown code identity kind");
+    MUT("identity kind 3", h->id_kind = 3, 0, "unknown code identity kind");
+    MUT("identity kind 0 on both sides", (h->id_kind = 0, x.id_kind = 0), 0, "no code identity");
+    MUT("image whose identity kind is unknown", x.id_kind = 0, 0, "no code identity");
+    {
+        /* the reason names both identities */
+        n = build(f, &x);
+        h->code_id[0] ^= 1;
+        hao_aot_check(f, n, &x, &v, why, sizeof why);
+        CHECK(strstr(why, "c0de0102030405060708090a0b0c0d0e0f101112") && strstr(why, "c1de0102030405060708090a0b0c0d0e0f101112"),
+              "a code mismatch names the image's cdhash and the cache's (%s)", why);
+        /* identity not computed yet: never accepted, and asked for only by a
+         * file that names this guest, this build and this kind of identity */
+        n = build(f, &x);
+        x.code_id = NULL;
+        CHECK(hao_aot_check(f, n, &x, &v, why, sizeof why) == HAO_AOT_NEED_ID, "no identity yet: a matching header asks for it");
+        h->code_id[0] ^= 1;
+        CHECK(hao_aot_check(f, n, &x, &v, why, sizeof why) == HAO_AOT_NEED_ID, "no identity yet: never accepted, whatever the file says");
+        memset(h->code_id, 0, sizeof h->code_id);
+        CHECK(hao_aot_check(f, n, &x, &v, why, sizeof why) == HAO_AOT_NEED_ID, "no identity yet: a zero identity in the file is not accepted");
+        n = build(f, &x); x.code_id = NULL; h->gen[0] ^= 1;
+        CHECK(hao_aot_check(f, n, &x, &v, why, sizeof why) == -1 && strstr(why, "another hao build"),
+              "no identity yet: another build's cache is rejected without asking");
+        n = build(f, &x); x.code_id = NULL; h->id_kind = HAO_AOT_ID_CODE;
+        CHECK(hao_aot_check(f, n, &x, &v, why, sizeof why) == -1 && strstr(why, "unsigned guest"),
+              "no identity yet: a cache of the other kind is rejected without asking");
+        n = build(f, &x); x.code_id = NULL; h->guest_id ^= 1;
+        CHECK(hao_aot_check(f, n, &x, &v, why, sizeof why) == -1, "no identity yet: other load commands are rejected without asking");
+        n = build(f, &x);
+    }
     MUT("file_size field", h->file_size += 8, 0, "header says");
     MUT("truncated file", n -= 8, 0, "header says");
     MUT("truncated to the header", n = 40, 0, "truncated");
@@ -369,9 +415,90 @@ static void test_format(void)
     printf("fuzz: 200000 mutations, %d accepted, %d rejected, %d out of bounds\n", accepted, rejected, bad);
 }
 
+/* ------------------------------------------------------ code identity */
+
+/* The identity of an unsigned guest: SHA-256 over the documented stream
+ * (hao/aot.h), compared with an independent computation, and different for
+ * every change to the header, the layout or one code byte. */
+static void test_code_id(void)
+{
+    uint8_t hdr[48], c0[0x40], c1[0x20], got[HAO_AOT_ID_LEN], want[HAO_AOT_ID_LEN], other[HAO_AOT_ID_LEN];
+    for (size_t k = 0; k < sizeof hdr; k++) hdr[k] = (uint8_t)(k * 7 + 1);
+    for (size_t k = 0; k < sizeof c0; k++) c0[k] = (uint8_t)(k ^ 0x5a);
+    for (size_t k = 0; k < sizeof c1; k++) c1[k] = (uint8_t)(k + 0x80);
+    uint64_t lo[2] = {0x4000, 0x9000}, hi[2] = {0x4040, 0x9020};
+    const uint8_t *code[2] = {c0, c1};
+    hao_aot_code_id(hdr, sizeof hdr, lo, hi, code, 2, got);
+    CC_SHA256_CTX c;
+    CC_SHA256_Init(&c);
+    uint64_t v;
+    CC_SHA256_Update(&c, "hao-aot-code-v1", 16);
+    v = sizeof hdr; CC_SHA256_Update(&c, &v, 8);
+    CC_SHA256_Update(&c, hdr, sizeof hdr);
+    v = 2; CC_SHA256_Update(&c, &v, 8);
+    CC_SHA256_Update(&c, &lo[0], 8); CC_SHA256_Update(&c, &hi[0], 8); CC_SHA256_Update(&c, c0, sizeof c0);
+    CC_SHA256_Update(&c, &lo[1], 8); CC_SHA256_Update(&c, &hi[1], 8); CC_SHA256_Update(&c, c1, sizeof c1);
+    CC_SHA256_Final(want, &c);
+    CHECK(!memcmp(got, want, sizeof got), "code identity is SHA-256 of tag | len | header | n | (lo | hi | bytes)...");
+    hao_aot_code_id(hdr, sizeof hdr, lo, hi, code, 2, other);
+    CHECK(!memcmp(got, other, sizeof got), "code identity is deterministic");
+#define DIFF(what, change, undo) do { change; hao_aot_code_id(hdr, sizeof hdr, lo, hi, code, 2, other); undo; \
+        CHECK(memcmp(got, other, sizeof got) != 0, "code identity changes with %s", what); } while (0)
+    DIFF("one code bit (the twin: same header and layout, other code)", c0[0x21] ^= 4, c0[0x21] ^= 4);
+    DIFF("the last code byte of the last range", c1[0x1f] ^= 1, c1[0x1f] ^= 1);
+    DIFF("one load-command byte", hdr[40] ^= 1, hdr[40] ^= 1);
+    DIFF("where a range is mapped", (lo[0] += 0x1000, hi[0] += 0x1000), (lo[0] -= 0x1000, hi[0] -= 0x1000));
+    DIFF("a range moved with its end", (lo[1] -= 4, hi[1] -= 4), (lo[1] += 4, hi[1] += 4));
+#undef DIFF
+    /* the same bytes cut differently between header and code, or between ranges, are another identity */
+    uint8_t all[sizeof c0 + sizeof c1];
+    memcpy(all, c0, sizeof c0);
+    memcpy(all + sizeof c0, c1, sizeof c1);
+    uint64_t lo1[1] = {0x4000}, hi1[1] = {0x4000 + sizeof all};
+    const uint8_t *code1[1] = {all};
+    hao_aot_code_id(hdr, sizeof hdr, lo1, hi1, code1, 1, other);
+    CHECK(memcmp(got, other, sizeof got) != 0, "code identity: two ranges are not their concatenation");
+    hao_aot_code_id(hdr, sizeof hdr - 8, lo, hi, code, 2, other);
+    CHECK(memcmp(got, other, sizeof got) != 0, "code identity: a shorter load-command area is another identity");
+    hao_aot_code_id(hdr, sizeof hdr, lo, hi, code, 0, other);
+    CHECK(memcmp(got, other, sizeof got) != 0, "code identity: no code range is another identity");
+}
+
+/* Which directories hold caches for signed code only. */
+static void test_system_dirs(void)
+{
+    CHECK(hao_aot_dir_is_system(HAO_AOT_SYS, "/anything"), "the SYS kind is a system directory");
+    CHECK(hao_aot_dir_is_system(HAO_AOT_SYS_RO, NULL), "the SYS_RO kind is a system directory");
+    CHECK(hao_aot_dir_is_system(HAO_AOT_EXPLICIT, HAO_AOT_SYS_DIR), "HAO_CACHE=/private/var/db/hao is a system directory");
+    CHECK(hao_aot_dir_is_system(HAO_AOT_EXPLICIT, HAO_AOT_SYS_RO_DIR), "HAO_CACHE=/usr/lib/hao/aot is a system directory");
+    CHECK(hao_aot_dir_is_system(HAO_AOT_EXPLICIT, HAO_AOT_SYS_DIR "/sub"), "a directory inside a system directory is one");
+    CHECK(!hao_aot_dir_is_system(HAO_AOT_EXPLICIT, HAO_AOT_SYS_DIR "-other"), "/private/var/db/hao-other is not");
+    CHECK(!hao_aot_dir_is_system(HAO_AOT_EXPLICIT, "/private/var/db"), "the parent of a system directory is not");
+    CHECK(!hao_aot_dir_is_system(HAO_AOT_USER, "/Users/alice/Library/Caches/hao"), "a user's directory is not");
+    CHECK(!hao_aot_dir_is_system(HAO_AOT_EXPLICIT, "/private/tmp/x"), "an explicit scratch directory is not");
+    CHECK(!hao_aot_dir_is_system(HAO_AOT_EXPLICIT, NULL), "an explicit directory with no path is not");
+    /* the directory root's `hao --aot` writes to is a system one; a user's is not */
+    hao_aot_dir d[HAO_AOT_MAX_DIRS];
+    int w;
+    char why[128];
+    hao_aot_dirs_for(HAO_ENV_OPEN, 0, NULL, NULL, d, &w, why, sizeof why);
+    CHECK(w >= 0 && hao_aot_dir_is_system(d[w].kind, d[w].path), "root's write directory is a system directory");
+    hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/alice", NULL, d, &w, why, sizeof why);
+    CHECK(w >= 0 && !hao_aot_dir_is_system(d[w].kind, d[w].path), "a user's write directory is not a system directory");
+    hao_aot_dirs_for(HAO_ENV_OPEN, 0, NULL, "/var/root/staging", d, &w, why, sizeof why);
+    CHECK(w >= 0 && !hao_aot_dir_is_system(d[w].kind, d[w].path), "root's HAO_CACHE staging directory is not a system directory");
+    hao_aot_dirs_for(HAO_ENV_OPEN, 0, NULL, HAO_AOT_SYS_DIR, d, &w, why, sizeof why);
+    CHECK(w >= 0 && hao_aot_dir_is_system(d[w].kind, d[w].path), "root's HAO_CACHE naming a system directory is one");
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) { fprintf(stderr, "usage: policy TMPDIR\n"); return 2; }
+    CHECK(sizeof(hao_aot_hdr) == 136 && __builtin_offsetof(hao_aot_hdr, id_kind) == 96 && __builtin_offsetof(hao_aot_hdr, code_id) == 104 &&
+          __builtin_offsetof(hao_aot_hdr, nblocks) == 64 && HAO_AOT_VERSION == 6,
+          "format v6 header: 136 bytes, id_kind at 96, code_id at 104 (the tools read these offsets)");
+    test_code_id();
+    test_system_dirs();
     test_tiers();
     test_dirs();
     test_stat_rules(argv[1]);

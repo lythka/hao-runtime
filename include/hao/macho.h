@@ -186,6 +186,10 @@ typedef int (*hao_imgsig_fn)(int fd, const char *path, uint64_t slice_off, uint6
 int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype,
                         uint32_t sig_off, uint32_t sig_size, const hao_range *exec, int nexec, bool signer,
                         const char *team, hao_imgsig *out, char *why, size_t n);
+/* The cdhash and hash type of an embedded signature held in memory, after
+ * the structure checks hao_guest_sig_image makes (no page is hashed): the
+ * AOT loader's code identity of a signed image (jit.c). */
+bool hao_guest_sig_cdhash(const uint8_t *blob, size_t len, uint8_t cdhash[20], uint8_t *hash_type, char *why, size_t n);
 /* The runtime hands libval.c hao's signature checker (guest_sig.c), and
  * whether to check signers in user space even where the kernel could
  * (HAO_LIBVAL_USER, tests). Without a checker (the loader's unit tests and

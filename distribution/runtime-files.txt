@@ -231,6 +231,7 @@ tests/a64/test_imm_cond.c
 tests/abi/test_layout.m
 tests/aot/helper_descriptor.c
 tests/aot/installed.c
+tests/aot/loadtime.c
 tests/aot/opts_test.c
 tests/aot/patch.py
 tests/aot/policy.c

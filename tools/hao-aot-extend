@@ -92,7 +92,7 @@ for uuid, paths in by_uuid.items():
     # outer primary bundle wins over its nested helper; fewer path components
     # also selects the current ExtensionKit service over its legacy prefPane.
     oldcache = base / 'root/usr/lib/hao/aot' / (uuid + '.aot')
-    prior_id = struct.unpack_from('<Q', oldcache.read_bytes(), 56)[0] if oldcache.exists() else None
+    prior_id = struct.unpack_from('<Q', oldcache.read_bytes(), 56)[0] if oldcache.exists() else None   # hao_aot_hdr guest_id
     canonical = min(paths, key=lambda p: (identities[p][1] != prior_id if prior_id is not None else False,
                                          len(Path(p).parts), p))
     rejected = [p for p in paths if identities[p][1] != identities[canonical][1]]
@@ -121,7 +121,9 @@ for entry in aot['programs']:
         continue
     cache = out / 'root/usr/lib/hao/aot' / (entry['uuid'] + '.aot')
     with cache.open('rb') as f:
-        header = f.read(96)
+        header = f.read(136)   # hao_aot_hdr, format v6 (include/hao/aot.h)
+    assert header[:8] == b'HAOAOT2\0' and struct.unpack_from('<II', header, 8) == (6, 136), cache
+    assert struct.unpack_from('<I', header, 96)[0] == 1, 'not bound to a signed guest (cdhash): ' + str(cache)
     for path in entry['paths']:
         assert identities[path] == (entry['uuid'], struct.unpack_from('<Q', header, 56)[0]), path
 aot['summary']['inventory_paths'] = len(want)

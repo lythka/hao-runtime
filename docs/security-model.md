@@ -212,6 +212,73 @@ process to the guarded or set-ID rules.
 With `hao_crash=1`, root processes log to `/private/var/log/hao/console.log`
 and other users to a directory of their own under it. The logs hold register
 dumps and image addresses, so each is readable by its owner only (0600).
+## AOT caches
+
+An AOT cache (`<LC_UUID>.aot`, written by `hao --aot FILE`) is x86_64 code that
+hao copies into its code cache and runs in place of translating the guest. hao
+uses one only if both of the following hold.
+
+### Who could write it
+
+| Directory | Read by | Must be owned by |
+|---|---|---|
+| `/usr/lib/hao/aot`, `/private/var/db/hao` | every process | root |
+| `~/Library/Caches/hao` (home from the user database, never `$HOME`) | that user's open-tier processes | root or the user |
+| `HAO_CACHE=/abs/dir` | an open-tier process that sets it | root or the user |
+
+The file, its directory and every directory above must have that owner, no
+group or other write bit (a sticky ancestor is allowed outside the system
+directories), no ACL entry that grants a write-type right, and no symlink the
+user owns on the way. The file is read once into memory, checked there, and
+those bytes are installed.
+
+### What it was translated from
+
+Ownership says who wrote a cache, not which code it stands for. The LC_UUID,
+vmsize and load-command hash in its header only name a guest: a file that
+copies a program's mach header and load commands and carries other
+instructions has all three. So the header (format v6) also carries the
+identity of the code it was translated from, and the loader accepts a cache
+only for an image whose own code gives the same identity.
+
+| Guest | Identity | When `hao --aot` writes it | At load |
+|---|---|---|---|
+| Signed, signature validates | the cdhash of the slice hao runs, with its hash type | after every page of the slice matched that CodeDirectory | cdhash of the signature in the mapped image |
+| Signed, signature does not validate | none | never: no cache is written | |
+| Unsigned | SHA-256 over the mach header, load commands and executable segments | into a user or `HAO_CACHE` directory only | the same hash over the mapped image |
+
+A cdhash covers the header, the load commands and the code, because the
+CodeDirectory holds a hash of every page of the slice and hao requires the
+hashed range to reach the signature. An executable segment that reaches into
+the signature itself, whose bytes are not all sealed, gets no cache.
+
+`hao --aot FILE` works on a private copy: it copies FILE into the cache
+directory (created exclusively, mode 0600, unlinked once mapped), maps the
+copy, checks the copy's signature and translates the mapping. The owner of
+FILE can rewrite it during generation without effect on what is checked or
+translated. Who signed the guest and what it is entitled to are not asked:
+those decide whether hao runs a program, not what its code is, and only an
+image with that cdhash ever loads the cache.
+
+System directories hold caches for signed code only. `hao --aot` writes none
+for an unsigned guest there (as root without `HAO_CACHE`, or with `HAO_CACHE`
+naming a system directory), the loader takes none from there, and
+`tools/hao-install.py` removes any from `/usr/lib/hao/aot`. Guarded processes,
+which search only the system directories, therefore never hash guest code at
+load.
+
+A user's own directory needs no such rule. The user can write any file there,
+with any header, and only that user's open-tier processes read it: the
+ownership rule is the boundary. The identity still applies there, so that
+`hao --aot` on a file the user does not trust cannot produce a cache that
+another of the user's programs loads.
+
+Cost at load, measured for x86_64 code under Rosetta 2 on an M4 Max: the
+identity of a signed image takes 2 to 18 microseconds (`awk`, `zsh`, `vim`),
+which does not show in a cache load of 0.7 to 24 ms (medians before and after
+differ by less than 2% either way); an unsigned copy of `zsh` (544 KB of
+code) loads 1.6 ms slower than before the identity existed.
+`tests/aot/loadtime.c` measures a load.
 
 ## Identity
 
@@ -289,3 +356,11 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - The stub's own-file check and the fork that asks Security.framework were
   tested under Rosetta on an Apple-silicon host. Neither has been run on an
   Intel kernel yet.
+  volumes, hao does not yet check the ARM slice.
+- The AOT loader takes a signed image's cdhash from the signature the image
+  maps and does not hash the image's pages again. Where hao has not checked
+  those pages (the previous item), an image whose code differs from what its
+  own signature covers runs the cache translated from the signed code.
+- An AOT cache in a user's own directory is trusted as far as that user: any
+  process of the user can write one that the user's other open-tier programs
+  load.
