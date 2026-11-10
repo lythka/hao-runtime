@@ -1748,9 +1748,13 @@ static int diag_claim(void)
     return -1;   /* 16 reports at once: this one is skipped */
 }
 
+/* resume the faulting context with its own errno (fault_resume: the calls made here may set it) */
+static inline void fault_resume(ucontext_t *uc, int e, int path) { errno = e; hao_sig_resume(uc, path); errno = e; }
+
 __attribute__((visibility("hidden"))) void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok);
 void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
 {
+    int fe = errno;   /* the interrupted code's, restored before it resumes */
     ucontext_t *uc = ctx;
     uint64_t rip = uc->uc_mcontext->__ss.__rip;
     uint64_t addr = (uint64_t)(uintptr_t)si->si_addr;
@@ -1759,7 +1763,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
         __atomic_fetch_add(&hao_probe_faults, 1, __ATOMIC_RELAXED);
         hao_fault_act_note(HAO_ACT_PROBE, sig, addr, rip, uc, tok);
         uc->uc_mcontext->__ss.__rip = (uint64_t)(uintptr_t)hao_probe_read8_fail;
-        hao_sig_resume(uc, HAO_RESUME_PROBE);
+        fault_resume(uc, fe, HAO_RESUME_PROBE);
         return;
     }
     /* the same fault, stale: another signal's frame was set up first (Rosetta delivers a pending SIGALRM
@@ -1767,7 +1771,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
      * cleanly, when it returns (as a stale NX fault, below) */
     if ((sig == SIGSEGV || sig == SIGBUS) && hao_sig_stale_at(uc, addr, (uint64_t)(uintptr_t)hao_probe_read8_load)) {
         hao_fault_act_note(HAO_ACT_STALE, sig, addr, rip, uc, tok);
-        hao_sig_resume(uc, HAO_RESUME_STALE);
+        fault_resume(uc, fe, HAO_RESUME_STALE);
         return;
     }
     if (hao_opt.crash_trace && !(rip == addr && (hao_image_for_code(rip) || hao_is_trap(rip)))) {
@@ -1794,7 +1798,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
         uc->uc_mcontext->__ss.__r11 = rip;
         uc->uc_mcontext->__ss.__r10 = HAO_CB_FAULT;
         uc->uc_mcontext->__ss.__rip = (uint64_t)(uintptr_t)hao_callback_entry;
-        hao_sig_resume(uc, HAO_RESUME_NX);   /* returns only to go back through __sigreturn */
+        fault_resume(uc, fe, HAO_RESUME_NX);   /* returns only to go back through __sigreturn */
         return;
     }
     if (rip == addr && hao_is_trap(rip)) {
@@ -1807,7 +1811,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
          * dispatcher handle it as if called from guest code */
         uc->uc_mcontext->__ss.__r11 = rip;
         uc->uc_mcontext->__ss.__rip = (uint64_t)(uintptr_t)hao_callback_entry;
-        hao_sig_resume(uc, HAO_RESUME_TRAP);
+        fault_resume(uc, fe, HAO_RESUME_TRAP);
         return;
     }
     /* A stale NX fault: an instruction fetch at guest code or a trap (the x86 error code's I/D bit, the
@@ -1818,7 +1822,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
      * last fault code and address too, but stands after its kill syscall, not at _sigtramp.) */
     if (hao_sig_stale(uc, addr) && (hao_image_for_code(addr) || hao_is_trap(addr))) {
         hao_fault_act_note(HAO_ACT_STALE, sig, addr, rip, uc, tok);
-        hao_sig_resume(uc, HAO_RESUME_STALE);   /* counted there ("stale") */
+        fault_resume(uc, fe, HAO_RESUME_STALE);   /* counted there ("stale") */
         return;
     }
     /* an uncaught exception at a libdispatch callout: its x86_64 personality cannot be called (unwind.c).
@@ -1827,7 +1831,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
         uint64_t pers = uc->uc_mcontext->__ss.__rax;
         if (hao_eh_fault(uc)) {
             hao_fault_act_note(HAO_ACT_EHPERS, sig, pers, uc->uc_mcontext->__ss.__rip, uc, tok);
-            hao_sig_resume(uc, HAO_RESUME_EHPERS);   /* the edited context, without __sigreturn when it can */
+            fault_resume(uc, fe, HAO_RESUME_EHPERS);   /* the edited context, without __sigreturn when it can */
             return;
         }
     }
@@ -1841,7 +1845,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
         const hao_image *pi = NULL;
         int r = hao_code_poison_fault(addr, (uc->uc_mcontext->__es.__err & 2) != 0, guest, &pi);
         if (r > 0) {
-            hao_sig_resume(uc, HAO_RESUME_COMMPAGE);   /* the access again, now that the page is readable */
+            fault_resume(uc, fe, HAO_RESUME_COMMPAGE);   /* the access again, now that the page is readable */
             return;
         }
         if (r < 0) {
@@ -1860,7 +1864,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
     extern bool hao_commpage_fault(uint64_t addr);
     if (hao_commpage_fault(addr)) {
         hao_fault_act_note(HAO_ACT_COMMPAGE, sig, addr, rip, uc, tok);
-        hao_sig_resume(uc, HAO_RESUME_COMMPAGE);   /* the read again, now that the page is there */
+        fault_resume(uc, fe, HAO_RESUME_COMMPAGE);   /* the read again, now that the page is there */
         return;
     }
     /* a guest handler on top of a hao critical section could need the lock
@@ -1868,6 +1872,7 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
     int crit = hao_crit_depth();
     if (!crit) {
         hao_fault_act_note(HAO_ACT_FORWARD, sig, hao_signal_shadow_handler(sig), addr, uc, tok);
+        errno = fe;   /* the handler sees the interrupted code's errno and leaves its own */
         if (hao_signal_forward(sig, si, ctx)) return;
     }
     hao_fault_act_note(HAO_ACT_GIVEUP, sig, addr, rip, uc, tok);

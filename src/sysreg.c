@@ -12,10 +12,17 @@ uint64_t hao_sysreg_read(hao_cpu *cpu, unsigned enc, bool *ok)
     case 0xDF02: /* CNTVCT_EL0 */
     case 0xDF05: /* CNTPCTSS_EL0 */
     case 0xDF06: /* CNTVCTSS_EL0 */ {
-        static mach_timebase_info_data_t tb;
-        if (!tb.denom) mach_timebase_info(&tb);
+        /* numer << 32 | denom, published as one word: a thread never sees half of it */
+        static uint64_t tbw;
+        uint64_t w = __atomic_load_n(&tbw, __ATOMIC_RELAXED);
+        if (!w) {
+            mach_timebase_info_data_t tb;
+            if (mach_timebase_info(&tb) != KERN_SUCCESS || !tb.denom) tb.numer = tb.denom = 1;
+            w = (uint64_t)tb.numer << 32 | tb.denom;
+            __atomic_store_n(&tbw, w, __ATOMIC_RELAXED);
+        }
         /* report a 24 MHz counter like Apple silicon */
-        unsigned __int128 ns = (unsigned __int128)mach_absolute_time() * tb.numer / tb.denom;
+        unsigned __int128 ns = (unsigned __int128)mach_absolute_time() * (uint32_t)(w >> 32) / (uint32_t)w;
         return (uint64_t)(ns * 24 / 1000);
     }
     case 0xD801: /* CTR_EL0 (Arm ARM D23.2.34). Darwin traps EL0 reads (SIGILL on
