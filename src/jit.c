@@ -379,7 +379,7 @@ static void exit_direct(tctx *t, uint64_t target)
     if (t->links) {
         if (t->nlinks == t->caplinks) {
             t->caplinks = t->caplinks ? 2 * t->caplinks : 1024;
-            t->links = realloc(t->links, (size_t)t->caplinks * sizeof *t->links);
+            t->links = hao_alloc_check(realloc(t->links, (size_t)t->caplinks * sizeof *t->links), "AOT branch links");
         }
         t->links[t->nlinks].site = (uint32_t)j;
         t->links[t->nlinks].target = target;
