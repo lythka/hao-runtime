@@ -65,6 +65,10 @@
  * descriptor. Library validation's user-space route (hao_guest_sig_image,
  * below) is different: it asks Security in the running process, where a
  * fork could not safely do it.
+ *
+ * Cost: a signed image's pages are hashed once in its process (libval.c
+ * hao_slice_verify keeps the answer with the slice), and the trusted cdhash
+ * lists are read once per process.
  */
 #include "hao/runtime.h"
 #include "hao/aot.h"
@@ -91,33 +95,68 @@
 
 /* -------------------------------------------- signer: trusted cdhash list */
 
-/* "# comment" lines and one lowercase or uppercase 40-hex cdhash per line. */
-static bool list_has(const char *data, size_t len, const uint8_t cdhash[CS_CDHASH_LEN_])
+/*
+ * The lists are read once per process, into one sorted array of cdhashes
+ * that every later question searches: a process asks once for each Apple
+ * library it loads on a kernel that cannot hold their signatures, and
+ * reading a list means resolving its path, checking the owner, mode and ACL
+ * of the file and of every directory above it, and reading up to 16 MiB.
+ * Those checks are made when the list is read; what was read is what is
+ * trusted for the life of the process, also in the children it forks (the
+ * array is ordinary memory, and no lock guards it: guest images are checked
+ * under the runtime's load lock, and a list read twice by a race would only
+ * be read twice).
+ */
+typedef struct { size_t n, cap; uint8_t (*h)[CS_CDHASH_LEN_]; } cdhash_set;
+static const cdhash_set *trusted;      /* NULL: not read yet */
+
+static int hexval(char c)
 {
-    char want[2 * CS_CDHASH_LEN_ + 1];
-    for (int k = 0; k < CS_CDHASH_LEN_; k++) snprintf(want + 2 * k, 3, "%02x", cdhash[k]);
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* "# comment" lines and one lowercase or uppercase 40-hex cdhash per line,
+ * alone or followed by a space or tab and anything; other lines are skipped. */
+static bool list_parse(const char *data, size_t len, cdhash_set *set)
+{
     for (const char *p = data, *e = data + len; p < e;) {
         const char *nl = memchr(p, '\n', (size_t)(e - p));
         size_t l = (size_t)((nl ? nl : e) - p);
-        if (l >= 2 * CS_CDHASH_LEN_ && p[0] != '#' && (l == 2 * CS_CDHASH_LEN_ || p[2 * CS_CDHASH_LEN_] == ' ' || p[2 * CS_CDHASH_LEN_] == '\t')) {
-            bool eq = true;
-            for (int k = 0; k < 2 * CS_CDHASH_LEN_ && eq; k++) eq = (p[k] | 0x20) == want[k];
-            if (eq) return true;
+        if (l >= 2 * CS_CDHASH_LEN_ && (l == 2 * CS_CDHASH_LEN_ || p[2 * CS_CDHASH_LEN_] == ' ' || p[2 * CS_CDHASH_LEN_] == '\t')) {
+            uint8_t h[CS_CDHASH_LEN_];
+            bool hex = true;
+            for (int k = 0; k < CS_CDHASH_LEN_ && hex; k++) {
+                int hi = hexval(p[2 * k]), lo = hexval(p[2 * k + 1]);
+                hex = hi >= 0 && lo >= 0;
+                h[k] = (uint8_t)(hi << 4 | lo);
+            }
+            if (hex) {
+                if (set->n == set->cap) {
+                    size_t cap = set->cap ? 2 * set->cap : 1024;
+                    void *m = realloc(set->h, cap * sizeof *set->h);
+                    if (!m) return false;
+                    set->h = m;
+                    set->cap = cap;
+                }
+                memcpy(set->h[set->n++], h, sizeof h);
+            }
         }
         p += l + 1;
     }
-    return false;
+    return true;
 }
 
-/* 1: listed, 0: not (or no list), -1: a list exists but is not trusted (why set) */
-static int trusted_list_has(const hao_aot_dir *d, const char *name, const uint8_t cdhash[CS_CDHASH_LEN_], char *why, size_t n)
+/* Add the list d->path/name to set. 1: read, 0: no such list, -1: a list
+ * exists but is not trusted or cannot be read (why set). */
+static int list_read(const hao_aot_dir *d, const char *name, cdhash_set *set, char *why, size_t n)
 {
     struct stat st;
+    why[0] = 0;
     int fd = hao_aot_open_trusted(d, name, &st, why, n);
     if (fd < 0) return why[0] ? -1 : 0;
-    int r = 0;
+    int r = 1;
     if (st.st_size > 16 << 20) { snprintf(why, n, "larger than 16 MiB"); r = -1; }
-    char *buf = r ? NULL : malloc(st.st_size ? (size_t)st.st_size : 1);
+    char *buf = r < 0 ? NULL : malloc(st.st_size ? (size_t)st.st_size : 1);
     size_t got = 0;
     while (buf && got < (size_t)st.st_size) {
         ssize_t k = pread(fd, buf + got, (size_t)st.st_size - got, (off_t)got);
@@ -125,44 +164,58 @@ static int trusted_list_has(const hao_aot_dir *d, const char *name, const uint8_
         if (k <= 0) break;
         got += (size_t)k;
     }
-    if (buf) r = list_has(buf, got, cdhash);
+    if (r > 0 && (!buf || !list_parse(buf, got, set))) { snprintf(why, n, "out of memory"); r = -1; }
     free(buf);
     close(fd);
     return r;
 }
 
-/* 1: the cdhash is in the system's trusted cdhash list or HAO_TRUST_LIST's
- * (an open-tier process only), else 0; a list that exists but cannot be
- * used is reported. */
-static int trusted_cdhash(const uint8_t cdhash[CS_CDHASH_LEN_], char *w2, size_t w2n)
+static int cdhash_cmp(const void *a, const void *b) { return memcmp(a, b, CS_CDHASH_LEN_); }
+
+/* The system's trusted cdhash list and HAO_TRUST_LIST's (an open-tier
+ * process only: hao_opt.trust_list is empty elsewhere), read once. A list
+ * that exists but cannot be used is reported, once. */
+static const cdhash_set *trusted_set(void)
 {
+    const cdhash_set *have = __atomic_load_n(&trusted, __ATOMIC_ACQUIRE);
+    if (have) return have;
     FILE *f = HAO_DIAG;
-    w2[0] = 0;
+    char w[400];
+    cdhash_set *set = calloc(1, sizeof *set);
+    if (!set) return NULL;
     hao_aot_dir sys = {HAO_TRUST_SYS_DIR, HAO_AOT_SYS_RO}, ex = {"", HAO_AOT_EXPLICIT};
-    int in = trusted_list_has(&sys, HAO_TRUST_NAME, cdhash, w2, w2n);
-    if (in < 0 && hao_opt.verbose) {
+    if (list_read(&sys, HAO_TRUST_NAME, set, w, sizeof w) < 0 && hao_opt.verbose) {
         hao_diag_prefix(f);
-        fprintf(f, "%s/%s: not used: %s\n", HAO_TRUST_SYS_DIR, HAO_TRUST_NAME, w2);
+        fprintf(f, "%s/%s: not used: %s\n", HAO_TRUST_SYS_DIR, HAO_TRUST_NAME, w);
     }
-    if (in <= 0 && hao_opt.trust_list[0]) {
-        char dir[1024];
+    if (hao_opt.trust_list[0]) {
         const char *sl = strrchr(hao_opt.trust_list, '/');
+        int in = -1;
         if (hao_opt.trust_list[0] == '/' && sl && sl[1]) {
-            snprintf(dir, sizeof dir, "%.*s", sl == hao_opt.trust_list ? 1 : (int)(sl - hao_opt.trust_list), hao_opt.trust_list);
-            snprintf(ex.path, sizeof ex.path, "%s", dir);
-            w2[0] = 0;
-            in = trusted_list_has(&ex, sl + 1, cdhash, w2, w2n);
-        } else {
-            snprintf(w2, w2n, "not an absolute file path");
-            in = -1;
-        }
-        if (in < 0) {
+            snprintf(ex.path, sizeof ex.path, "%.*s", sl == hao_opt.trust_list ? 1 : (int)(sl - hao_opt.trust_list), hao_opt.trust_list);
+            in = list_read(&ex, sl + 1, set, w, sizeof w);
+            if (!in) snprintf(w, sizeof w, "no such file");
+        } else snprintf(w, sizeof w, "not an absolute file path");
+        if (in <= 0) {
             hao_diag_prefix(f);
-            fprintf(f, "HAO_TRUST_LIST=%s: not used: %s\n", hao_opt.trust_list, w2[0] ? w2 : "no such file");
+            fprintf(f, "HAO_TRUST_LIST=%s: not used: %s\n", hao_opt.trust_list, w);
         }
     }
-    w2[0] = 0;
-    return in > 0;
+    if (set->n) qsort(set->h, set->n, sizeof *set->h, cdhash_cmp);
+    const cdhash_set *expect = NULL;
+    if (!__atomic_compare_exchange_n(&trusted, &expect, set, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        free(set->h);                                  /* another thread read them first */
+        free(set);
+        return expect;
+    }
+    return set;
+}
+
+/* Is the cdhash in a trusted cdhash list? */
+static bool trusted_cdhash(const uint8_t cdhash[CS_CDHASH_LEN_])
+{
+    const cdhash_set *set = trusted_set();
+    return set && set->n && bsearch(cdhash, set->h, set->n, sizeof *set->h, cdhash_cmp) != NULL;
 }
 
 /* ------------------------------------------------- signer: the kernel */
@@ -449,8 +502,7 @@ int hao_guest_sig_enforce(int fd, const char *path)
         kind = "ad hoc";
         by = "CodeDirectory and page hashes";
     } else {
-        int in = trusted_cdhash(s.cdhash, w2, sizeof w2);
-        if (in > 0) {
+        if (trusted_cdhash(s.cdhash)) {
             kind = "Apple";
             by = "trusted cdhash list";
             apple = true;
@@ -515,32 +567,25 @@ out:
 /* ----------------------------------------- guest libraries (libval.c) */
 
 /*
- * A guest dylib's signature, checked here as for the main executable: the
- * structure, the best CodeDirectory and its cdhash, every page hash of the
- * slice at the page size the CodeDirectory declares (4 or 16 KiB), and
- * nothing the loader maps outside the hashed range but the signature.
- * With signer, also who signed it: ad hoc (nobody), a trusted cdhash list
- * (Apple), else Security.framework (the CMS over this CodeDirectory, then
- * `anchor apple`, and the Team ID's certificate when team is given). The
- * kernel's own answer is libval.c's: this is the route for signatures the
- * kernel cannot hold (an x86_64 kernel registers only 4 KiB pages).
- * 0: valid (out filled); -1: not (why; out->bad_exec when a page of an
- * executable segment does not match its hash).
+ * Who signed a guest library, for libval.c, which has verified its
+ * signature on the bytes the image is built from (sl->sig: structure, the
+ * best CodeDirectory and its cdhash, every page hash) and asks here only
+ * where the kernel cannot answer (an x86_64 kernel registers only 4 KiB
+ * pages): ad hoc (nobody), a trusted cdhash list (Apple), else
+ * Security.framework (the CMS over this CodeDirectory, then `anchor apple`,
+ * and the Team ID's certificate when team is given). Nothing is hashed
+ * here: the answer is about the cdhash libval.c verified.
+ * 0: out filled; -1: Security could not validate the signature (why).
  */
-int hao_guest_sig_image(hao_slice *sl, const char *path, bool signer, const char *team, hao_imgsig *out,
-                        char *why, size_t n)
+int hao_guest_sig_image(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n)
 {
     memset(out, 0, sizeof *out);
-    char w2[400] = "";
-    if (hao_slice_verify(sl, &out->bad_exec, w2, sizeof w2) != 0) {
-        snprintf(why, n, "code signature invalid (%s)", w2);
-        return -1;
-    }
     const hao_codesig *s = &sl->sig;
-    if (!signer) return 0;
+    if (!s->cd) { snprintf(why, n, "its signature was not verified"); return -1; }
     if (s->flags & CS_ADHOC_) { out->by = "ad hoc"; return 0; }
-    if (trusted_cdhash(s->cdhash, w2, sizeof w2)) { out->apple = true; out->by = "trusted cdhash list"; return 0; }
+    if (trusted_cdhash(s->cdhash)) { out->apple = true; out->by = "trusted cdhash list"; return 0; }
     /* a team requirement only for a well-formed Team ID (it is quoted into the requirement text) */
+    char w2[400] = "";
     bool team_ok = false, tsafe = team && team[0] && strlen(team) < 32;
     for (const char *t = team; tsafe && *t; t++)
         tsafe = (*t >= 'A' && *t <= 'Z') || (*t >= '0' && *t <= '9') || (*t >= 'a' && *t <= 'z');

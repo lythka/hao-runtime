@@ -371,12 +371,19 @@ static bool pages_valid(const uint8_t *bytes, const hao_codesig *s, const hao_ra
  * result: whoever decides anything about this image reads it there.
  * 0: valid; -1: not (why; *bad_exec, if not NULL, when a page of an
  * executable segment does not match its hash).
+ *
+ * The slice's bytes do not change (hao_slice), so it is hashed once: the
+ * CLI's policy (hao_guest_sig_enforce), the main executable's policy
+ * (decide) and a library's integrity and signer (check_image) all ask
+ * here, and whoever asks second gets the first answer.
  */
+unsigned hao_slice_verify_passes;
+
 int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n)
 {
     hao_codesig s;
     if (bad_exec) *bad_exec = false;
-    memset(&sl->sig, 0, sizeof sl->sig);
+    if (sl->sig.cd) return 0;
     if (!sl->sig_size) { snprintf(why, n, "not code signed"); return -1; }
     if ((uint64_t)sl->sig_off + sl->sig_size > sl->size || sl->sig_size > CS_MAX_BLOB) {
         snprintf(why, n, "code signature [%#x, +%#x) outside the slice", sl->sig_off, sl->sig_size);
@@ -391,6 +398,7 @@ int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n)
     }
     hao_range ex[16];
     int nex = exec_ranges(sl->cmds, sl->ncmds, ex, 16);
+    hao_slice_verify_passes++;
     if (!pages_valid(sl->bytes, &s, ex, nex, bad_exec, why, n)) return -1;
     sl->sig = s;
     return 0;
@@ -401,7 +409,7 @@ int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n)
 static int mode = HAO_LIBVAL_UNDECIDED;
 static bool expect_main;
 static char reason[160];
-static hao_imgsig_fn verifier;      /* guest_sig.c's checker (NULL: the loader's unit tests) */
+static hao_imgsig_fn verifier;      /* guest_sig.c's signer check (NULL: the loader's unit tests) */
 static bool force_user;             /* HAO_LIBVAL_USER: signers in user space even where the kernel answers */
 static bool integrity;              /* the policy came from the main executable's signature: pages are checked */
 static bool main_platform;          /* the main executable's CodeDirectory has a platform identifier */
@@ -429,10 +437,10 @@ int hao_libval_mode(void) { return mode; }
 const char *hao_libval_reason(void) { return reason; }
 
 /* The policy, from the main executable's signature. A signed main executable
- * is verified here on the bytes it is built from, whoever checked it before
- * (hao_guest_sig_enforce on the same slice; nobody, for an embedded
- * program), and the policy is read from that CodeDirectory: an invalid
- * signature is a refusal, not a program without a policy. */
+ * is verified on the bytes it is built from (by hao_guest_sig_enforce
+ * already, on this slice, for the CLI; here for an embedded program), and
+ * the policy is read from that CodeDirectory: an invalid signature is a
+ * refusal, not a program without a policy. */
 static int decide(hao_slice *sl, char *why, size_t n)
 {
     static const hao_codesig unsigned_code;
@@ -524,30 +532,31 @@ static const char *lv_rule(const char *team, const hao_imgsig *g)
  *     CodeDirectories, so on Intel every 16 KiB-page arm64 signature
  *     (all of Apple's) takes the user-space route. So does a same-team
  *     library the kernel refuses because the process's Team ID is hao's.
- * Everything below is about sl->sig, the CodeDirectory step 1 verified.
+ * Everything in step 2 is about sl->sig, the CodeDirectory step 1 verified:
+ * the pages are hashed once, whichever route decides.
  */
 static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
 {
     bool lv = mode == HAO_LIBVAL_KERNEL || mode == HAO_LIBVAL_PLATFORM;
-    if (!verifier) { snprintf(k, kn, "no signature checker in this process"); return -1; }
     if (!sl->sig_size) {
         if (!lv) return 0;
         snprintf(k, kn, "mapped file is not code signed");
         return -1;
     }
     snprintf(route, sizeof route, "integrity");
-    hao_imgsig g;
+    hao_imgsig g = {0};
     char w[400] = "";
-    if (verifier(sl, img->path, false, NULL, &g, w, sizeof w) != 0) {
-        if (g.bad_exec) {
-            char msg[700];
-            snprintf(msg, sizeof msg, "%s: %s: a page of an executable segment; killed as the kernel kills it natively", img->path, w);
+    bool bad_exec = false;
+    if (hao_slice_verify(sl, &bad_exec, w, sizeof w) != 0) {
+        snprintf(k, kn, "code signature invalid (%s)", w);
+        if (bad_exec) {
+            char msg[1700];
+            snprintf(msg, sizeof msg, "%s: %s: a page of an executable segment; killed as the kernel kills it natively", img->path, k);
             if (report_line) report_line(msg);
             else fprintf(stderr, "hao: %s\n", msg);
             terminate_with_payload(getpid(), OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_INVALID_PAGE, NULL, 0, msg, 0);
             _exit(137);
         }
-        snprintf(k, kn, "%s", w);
         return -1;
     }
     if (!lv) return 0;
@@ -585,7 +594,8 @@ static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
         }
     }
     snprintf(route, sizeof route, "user space%s, %u KiB pages", force_user ? " (HAO_LIBVAL_USER)" : "", 1u << (cs->page_shift - 10));
-    if (verifier(sl, img->path, true, main_team[0] ? main_team : NULL, &g, w, sizeof w) != 0) {
+    if (!verifier) { snprintf(k, kn, "nothing in this process can say who signed it"); return -1; }
+    if (verifier(sl, img->path, main_team[0] ? main_team : NULL, &g, w, sizeof w) != 0) {
         snprintf(k, kn, "%s", w);
         return -1;
     }

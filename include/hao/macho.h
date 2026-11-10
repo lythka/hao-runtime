@@ -175,6 +175,8 @@ typedef struct hao_slice {
     uint32_t sig_off, sig_size; /* its one LC_CODE_SIGNATURE (sig_size 0: not signed); not yet checked to lie in the slice */
     hao_codesig sig;            /* the signature, once hao_slice_verify accepted it (sig.cd NULL: not verified) */
 } hao_slice;
+/* Page-hash passes hao_slice_verify has made in this process (tests: one for each signed image). */
+extern unsigned hao_slice_verify_passes;
 /* The slice the loader runs (arm64e, else arm64) of the regular file open on
  * fd; NULL with why filled if there is none or its header or load commands
  * are malformed. */
@@ -244,25 +246,25 @@ bool hao_codesig_library_validated(const hao_codesig *cs);
 /* Check the slice's signature on its bytes: structure, every page hash, and
  * that nothing in the slice but the signature lies outside the hashed range.
  * 0: valid, and sl->sig is the signature; -1: not (why; *bad_exec, if not
- * NULL, when a page of an executable segment does not match its hash). */
+ * NULL, when a page of an executable segment does not match its hash). A
+ * slice is hashed once: a second call for a verified slice returns 0. */
 int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n);
-/* A guest image's signature as hao checks it in user space (guest_sig.c
- * hao_guest_sig_image, through hao_libval_set_verifier). */
+/* Who signed a guest library whose signature hao verified (sl->sig), where
+ * the kernel cannot say (guest_sig.c hao_guest_sig_image, through
+ * hao_libval_set_verifier): nobody (ad hoc), Apple (a trusted cdhash list
+ * or `anchor apple`), or with team a certificate of that Team ID. */
 typedef struct {
-    bool apple;          /* signer asked: a trusted cdhash list or `anchor apple` (Security) */
-    bool team_ok;        /* signer asked with a team: its certificate is that Team ID's */
-    bool bad_exec;       /* invalid: a page of an executable segment does not match its hash */
-    const char *by;      /* who vouched (signer asked) */
+    bool apple;          /* a trusted cdhash list or `anchor apple` (Security) */
+    bool team_ok;        /* asked with a team: the certificate is that Team ID's */
+    const char *by;      /* who vouched */
 } hao_imgsig;
-typedef int (*hao_imgsig_fn)(hao_slice *sl, const char *path, bool signer, const char *team, hao_imgsig *out,
-                             char *why, size_t n);
-int hao_guest_sig_image(hao_slice *sl, const char *path, bool signer, const char *team, hao_imgsig *out,
-                        char *why, size_t n);
-/* The runtime hands libval.c hao's signature checker (guest_sig.c), and
- * whether to check signers in user space even where the kernel could
- * (HAO_LIBVAL_USER, tests). Without a checker (the loader's unit tests and
- * fuzzers) only the kernel is asked. report writes a diagnostic line (the
- * diagnostics log) before an invalid page ends the process. */
+typedef int (*hao_imgsig_fn)(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n);
+int hao_guest_sig_image(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n);
+/* The runtime hands libval.c the signer check (guest_sig.c), and whether to
+ * establish signers in user space even where the kernel could
+ * (HAO_LIBVAL_USER, tests). Without one (the loader's unit tests and
+ * fuzzers) a library that needs it is refused. report writes a diagnostic
+ * line (the diagnostics log) before an invalid page ends the process. */
 void hao_libval_set_verifier(hao_imgsig_fn fn, bool force_user, void (*report)(const char *line));
 enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
 /* The next image loaded is the main executable: its signature sets the

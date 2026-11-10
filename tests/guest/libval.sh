@@ -150,6 +150,16 @@ mkdir -m 700 -p "$OUT/trust"
 echo "$PLATLIB" >"$OUT/trust/paths"
 python3 "$repo/tools/hao-trust-list" / "$OUT/trust/paths" >"$OUT/trust/list" 2>"$OUT/trust/err"
 grep -q '^[0-9a-f]\{40\} ' "$OUT/trust/list" || { echo "FAIL tools/hao-trust-list did not list $PLATLIB: $(cat "$OUT/trust/err")"; fail=1; }
+# hao reads the list once and searches it sorted: put the library's line among 4000 others, out of order,
+# in upper case, between comments and lines that are not cdhashes
+python3 -I - "$OUT/trust/list" <<'EOF'
+import hashlib, sys
+p = sys.argv[1]
+real = [l for l in open(p).read().splitlines() if l and not l.startswith("#")]
+other = [hashlib.sha1(b"other %d" % k).hexdigest() + " other/%d" % k for k in range(4000)]
+lines = ["# test list"] + other[:1500] + ["not a cdhash", "", "abcdef"] + [l[:40].upper() + l[40:] for l in real] + other[1500:]
+open(p, "w").write("\n".join(lines) + "\n")
+EOF
 chmod 600 "$OUT/trust/list"
 case " $MODES " in *" aot "*)
     mkdir -m 700 "$OUT/aot"
