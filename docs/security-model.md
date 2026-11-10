@@ -68,7 +68,10 @@ also every routed exec), hao checks the slice it will run (arm64e, else arm64):
 | Set-user-ID or set-group-ID whose owner or group this process is not | refused |
 
 Refusals exit with status 126 and a `hao[prog:pid]:` diagnostic; `-v` prints
-the verdict, who gave it and the cdhash.
+the verdict, who gave it and the cdhash. A switch that the process's tier
+ignores (`--allow-unsigned`, `HAO_FLAGS` or `HAO_TRUST_LIST` outside an
+open-tier process) is named on standard error whatever the verbosity:
+`hao: --allow-unsigned ignored (guarded process)`.
 
 ### Integrity
 
@@ -102,8 +105,11 @@ The first route that answers decides:
 4. **Security.framework**: the CMS over the CodeDirectory, then
    `anchor apple`. This is the only route that needs `trustd`, and only
    CMS-signed guests that are in no list and that the kernel does not register
-   reach it. Security.framework is loaded only for this route, so it never
-   stays in a guest's process.
+   reach it. For the main executable hao asks in a short-lived fork of the
+   process that is about to run the guest and takes only that child's exit
+   status, for the cdhash the parent computed itself. The fork is this code by
+   construction; no program is started by path to give the answer.
+   Security.framework is loaded in the child only.
 
 The list exists because an x86_64 kernel accepts only CodeDirectories with
 4 KiB pages, and Apple's arm64 code is signed with 16 KiB pages: route 3
@@ -112,10 +118,20 @@ daemon, which matters for programs that launchd starts before `trustd`.
 
 ### Check and load the same file
 
-The check runs in the launcher's first stage, which then re-executes into the
-guest's process. The first stage passes the checked file's device and inode to
-the second (`HAO_EXEC_ID`); the second refuses to run without them and refuses
-a mapped file that is not the one checked.
+The launcher runs in two stages. The first only re-executes hao with the
+guest's arguments and the ObjC tagged-pointer switch. The second, which is
+the guest's process, opens the file, applies the checks above to that
+descriptor and maps the image from the same descriptor. Security.framework,
+where it is asked, opens the path itself; its answer counts only for the
+cdhash hao computed on the descriptor.
+
+What the first stage passes in the environment is a hint and carries no
+trust: `HAO_EXEC` is the path, `HAO_EXEC_FLAGS` the command line's switches.
+Anyone can start hao as its own second stage; the file is checked all the
+same. Each command-line switch is honoured where the environment switch of
+the same effect is: `-v` as `HAO_VERBOSE` and `--interp` as `HAO_INTERP`,
+`--stats` and `--allow-unsigned` in an open-tier process only. An inherited
+`HAO_FLAGS` is honoured in an open-tier process only.
 
 ## Library validation
 
@@ -137,7 +153,13 @@ binary without its own `disable-library-validation`, hao:
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
 `DYLD_EXIT_REASON_DYLIB_MISSING`). In a test build (`HAO_TEST_SWITCHES`),
-`HAO_LIBVAL_USER=1` takes the user-space route on any kernel.
+`HAO_LIBVAL_USER=1` takes the user-space route on any kernel, for the main
+executable's signer too.
+
+Where a guest library's signer has to come from Security.framework (for
+example a CMS-signed library that is in no list, on a kernel that cannot hold
+its signature), hao asks in the guest's process, which keeps the framework
+loaded from then on.
 
 In a set-ID process hao searches for a guest's dependencies as dyld does for
 one: `@executable_path` is not expanded, `@loader_path` is not expanded in an
@@ -206,6 +228,24 @@ embedded with `tools/hao-embed`. Script interpreters must be embedded too: the
 kernel does not interpret twice, so a script whose interpreter is a routed
 program fails with `EBADARCH`.
 
+### Embedded programs
+
+An embedded program's x86_64 slice is the stub, which runs the ARM slice of
+the same file. The stub loads that slice only from the file the kernel is
+running: it asks the kernel for the device and inode of the vnode behind its
+own Mach-O header (`proc_pidinfo`, or the `executable_file=` pair the kernel
+passes at exec where a sandbox denies that), opens the executable's path,
+and refuses with status 126 unless the descriptor is that file. The slice is
+mapped from that descriptor. A link in the path that was repointed after the
+exec therefore cannot put another file's ARM code into the process.
+
+A stub whose program uses ObjC re-executes itself once to turn off libobjc's
+tagged-pointer obfuscation, unless its parent's exec already did. It
+re-executes the path it was started through while that still names its own
+file, else the kernel's path for its vnode, and never another file. A process
+whose credentials changed at exec (set-user-ID or set-group-ID: `issetugid()`,
+or a real ID that differs from the effective one) does not re-execute.
+
 Because any user can run any ARM code through it, **`/usr/libexec/hao` must
 never be given privileges**: no TCC grants, configuration profiles, extra
 entitlements, platform or trust-cache status, or set-ID bits. Its own
@@ -214,9 +254,13 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 
 ## Known limitations
 
-- hao reopens a routed guest by path. The device and inode check catches a
-  swapped file, not one rewritten in place by its owner between the check and
-  the mapping, or before hao reads a page it has not translated yet.
+- hao checks and maps a guest through one descriptor, but the two are not
+  atomic: a file rewritten in place by someone who may write it, between the
+  check and the mapping or before hao reads a page it has not translated yet,
+  is not caught.
+- HaoExec hands hao a path, not the file the kernel examined, and hao opens
+  it again. Routing grants nothing, so a path that names another file by then
+  only runs that file under the same checks.
 - HaoExec routes unsigned and set-ID files; hao refuses them afterwards.
 - HaoExec clears CR0.WP on one CPU, with interrupts off, for the one store
   that installs its activator. A non-maskable interrupt taken in that window
@@ -225,6 +269,23 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   nothing else changes the System volume during the install, as in an image
   builder.
 - A routed process cannot take on the guest's code identity or entitlements.
+- In the command-line route, native library initializers run before hao's
+  check. If one of them asks for the main executable's path or sections, it
+  is answered from the file `HAO_EXEC` names, unchecked. A file that fails
+  the check never runs.
 - An embedded stub's signature does not cover the ARM slice. On a sealed
   system volume this does not matter; for embedded programs on writable
-  volumes, hao does not yet check the ARM slice.
+  volumes, hao does not yet check the ARM slice. It does check that the
+  slice comes from the stub's own file.
+- A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
+  obfuscation on: the stub does not re-execute there, and where `issetugid()`
+  is set libobjc would ignore the switch anyway. Translated code that tests
+  for tagged pointers inline can misread them.
+  Programs that do not use ObjC (stubs marked `__hao_noreexec`) are not
+  affected.
+- A process that may not fork (a sandbox that denies `process-fork`) cannot
+  ask Security.framework about a main executable: a guest whose signer only
+  that route can give is refused there.
+- The stub's own-file check and the fork that asks Security.framework were
+  tested under Rosetta on an Apple-silicon host. Neither has been run on an
+  Intel kernel yet.

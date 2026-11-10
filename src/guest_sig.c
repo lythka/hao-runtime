@@ -52,12 +52,17 @@
  *        cdhash): the only step that needs trustd, reached only by
  *        CMS-signed guests that are neither listed nor registrable.
  *
- * The check runs in the CLI's stage 1, which re-execs into stage 2: any
- * framework it loads (with dlopen; libhao does not link them) never reaches
- * the guest's process or any embedded program. It reads the file through
- * one descriptor and hands that file's device and inode to stage 2
- * (HAO_EXEC_ID), whose run_guest refuses an image whose file is not that
- * one (a path swapped between check and load).
+ * The check runs in the process that runs the guest (the CLI's stage 2), on
+ * the descriptor the loader then maps the image from: nothing a caller puts
+ * in the environment or in argv stands in for it, and no path is opened
+ * twice. Everything but the Security.framework step needs only libc and
+ * CommonCrypto. That step runs in a fork of this process, which exits with
+ * the answer (sec_ask): the frameworks it loads (with dlopen; libhao does
+ * not link them) are not loaded into the guest's process for this check,
+ * and the answer is for the cdhash this process computed on its own
+ * descriptor. Library validation's user-space route (hao_guest_sig_image,
+ * below) is different: it asks Security in the running process, where a
+ * fork could not safely do it.
  */
 #include "hao/runtime.h"
 #include "hao/aot.h"
@@ -73,6 +78,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -573,27 +579,67 @@ out:
     return rc;
 }
 
+/*
+ * sec_verdict for the main executable, asked in a child. Security.framework
+ * and what it loads must not stay in the process that runs the guest, so the
+ * question goes to a fork of this process, which exits with the answer. A
+ * fork, not an exec of hao's path: the child is this code by construction,
+ * where a path could name another program by the time it is run. The child
+ * answers for s->cdhash, which this process computed on its own descriptor,
+ * and only one of the three statuses below counts: a child that is killed,
+ * or that leaves any other way, is a refusal. The pipe carries the reason,
+ * for the diagnostic only.
+ */
+enum { SEC_CHILD_VALID = 90, SEC_CHILD_APPLE = 91, SEC_CHILD_REFUSED = 92 };
+
+static int sec_ask(const char *path, uint32_t subtype, const sig_info *s, bool *apple, char *why, size_t n)
+{
+    int p[2];
+    if (pipe(p) != 0) { snprintf(why, n, "cannot ask Security.framework (pipe: %s)", strerror(errno)); return -1; }
+    /* waitpid gets the status whatever SIGCHLD disposition this process inherited: an ignored SIGCHLD
+     * does not reap children here, and SA_NOCLDWAIT does not survive the exec that started this process */
+    int rc = -1;
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(p[0]);
+        bool a = false;
+        char w[400] = "";
+        int r = sec_verdict(path, subtype, s, &a, NULL, NULL, w, sizeof w);
+        if (r != 0) (void)!write(p[1], w, strlen(w));
+        _exit(r != 0 ? SEC_CHILD_REFUSED : a ? SEC_CHILD_APPLE : SEC_CHILD_VALID);
+    }
+    close(p[1]);
+    if (pid < 0) {
+        snprintf(why, n, "cannot ask Security.framework (fork: %s)", strerror(errno));
+    } else {
+        char w[400];
+        size_t got = 0;
+        for (;;) {
+            ssize_t k = read(p[0], w + got, sizeof w - 1 - got);
+            if (k < 0 && errno == EINTR) continue;
+            if (k <= 0) break;
+            got += (size_t)k;
+        }
+        w[got] = 0;
+        int st = 0;
+        pid_t r;
+        while ((r = waitpid(pid, &st, 0)) < 0 && errno == EINTR) {}
+        if (r == pid && WIFEXITED(st) && (WEXITSTATUS(st) == SEC_CHILD_VALID || WEXITSTATUS(st) == SEC_CHILD_APPLE)) {
+            *apple = WEXITSTATUS(st) == SEC_CHILD_APPLE;
+            rc = 0;
+        } else if (r == pid && WIFEXITED(st) && WEXITSTATUS(st) == SEC_CHILD_REFUSED && got) {
+            snprintf(why, n, "%s", w);
+        } else if (r == pid && WIFSIGNALED(st)) {
+            snprintf(why, n, "the Security.framework check was killed by signal %d", WTERMSIG(st));
+        } else {
+            snprintf(why, n, "the Security.framework check gave no answer (wait status %#x)", r == pid ? (unsigned)st : ~0u);
+        }
+    }
+    close(p[0]);
+    return rc;
+}
+
 /* ------------------------------------------------------------- policy */
-
-static dev_t checked_dev;
-static ino_t checked_ino;
-static bool checked;
-
-bool hao_guest_sig_matches(hao_image *img)
-{
-    return !checked || (img->dev == (uint64_t)checked_dev && img->ino == (uint64_t)checked_ino);
-}
-
-bool hao_guest_sig_expect(const char *id)
-{
-    unsigned long long d, i;
-    char tail;
-    if (!id || sscanf(id, "%llu:%llu%c", &d, &i, &tail) != 2) return false;
-    checked = true;
-    checked_dev = (dev_t)d;
-    checked_ino = (ino_t)i;
-    return true;
-}
 
 /* The slice's LC_CODE_SIGNATURE (*sig_size 0: none), after checking that
  * nothing the loader maps lies past code_limit except the signature: called
@@ -639,16 +685,21 @@ static double now_us(void)
     return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3;
 }
 
-/* 0: run it (id gets "dev:ino" of the file checked); -1: refused (diagnostic printed). */
-int hao_guest_sig_enforce(const char *path, char *id, size_t idlen)
+/* The policy for the file open on fd, which the caller then hands to the
+ * loader (hao_load_main_image): every byte read here and every byte mapped
+ * there comes through this one descriptor. path names the file in
+ * diagnostics and is what Security.framework opens (sec_verdict).
+ * 0: run it; -1: refused (diagnostic printed). */
+int hao_guest_sig_enforce(int fd, const char *path)
 {
-    if (idlen) id[0] = 0;
     FILE *f = HAO_DIAG;
     double t0 = now_us();
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { snprintf(id, idlen, "0:0"); return 0; }   /* the loader reports the open error */
     struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); snprintf(id, idlen, "0:0"); return 0; }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        hao_diag_prefix(f);
+        fprintf(f, "%s: not a regular file\n", path);
+        return -1;
+    }
     /* setuid/setgid cannot be honoured here: the kernel exec'd hao (and
      * through HaoExec's #! route it clears the bits). Running a privileged
      * helper without its privileges would fail in ways it does not expect. */
@@ -656,7 +707,6 @@ int hao_guest_sig_enforce(const char *path, char *id, size_t idlen)
         hao_diag_prefix(f);
         fprintf(f, "%s: set-%s-ID program, which hao cannot run with its privileges here; refusing to run "
                    "(embed it with tools/hao-embed)\n", path, st.st_mode & S_ISUID ? "user" : "group");
-        close(fd);
         return -1;
     }
     int rc = 0;
@@ -724,8 +774,11 @@ int hao_guest_sig_enforce(const char *path, char *id, size_t idlen)
             by = "trusted cdhash list";
             apple = true;
         } else {
+            /* HAO_LIBVAL_USER (tests): the signer in user space, as on a kernel that cannot hold the signature */
             bool platform = false;
-            int k = kernel_verdict(fd, slice_off, sig_off, sig_size, &s, &platform, w2, sizeof w2);
+            int k = 1;
+            if (hao_opt.libval_user) snprintf(w2, sizeof w2, "not asked: HAO_LIBVAL_USER");
+            else k = kernel_verdict(fd, slice_off, sig_off, sig_size, &s, &platform, w2, sizeof w2);
             if (k < 0) {
                 snprintf(why, sizeof why, "code signature invalid (%s)", w2);
                 rc = -1;
@@ -742,7 +795,7 @@ int hao_guest_sig_enforce(const char *path, char *id, size_t idlen)
                     hao_diag_prefix(f);
                     fprintf(f, "%s: the kernel did not register the signature (%s); asking Security.framework\n", path, kw);
                 }
-                if (sec_verdict(path, subtype, &s, &apple, NULL, NULL, w2, sizeof w2) != 0) {
+                if (sec_ask(path, subtype, &s, &apple, w2, sizeof w2) != 0) {
                     snprintf(why, sizeof why, "%s; the cdhash is in no trusted cdhash list, and the kernel did not "
                              "register the signature (%s)", w2, kw);
                     rc = -1;
@@ -772,13 +825,7 @@ out:
     if (rc) {
         hao_diag_prefix(f);
         fprintf(f, "%s: %s; refusing to run\n", path, why);
-    } else {
-        checked = true;
-        checked_dev = st.st_dev;
-        checked_ino = st.st_ino;
-        snprintf(id, idlen, "%llu:%llu", (unsigned long long)st.st_dev, (unsigned long long)st.st_ino);
     }
-    close(fd);
     return rc;
 }
 

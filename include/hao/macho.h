@@ -127,6 +127,12 @@ hao_image *hao_load_image(const char *path, hao_resolver resolve, char *err, siz
 typedef void (*hao_mapped_fn)(hao_image *img, void *ctx);
 hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err,
                              size_t errlen);
+/* The same from fd, an open descriptor of the file, instead of opening path
+ * (which then only names the image): for a caller that has checked that
+ * descriptor and must load what it checked. The image owns fd from here on;
+ * it is closed whether the load succeeds or fails. */
+hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
+                                char *err, size_t errlen);
 /* Native bundle fallback: recheck ARM-only MH_BUNDLE on the descriptor used
  * for signature validation and mapping, not only the preflight pathname. */
 bool hao_is_arm_only_bundle(const char *path);

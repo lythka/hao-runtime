@@ -1,7 +1,7 @@
 #!/bin/bash
 # The CLI front end and the guest-signature policy (src/main.c, src/guest_sig.c):
-# which guests hao refuses (also with trustd unreachable), option parsing,
-# HAO_FLAGS, argc 0.
+# which guests hao refuses (also with trustd unreachable, and when hao is started
+# as its own second stage), option parsing, HAO_FLAGS, argc 0.
 #   OUT=dir [HAO=build/hao] [B=build] [T=60] tests/guest/cli.sh
 # Prints PASS/FAIL per case; exit 1 if any failed.
 set -u
@@ -29,6 +29,9 @@ run() {
     if [ $rc = "$want" ] && { [ -z "$pat" ] || grep -q -- "$pat" "$OUT/$name.out"; }; then pass "$name (rc $rc)"
     else bad "$name: rc $rc, want $want${pat:+ and /$pat/}: $(head -c 300 "$OUT/$name.out")"; fi
 }
+# also RUN_NAME NAME PATTERN / lacks RUN_NAME NAME PATTERN: that run's output has, or has not, the pattern
+also() { grep -q -- "$3" "$OUT/$1.out" && pass "$2" || bad "$2: no /$3/ in: $(head -c 300 "$OUT/$1.out")"; }
+lacks() { grep -q -- "$3" "$OUT/$1.out" && bad "$2: /$3/ in: $(head -c 300 "$OUT/$1.out")" || pass "$2"; }
 
 # --- signature policy
 run "ad hoc (linker-signed) guest runs" 7 "hello from arm64e" "$HAO" "$G"
@@ -126,6 +129,27 @@ run "ad hoc guest with one __text byte flipped refused (page hash)" 126 "does no
 cp "$G" "$OUT/trailing" && printf 'unsigned tail' >>"$OUT/trailing"
 run "bytes after the code signature refused" 126 "code signature invalid" "$HAO" "$OUT/trailing"
 
+# --- the hand-off to the second stage carries no trust. Anyone can start hao as
+# its own stage 2 (HAO_EXEC naming argv[0]); HAO_EXEC_ID is where a first stage's
+# verdict once travelled. The file is checked in the process that maps it.
+# forged NAME EXPECT_RC PATTERN FILE [ENV=VALUE...]
+forged() {
+    local name=$1 want=$2 pat=$3 file=$4; shift 4
+    run "$name" "$want" "$pat" env HAO_EXEC="$file" HAO_EXEC_ID="$(stat -f '%d:%i' "$file")" "$@" \
+        /bin/bash -c 'exec -a "$1" "$2"' - "$file" "$HAO"
+}
+forged "forged stage-2 hand-off, unsigned guest: refused" 126 "not code signed" "$OUT/unsigned"
+forged "forged stage-2 hand-off, tampered guest: refused" 126 "code signature invalid" "$OUT/tampered"
+forged "forged stage-2 hand-off, guest claiming a private entitlement: refused" 126 "claims entitlements hao cannot grant" "$OUT/entitled"
+forged "forged stage-2 hand-off, ad hoc guest: checked, then run" 7 "hello from arm64e" "$G"
+also "forged stage-2 hand-off, ad hoc guest: checked, then run" "a hand-off without the tagged-pointer switch is reported" \
+    "started without OBJC_DISABLE_TAG_OBFUSCATION"
+forged "forged stage-2 hand-off with the unsigned switch, distrusted process: refused" 126 "not code signed" "$OUT/unsigned" \
+    HAO_EXEC_FLAGS=u HAO_DISTRUST_ENV=1
+# a program that does not exist is reported; its arguments are not read as hao's options
+run "missing program: open error" 126 "open $OUT/missing: No such file or directory" "$HAO" "$OUT/missing" --allow-unsigned "$OUT/unsigned"
+lacks "missing program: open error" "missing program: its arguments are not hao's options" "hello from arm64e"
+
 # --- the verdict needs no daemon: launchd starts arm64-only programs before
 # trustd exists (a Security-only check refuses seputil at PID 5 with CSSMERR_TP_NOT_TRUSTED)
 printf '(version 1)\n(allow default)\n(deny mach-lookup (global-name "com.apple.trustd") (global-name "com.apple.trustd.agent"))\n' >"$OUT/notrustd.sb"
@@ -136,6 +160,12 @@ run "ad hoc guest, trustd unreachable" 7 "hello from arm64e" "${NT[@]}" "$HAO" "
 if [ "$(arch -x86_64 sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ] && lipo -archs /bin/ls 2>/dev/null | grep -q arm64e; then
     run "host Apple platform arm64e slice of ls, trustd unreachable: kernel verdict" 0 "Apple signature (kernel: platform binary)" \
         "${NT[@]}" "$HAO" -v /bin/ls -d /
+    # HAO_LIBVAL_USER: the signer as on a kernel that cannot hold the signature. Security.framework
+    # answers in a child of the process that runs the guest, which trusts the child's exit status only.
+    run "the same slice, signer from Security.framework in a child" 0 "Apple signature (Security.framework)" \
+        env HAO_LIBVAL_USER=1 "$HAO" -v /bin/ls -d /
+    run "the same, trustd unreachable: refused" 126 "the cdhash is in no trusted cdhash list" \
+        "${NT[@]}" env HAO_LIBVAL_USER=1 "$HAO" /bin/ls -d /
 fi
 AT=$FS/usr/bin/dserr
 if [ -f "$AT" ]; then
@@ -168,6 +198,20 @@ run "a program named -v after -- (HaoExec's #! form)" 7 "hello from arm64e" "$HA
 run "HAO_FLAGS=s adds to the CLI options" 7 "hao: blocks=" env HAO_FLAGS=s "$HAO" "$G"
 run "HAO_FLAGS=V alone is verbose" 7 "hao: loaded" env HAO_FLAGS=V "$HAO" "$G"
 run "unknown option: usage" 64 "usage: hao" "$HAO" --bogus "$G"
+# A switch the process's tier ignores is named without -v. The command line's
+# switches are apart from an inherited HAO_FLAGS: each is honoured where the
+# environment switch of the same effect is (-v as HAO_VERBOSE, in a guarded process too).
+run "--allow-unsigned in a distrusted process: refused" 126 "not code signed" env HAO_DISTRUST_ENV=1 "$HAO" --allow-unsigned "$OUT/unsigned"
+also "--allow-unsigned in a distrusted process: refused" "the ignored --allow-unsigned is named without -v" \
+    "^hao: --allow-unsigned ignored (guarded process)"
+run "HAO_FLAGS=u in a distrusted process: the ignored HAO_FLAGS is named without -v" 126 "^hao: HAO_FLAGS ignored (guarded process)" \
+    env HAO_FLAGS=u HAO_DISTRUST_ENV=1 "$HAO" "$OUT/unsigned"
+run "-v in a distrusted process is honoured" 7 "ad hoc signature" env HAO_FLAGS=s HAO_DISTRUST_ENV=1 "$HAO" -v "$G"
+lacks "-v in a distrusted process is honoured" "the inherited HAO_FLAGS=s beside it is not" "^hao: blocks="
+run "--stats in a distrusted process: ignored and named" 7 "^hao: --stats ignored (guarded process)" env HAO_DISTRUST_ENV=1 "$HAO" --stats "$G"
+lacks "--stats in a distrusted process: ignored and named" "no statistics there" "^hao: blocks="
+run "HAO_VERBOSE=0 beats -v (the environment beats flags)" 7 "hello from arm64e" env HAO_VERBOSE=0 "$HAO" -v "$G"
+lacks "HAO_VERBOSE=0 beats -v (the environment beats flags)" "no verbose output then" "signature ("
 # HAO_VERBOSE=3 traces the word at x0 of every native call: only when it is mapped
 for a in arm64e arm64; do clang -arch $a -O1 -o "$OUT/tracearg.$a" "$here/tracearg.c" && codesign -s - -f "$OUT/tracearg.$a" 2>/dev/null; done
 nat=$(cd /tmp && timeout -s KILL "$T" "$OUT/tracearg.arm64" 2>&1; echo "rc=$?")

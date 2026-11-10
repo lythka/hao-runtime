@@ -22,10 +22,13 @@
  * applies its __interpose tuples process-wide, also to shared-cache code,
  * while the main executable stays dyld image 0. The guest path comes from
  * HAO_EXEC, which stage 1 of hao_cli_main sets and stage 2 unsets before
- * main; it is taken only when it names the same file as argv[0], which is how
- * stage 2 recognises itself, and only in the CLI launcher (its
- * __TEXT,__hao_cli marker): a stub never reads HAO_EXEC, so the environment
- * cannot make an embedded program load another file under its identity.
+ * main; it is taken only when it names the same file as argv[0] (stage 2
+ * recognises itself by the stricter test that it is argv[0]'s absolute
+ * path, main.c), and only in the CLI launcher (its __TEXT,__hao_cli marker):
+ * a stub never reads HAO_EXEC, so the environment cannot make an embedded
+ * program load another file under its identity. HAO_EXEC is a name for
+ * native code to see, not evidence about the file: anyone can set it, and
+ * stage 2 checks the file it opens itself (guest_sig.c).
  */
 #include <crt_externs.h>
 #include <dlfcn.h>

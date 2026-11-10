@@ -137,10 +137,14 @@ bool hao_bootarg_flag(const char *key);   /* boot argument "key=1" present (kern
 /* trust.c: how far the environment is trusted (hao/aot.h); the switches
  * themselves are read once into hao_opt (hao/opts.h, hao_opts_init). */
 int hao_env_tier(void);                   /* HAO_ENV_OPEN / GUARDED / SETUGID */
-/* guest_sig.c: code-signature policy for CLI-form guests (0 = run it) */
-int hao_guest_sig_enforce(const char *path, char *id, size_t idlen);   /* stage 1; id: the checked file */
-bool hao_guest_sig_expect(const char *id);    /* stage 2: the file stage 1 checked (false: none) */
-bool hao_guest_sig_matches(hao_image *img);  /* the loaded file is the one checked */
+/* hao_opts_init for the CLI's stage 2: flags is the inherited HAO_FLAGS,
+ * argv_flags the letters of hao's own command-line switches, each honoured
+ * where the environment switch of the same effect is (trust.c). */
+void hao_opts_init_cli(const char *flags, const char *argv_flags);
+/* guest_sig.c: code-signature policy for a CLI-form guest, checked on the
+ * descriptor the loader then maps (hao_load_main_image); path names the file
+ * in diagnostics. 0 = run it; -1 = refused, diagnostic printed. */
+int hao_guest_sig_enforce(int fd, const char *path);
 const char *hao_env_tier_name(int tier);
 /* Fatal diagnostics: stderr, or the console with boot argument hao_crash=1
  * (daemons' stderr usually goes nowhere and AMFI denies their core dumps),
@@ -162,8 +166,10 @@ void hao_diag_block_end(hao_diag_blk *b);
 void hao_diag_prefix(FILE *f);            /* "hao[prog:pid]: " */
 void hao_diag_guest_addr(FILE *f, uint64_t a);   /* " (image+off, file vmaddr V)" when a is guest code */
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
-/* Load the main executable (hao_main_image is set before its imports bind). */
-hao_image *hao_load_main_image(const char *path, char *err, size_t errlen);
+/* Load the main executable from fd, the open descriptor its launcher has
+ * checked (main.c); path only names it. The loader owns fd from here on.
+ * hao_main_image is set before its imports bind. */
+hao_image *hao_load_main_image(const char *path, int fd, char *err, size_t errlen);
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */

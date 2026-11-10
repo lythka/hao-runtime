@@ -533,6 +533,9 @@ tests/guest/stackhelper.m
 tests/guest/stackpack.swift
 tests/guest/stackpackhelper.swift
 tests/guest/stacks.c
+tests/guest/stubself.c
+tests/guest/stubself.sh
+tests/guest/stubswap.c
 tests/guest/swift-associated-native.swift
 tests/guest/swift-associated-symbols.c
 tests/guest/swift-associated.swift

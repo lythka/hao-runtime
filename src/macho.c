@@ -944,11 +944,18 @@ bool hao_is_arm_only_bundle(const char *path)
     return ok;
 }
 
-static hao_image *load_image(const char *, hao_resolver, hao_mapped_fn, void *, bool, char *, size_t);
+static hao_image *load_image(const char *, int, hao_resolver, hao_mapped_fn, void *, bool, char *, size_t);
 hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                               char *err, size_t errlen)
 {
-    return load_image(path, resolve, mapped, ctx, true, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, true, err, errlen);
+}
+
+hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
+                                char *err, size_t errlen)
+{
+    if (fd < 0) { snprintf(err, errlen, "%s: no open descriptor to load from", path); return NULL; }
+    return load_image(path, fd, resolve, mapped, ctx, false, err, errlen);
 }
 
 hao_image *hao_load_image(const char *path, hao_resolver resolve, char *err, size_t errlen)
@@ -959,9 +966,12 @@ hao_image *hao_load_image(const char *path, hao_resolver resolve, char *err, siz
 hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err,
                              size_t errlen)
 {
-    return load_image(path, resolve, mapped, ctx, false, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, false, err, errlen);
 }
-static hao_image *load_image(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
+/* fd >= 0: the file, already open (the image owns the descriptor from here
+ * on, also when the load fails); path then only names it. Otherwise path is
+ * opened. */
+static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                              bool bundle_only, char *err, size_t errlen)
 {
     hao_image *img = calloc(1, sizeof *img);
@@ -971,10 +981,13 @@ static hao_image *load_image(const char *path, hao_resolver resolve, hao_mapped_
     seginfo *segs = NULL;
     bool linked = false, visible = false;
     struct stat st;
-    if (!img) { snprintf(err, errlen, "%s: out of memory", path); return NULL; }
-    img->fd = -1;
+    if (!img) {
+        if (fd >= 0) close(fd);
+        snprintf(err, errlen, "%s: out of memory", path);
+        return NULL;
+    }
     snprintf(img->path, sizeof img->path, "%s", path);
-    img->fd = open(path, O_RDONLY | O_CLOEXEC);
+    img->fd = fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
     if (img->fd < 0) ERR("open %s: %s", path, strerror(errno));
     if (fstat(img->fd, &st) != 0) ERR("%s: fstat: %s", path, strerror(errno));
     if (!S_ISREG(st.st_mode)) ERR("%s: not a regular file", path);
