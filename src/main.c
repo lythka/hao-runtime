@@ -25,7 +25,8 @@
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n");
+    fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n"
+                    "       hao --aot [--cache DIR] [--] FILE...\n");
     exit(64);
 }
 
@@ -216,12 +217,32 @@ static void dyld_abs_path(const char *path, char *out, size_t n)
 
 static int aot_main(int argc, char **argv)
 {
-    /* hao --aot BINARY...: generate AOT caches (no execution) */
-    int bad = 0;
+    /* hao --aot [--cache DIR] [--] BINARY...: generate AOT caches (no execution).
+     * --cache names the output directory on the command line: a guarded
+     * process (root, for one) ignores HAO_CACHE, and would otherwise write
+     * into the system directory of the machine it runs on. */
+    int bad = 0, k = 2;
+    const char *cache = NULL;
+    char abs[PATH_MAX];
+    if (k < argc && !strcmp(argv[k], "--cache")) {
+        if (k + 1 >= argc || !argv[k + 1][0]) usage();
+        cache = argv[k + 1];
+        if (cache[0] != '/') {          /* relative to where the command was typed */
+            char cwd[PATH_MAX];
+            if (!getcwd(cwd, sizeof cwd) || snprintf(abs, sizeof abs, "%s/%s", cwd, cache) >= (int)sizeof abs) {
+                fprintf(stderr, "hao-aot: --cache %s: cannot make the path absolute\n", cache);
+                return 1;
+            }
+            cache = abs;
+        }
+        k += 2;
+    }
+    if (k < argc && !strcmp(argv[k], "--")) k++;
+    if (k >= argc) usage();
     hao_opts_init(NULL);
     hao_verbose = 1;
-    for (int k = 2; k < argc; k++)
-        if (hao_aot_generate_file(argv[k], true) < 0) bad++;   /* maps a private copy of the file (jit.c) */
+    for (; k < argc; k++)
+        if (hao_aot_generate_file(argv[k], true, cache) < 0) bad++;   /* maps a private copy of the file (jit.c) */
     return bad ? 1 : 0;
 }
 

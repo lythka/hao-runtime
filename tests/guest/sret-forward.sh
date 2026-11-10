@@ -26,7 +26,7 @@ for case in 0 1 2 3 4 5 6 7 8 9 10 11; do
 done
 export HAO_NO_IFUNITS=1 HAO_CACHE="$OUT/aot"
 mkdir -p "$HAO_CACHE"
-timeout -s KILL "$T" "$HAO" --aot "$OUT/guest.arm64e" > "$OUT/aotgen.log" 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$HAO_CACHE" "$OUT/guest.arm64e" > "$OUT/aotgen.log" 2>&1
 fail=0
 for mode in jit interp aot; do
     flag=; [ "$mode" != interp ] || flag=--interp

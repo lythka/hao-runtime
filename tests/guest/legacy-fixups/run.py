@@ -50,7 +50,7 @@ cache=OUT/'aot'
 cache.mkdir(exist_ok=True)
 aot_env=dict(env,HAO_CACHE=str(cache),HAO_VERBOSE='1')
 for binary in ('liba.dylib','libb.dylib','main'):
-    p=command([HAO,'--aot',OUT/'arm64'/binary],aot_env)
+    p=command([HAO,'--aot','--cache',cache,OUT/'arm64'/binary],aot_env)
     (OUT/('aot-build-'+binary+'.log')).write_bytes(p.stdout+p.stderr)
 rows=[]
 for mode,args,policy in [

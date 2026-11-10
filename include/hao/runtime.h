@@ -375,8 +375,9 @@ bool hao_jit_init(void);      /* false: no executable memory (interpreter, no th
 bool hao_have_thunks(void);
 bool hao_thunk_range(uint64_t *lo, uint64_t *hi); /* entire reserved plain-thunk area */
 void hao_jit_stats(void);
-/* `hao --aot FILE`: write FILE's AOT cache into the directory this process writes to; 0 or -1 (reported) */
-int hao_aot_generate_file(const char *path, bool verbose);
+/* `hao --aot [--cache DIR] FILE`: write FILE's AOT cache into cache_dir (absolute), or with NULL into
+ * the directory this process writes to; 0 or -1 (reported) */
+int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir);
 uint64_t hao_thunk_for(uint64_t guest);
 uint64_t hao_thunk_target(uint64_t thunk);
 bool hao_in_code_cache(uint64_t a);

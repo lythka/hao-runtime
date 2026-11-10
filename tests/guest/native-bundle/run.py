@@ -26,8 +26,8 @@ for name in ['GuestBundleFixture','UniversalBundleFixture']:
  native=run([OUT/'guest.arm64',bundle],capture_output=True,text=True)
  env={**os.environ,'HAO_CACHE':str(OUT/'aot'),'HAO_VERBOSE':'1'}
  env.pop('HAO_NO_AOT',None)
- run([HAO,'--aot',OUT/'guest.arm64e'],capture_output=True,env=env)
- run([HAO,'--aot',bundle/'Contents/MacOS'/name],capture_output=True,env=env)
+ run([HAO,'--aot','--cache',OUT/'aot',OUT/'guest.arm64e'],capture_output=True,env=env)
+ run([HAO,'--aot','--cache',OUT/'aot',bundle/'Contents/MacOS'/name],capture_output=True,env=env)
  for mode in ['jit','interp','aot']:
   mode_env=dict(env)
   if mode != 'aot':mode_env['HAO_NO_AOT']='1'

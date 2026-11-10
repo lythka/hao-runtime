@@ -29,7 +29,7 @@ for a in arm64e arm64; do
     codesign -s - -f "$OUT/xinhab.$a" 2>/dev/null
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/xinhab.arm64e" >"$OUT/aot.gen" 2>&1 || echo "xinhab: aot generation failed"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/xinhab.arm64e" >"$OUT/aot.gen" 2>&1 || echo "xinhab: aot generation failed"
 timeout -s KILL "$T" "$OUT/xinhab.arm64" >"$OUT/native.out" 2>/dev/null; nrc=$?
 echo "native    rc=$nrc lines=$(wc -l <"$OUT/native.out" | tr -d ' ')"
 fail=0

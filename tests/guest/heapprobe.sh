@@ -27,7 +27,7 @@ done
 export MallocNanoZone=0 MallocDebugReport=stderr
 timeout -s KILL 30 "$OUT/heapprobe.arm64" >"$OUT/native.out" 2>"$OUT/native.err"
 if grep -q 'NO ZONE' "$OUT/native.err"; then echo "heapprobe: native run printed NO ZONE"; exit 1; fi
-HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/heapprobe.arm64e" >"$OUT/aot-build.log" 2>&1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/heapprobe.arm64e" >"$OUT/aot-build.log" 2>&1
 fail=0
 run() {   # mode hao
     m=$1 h=$2

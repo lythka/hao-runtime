@@ -214,7 +214,7 @@ and other users to a directory of their own under it. The logs hold register
 dumps and image addresses, so each is readable by its owner only (0600).
 ## AOT caches
 
-An AOT cache (`<LC_UUID>.aot`, written by `hao --aot FILE`) is x86_64 code that
+An AOT cache (`<LC_UUID>.aot`, written by `hao --aot [--cache DIR] FILE...`) is x86_64 code that
 hao copies into its code cache and runs in place of translating the guest. hao
 uses one only if both of the following hold.
 
@@ -225,12 +225,25 @@ uses one only if both of the following hold.
 | `/usr/lib/hao/aot`, `/private/var/db/hao` | every process | root |
 | `~/Library/Caches/hao` (home from the user database, never `$HOME`) | that user's open-tier processes | root or the user |
 | `HAO_CACHE=/abs/dir` | an open-tier process that sets it | root or the user |
+| `hao --aot --cache DIR` | nothing: `hao --aot` writes there; a process reads it only as one of the rows above | root or the user |
 
 The file, its directory and every directory above must have that owner, no
 group or other write bit (a sticky ancestor is allowed outside the system
 directories), no ACL entry that grants a write-type right, and no symlink the
 user owns on the way. The file is read once into memory, checked there, and
 those bytes are installed.
+
+`hao --aot` writes into the last directory of that list its process reads:
+`/private/var/db/hao` as root, the user's own directory otherwise, or
+`HAO_CACHE` in an open-tier process. `--cache DIR` names the directory on the
+command line instead. The command line is the choice of whoever runs the
+command, which the environment of a guarded process is not, so `--cache` is
+honoured at every tier except set-ID; a root process, which ignores
+`HAO_CACHE`, needs it to write anywhere but `/private/var/db/hao` of the
+machine it runs on (`tools/hao-image-payload` and `tools/hao_release.py` pass
+it). DIR is checked exactly as `HAO_CACHE`'s directory is: every element must
+be owned by root or the invoking user (by root, for root) with no group or
+other write access, and a relative DIR is taken from the working directory.
 
 ### What it was translated from
 
@@ -245,7 +258,7 @@ only for an image whose own code gives the same identity.
 |---|---|---|---|
 | Signed, signature validates | the cdhash of the slice hao runs, with its hash type | after every page of the slice matched that CodeDirectory | cdhash of the signature in the mapped image |
 | Signed, signature does not validate | none | never: no cache is written | |
-| Unsigned | SHA-256 over the mach header, load commands and executable segments | into a user or `HAO_CACHE` directory only | the same hash over the mapped image |
+| Unsigned | SHA-256 over the mach header, load commands and executable segments | into a user, `HAO_CACHE` or `--cache` directory outside the system directories only | the same hash over the mapped image |
 
 A cdhash covers the header, the load commands and the code, because the
 CodeDirectory holds a hash of every page of the slice and hao requires the
@@ -261,8 +274,8 @@ those decide whether hao runs a program, not what its code is, and only an
 image with that cdhash ever loads the cache.
 
 System directories hold caches for signed code only. `hao --aot` writes none
-for an unsigned guest there (as root without `HAO_CACHE`, or with `HAO_CACHE`
-naming a system directory), the loader takes none from there, and
+for an unsigned guest there (as root without `--cache`, or with `--cache` or
+`HAO_CACHE` naming a system directory), the loader takes none from there, and
 `tools/hao-install.py` removes any from `/usr/lib/hao/aot`. Guarded processes,
 which search only the system directories, therefore never hash guest code at
 load.

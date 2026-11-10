@@ -33,7 +33,7 @@ grep -q '^done' "$OUT/native.out" || { echo "native transcript is incomplete"; e
 grep -q 'present=1' "$OUT/native.out" || echo "note: native reports krb5 mech absent (still a valid control)"
 
 mkdir -p "$OUT/cache"; chmod 755 "$OUT/cache"; rm -f "$OUT/cache/"*
-timeout -s KILL "$T" env HAO_CACHE="$OUT/cache" "$HAO" --aot "$OUT/gss.arm64e" >/dev/null 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/cache" "$OUT/gss.arm64e" >/dev/null 2>&1
 
 for m in jit interp nojit aot; do
     case $m in

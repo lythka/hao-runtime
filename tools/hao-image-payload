@@ -280,6 +280,10 @@ EOF
 fi
 # AOT caches (--aot, --aot-list): this build's hao --aot on each program's file in ROOT,
 # into the directory hao searches first (/usr/lib/hao/aot). OUT/aot.json is the record.
+# The directory goes on hao's command line (--cache): as root hao ignores HAO_CACHE and
+# would write into the build host's /private/var/db/hao. hao holds it to its cache
+# directory rules, so OUT and the directories above it must be owned by the user this
+# runs as (by root, when it runs as root) and not group- or other-writable.
 if [ $AOT = 1 ]; then
     python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" <<'EOF' || exit 1
 import concurrent.futures, hashlib, json, os, re, struct, subprocess, sys, time
@@ -336,7 +340,8 @@ for rel in want:
         progs.append(by_ino[k])
 if bad:
     sys.exit('hao-image-payload: --aot-list: ' + '; '.join(bad[:10]))
-env = {'PATH': '/usr/bin:/bin', 'HAO_CACHE': os.path.realpath(aotdir)}
+env = {'PATH': '/usr/bin:/bin'}
+cache = os.path.realpath(aotdir)
 LINE = re.compile(r'^hao-aot: .*: (\d+) blocks, (\d+) insns .* -> .*/([0-9a-f]{32})\.aot$')
 # The generator's outcomes that are not errors: the program has no code hao can reach,
 # its translation does not fit hao --aot's output buffer (src/jit.c), or hao cannot load
@@ -348,7 +353,7 @@ SKIPS = [(re.compile(r'^hao-aot: output buffer overflow$'), 'too large: translat
 def one(p):
     t = time.monotonic()
     try:
-        r = subprocess.run([hao, '--aot', p['file']], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+        r = subprocess.run([hao, '--aot', '--cache', cache, '--', p['file']], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, errors='replace', timeout=600)
         rc, err = r.returncode, (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:

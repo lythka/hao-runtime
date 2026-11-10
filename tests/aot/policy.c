@@ -489,6 +489,22 @@ static void test_system_dirs(void)
     CHECK(w >= 0 && !hao_aot_dir_is_system(d[w].kind, d[w].path), "root's HAO_CACHE staging directory is not a system directory");
     hao_aot_dirs_for(HAO_ENV_OPEN, 0, NULL, HAO_AOT_SYS_DIR, d, &w, why, sizeof why);
     CHECK(w >= 0 && hao_aot_dir_is_system(d[w].kind, d[w].path), "root's HAO_CACHE naming a system directory is one");
+
+    /* `hao --aot --cache DIR`: the command line, so every tier but set-ID; an EXPLICIT directory */
+    hao_aot_dir x;
+    CHECK(hao_aot_dir_explicit(HAO_ENV_OPEN, "/Users/x/c", &x, why, sizeof why) && x.kind == HAO_AOT_EXPLICIT && !strcmp(x.path, "/Users/x/c"),
+          "--cache in an open process");
+    CHECK(hao_aot_dir_explicit(HAO_ENV_GUARDED, "/var/root/staging", &x, why, sizeof why) && x.kind == HAO_AOT_EXPLICIT &&
+          !hao_aot_dir_is_system(x.kind, x.path), "--cache in a guarded process (root): taken, not a system directory");
+    CHECK(hao_aot_dir_explicit(HAO_ENV_GUARDED, HAO_AOT_SYS_RO_DIR, &x, why, sizeof why) && hao_aot_dir_is_system(x.kind, x.path),
+          "--cache naming a system directory is one (signed code only)");
+    CHECK(!hao_aot_dir_explicit(HAO_ENV_SETUGID, "/Users/x/c", &x, why, sizeof why) && strstr(why, "setuid/setgid"), "--cache refused at the set-ID tier (%s)", why);
+    CHECK(!hao_aot_dir_explicit(HAO_ENV_OPEN, "rel/c", &x, why, sizeof why) && strstr(why, "not an absolute"), "relative --cache refused (%s)", why);
+    char big[1100];
+    memset(big, 'a', sizeof big - 1);
+    big[0] = '/';
+    big[sizeof big - 1] = 0;
+    CHECK(!hao_aot_dir_explicit(HAO_ENV_OPEN, big, &x, why, sizeof why), "over-long --cache refused");
 }
 
 int main(int argc, char **argv)

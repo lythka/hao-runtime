@@ -63,7 +63,7 @@ run('unit', ['python3', '-I', repo/'tools/hao_ifunit.py', 'write', out/'if'/uuid
 native = run('native-arm', [out/'guest.arm64'])[0]
 assert native == run('native-x86', [out/'guest.x86_64'])[0], 'native architecture outputs differ'
 env = dict(os.environ, HAO_IF_DIR=str(out/'if'), HAO_VERBOSE='1', HAO_BRIDGE_STATS='1')
-run('aotgen', [hao, '--aot', out/'guest.arm64e'], dict(env, HAO_CACHE=str(out/'aot')))
+run('aotgen', [hao, '--aot', '--cache', out/'aot', out/'guest.arm64e'], env)
 for mode in ('jit', 'interp', 'aot'):
     command = [hao] + (['--interp'] if mode == 'interp' else []) + [out/'guest.arm64e']
     stdout, stderr = run(mode, command, dict(env, HAO_CACHE=str(out/('aot' if mode == 'aot' else 'none'))))

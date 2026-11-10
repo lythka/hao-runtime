@@ -46,7 +46,7 @@ timeout -s KILL "$T" "$OUT/bridgeunit.arm64" >"$OUT/native.out" 2>"$OUT/native.e
 rc=$?
 echo "native rc=$rc lines=$(wc -l <"$OUT/native.out" | tr -d ' ')"
 [ $rc = 0 ] || fail=1
-HAO_CACHE="$OUT/aot" HAO_IF_DIR="$OUT/if" timeout -s KILL "$T" "$HAO" --aot "$OUT/bridgeunit.arm64e" >"$OUT/aotgen.out" 2>&1 || fail=1
+HAO_IF_DIR="$OUT/if" timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/bridgeunit.arm64e" >"$OUT/aotgen.out" 2>&1 || fail=1
 for mode in jit interp aot; do
     flag=; [ $mode = interp ] && flag=--interp
     cache=$OUT/none; [ $mode = aot ] && cache=$OUT/aot
