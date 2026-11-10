@@ -125,8 +125,8 @@ if [ $ORACLE_CASES = 1 ] && [ -n "$ORACLE265" ] && [ -x "$ORACLE265/modelmanager
     oracle_case oracle265-modelmanagerdump arch -x86_64 "$ORACLE265/modelmanagerdump.x86_64.adhoc" -h -- "$ORACLE265/modelmanagerdump.arm64e.adhoc" -h
     if [ -n "$IPSW27" ] && [ -f "$IPSW27/usr/bin/modelmanagerdump" ]; then
         oracle_case ipsw27-modelmanagerdump arch -x86_64 "$ORACLE265/modelmanagerdump.x86_64.adhoc" -h -- "$IPSW27/usr/bin/modelmanagerdump" -h
-    fi
-fi
+    else echo "SKIP ipsw27-modelmanagerdump (IPSW27 not set or no usr/bin/modelmanagerdump in it)"; fi
+elif [ $ORACLE_CASES = 1 ]; then echo "SKIP modelmanagerdump oracle cases (ORACLE265 not set or no modelmanagerdump.*.adhoc in it)"; fi
 
 echo "async: $pass pass, $fail fail${failed[*]:+ (${failed[*]})}"
 [ $fail -eq 0 ]

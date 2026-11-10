@@ -7,7 +7,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 HAO=${HAO:-$repo/build/hao}
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-callback-routes}
+OUT=${OUT:-$(mktemp -d -t hao-callback-routes)}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 for a in arm64 arm64e; do

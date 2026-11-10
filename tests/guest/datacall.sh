@@ -9,7 +9,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-datacall}
+OUT=${OUT:-$(mktemp -d -t hao-datacall)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-30}
 mkdir -p "$OUT"

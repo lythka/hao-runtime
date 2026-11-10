@@ -3,7 +3,7 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-sret-forward}
+OUT=${OUT:-$(mktemp -d -t hao-sret-forward)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 mkdir -p "$OUT"

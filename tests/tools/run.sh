@@ -13,7 +13,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-tools}
+OUT=${OUT:-$(mktemp -d -t hao-tools)}
 B=${B:-$repo/build}
 KC=${KC:-}
 fails=0

@@ -24,7 +24,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-oslog}
+OUT=${OUT:-$(mktemp -d -t hao-oslog)}
 HAO=${HAO:-$repo/build/hao}
 B=${B:-$(dirname "$HAO")}
 T=${T:-60}

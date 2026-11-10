@@ -25,7 +25,7 @@
 # hangs in Rosetta's exception server at its first SIGSEGV (no hao involved).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-sigpolicy}
+OUT=${OUT:-$(mktemp -d -t hao-sigpolicy)}
 T=${T:-10}
 mkdir -p "$OUT"
 # Select actual hardware even when this shell itself is under Rosetta.
@@ -50,6 +50,7 @@ if [ -n "${PROFILE:-}" ]; then
     check 14 raw "$PROFILE" allow
     check 0 handler "$PROFILE" allow
 fi
+[ -n "${PROFILE:-}" ] || echo "SKIP profile cases (PROFILE not set)"
 if [ -n "${HAO:-}" ] && [ -n "${PROFILE:-}" ]; then
     if [ "$a" = arm64 ]; then
         echo "SKIP hao under $PROFILE: x86_64 under Rosetta takes no fault inside such a sandbox"

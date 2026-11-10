@@ -7,7 +7,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-cli}
+OUT=${OUT:-$(mktemp -d -t hao-cli)}
 HAO=${HAO:-$repo/build/hao}
 B=${B:-$repo/build}
 T=${T:-60}
@@ -171,7 +171,7 @@ if [ "$(arch -x86_64 sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ] && lip
         run "the same, trustd unreachable: refused" 126 "the cdhash is in no trusted cdhash list" \
             "${NT[@]}" env HAO_LIBVAL_USER=1 "$HAO" /bin/ls -d /
     fi
-fi
+else echo "SKIP host arm64e ls with trustd unreachable (no Rosetta or no arm64e /bin/ls)"; fi
 AT=$FS/usr/bin/dserr
 if [ -f "$AT" ]; then
     echo "$AT" >"$OUT/trust.in"
@@ -191,7 +191,7 @@ if [ -f "$AT" ]; then
 else echo "SKIP trusted cdhash list ($FS not mounted)"; fi
 if [ -u /usr/bin/login ] && [ -r /usr/bin/login ] && [ "$(stat -f %u /usr/bin/login)" != "$(id -u)" ]; then
     run "set-user-ID guest owned by another user refused (host login)" 126 "set-user-ID program" "$HAO" /usr/bin/login -h
-fi
+else echo "SKIP set-user-ID guest (no readable /usr/bin/login owned by another user)"; fi
 
 # --- options and HAO_FLAGS
 v=(); for k in $(seq 40); do v+=(-v); done
@@ -235,6 +235,6 @@ if [ -x "$repo/tools/hao-embed" ] && [ -f "$B/hao-stub" ]; then
     "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$OUT/argc0.emb" "$OUT/argc0" >/dev/null 2>&1
     r=$(cd /tmp && timeout -s KILL "$T" "$OUT/spawn0" "$OUT/argc0.emb" 2>&1 | tail -1)
     [ "$r" = "exit 3" ] && pass "embedded program with an empty argv ($r)" || bad "embedded program with an empty argv: $r"
-fi
+else echo "SKIP embedded program with an empty argv (no tools/hao-embed or $B/hao-stub)"; fi
 echo "cli: $fails failed"
 exit $((fails != 0))

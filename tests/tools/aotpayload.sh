@@ -29,7 +29,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-tools-aotpayload}
+OUT=${OUT:-$(mktemp -d -t hao-tools-aotpayload)}
 B=$repo/build
 X86=${X86_CACHE:-}
 for c in /System/Volumes/Preboot/Cryptexes/Rosetta/System/Library/dyld /System/Library/dyld; do

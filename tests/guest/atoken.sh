@@ -11,7 +11,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-atoken}
+OUT=${OUT:-$(mktemp -d -t hao-atoken)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 mkdir -p "$OUT"

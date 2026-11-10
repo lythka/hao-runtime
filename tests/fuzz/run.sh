@@ -3,13 +3,13 @@
 # inputs), then fuzz each for FUZZ_TIME seconds from a scratch copy of it.
 #   [B=build] [FUZZ_TIME=60] [OUT=dir] [SEED=n] tests/fuzz/run.sh
 # Builds the targets with `make fuzz` first. Crashing inputs land in
-# OUT/<target>/ (default $TMPDIR/hao-fuzz); exit status 1 if any target crashed.
+# OUT/<target>/ (default a new $TMPDIR/hao-fuzz.XXXXXX); exit status 1 if any target crashed.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 B=${B:-build}
 T=${FUZZ_TIME:-60}
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-fuzz}
+OUT=${OUT:-$(mktemp -d -t hao-fuzz)}
 SEED=${SEED:-$(date +%s)}
 cd "$repo"
 make -s B="$B" fuzz || exit 2
@@ -19,7 +19,7 @@ run() {   # run NAME MAX_LEN
     local name=$1 max=$2 dir=$OUT/$1
     mkdir -p "$dir/corpus" "$dir/artifacts"
     cp "$here/corpus/${name#fuzz_}"/* "$dir/corpus/" 2>/dev/null
-    local bin=$repo/$B/fuzz/$name
+    local bin; case $B in /*) bin=$B/fuzz/$name ;; *) bin=$repo/$B/fuzz/$name ;; esac
     if ! (cd "$dir" && TMPDIR=$dir timeout -s KILL 300 "$bin" -artifact_prefix="$dir/artifacts/" "$here/corpus/${name#fuzz_}"/* >"$dir/replay.log" 2>&1); then
         echo "FAIL $name: corpus replay crashed (see $dir/replay.log)"; bad=1; return
     fi

@@ -12,7 +12,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-fullcache}
+OUT=${OUT:-$(mktemp -d -t hao-fullcache)}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}

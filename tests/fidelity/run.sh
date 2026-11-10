@@ -36,13 +36,16 @@ DIFF=${DIFF:-$repo/tools/fidelity/diff.py}
 KNOWN=${KNOWN:-$(dirname "$DIFF")/known.tsv}
 EMBED=${EMBED:-$repo/tools/hao-embed}
 STUB=${STUB:-$(dirname "$HAO")/hao-stub}
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-fidelity}
+OUT=${OUT:-$(mktemp -d -t hao-fidelity)}
 T=${T:-60}
 fails=0
 pass() { echo "PASS $*"; }
 bad() { echo "FAIL $*"; fails=$((fails + 1)); }
 note() { echo "NOTE $*"; }
-for f in "$HAO" "$OBSERVE" "$DIFF"; do [ -e "$f" ] || { echo "missing $f" >&2; exit 2; }; done
+[ -e "$HAO" ] || { echo "missing $HAO" >&2; exit 2; }
+# The observer and diff tool are not part of this repository: without them the
+# run is a skip, said as one.
+for f in "$OBSERVE" "$DIFF"; do [ -e "$f" ] || { echo "SKIP fidelity oracle: no $f (set OBSERVE and DIFF)"; exit 77; }; done
 rm -rf "$OUT"; mkdir -p "$OUT/native" "$OUT/guest" "$OUT/emb" "$OUT/fx"
 OUT=$(cd "$OUT" && pwd -P)   # proc_pidpath and fd paths are real paths
 # one file name on every route, so the observed program is the same; one signing

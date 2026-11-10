@@ -41,6 +41,9 @@ for arch in ('arm64', 'x86_64', 'arm64e'):
     run('guest-'+arch, ['clang', '-arch', arch, '-O1', here/'guest.c', '-L'+str(out), '-lspill', '-o', out/('guest.'+arch)])
     run('sign-'+arch, ['codesign', '-s', '-', '-f', out/('guest.'+arch)])
 
+if not (scanner/'tools/codesig.py').is_file():
+    print('SKIP sret-spill: no tools/codesig.py under SCANNER_ROOT=%s (the scanner is not in this tree)' % scanner)
+    sys.exit(77)
 spec = importlib.util.spec_from_file_location('spill_codesig', scanner/'tools/codesig.py')
 c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)

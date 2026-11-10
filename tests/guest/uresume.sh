@@ -32,7 +32,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-uresume}
+OUT=${OUT:-$(mktemp -d -t hao-uresume)}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}

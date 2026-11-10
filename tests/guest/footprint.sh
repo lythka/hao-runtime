@@ -32,7 +32,7 @@
 #   OUT=dir HAO=/abs/build/hao [FP_TIMEOUT=60] [N=1024] [BIG_FNS=6000] [LIMIT_KB=16384] [MODES="jit interp aot"] tests/guest/footprint.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-footprint}
+OUT=${OUT:-$(mktemp -d -t hao-footprint)}
 HAO=${HAO:-$here/../../build/hao}
 N=${N:-1024}
 BIG_FNS=${BIG_FNS:-6000}

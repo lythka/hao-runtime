@@ -12,7 +12,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-swiftpop}
+OUT=${OUT:-$(mktemp -d -t hao-swiftpop)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 B=$(cd "$(dirname "$HAO")" && pwd)
@@ -23,6 +23,9 @@ for a in arm64e arm64; do
     codesign -s - -f "$OUT/swiftpop.$a" 2>/dev/null
 done
 rm -f "$OUT/swiftslots" "$OUT/scan.txt"
+if [ ! -f "$repo/tests/host/swiftslots.c" ]; then
+    echo "SKIP scan: no tests/host/swiftslots.c (the offline scanner is not in this tree)"
+else
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/swiftslots" "$repo/tests/host/swiftslots.c" -L"$B" -lhao -Wl,-rpath,"$B" 2>"$OUT/swiftslots.err" &&
     codesign -s - -f "$OUT/swiftslots" 2>/dev/null
 scan=$( [ -x "$OUT/swiftslots" ] && timeout -s KILL "$T" "$OUT/swiftslots" "$OUT/swiftpop.arm64e" | tee "$OUT/scan.txt" | tail -1)
@@ -35,6 +38,7 @@ r=OK
 [ "$r" = OK ] || fail=1
 echo "scan      $r outlined_sp=${osp:-?} over=${over:-?}"
 grep -s '^swiftslots: over' "$OUT/scan.txt" | head -4 | sed 's/^/    /'
+fi
 rm -rf "$OUT/aot" "$OUT/diag"; mkdir -m 700 "$OUT/aot" "$OUT/diag"
 HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/swiftpop.arm64e" >"$OUT/aot.gen" 2>&1 || echo "swiftpop: aot generation failed"
 timeout -s KILL "$T" "$OUT/swiftpop.arm64" >"$OUT/native.out" 2>"$OUT/native.err"

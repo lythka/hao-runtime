@@ -8,7 +8,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-fenv}
+OUT=${OUT:-$(mktemp -d -t hao-fenv)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 mkdir -p "$OUT"

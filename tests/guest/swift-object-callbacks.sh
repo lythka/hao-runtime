@@ -4,7 +4,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 HAO=${HAO:-$repo/build/hao}
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-swift-object-callbacks}
+OUT=${OUT:-$(mktemp -d -t hao-swift-object-callbacks)}
 mkdir -p "$OUT/aot"
 OUT=$(cd "$OUT" && pwd)
 for p in swiftboxes observation-closures generic-objc-destruct generic-objc-layout; do
