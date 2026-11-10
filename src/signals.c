@@ -947,6 +947,25 @@ bool hao_signal_interpose(const char *name, uint64_t *addr)
     return false;
 }
 
+/* A raw `svc` sigaction (syscall.c): the kernel's struct __sigaction also
+ * names the libc trampoline that calls the handler, which hao's own
+ * delivery (tramp) stands in for, as for a libc sigaction. oact is the
+ * user struct sigaction. */
+int hao_signal_raw_sigaction(int sig, const void *nsa, void *osa)
+{
+    const struct { uint64_t handler, tramp; sigset_t mask; int flags; } *k = nsa;
+    struct sigaction na, oa;
+    if (k) {
+        memset(&na, 0, sizeof na);
+        na.sa_handler = (void (*)(int))(uintptr_t)k->handler;
+        na.sa_mask = k->mask;
+        na.sa_flags = k->flags;
+    }
+    int r = do_sigaction(sig, k ? &na : NULL, osa ? &oa : NULL);
+    if (!r && osa) memcpy(osa, &oa, sizeof oa);
+    return r;
+}
+
 /* libhao_identity's sigaction family for native callers, SIGSEGV/SIGBUS only */
 static int hao_native_sigaction(int sig, const struct sigaction *act, struct sigaction *oact)
 {

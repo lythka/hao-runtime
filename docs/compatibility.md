@@ -53,9 +53,14 @@ boundary, with runtime-sized values handled where the layout is proven.
   run: a call into memory the guest mapped or made executable with `mmap` or
   `mprotect`, or into memory that is not executable on the host, stops the
   program with a `bridge: REFUSED` diagnostic. Executable memory the guest
-  creates by other means (`mach_vm_*`, raw system calls) is not recognised,
-  and a call there runs as x86_64 code, as does a first call made from a guest
-  signal handler or a native call through a pointer to such code.
+  creates by other means (`mach_vm_*`) is not recognised, and a call there
+  runs as x86_64 code, as does a first call made from a guest signal handler
+  or a native call through a pointer to such code.
+- Raw `svc` system calls pass to the kernel, except: `sigaction`,
+  `sigprocmask` and `__pthread_sigmask` take the same path as the libc calls
+  (a trampoline in a raw `sigaction` is not called; hao runs the handler as
+  libc's trampoline would), and `bsdthread_create`, `bsdthread_register` and
+  `sigreturn` fail with `ENOTSUP` and a diagnostic.
 
 **Loading**
 - Lazy binds are resolved eagerly; `dyld_stub_binder` is not implemented.
