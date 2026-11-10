@@ -437,6 +437,8 @@ tests/guest/identity.sh
 tests/guest/ifunits.c
 tests/guest/indexed-mulhigh/run.py
 tests/guest/indirect-x8.sh
+tests/guest/jitinsns.c
+tests/guest/jitinsns.sh
 tests/guest/keypath-identity/Probe.swift
 tests/guest/keypath-identity/README.md
 tests/guest/keypath-identity/run.py
