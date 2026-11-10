@@ -172,7 +172,7 @@ static bool add_file(const char *path, bool main_file)
             uint64_t sio = u64(e + 24), sis = u64(e + 32);
             m->flags = u64(e + 40);
             if (sis && sis < (64u << 20)) {
-                m->slide = malloc(sis);
+                m->slide = hao_alloc_check(malloc(sis), "shared cache tables");
                 if (pread(fd, m->slide, sis, (off_t)sio) != (ssize_t)sis) { free(m->slide); m->slide = NULL; }
                 else m->slide_size = (uint32_t)sis;
             }
@@ -202,8 +202,8 @@ static bool add_file(const char *path, bool main_file)
         uint32_t io = u32(h + 0x1c0), ic = u32(h + 0x1c4);
         if (!ic) { io = u32(h + 0x18); ic = u32(h + 0x1c); }
         if (ic > 100000) ic = 0;
-        D.images = calloc(ic ? ic : 1, sizeof *D.images);
-        uint8_t *ii = malloc((size_t)ic * 32 + 1);
+        D.images = hao_alloc_check(calloc(ic ? ic : 1, sizeof *D.images), "shared cache tables");
+        uint8_t *ii = hao_alloc_check(malloc((size_t)ic * 32 + 1), "shared cache tables");
         if (pread(fd, ii, (size_t)ic * 32, io) == (ssize_t)ic * 32) {
             for (uint32_t k = 0; k < ic; k++) {
                 char p[1024];
@@ -211,7 +211,7 @@ static bool add_file(const char *path, bool main_file)
                 if (pn <= 0) continue;
                 p[pn] = 0;
                 D.images[D.nimages].addr = u64(ii + 32 * k);
-                D.images[D.nimages].path = strdup(p);
+                D.images[D.nimages].path = hao_alloc_check(strdup(p), "shared cache tables");
                 D.nimages++;
             }
         }
@@ -275,7 +275,7 @@ static int range_cmp(const void *a, const void *b)
 static void build_ranges(void)
 {
     size_t cap = 4096;
-    D.ranges = malloc(cap * sizeof *D.ranges);
+    D.ranges = hao_alloc_check(malloc(cap * sizeof *D.ranges), "shared cache tables");
     for (uint32_t k = 0; k < D.nimages; k++) {
         if (k && D.images[k].addr == D.images[k - 1].addr) continue;  /* alias entry */
         const struct mach_header_64 *mh = image_header(k);
@@ -284,7 +284,7 @@ static void build_ranges(void)
             if (lc->cmd != LC_SEGMENT_64) continue;
             const struct segment_command_64 *sg = (const void *)lc;
             if (!sg->vmsize || !strncmp(sg->segname, "__LINKEDIT", 16)) continue;
-            if (D.nranges == cap) { cap *= 2; D.ranges = realloc(D.ranges, cap * sizeof *D.ranges); }
+            if (D.nranges == cap) { cap *= 2; D.ranges = hao_alloc_check(realloc(D.ranges, cap * sizeof *D.ranges), "shared cache tables"); }
             D.ranges[D.nranges++] = (drange){sg->vmaddr, sg->vmaddr + sg->vmsize, k};
         }
     }
@@ -452,9 +452,9 @@ static void rev_walk(rev_ctx *x, const uint8_t *node, size_t len, int depth)
         if (!(flags & EXPORT_SYMBOL_FLAGS_REEXPORT)) {
             uint64_t off = uleb(&q, x->end);
             uint64_t a = (flags & EXPORT_SYMBOL_FLAGS_KIND_MASK) == EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE ? off : x->base + off;
-            if (x->n == x->cap) { x->cap = x->cap ? 2 * x->cap : 256; x->v = realloc(x->v, x->cap * sizeof *x->v); }
+            if (x->n == x->cap) { x->cap = x->cap ? 2 * x->cap : 256; x->v = hao_alloc_check(realloc(x->v, x->cap * sizeof *x->v), "shared cache tables"); }
             x->v[x->n].addr = a;
-            x->v[x->n].name = strndup(x->name, len);
+            x->v[x->n].name = hao_alloc_check(strndup(x->name, len), "shared cache tables");
             x->n++;
         }
     }
@@ -492,7 +492,7 @@ static const char *rev_name(uint32_t idx, uint64_t a)
         uint32_t size = 0;
         const uint8_t *t = mh ? exports_trie(mh, &size) : NULL;
         if (t && size) {
-            rev_ctx *x = calloc(1, sizeof *x);
+            rev_ctx *x = hao_alloc_check(calloc(1, sizeof *x), "shared cache tables");
             x->base = im->addr;
             x->start = t;
             x->end = t + size;
@@ -584,7 +584,7 @@ static void fixed_add(uint64_t a)
         size_t oc = D.capfixed;
         uint64_t *old = D.fixed;
         D.capfixed = oc ? 2 * oc : 4096;
-        D.fixed = calloc(D.capfixed, 8);
+        D.fixed = hao_alloc_check(calloc(D.capfixed, 8), "shared cache tables");
         D.nfixed = 0;
         for (size_t k = 0; k < oc; k++) if (old[k]) fixed_add(old[k]);
         free(old);
@@ -634,7 +634,7 @@ static chain_t *page_chain(const dmap *m, uint64_t page)
         size_t oc = capchains;
         chain_t *old = chains;
         capchains = oc ? 2 * oc : 1024;
-        chains = calloc(capchains, sizeof *chains);
+        chains = hao_alloc_check(calloc(capchains, sizeof *chains), "shared cache tables");
         for (size_t k = 0; k < oc; k++) {
             if (!old[k].page) continue;
             size_t j = (old[k].page >> 14) & (capchains - 1);
@@ -652,10 +652,10 @@ static chain_t *page_chain(const dmap *m, uint64_t page)
     memcpy(&start, m->slide + 24 + 2 * page, 2);
     if (start == 0xffff) return c;
     uint32_t cap = 64;
-    c->e = malloc(cap * sizeof *c->e);
+    c->e = hao_alloc_check(malloc(cap * sizeof *c->e), "shared cache tables");
     for (uint64_t off = start; off + 8 <= psize && c->n < 4096 && base + off + 8 <= m->addr + m->size;) {
         uint64_t raw = *(const uint64_t *)at(base + off);
-        if (c->n == cap) { cap *= 2; c->e = realloc(c->e, cap * sizeof *c->e); }
+        if (c->n == cap) { cap *= 2; c->e = hao_alloc_check(realloc(c->e, cap * sizeof *c->e), "shared cache tables"); }
         c->e[c->n].loc = base + off;
         c->e[c->n].raw = raw;
         c->n++;
@@ -768,7 +768,7 @@ static void selmap_build(selmap *sm, hao_image *img)
     if (!a || n < 8) return;
     size_t cap = 16;
     while (cap < n / 8 * 2) cap *= 2;
-    sm->v = calloc(cap, sizeof *sm->v);
+    sm->v = hao_alloc_check(calloc(cap, sizeof *sm->v), "shared cache tables");
     sm->cap = cap;
     for (uint64_t k = 0; k < n / 8; k++) {
         uint64_t slot = a + 8 * k, str = *(const uint64_t *)(uintptr_t)slot & ((1ull << 56) - 1);
@@ -1141,7 +1141,7 @@ static bool callee_keeps(codescan *s, uint64_t t, unsigned r)
         size_t oc = s->ccap;
         __typeof__(s->cc) old = s->cc;
         s->ccap = oc ? 2 * oc : 256;
-        s->cc = calloc(s->ccap, sizeof *s->cc);
+        s->cc = hao_alloc_check(calloc(s->ccap, sizeof *s->cc), "shared cache tables");
         s->ccn = 0;
         for (size_t k = 0; k < oc; k++)
             if (old[k].key) {
@@ -1193,7 +1193,7 @@ static void add_reader(codescan *s, int32_t k, int32_t j, unsigned r, uint64_t p
     }
     if (s->nrv == s->caprv) {
         s->caprv = s->caprv ? 2 * s->caprv : 1024;
-        s->rv = realloc(s->rv, s->caprv * sizeof *s->rv);
+        s->rv = hao_alloc_check(realloc(s->rv, s->caprv * sizeof *s->rv), "shared cache tables");
     }
     s->rv[s->nrv++] = (reader_t){k, j, kind};
     if (kind != RK_SEL && !(s->aflags[k] & AF_NONSEL)) s->ns_at[k] = j;
@@ -1344,7 +1344,7 @@ static void add_edge(codescan *s, int32_t to, int32_t from)
 {
     if (s->nedges == s->capedges) {
         s->capedges = s->capedges ? 2 * s->capedges : 1024;
-        s->edges = realloc(s->edges, s->capedges * sizeof *s->edges);
+        s->edges = hao_alloc_check(realloc(s->edges, s->capedges * sizeof *s->edges), "shared cache tables");
     }
     s->edges[s->nedges++] = (uint64_t)(uint32_t)to << 32 | (uint32_t)from;
 }
@@ -1966,7 +1966,7 @@ hao_image *hao_dsc_load(const char *path, hao_mapped_fn mapped, void *ctx, char 
         case LC_LOAD_DYLIB: case LC_LOAD_WEAK_DYLIB: case LC_REEXPORT_DYLIB: case LC_LOAD_UPWARD_DYLIB: {
             const struct dylib_command *dc = (const void *)lc;
             if (img->ndeps < HAO_MAX_DEPS) {   /* name offset and terminator: hao_macho_check_cmds */
-                img->deps[img->ndeps] = strdup((const char *)lc + dc->dylib.name.offset);
+                img->deps[img->ndeps] = hao_alloc_check(strdup((const char *)lc + dc->dylib.name.offset), "shared cache tables");
                 img->dep_weak[img->ndeps] = lc->cmd == LC_LOAD_WEAK_DYLIB;
                 img->dep_reexport[img->ndeps] = lc->cmd == LC_REEXPORT_DYLIB;
                 img->dep_upward[img->ndeps] = lc->cmd == LC_LOAD_UPWARD_DYLIB;
@@ -1989,7 +1989,7 @@ hao_image *hao_dsc_load(const char *path, hao_mapped_fn mapped, void *ctx, char 
     const uint8_t *fs = !bad && fs_size ? linkedit_ptr(mh, fs_off, fs_size) : NULL;
     if (fs) {
         size_t cap = 256;
-        img->fstarts = malloc(cap * 8);
+        img->fstarts = hao_alloc_check(malloc(cap * 8), "shared cache tables");
         const uint8_t *q = fs, *e = fs + fs_size;
         uint64_t a = img->base, limit = img->base + img->vmsize;   /* starts are in __TEXT */
         while (q < e && img->fstarts) {
@@ -2186,7 +2186,7 @@ static void redir_add(uint64_t pc, uint64_t native, uint64_t x1)
         size_t oc = D.capredir;
         redir_t *old = D.redir;
         D.capredir = oc ? 2 * oc : 256;
-        D.redir = calloc(D.capredir, sizeof *D.redir);
+        D.redir = hao_alloc_check(calloc(D.capredir, sizeof *D.redir), "shared cache tables");
         for (size_t k = 0; k < oc; k++) if (old[k].pc) D.redir[redir_find(old[k].pc)] = old[k];
         free(old);
     }

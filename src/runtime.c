@@ -2336,9 +2336,9 @@ static int glib_slot(const char *path, hao_image *loader)
 {
     if (nglibs == capglibs) {
         capglibs = capglibs ? 2 * capglibs : 16;
-        glibs = realloc(glibs, capglibs * sizeof *glibs);
+        glibs = hao_alloc_check(realloc(glibs, capglibs * sizeof *glibs), "guest library list");
     }
-    glibs[nglibs] = (struct guest_lib){strdup(path), NULL, loader};
+    glibs[nglibs] = (struct guest_lib){hao_alloc_check(strdup(path), "guest library list"), NULL, loader};
     return nglibs++;
 }
 
