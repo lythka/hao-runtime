@@ -48,6 +48,7 @@ typedef struct hao_eh_rec {
 
 #define HAO_EH_RECS 8
 
+#define HAO_JIT_JC_SLOTS 2048   /* a power of two */
 typedef struct hao_thread {
     hao_cpu cpu;               /* must be first (16-byte aligned) */
     uint8_t *stack;
@@ -82,6 +83,10 @@ typedef struct hao_thread {
      * created, kept by libhao_identity's pthread_sigmask/sigprocmask
      * interposers): hao_probe_read8 must not fault then */
     int sync_masked;
+    /* jit.c: the thread's jump cache, one slot per low part of a branch
+     * target, and one miss record (two words) per slot behind them (zero
+     * until the thread first runs translated code) */
+    uint64_t jit_jc[3 * HAO_JIT_JC_SLOTS];
 } hao_thread;
 
 /* Where guest execution stands, for a signal that interrupts it. The

@@ -10,8 +10,9 @@
  * Every block is entered through hao_jit_enter (callee-saved registers
  * saved, rsp 16-byte aligned) and leaves through the exit stub with the
  * exit reason in eax. Direct branches are chained: their exit jmp is
- * patched to the successor block once it exists. Indirect branches probe
- * the translation table inline.
+ * patched to the successor block once it exists. Indirect branches and
+ * returns look their target up in the thread's jump cache inline and, on a
+ * miss, in the translation table from a shared stub.
  *
  * Instructions without a native translation call a64_exec (the oracle-
  * checked interpreter) as a helper on the in-memory state.
@@ -68,13 +69,12 @@ static uint8_t *sig_area, *sig_ptr, *sig_end;
 static uint8_t *scratch;
 /* The translation table, guest pc -> code. It starts at TABLE_MIN_BITS and
  * grows by replacement under jit_lock (a copy twice the size, published
- * with a release store). Translated code probes the table its hao_cpu
- * names (rt_table, rt_mask: set together from one table at every entry
- * from the dispatcher), so a thread still running chained blocks probes an
- * older table: old tables are never unmapped or written again, and every
- * code address in them stays valid (the cache is never flushed); a block
- * missing from them is a miss, which exits to the dispatcher, and the
- * dispatcher's lookup reads the current table. */
+ * with a release store). An entry, once published, keeps its pc for good
+ * and always names valid code for it (the cache is never flushed; an AOT
+ * blob may replace the code of the current table's entry with its own
+ * block for the same pc). Old tables are never unmapped or written again.
+ * The jump caches of translated code rely on both: their slots point at
+ * entries of whichever table was current when they were filled. */
 typedef struct jtab {
     struct jtab *prev;
     uint32_t bits, mask, used, limit;
@@ -85,6 +85,14 @@ static uint32_t table_used;           /* under jit_lock (the current table's use
 static uint64_t st_table_bytes;
 static int cache_full;                /* atomic: no new blocks; misses run in the interpreter */
 static void *exit_stub;               /* restores host state, returns eax */
+static void *probe_stub;              /* jump-cache miss: probes the translation table (build_stubs) */
+/* What an empty jump-cache slot points at: no branch target equals its pc
+ * except a wild branch there, which goes to the probe stub like any miss. */
+static tentry jc_none;
+/* Counts the entries added to the translation table (insert): a jump
+ * cache's record that a target has no translation holds until the next
+ * one. Never 0, which is what an unused record holds. */
+static uint64_t table_epoch = 1;
 static int (*jit_enter)(hao_cpu *, void *code);
 static uint64_t st_blocks, st_insns, st_native, st_helper, st_links, st_bytes, st_aot_blocks;
 static uint64_t st_sites, st_sites_unaligned, st_link_skips;   /* chainable exits emitted / not 4-aligned; links refused */
@@ -168,6 +176,7 @@ static bool insert(uint64_t pc, void *code)
     __atomic_store_n(&table_used, table->used, __ATOMIC_RELAXED);
     e->code = code;
     __atomic_store_n(&e->pc, pc, __ATOMIC_RELEASE);
+    __atomic_store_n(&table_epoch, table_epoch + 1, __ATOMIC_RELEASE);   /* after the entry: a miss recorded now is rechecked */
     return true;
 }
 
@@ -427,33 +436,27 @@ static void exit_direct(tctx *t, uint64_t target)
  * before the target was loaded) */
 static void exit_indirect(tctx *t)
 {
+    /*
+     * The jump cache. Each thread has HAO_JIT_JC_SLOTS slots, indexed by
+     * the low bits of the target's instruction index; a slot holds the
+     * address of a translation-table entry {pc, code} or of jc_none. The
+     * slot is read with one load and an entry never changes its pc, so the
+     * compare and the jump agree even if a signal handler that runs guest
+     * code on this thread refills the slot between them; a refill is one
+     * store. Nothing here writes translated code.
+     *   rdx = (pc & (SLOTS - 1) << 2), twice the slot's offset / 4: the
+     *   probe stub stores to the same slot.
+     */
     x_mov_st(&t->b, 8, xm(RBX, CPU_OFF_PC), RAX);
-    x_mov_mi(&t->b, 8, xm(RBX, CPU_OFF_SCRATCH0), 0);
-    /* inline probe of the translation table (thash, then linear probing to
-     * an empty slot): the table is grown at 3/4, so a hit or miss takes a
-     * few compares and no dispatcher exit */
-    x_mov_rr(&t->b, 1, RCX, RAX);
-    x_shift_ri(&t->b, XSHR, 1, RCX, 2);                         /* x = pc >> 2 (thash) */
-    x_mov_rr(&t->b, 1, RDX, RCX);
-    x_shift_ri(&t->b, XSHR, 1, RDX, 10);
-    x_alu_rr(&t->b, XXOR, 1, RCX, RDX);
-    x_shift_ri(&t->b, XSHR, 1, RDX, 10);
-    x_alu_rr(&t->b, XXOR, 1, RCX, RDX);
-    x_shift_ri(&t->b, XSHL, 1, RCX, 4);
-    x_alu_rm(&t->b, XAND, 1, RCX, xm(RBX, CPU_OFF_RT_MASK));   /* the slot's byte offset in rt_table */
-    x_mov_ld(&t->b, 8, RDX, xm(RBX, CPU_OFF_RT_TABLE));
-    size_t loop = xb_len(&t->b);
-    x_alu_rm(&t->b, XCMP, 1, RAX, xmi(RDX, RCX, 1, 0));
-    size_t next = x_jcc8(&t->b, XCC_NE);
-    x_jmp_m(&t->b, xmi(RDX, RCX, 1, 8));
-    x_patch8(&t->b, next, xb_len(&t->b));
-    x_alu_mi(&t->b, XCMP, 1, xmi(RDX, RCX, 1, 0), 0);
-    size_t miss = x_jcc8(&t->b, XCC_E);
-    x_alu_ri(&t->b, XADD, 1, RCX, 16);
-    x_alu_rm(&t->b, XAND, 1, RCX, xm(RBX, CPU_OFF_RT_MASK));
-    x_patch8(&t->b, x_jmp8(&t->b), loop);
+    x_mov_ld(&t->b, 8, RCX, xm(RBX, CPU_OFF_RT_JC));
+    x_mov_rr(&t->b, 0, RDX, RAX);
+    x_alu_ri(&t->b, XAND, 0, RDX, (int32_t)((HAO_JIT_JC_SLOTS - 1) << 2));
+    x_mov_ld(&t->b, 8, RCX, xmi(RCX, RDX, 2, 0));
+    x_alu_rm(&t->b, XCMP, 1, RAX, xm(RCX, 0));
+    size_t miss = x_jcc8(&t->b, XCC_NE);
+    x_jmp_m(&t->b, xm(RCX, 8));
     x_patch8(&t->b, miss, xb_len(&t->b));
-    exit_with(t, HAO_EXIT_BRANCH);
+    x_jmp_m(&t->b, xm(RBX, CPU_OFF_RT_PROBE));
 }
 
 static void helper(tctx *t, uint32_t insn, uint64_t pc)
@@ -3106,7 +3109,7 @@ void hao_aot_note_jit_block(hao_image *im, uint64_t pc)
 static void build_stubs(void)
 {
     xbuf b;
-    xb_init(&b, cache_ptr, 512);
+    xb_init(&b, cache_ptr, 1024);
     /* int enter(hao_cpu *cpu, void *code) */
     void *enter = cache_ptr;
     x_push_r(&b, RBP); x_push_r(&b, RBX); x_push_r(&b, R12); x_push_r(&b, R13); x_push_r(&b, R14); x_push_r(&b, R15);
@@ -3119,8 +3122,74 @@ static void build_stubs(void)
     x_pop_r(&b, R15); x_pop_r(&b, R14); x_pop_r(&b, R13); x_pop_r(&b, R12); x_pop_r(&b, RBX); x_pop_r(&b, RBP);
     x_ret(&b);
     while (xb_len(&b) & 15) x_int3(&b);
+    /*
+     * The probe stub: an indirect exit (exit_indirect) whose jump-cache slot
+     * did not hold its target. rax = target (already in cpu.pc), rdx = the
+     * slot index * 4, NZCV in memory.
+     *
+     * It probes the current translation table as lookup() does (thash,
+     * linear probing to an empty slot; the table is grown at 3/4). A hit
+     * stores the entry's address in the slot and jumps to its code. A miss
+     * leaves through the exit stub with no chain site: the dispatcher
+     * translates the target, or makes the native call it is.
+     *
+     * Most misses are native functions and the return to native code,
+     * which never get a translation. Each slot therefore has a miss record
+     * {pc, table_epoch} behind the slots: a miss writes its target and the
+     * epoch read before its probe, and the stub leaves without probing
+     * while the record names its target and the table has not changed. A
+     * record that is wrong or torn (a signal handler on this thread
+     * rewrote it) costs a probe or an unneeded trip to the dispatcher,
+     * never a wrong jump.
+     */
+    probe_stub = b.p;
+    x_mov_ld(&b, 8, RCX, xm(RBX, CPU_OFF_RT_JC));
+    x_lea(&b, 1, RDI, xmi(RCX, RDX, 4, 8 * HAO_JIT_JC_SLOTS));  /* the slot's miss record (16 bytes each) */
+    x_mov_ri(&b, R8, (uint64_t)(uintptr_t)&table_epoch);
+    x_mov_ld(&b, 8, RSI, xm(R8, 0));                             /* before the probe: an insert during it is noticed */
+    x_alu_rm(&b, XCMP, 1, RAX, xm(RDI, 0));
+    size_t probe = x_jcc8(&b, XCC_NE);
+    x_alu_rm(&b, XCMP, 1, RSI, xm(RDI, 8));
+    size_t known = x_jcc32(&b, XCC_E);
+    x_patch8(&b, probe, xb_len(&b));
+    x_mov_ri(&b, R8, (uint64_t)(uintptr_t)&table);
+    x_mov_ld(&b, 8, R8, xm(R8, 0));
+    x_mov_rr(&b, 1, R9, RAX);
+    x_shift_ri(&b, XSHR, 1, R9, 2);                              /* x = pc >> 2 */
+    x_mov_rr(&b, 1, R10, R9);
+    x_shift_ri(&b, XSHR, 1, R10, 10);
+    x_alu_rr(&b, XXOR, 1, R9, R10);
+    x_shift_ri(&b, XSHR, 1, R10, 10);
+    x_alu_rr(&b, XXOR, 1, R9, R10);                              /* x ^ x >> 10 ^ x >> 20 */
+    x_mov_ld(&b, 4, R10, xm(R8, (int32_t)offsetof(jtab, mask)));
+    x_alu_rr(&b, XAND, 1, R9, R10);
+    size_t loop = xb_len(&b);
+    x_mov_rr(&b, 1, R11, R9);
+    x_shift_ri(&b, XSHL, 1, R11, 4);
+    x_lea(&b, 1, R11, xmi(R8, R11, 1, (int32_t)offsetof(jtab, e)));
+    x_alu_rm(&b, XCMP, 1, RAX, xm(R11, 0));
+    size_t hit = x_jcc8(&b, XCC_E);
+    x_alu_mi(&b, XCMP, 1, xm(R11, 0), 0);
+    size_t miss = x_jcc8(&b, XCC_E);
+    x_lea(&b, 1, R9, xm(R9, 1));
+    x_alu_rr(&b, XAND, 1, R9, R10);
+    x_patch8(&b, x_jmp8(&b), loop);
+    x_patch8(&b, hit, xb_len(&b));
+    x_mov_st(&b, 8, xmi(RCX, RDX, 2, 0), R11);
+    x_jmp_m(&b, xm(R11, 8));
+    x_patch8(&b, miss, xb_len(&b));
+    x_mov_st(&b, 8, xm(RDI, 0), RAX);
+    x_mov_st(&b, 8, xm(RDI, 8), RSI);
+    x_patch32(&b, known, xb_len(&b));
+    x_mov_mi(&b, 8, xm(RBX, CPU_OFF_SCRATCH0), 0);
+    x_mov_ri(&b, RAX, HAO_EXIT_BRANCH);
+    x_jmp_m(&b, xm(RBX, CPU_OFF_RT_EXIT));
+    while (xb_len(&b) & 15) x_int3(&b);
+    if (b.overflow || b.bad) abort();
     cache_ptr += xb_len(&b);
     jit_enter = (int (*)(hao_cpu *, void *))enter;
+    jc_none.pc = ~0ull;
+    jc_none.code = probe_stub;
 }
 
 /* 1: the code cache is mapped; -1: no executable memory (interpreter only,
@@ -3238,12 +3307,18 @@ static void *find_or_translate(uint64_t pc)
     return code;
 }
 
-/* the table translated code on this thread probes inline: entries and mask of one table */
-static inline void set_rt_table(hao_cpu *c)
+/* Give a hao_cpu what translated code reaches through it: the entry
+ * points, the FCMP table and a jump cache (HAO_JIT_JC_SLOTS slots and as
+ * many two-word miss records, zero when new: every slot then starts at
+ * jc_none). */
+static void rt_bind(hao_cpu *c, uint64_t *jc, void *helper)
 {
-    const jtab *t = __atomic_load_n(&table, __ATOMIC_ACQUIRE);
-    c->rt_table = (uint64_t)(uintptr_t)t->e;
-    c->rt_mask = (uint64_t)t->mask << 4;
+    if (!jc[0]) for (int k = 0; k < HAO_JIT_JC_SLOTS; k++) jc[k] = (uint64_t)(uintptr_t)&jc_none;
+    c->rt_helper = (uint64_t)(uintptr_t)helper;
+    c->rt_exit = (uint64_t)(uintptr_t)exit_stub;
+    c->rt_probe = (uint64_t)(uintptr_t)probe_stub;
+    init_fcmp(c);
+    c->rt_jc = (uint64_t)(uintptr_t)jc;
 }
 
 int hao_jit_run_block(hao_thread *th)
@@ -3267,10 +3342,9 @@ int hao_jit_run_block(hao_thread *th)
         }
     }
     c->host_scratch[0] = 0;
-    c->rt_helper = (uint64_t)(uintptr_t)jit_helper;
-    c->rt_exit = (uint64_t)(uintptr_t)exit_stub;
-    set_rt_table(c);
-    if (!c->fcmp_flags[0]) init_fcmp(c);
+    /* a cpu state that was saved before this thread first ran translated
+     * code, or built elsewhere, is bound again; otherwise nothing to do */
+    if (c->rt_jc != (uint64_t)(uintptr_t)th->jit_jc) rt_bind(c, th->jit_jc, (void *)(uintptr_t)jit_helper);
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = 1;
     int r = jit_enter(c, code);
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = 0;
@@ -3334,6 +3408,7 @@ typedef struct {
     uint64_t last_pc, last_base;               /* the block left in scratch, and the code it was part of */
     int last_m, last_n;
     uint32_t last_code[2 * MAX_BLOCK_INSNS];
+    uint64_t jc[3 * HAO_JIT_JC_SLOTS];
 } exec_state;
 static pthread_key_t exec_key;
 static pthread_once_t exec_once = PTHREAD_ONCE_INIT;
@@ -3362,10 +3437,7 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
     }
     uint8_t *tscratch = es->scratch;
     c->pc = base;
-    c->rt_helper = (uint64_t)(uintptr_t)a64_exec_helper;
-    c->rt_exit = (uint64_t)(uintptr_t)exit_stub;
-    set_rt_table(c);
-    init_fcmp(c);
+    rt_bind(c, es->jc, (void *)(uintptr_t)a64_exec_helper);
     for (int steps = 0; steps < 4 * n + 4; steps++) {
         uint64_t pc = c->pc;
         if (pc == base + 4u * (unsigned)n) return HAO_EXIT_NONE;
