@@ -3,7 +3,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 B=$(cd "${B:-$repo/build}" && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-dscselhoist}
+OUT=${OUT:-$(mktemp -d -t hao-dscselhoist)}
 mkdir -p "$OUT"
 clang -arch x86_64 -O1 -g -Wall -Wextra -Wno-unused-parameter -I"$repo/include" \
     "$here/dscselhoist.c" -L"$B" -lhao -Wl,-rpath,"$B" -lobjc -o "$OUT/dscselhoist"

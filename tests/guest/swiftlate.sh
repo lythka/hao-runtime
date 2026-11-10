@@ -13,7 +13,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-swiftlate}
+OUT=${OUT:-$(mktemp -d -t hao-swiftlate)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 MODES=${MODES:-jit interp aot}

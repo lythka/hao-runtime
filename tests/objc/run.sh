@@ -21,7 +21,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-objc}
+OUT=${OUT:-$(mktemp -d -t hao-objc)}
 B=${B:-$repo/build}
 case $B in /*) ;; *) B=$repo/$B ;; esac
 HAO=${HAO:-$B/hao}

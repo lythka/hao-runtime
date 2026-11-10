@@ -37,7 +37,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-libval}
+OUT=${OUT:-$(mktemp -d -t hao-libval)}
 HAO=${HAO:-$repo/build/hao}
 B=${B:-$(dirname "$HAO")}
 T=${T:-60}
@@ -233,6 +233,6 @@ if [ -x "$repo/tools/hao-embed" ] && [ -f "$B/hao-stub" ]; then
         if [ "$n" = "$e" ]; then echo "PASS $v embedded: DYLD_INSERT_LIBRARIES loaded $e time(s), native $n"
         else echo "FAIL $v embedded: DYLD_INSERT_LIBRARIES loaded $e time(s), native $n"; fail=1; fi
     done
-fi
+else echo "SKIP embedded form (no tools/hao-embed or $B/hao-stub)"; fi
 echo "libval: $([ $fail = 0 ] && echo all passed || echo FAILED)"
 exit $fail

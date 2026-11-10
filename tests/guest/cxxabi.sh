@@ -21,7 +21,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-cxxabi}
+OUT=${OUT:-$(mktemp -d -t hao-cxxabi)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-30}
 SECTIONS=${SECTIONS:-"1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19"}

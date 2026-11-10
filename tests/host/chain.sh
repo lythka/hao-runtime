@@ -14,7 +14,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-chain}
+OUT=${OUT:-$(mktemp -d -t hao-chain)}
 LIB=$(cd "${LIB:-$repo/build}" && pwd)
 HAO=${HAO:-$LIB/hao}
 INC=${INC:-$repo/include}

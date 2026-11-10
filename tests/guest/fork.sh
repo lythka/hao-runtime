@@ -20,7 +20,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-fork}
+OUT=${OUT:-$(mktemp -d -t hao-fork)}
 HAO=${HAO:-$repo/build/hao}
 N=${N:-100}
 NI=${NI:-40}

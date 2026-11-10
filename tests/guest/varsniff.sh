@@ -8,7 +8,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-varsniff}
+OUT=${OUT:-$(mktemp -d -t hao-varsniff)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 LS=/System/Library/PrivateFrameworks/login.framework/Versions/A/Frameworks/loginsupport.framework/Versions/A/loginsupport

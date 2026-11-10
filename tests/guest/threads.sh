@@ -15,7 +15,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-threads}
+OUT=${OUT:-$(mktemp -d -t hao-threads)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 TI=${TI:-200}

@@ -1,0 +1,76 @@
+# tests/check.sh entries: NAME TIMEOUT(s) MODE(par|serial) COMMAND
+# COMMAND runs in the repository with OUT (a private empty directory) and
+# B, LIB and HAO (absolute paths) set. serial entries run alone, after the
+# parallel ones. tests/README.md lists what is left out and why.
+guest/aggspi6	300	par	tests/guest/aggspi6.sh
+guest/atoken	300	par	tests/guest/atoken.sh
+guest/bitfields	300	par	tests/guest/bitfields.sh
+guest/blocks2	300	par	tests/guest/blocks2.sh
+guest/bridgefix	300	par	tests/guest/bridgefix.sh
+guest/bridgeunit	300	par	tests/guest/bridgeunit.sh
+guest/callback-routes	300	par	tests/guest/callback-routes.sh
+guest/callbacks	300	par	tests/guest/callbacks.sh
+guest/cfnull	300	par	tests/guest/cfnull.sh
+guest/chkstk	300	par	tests/guest/chkstk.sh
+guest/cli	300	par	tests/guest/cli.sh
+guest/crypto	300	par	tests/guest/crypto.sh
+guest/cxxabi	300	par	tests/guest/cxxabi.sh
+guest/datacall	300	par	tests/guest/datacall.sh
+guest/dsc	300	par	tests/guest/dsc.sh
+guest/dscswift	300	par	tests/guest/dscswift.sh
+guest/dylibs	300	par	tests/guest/dylibs.sh
+guest/eh	300	par	tests/guest/eh.sh
+guest/fenv	300	par	tests/guest/fenv.sh
+guest/footprint	600	par	tests/guest/footprint.sh
+guest/fork	600	par	tests/guest/fork.sh
+guest/fullcache	300	par	tests/guest/fullcache.sh
+guest/gss	300	par	tests/guest/gss.sh
+guest/heapprobe	300	par	tests/guest/heapprobe.sh
+guest/hfasret	300	par	tests/guest/hfasret.sh
+guest/identity	300	par	tests/guest/identity.sh
+guest/indirect-x8	300	par	tests/guest/indirect-x8.sh
+guest/keypath	300	par	tests/guest/keypath.sh
+guest/libval	300	par	tests/guest/libval.sh
+guest/msgfnptr	300	par	tests/guest/msgfnptr.sh
+guest/narrowret	300	par	tests/guest/narrowret.sh
+guest/nativesig	300	par	tests/guest/nativesig.sh
+guest/nojit	300	par	tests/guest/nojit.sh
+guest/objcimp	300	par	tests/guest/objcimp.sh
+guest/objcva	300	par	tests/guest/objcva.sh
+guest/oslog	600	xfail	tests/guest/oslog.sh
+guest/signals	600	par	tests/guest/signals.sh
+guest/sret-forward	300	par	tests/guest/sret-forward.sh
+guest/stackargs	300	par	tests/guest/stackargs.sh
+guest/stackguard	300	par	tests/guest/stackguard.sh
+guest/swift-object-callbacks	300	par	tests/guest/swift-object-callbacks.sh
+guest/swiftlate	300	par	tests/guest/swiftlate.sh
+guest/swiftls	300	par	tests/guest/swiftls.sh
+guest/swiftmeta	300	par	tests/guest/swiftmeta.sh
+guest/swiftpop	300	par	tests/guest/swiftpop.sh
+guest/swiftthunks	300	par	tests/guest/swiftthunks.sh
+guest/threads	300	par	tests/guest/threads.sh
+guest/uresume	300	par	tests/guest/uresume.sh
+guest/varsniff	300	par	tests/guest/varsniff.sh
+guest/xinhab	300	xfail	tests/guest/xinhab.sh
+guest/xpac	300	par	tests/guest/xpac.sh
+guest/run-async	300	par	tests/guest/run-async.sh -k
+guest/keypath-identity	300	par	python3.14 -I tests/guest/keypath-identity/run.py
+guest/late-method-signatures	300	par	python3.14 -I tests/guest/late-method-signatures/run.py
+guest/native-bundle	300	par	python3.14 -I tests/guest/native-bundle/run.py
+guest/objc-class-order	300	par	python3.14 -I tests/guest/objc-class-order/run.py
+guest/sret-spill	300	par	python3.14 -I tests/guest/sret-spill/run.py
+guest/objcvascope	300	par	python3.14 -I tests/guest/objcvascope.py
+host/runtime	300	par	tests/host/runtime.sh
+host/chain	300	par	tests/host/chain.sh
+host/commpage	300	par	tests/host/commpage.sh
+host/sigpolicy	300	par	tests/host/sigpolicy.sh
+host/near-map	300	par	tests/host/near-map.sh
+host/dscselhoist	300	par	tests/host/dscselhoist.sh
+objc	300	par	tests/objc/run.sh
+tools	300	par	tests/tools/run.sh
+tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py
+translate	300	par	tests/translate/run.sh "$B" "$OUT"
+oss265	300	par	tests/oss265/run.sh
+fidelity	300	par	tests/fidelity/run.sh
+fuzz-smoke	600	par	make -s B="$B" fuzz-smoke
+corpus27_df	300	serial	tests/corpus27_df.sh

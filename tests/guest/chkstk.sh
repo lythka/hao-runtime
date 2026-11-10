@@ -10,7 +10,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-chkstk}
+OUT=${OUT:-$(mktemp -d -t hao-chkstk)}
 HAO=${HAO:-$repo/build/hao}
 case $HAO in /*) ;; *) echo "chkstk.sh: HAO must be an absolute path"; exit 2 ;; esac
 rm -rf "$OUT"; mkdir -p "$OUT/aot" "$OUT/none"; chmod 755 "$OUT" "$OUT/aot"

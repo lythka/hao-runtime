@@ -21,7 +21,8 @@ ARCH      := -arch x86_64 -mmacosx-version-min=$(MACOS_MIN)
 # gives the same bytes in any checkout, worktree or rebuild.
 export ZERO_AR_DATE := 1
 REPRO     := -ffile-prefix-map=$(CURDIR)=.
-CFLAGS    := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Iinclude -Isrc -mcx16 $(REPRO)
+WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
+CFLAGS    := $(ARCH) -std=gnu11 -O2 -g $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
 # Changing MACOS_MIN in one B rebuilds everything there.
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
@@ -41,8 +42,12 @@ RT_O := $(patsubst src/%.c,$(B)/%.o,$(RT)) $(B)/bridge_x86_64.o
 # x86_64 slice tools/hao-embed adds to arm64e-only programs) are front ends.
 HAO_LIBDIR ?= /usr/lib/hao
 FRONT_LD := -Wl,-rpath,@executable_path -Wl,-rpath,$(HAO_LIBDIR)
+# Front ends get CFLAGS' warnings but no -g: they are linked straight from
+# source (a debug map would name temporary objects), and front/stub.o is
+# linked into every embedded program by tools/hao-embed.
+FRONT_CFLAGS := $(ARCH) -O2 $(WARN)
 
-.PHONY: all test oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke
+.PHONY: all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke
 all: $(B)/libhaocore.a $(B)/libhao.dylib $(B)/hao $(B)/hao-stub $(B)/front/stub.o
 
 $(MIN_STAMP):
@@ -51,13 +56,13 @@ $(MIN_STAMP):
 	@touch $@
 
 $(B)/bridge_x86_64.o: src/bridge_x86_64.S $(MIN_STAMP)
-	$(CC) $(ARCH) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Linked by hao and hao-stub (not inserted): its __interpose tuples apply
 # process-wide and the main executable stays dyld image 0 (src/process_identity.c).
 # src/oslog.c: guest os_log/os_signpost records composed in process (it says why).
 $(B)/libhao_identity.dylib: src/process_identity.c src/oslog.c src/native_bundle_identity.c include/hao/native_bundle.h include/hao/identity.h $(MIN_STAMP)
-	$(CC) $(ARCH) -O2 -Wall -Iinclude -dynamiclib -install_name @rpath/libhao_identity.dylib -o $@ src/process_identity.c src/oslog.c src/native_bundle_identity.c -lobjc
+	$(CC) $(FRONT_CFLAGS) -Iinclude -dynamiclib -install_name @rpath/libhao_identity.dylib -o $@ src/process_identity.c src/oslog.c src/native_bundle_identity.c -lobjc
 	codesign -s - -f $@
 
 # hao code runs in signal handlers on native threads that may hold the malloc
@@ -73,17 +78,17 @@ $(B)/libhao.dylib: $(RT_O) $(B)/libhaocore.a
 	codesign -s - -f $@
 
 $(B)/hao: src/front/cli.c $(B)/libhao.dylib $(B)/libhao_identity.dylib
-	$(CC) $(ARCH) -O2 -o $@ $< -L$(B) -lhao -lhao_identity $(FRONT_LD)
+	$(CC) $(FRONT_CFLAGS) -o $@ $< -L$(B) -lhao -lhao_identity $(FRONT_LD)
 	codesign -s - -f --entitlements tools/hao.entitlements $@
 
 # Object form for per-program stubs that carry the program's own data sections.
 $(B)/front/stub.o: src/front/stub.c $(MIN_STAMP)
 	@mkdir -p $(dir $@)
-	$(CC) $(ARCH) -O2 -c $< -o $@
+	$(CC) $(FRONT_CFLAGS) -c $< -o $@
 
 # Unsigned: tools/hao-embed signs each copy with its program's identity.
 $(B)/hao-stub: src/front/stub.c $(B)/libhao.dylib $(B)/libhao_identity.dylib $(MIN_STAMP)
-	$(CC) $(ARCH) -O2 -o $@ $< -L$(B) -lhao -lhao_identity -Wl,-rpath,$(HAO_LIBDIR) -Wl,-no_adhoc_codesign
+	$(CC) $(FRONT_CFLAGS) -o $@ $< -L$(B) -lhao -lhao_identity -Wl,-rpath,$(HAO_LIBDIR) -Wl,-no_adhoc_codesign
 
 $(B)/%.o: src/%.c $(wildcard include/hao/*.h src/*.inc) $(MIN_STAMP)
 	@mkdir -p $(dir $@)
@@ -118,6 +123,34 @@ oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	  echo "== $$m"; $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m.txt || fail=1; \
 	done; \
 	echo "== atomic"; $(B)/oracle-atomic || fail=1; \
+	exit $$fail
+
+# The same oracle checks with the translator itself (interpreter, JIT, x86
+# encoder: CORE, src/jit.c) built under ASan and UBSan, objects in $(B)/asan.
+# Any sanitizer report fails the target; reports are left in
+# $(B)/asan/oracle-*.log. ORACLE_ASAN_N records per mode (default 20000).
+ASAN_CFLAGS := $(filter-out -O2,$(CFLAGS)) -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
+ASAN_CORE_O := $(patsubst src/%.c,$(B)/asan/%.o,$(CORE) src/jit.c src/stubs_oracle.c)
+ASAN_ENV    := ASAN_OPTIONS=symbolize=0:handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0:detect_leaks=0 \
+               UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0
+ORACLE_ASAN_N ?= 20000
+$(B)/asan/%.o: src/%.c $(wildcard include/hao/*.h src/*.inc) $(MIN_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(ASAN_CFLAGS) -c $< -o $@
+$(B)/asan/oracle-check: tests/oracle/check.c tests/oracle/record.h tests/oracle/known.h $(ASAN_CORE_O)
+	$(CC) $(ASAN_CFLAGS) -o $@ $< $(ASAN_CORE_O) && codesign -s - -f $@
+$(B)/asan/oracle-atomic: tests/oracle/atomic16.c $(ASAN_CORE_O)
+	$(CC) $(ASAN_CFLAGS) -o $@ $< $(ASAN_CORE_O) -lpthread && codesign -s - -f $@
+.PHONY: oracle-asan
+oracle-asan: $(B)/oracle-native $(B)/asan/oracle-check $(B)/asan/oracle-atomic
+	@fail=0; seed=0x$$(date +%s)$$RANDOM; echo "seed $$seed"; for m in $(ORACLE_MODES); do \
+	  $(B)/oracle-native $(B)/asan/oracle-$$m.bin $(ORACLE_ASAN_N) $$seed $$m || fail=1; \
+	  echo "== $$m (asan)"; $(ASAN_ENV) timeout -s KILL 900 $(B)/asan/oracle-check $(B)/asan/oracle-$$m.bin --show 5 \
+	    --bad $(B)/asan/oracle_bad_$$m.txt >$(B)/asan/oracle-$$m.log 2>&1 || fail=1; tail -3 $(B)/asan/oracle-$$m.log; \
+	done; \
+	echo "== atomic (asan)"; $(ASAN_ENV) timeout -s KILL 300 $(B)/asan/oracle-atomic >$(B)/asan/oracle-atomic.log 2>&1 || fail=1; \
+	tail -3 $(B)/asan/oracle-atomic.log; \
+	if grep -lE 'runtime error:|ERROR: AddressSanitizer' $(B)/asan/oracle-*.log; then echo "sanitizer reports in the logs above"; fail=1; fi; \
 	exit $$fail
 
 # Unit tests of the A64 immediate decoder and condition mapping.
@@ -202,8 +235,18 @@ aot: all
 async-contract-test: all
 	python3.14 tests/host/async_package.py --build $(B)
 
-test: unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test
+test: unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest
 	tools/check_x86.sh
+
+# Every other test script that runs unattended on a development host
+# (tests/check.list, tests/README.md), in parallel (CHECK_J jobs), each with a
+# timeout and a private output directory; fails on any failure or on a skip
+# tests/expected-skips.txt does not list. `make check` is the full gate.
+CHECK_J ?= 8
+test-guest: all $(FUZZERS)
+	B=$(abspath $(B)) J=$(CHECK_J) tests/check.sh
+check: test
+	$(MAKE) B=$(B) test-guest
 
 # Fuzzing (tests/fuzz/README.md): ASan + trace-pc-guard targets driven by
 # tests/fuzz/driver.c (the toolchain has no libFuzzer runtime). `make fuzz`
@@ -230,7 +273,7 @@ fuzz-smoke: $(FUZZERS)
 
 # Host testing: a stub that finds libhao in build/ (not for images).
 $(B)/hao-stub-dev: src/front/stub.c $(B)/libhao.dylib $(MIN_STAMP)
-	$(CC) $(ARCH) -O2 -o $@ $< -L$(B) -lhao -Wl,-rpath,$(abspath $(B)) -Wl,-no_adhoc_codesign
+	$(CC) $(FRONT_CFLAGS) -o $@ $< -L$(B) -lhao -Wl,-rpath,$(abspath $(B)) -Wl,-no_adhoc_codesign
 
 # Swift callback islands share the bounded VM-hole allocator.
 $(B)/swiftmeta.o: src/near_map.h

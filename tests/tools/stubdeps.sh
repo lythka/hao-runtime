@@ -19,7 +19,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-tools-stubdeps}
+OUT=${OUT:-$(mktemp -d -t hao-tools-stubdeps)}
 B=${B:-$repo/build}
 EMBED=${EMBED:-$repo/tools/hao-embed}
 fails=0

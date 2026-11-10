@@ -226,6 +226,7 @@ src/variants_gen.inc
 src/varsniff.c
 src/vlist_gen.inc
 src/x86_emit.c
+tests/README.md
 tests/a64/test_imm_cond.c
 tests/abi/test_layout.m
 tests/aot/helper_descriptor.c
@@ -234,8 +235,11 @@ tests/aot/opts_test.c
 tests/aot/patch.py
 tests/aot/policy.c
 tests/aot/run.sh
+tests/check.list
+tests/check.sh
 tests/corpus27.txt
 tests/corpus27_df.sh
+tests/expected-skips.txt
 tests/fidelity/expect-ab.txt
 tests/fidelity/fixtures/extrabit.tsv
 tests/fidelity/fixtures/noprog.tsv

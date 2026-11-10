@@ -15,7 +15,8 @@ make B=build/macos-26.0       # macOS 26 deployment target, separate directory
 
 ## Tests
 
-Run `make test` for every runtime change. It runs:
+Run `make check` for every runtime change: `make test`, then `make
+test-guest`. `make test` alone is the quick gate. It runs:
 
 - `unit`: instruction decoding, condition mapping, ABI layout, the Mach-O
   loader and interface-unit parser (under ASan/UBSan), growable maps and option
@@ -27,25 +28,31 @@ Run `make test` for every runtime change. It runs:
 - `bridgetest`, `async-contract-test`, `legacy-dyld-test`,
   `indexed-mulhigh-test`: the native bridge table, async provider packaging,
   legacy dyld fixups and indexed multiply-high.
+- `forktest`, `jitlocktest`: `fork` while other threads hold runtime locks;
+  the code cache and thunk areas under contention.
 - `tools/check_x86.sh`: hao's x86 encoder against the system assembler.
+
+`make test-guest` runs every other test script that runs unattended on a
+development host (`tests/check.list`: the guest, host, Objective-C, tools,
+translate and release tests and `fuzz-smoke`) in parallel, each with a
+timeout and its own temporary output directory, and prints one PASS, FAIL,
+SKIP or XFAIL line per script. It fails on any failure and on any skip that
+`tests/expected-skips.txt` does not list. [tests/README.md](tests/README.md)
+lists every script, what it needs and what it measured.
 
 Further targets:
 
 | Command | Covers |
 |---|---|
-| `make forktest` | `fork` while other threads hold runtime locks |
-| `make jitlocktest` | code cache and thunk areas under contention |
+| `make oracle-asan` | the oracle checks with the interpreter, JIT and x86 encoder under ASan and UBSan |
 | `make fuzz`, `make fuzz-smoke` | parser fuzzing ([tests/fuzz/README.md](tests/fuzz/README.md)) |
-| `OUT=dir tests/tools/run.sh` | embedding, identity, installation and AOT payload tools |
-| `python3.14 -B -m unittest discover -s tests/tools -p test_release.py` | release assembly |
-| `python3 -I tests/tools/test_install.py` | installer path rules (also run by `tests/tools/run.sh`) |
 | `python3.14 tools/check_distribution.py` | every tracked file is in `distribution/runtime-files.txt` |
 
 The scripts under `tests/guest/`, `tests/host/`, `tests/objc/` and
 `tests/translate/` each describe their usage in their header. Most build an
 ARM64 reference and an ARM64e guest, run the guest under JIT, interpreter and
-AOT, and compare the output with the native run. Point `OUT` at a disposable
-directory.
+AOT, and compare the output with the native run. Without `OUT`, a script
+works in a new `mktemp -d` directory.
 
 A passing runtime suite does not establish that an application or a system
 image works; those are tested on the target system.

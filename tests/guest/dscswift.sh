@@ -22,7 +22,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 src=$here/dsc
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-dscswift}
+OUT=${OUT:-$(mktemp -d -t hao-dscswift)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 CASES=${CASES:-rdma connmode ulpn repair}

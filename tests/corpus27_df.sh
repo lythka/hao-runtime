@@ -10,13 +10,14 @@
 # usage: tests/corpus27_df.sh [CORPUS]   (default tests/corpus27.txt)
 # env:   N=runs per line (default 5), OUT=work dir (default: a temporary one)
 # Needs the 27.0 System at /private/tmp/ipsw27-fs (or $HAO_FS) and build/hao.
-# Exit: 0 all PASS, 1 some FAIL, 2 cannot test.
+# Exit: 0 all PASS, 1 some FAIL, 2 cannot test, 77 skipped (SKIP line says why).
 R=$(cd "$(dirname "$0")/.." && pwd)
 corpus=${1:-$R/tests/corpus27.txt}
 FS=${HAO_FS:-/private/tmp/ipsw27-fs}
 N=${N:-5}
 [ -x "$R/build/hao" ] || { echo "corpus27_df: no $R/build/hao (run make)"; exit 2; }
-[ -e "$FS/bin/df" ] || { echo "corpus27_df: no 27.0 System at $FS"; exit 2; }
+[ -e "$FS/bin/df" ] || { echo "SKIP corpus27_df: no 27.0 System at $FS"; exit 77; }
+[ -x "$R/tools/run27.sh" ] || { echo "SKIP corpus27_df: no tools/run27.sh (the corpus runner is not in this tree)"; exit 77; }
 if [ -n "$OUT" ]; then W=$OUT; mkdir -p "$W"; else W=$(mktemp -d); trap 'rm -rf "$W"' EXIT; fi
 rm -f "$W"/fill.*
 mkdir -p "$W/build"

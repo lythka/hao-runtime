@@ -16,7 +16,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 HAO=${HAO:-$repo/build/hao}
-OUT=${OUT:-${TMPDIR:-/tmp}/hao-heapprobe}
+OUT=${OUT:-$(mktemp -d -t hao-heapprobe)}
 MODES=${MODES:-jit interp aot user noprobe}
 mkdir -p "$OUT/aot"
 OUT=$(cd "$OUT" && pwd)
