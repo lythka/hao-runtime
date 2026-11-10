@@ -93,7 +93,7 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 | guest/nojit | PASS | PASS | 5 | |
 | guest/objcimp | PASS | PASS | 4 | |
 | guest/objcva | PASS | PASS | 3 | |
-| guest/oslog | FAIL | XFAIL | 79 | `log show`; see known failures |
+| guest/oslog | FAIL | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below |
 | guest/signals | PASS | PASS | 36 | |
 | guest/sret-forward | PASS | PASS | 3 | |
 | guest/stackargs | PASS | PASS | 2 | |
@@ -159,7 +159,7 @@ process.
 
 ## Known failures
 
-Both fail the same way at b5dfc26 and are marked `xfail`:
+`guest/xinhab` is marked `xfail`:
 
 - `guest/xinhab`: its header calls it an open class. Enum cases stored in a
   pointer payload's extra inhabitants cross the boundary with the wrong
@@ -168,13 +168,23 @@ Both fail the same way at b5dfc26 and are marked `xfail`:
   `guest wrote Three case 2, native read 0`,
   `native wrote Three case 2, guest read 2` where native arm64 reads 0, 2
   and 3 respectively.
-- `guest/oslog` passes on the `TEST_SWITCHES` build the gate uses (8 of 8) but fails on the
-  default build (5 of 8): there, as described next, the Swift program's records do not compose.
-  The cause of the difference between the two builds is not known yet.
-- `guest/oslog`: the C program's 24 records match on every route, but every
-  `oslogswift` record (Logger, `os_log()`, `os_signpost()` from Swift) is
-  `<compose failure [UUID]>` under JIT, `--interp` and AOT; the `oldstub`
-  route passes.
+
+Fixed: `guest/oslog` failed for the Swift program only (every `oslogswift`
+record `<compose failure [UUID]>` under JIT, `--interp` and AOT), and only
+in some build directories. No switch was involved. `tools/hao-embed` gave a
+stub an LC_UUID made from the program's arm slice LC_UUID alone, and logd
+saves the format strings of a UUID once (`/var/db/uuidtext`) and resolves
+every later record of that UUID in the saved copy. `oslogswift` builds to
+the same arm slice in every checkout, so all its stubs shared one UUID,
+while the stub's `__cstring` moves with the length of the `--host-test`
+rpath (the build directory): at offset 0x930 in the checkout whose stub
+logd saved first, 0x950 in `build/` and `build-ts/` of a worktree with a
+longer path. The C program never failed because its arm slice carries
+`$OUT` in a load command, so each run had a new UUID. The stub's LC_UUID
+now also names the stub's sections (addresses and bytes), as a linker's
+UUID does; the script checks that its two different stubs of a program
+have two UUIDs. The same defect reached installed systems: a program
+embedded again with another libhao build kept its UUID.
 
 Flaky under host load: `make oracle`'s `atomic16` control case ("two
 8-byte halves (must tear)") failed in one of three `make oracle` runs with 0
