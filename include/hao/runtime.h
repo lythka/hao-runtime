@@ -308,6 +308,7 @@ void hao_guest_svc(hao_thread *t);
 
 /* signals.c */
 void hao_signals_init(void);
+int hao_signal_raw_sigaction(int sig, const void *nsa, void *osa);   /* a guest svc sigaction(2) */
 void hao_signals_stats(void);
 bool hao_signal_forward(int sig, siginfo_t *info, void *uc);
 /* on_fault gives up on a fault: SIG_DFL, the signal and SIGILL/SIGTRAP unblocked (also in the

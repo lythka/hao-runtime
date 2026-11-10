@@ -18,6 +18,47 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 
+/* the kernel's result convention: x0 = value, or C set with x0 = errno */
+static void svc_result(hao_cpu *c, long r, int err)
+{
+    unsigned nzcv = hao_nzcv(c) & ~2u;
+    if (err) { nzcv |= 2; r = err; }
+    c->x[0] = (uint64_t)r;
+    hao_set_nzcv(c, nzcv);
+}
+
+/* BSD calls that would bypass hao's own state if passed through: the
+ * signal dispositions (a raw sigaction would replace hao's fault handler
+ * and trampoline) and the thread's signal mask go through the same code as
+ * the libc calls; thread creation and sigreturn, which hand the kernel
+ * entry points and register state hao does not set up, are refused.
+ * Returns whether the call was handled. */
+static bool raw_mediated(hao_thread *t, long bsd, const uint64_t *a)
+{
+    hao_cpu *c = &t->cpu;
+    switch (bsd) {
+    case SYS_sigaction: {
+        int r = hao_signal_raw_sigaction((int)a[0], (const void *)(uintptr_t)a[1], (void *)(uintptr_t)a[2]);
+        svc_result(c, 0, r < 0 ? errno : 0);
+        return true;
+    }
+    case SYS_sigprocmask: case SYS___pthread_sigmask: {
+        /* libc's pthread_sigmask: libhao_identity's hook tracks the mask */
+        int e = pthread_sigmask((int)a[0], (const sigset_t *)(uintptr_t)a[1], (sigset_t *)(uintptr_t)a[2]);
+        svc_result(c, 0, e);
+        return true;
+    }
+    case SYS_sigreturn: case SYS_bsdthread_create: case SYS_bsdthread_register:
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "raw system call %ld (%s) refused: guest threads and signal returns go through libSystem under hao\n",
+                bsd, bsd == SYS_sigreturn ? "sigreturn" : bsd == SYS_bsdthread_create ? "bsdthread_create" : "bsdthread_register");
+        svc_result(c, 0, ENOTSUP);
+        return true;
+    default:
+        return false;
+    }
+}
+
 void hao_guest_svc(hao_thread *t)
 {
     hao_cpu *c = &t->cpu;
@@ -51,6 +92,7 @@ void hao_guest_svc(hao_thread *t)
     int shift = num == 0 ? 1 : 0;                   /* indirect syscall: number in x0 */
     if (shift) xnum = 0x2000000L | (long)c->x[0];
     for (int k = 0; k < 9; k++) args[k] = c->x[k + shift];
+    if ((xnum >> 24) == 2 && raw_mediated(t, xnum & 0xffffff, args)) return;
     /* execve, __mac_execve, posix_spawn: a hao stub gets the tagged-pointer
      * switch in its environment, as through libSystem (process_identity.c) */
     long bsd = xnum & 0xffffff;
@@ -67,6 +109,12 @@ void hao_guest_svc(hao_thread *t)
     int err = 0;
     long r = hao_raw_syscall(xnum, args, &rdx, &err);
     if (env) munmap(env, envlen);
+    /* executable pages the guest maps itself hold arm64 code (interpose.c, as for libc's mmap) */
+    if (!err && (xnum >> 24) == 2) {
+        if (bsd == SYS_mmap) hao_guest_vm_note((uint64_t)r, args[1], (args[2] & PROT_EXEC) || (args[3] & MAP_JIT));
+        else if (bsd == SYS_munmap) hao_guest_vm_note(args[0], args[1], false);
+        else if (bsd == SYS_mprotect && (args[2] & PROT_EXEC)) hao_guest_vm_note(args[0], args[1], true);
+    }
     c->x[0] = (uint64_t)r;
     c->x[1] = rdx;
     unsigned nzcv = hao_nzcv(c) & ~2u;
