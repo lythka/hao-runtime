@@ -36,9 +36,11 @@ run fuzz_typeenc 1024
 run fuzz_codesig 65536
 run fuzz_ifunit 16384
 mkdir -p "$OUT/fuzz_hao_fat"
-if python3 -I "$here/fuzz_hao_fat.py" "$here"/corpus/fat/* >/dev/null 2>"$OUT/fuzz_hao_fat/replay.log" &&
+# the Python packaging readers (hao_fat, hao_macho, hao_codesig, hao_ifunit, the installer's and stamper's walks)
+if timeout -s KILL 120 python3 -I "$here/fuzz_hao_fat.py" "$here"/corpus/fat/* "$here"/corpus/macho/* "$here"/corpus/ifunit/* \
+        >/dev/null 2>"$OUT/fuzz_hao_fat/replay.log" &&
    r=$(timeout -s KILL $((T + 60)) python3 -I "$here/fuzz_hao_fat.py" --time "$T" --seed "$SEED" \
-        --artifacts "$OUT/fuzz_hao_fat" "$here/corpus/fat" "$here/corpus/macho" 2>&1); then
+        --artifacts "$OUT/fuzz_hao_fat" "$here/corpus/fat" "$here/corpus/macho" "$here/corpus/ifunit" 2>&1); then
     echo "PASS fuzz_hao_fat: ${r##*: }"
 else echo "FAIL fuzz_hao_fat: ${r:-replay crashed}"; bad=1; fi
 exit $bad

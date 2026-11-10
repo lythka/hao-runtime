@@ -20,8 +20,38 @@ stamped for another kernel never dereferences a guessed address. The activator
 table must be exactly `[mach, fat, shell, NULL]`. Stamp every boot kernel
 collection with the stamper from the same commit as the kext.
 
+The interpreter path is a constant compiled into HaoExec. Nothing at run time
+can change it: there is no `kern.hao.interpreter`, because a writable path
+would let one sysctl write send every ARM exec on the machine to another
+program. Root can turn routing off and on with `kern.hao.enabled`, and
+`kern.hao.routed` counts routed execs.
+
+Once its activator is installed, HaoExec refuses to unload. The kernel calls
+the activator through a table slot without holding a reference on the kext,
+so there is no moment at which its code is known to be unused. Set
+`kern.hao.enabled=0` to stop routing; restart to remove the kext. HaoExec
+writes the table slot once, at load, with one aligned pointer store, and
+stays inactive on a kernel that has CR4.CET set.
+
 Anyone can run `/usr/libexec/hao FILE` directly, so routing adds no privilege
 and every check lives in hao.
+
+## Installation
+
+`tools/hao-install.py` runs as root on a System volume and takes file names
+from the payload's manifests. Each name must be a relative path, already
+normalised, without `..`: one that is not fails the install before anything
+is written. The installer follows no symbolic link for such a name or for a
+runtime file: a link in the payload's tree, among the directories of a
+target, or where a file is to be written fails the install.
+`tools/hao_release.py` applies the same rule when it checks and materialises
+a bundle.
+
+The packaging tools read Mach-O files, code signatures and interface units
+from the image being built. Their readers share one bounded load-command walk
+(`hao_fat.load_commands`) and refuse malformed or truncated input with an
+error instead of hanging or failing with a traceback; `tests/fuzz` holds the
+inputs that once did.
 
 ## Guest signature checks
 
@@ -188,6 +218,12 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   swapped file, not one rewritten in place by its owner between the check and
   the mapping, or before hao reads a page it has not translated yet.
 - HaoExec routes unsigned and set-ID files; hao refuses them afterwards.
+- HaoExec clears CR0.WP on one CPU, with interrupts off, for the one store
+  that installs its activator. A non-maskable interrupt taken in that window
+  runs without kernel write protection.
+- The installer checks for symbolic links as it walks a path. It assumes
+  nothing else changes the System volume during the install, as in an image
+  builder.
 - A routed process cannot take on the guest's code identity or entitlements.
 - An embedded stub's signature does not cover the ARM slice. On a sealed
   system volume this does not matter; for embedded programs on writable

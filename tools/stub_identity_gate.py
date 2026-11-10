@@ -192,19 +192,7 @@ def commands(mo, what="Mach-O"):
     """(cmd, offset, cmdsize) of each load command of a thin 64-bit Mach-O (ValueError if malformed)."""
     if len(mo) < 32 or struct.unpack_from("<I", mo)[0] != 0xFEEDFACF:
         raise ValueError(f"{what}: not a thin 64-bit Mach-O")
-    ncmds, sizeofcmds = struct.unpack_from("<II", mo, 16)
-    end = 32 + sizeofcmds
-    if end > len(mo) or ncmds > sizeofcmds // 8:
-        raise ValueError(f"{what}: load commands overrun the file")
-    off = 32
-    for _ in range(ncmds):
-        if off + 8 > end:
-            raise ValueError(f"{what}: load command past sizeofcmds")
-        cmd, size = struct.unpack_from("<II", mo, off)
-        if size < 8 or off + size > end:
-            raise ValueError(f"{what}: bad cmdsize {size}")
-        yield cmd, off, size
-        off += size
+    yield from hao_fat.load_commands(mo, what)
 
 
 def cmd_bytes(mo, kind):

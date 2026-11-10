@@ -43,6 +43,31 @@ def slices(data):
     return out
 
 
+def load_commands(mo, what="Mach-O", base=0):
+    """(cmd, offset, cmdsize) of each load command of the 64-bit Mach-O whose
+    header is at BASE in MO (a thin file, a slice, or a kernel-collection
+    entry); offsets are into MO. This is the one load-command walk the
+    packaging tools share. It reads only what it has checked and always
+    terminates: ValueError if the header is truncated, the commands run past
+    MO, ncmds cannot fit in sizeofcmds, or a command is shorter than 8 bytes
+    or runs past sizeofcmds. The caller checks the magic; a caller that
+    reads a command's fields checks cmdsize covers them."""
+    if base < 0 or base + 32 > len(mo):
+        raise ValueError(f"{what}: truncated header")
+    ncmds, sizeofcmds = struct.unpack_from("<II", mo, base + 16)
+    off, end = base + 32, base + 32 + sizeofcmds
+    if end > len(mo) or ncmds > sizeofcmds // 8:
+        raise ValueError(f"{what}: load commands overrun the file")
+    for _ in range(ncmds):
+        if off + 8 > end:
+            raise ValueError(f"{what}: load command past sizeofcmds")
+        cmd, size = struct.unpack_from("<II", mo, off)
+        if size < 8 or off + size > end:
+            raise ValueError(f"{what}: bad cmdsize {size}")
+        yield cmd, off, size
+        off += size
+
+
 def has_cpu(data, cpu):
     sl = slices(data)
     return bool(sl) and any(c == cpu for c, _, _ in sl)

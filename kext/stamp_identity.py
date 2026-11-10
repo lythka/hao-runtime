@@ -11,9 +11,17 @@ function gives the same slide. The activator table must be exactly
 [mach, fat, shell, NULL], the layout the kext hard-codes (orig_shell =
 table[2]); anything else is refused here. Pure Python: runs in the image builder
 right after the collection it describes is built. --print shows the values.
+Load commands are walked by hao_fat.load_commands (tools/hao_fat.py, which
+ships next to this file in a payload); a malformed collection or kext is
+refused with a message, not a traceback.
 """
+import os
 import struct
 import sys
+
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _here if os.path.isfile(os.path.join(_here, "hao_fat.py")) else os.path.join(_here, "..", "tools"))
+import hao_fat  # noqa: E402
 
 MAGIC, VERSION = 0x494F4148, 2          # "HAOI"
 LAYOUT = "<II16sQQQQQQQQQ"              # magic, version, uuid, header, printf, table, act[3], slide checks[3]
@@ -23,17 +31,14 @@ LC_SEGMENT_64, LC_SYMTAB, LC_UUID, LC_FILESET_ENTRY = 0x19, 0x2, 0x1B, 0x8000003
 
 
 def commands(buf, hoff):
-    n, off = struct.unpack_from("<I", buf, hoff + 16)[0], hoff + 32
-    for _ in range(n):
-        cmd, size = struct.unpack_from("<II", buf, off)
-        yield cmd, off, size
-        off += size
+    """(cmd, offset, cmdsize) of the Mach-O at HOFF: bounded, ValueError if malformed."""
+    return hao_fat.load_commands(buf, "Mach-O at %#x" % hoff, hoff)
 
 
 def kernel_identity(kc):
     entry = None
     for cmd, off, size in commands(kc, 0):
-        if cmd == LC_FILESET_ENTRY:
+        if cmd == LC_FILESET_ENTRY and size >= 32:
             vm, fo, stroff = struct.unpack_from("<QQI", kc, off + 8)
             if kc[off + stroff:off + size].split(b"\0")[0] == b"com.apple.kernel":
                 entry = (vm, fo)
@@ -42,12 +47,12 @@ def kernel_identity(kc):
     header_vm, hoff = entry
     segs, uuid, syms = [], None, {}
     for cmd, off, size in commands(kc, hoff):
-        if cmd == LC_SEGMENT_64:
+        if cmd == LC_SEGMENT_64 and size >= 72:
             vm, vs, fo, fs = struct.unpack_from("<QQQQ", kc, off + 24)
             segs.append((vm, vs, fo, fs))
-        elif cmd == LC_UUID:
+        elif cmd == LC_UUID and size >= 24:
             uuid = kc[off + 8:off + 24]
-        elif cmd == LC_SYMTAB:
+        elif cmd == LC_SYMTAB and size >= 24:
             symoff, nsyms, stroff, _ = struct.unpack_from("<IIII", kc, off + 8)
             for k in range(nsyms):
                 strx, ntype, _, _, value = struct.unpack_from("<IBBHQ", kc, symoff + 16 * k)
@@ -79,8 +84,8 @@ def stamp(kext_binary, values):
     data = bytearray(open(kext_binary, "rb").read())
     sect = None
     for cmd, off, size in commands(data, 0):
-        if cmd == LC_SEGMENT_64:
-            nsect = struct.unpack_from("<I", data, off + 64)[0]
+        if cmd == LC_SEGMENT_64 and size >= 72:
+            nsect = min(struct.unpack_from("<I", data, off + 64)[0], (size - 72) // 80)
             for k in range(nsect):
                 so = off + 72 + 80 * k
                 if data[so:so + 16].split(b"\0")[0] == b"__hao_identity":
@@ -111,4 +116,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, struct.error) as e:
+        sys.exit("stamp_identity: malformed input: %s" % e)

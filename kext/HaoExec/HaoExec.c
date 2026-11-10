@@ -37,8 +37,18 @@
  * every stamped function gives the same slide, so a kext stamped for
  * another kernel never dereferences a guessed address.
  *
- * Controls:  sysctl kern.hao.enabled=0|1   kern.hao.interpreter=PATH
- * Counters:  kern.hao.routed   (registered at the first exec)
+ * Controls:  sysctl kern.hao.enabled=0|1   (root; registered at the first exec)
+ * Counters:  kern.hao.routed
+ * The translator path is the compile-time constant HAO_INTERPRETER. It is
+ * not a sysctl: a writable path would let one write redirect every arm64
+ * exec on the machine, and would race the activator that reads it.
+ *
+ * Once the hook is installed the kext refuses to unload. Other threads call
+ * the activator through the table slot with no reference on the kext, so no
+ * counter kept inside the activator can tell when its text is unused: a
+ * thread may have read the slot and not yet entered, or be in the epilogue
+ * after its last instruction that touches the counter. Set
+ * kern.hao.enabled=0 to stop routing; restart to remove the kext.
  *
  * OS executables normally never reach this hook: tools/hao-embed gives them
  * an x86_64 slice signed with their own identity. The kext covers arm64
@@ -64,7 +74,7 @@ __attribute__((used, section("__DATA,__hao_identity")))
 static volatile struct hao_identity hao_id = {0x494F4148, 2, {0}, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 extern boolean_t ml_set_interrupts_enabled(boolean_t enable);
-extern void IOSleep(unsigned milliseconds);
+extern void IOSleep(unsigned milliseconds);   /* linked for the slide cross-check only */
 
 /* bsd/sys/imgact.h struct image_params: only this prefix is touched. */
 struct hao_imgp {
@@ -85,11 +95,13 @@ _Static_assert(offsetof(struct hao_imgp, ip_flags) == 0x48, "image_params ABI");
 typedef int (*activator_t)(struct hao_imgp *);
 static activator_t *table;
 static activator_t orig_mach, orig_shell;
-static volatile SInt32 inflight;
 static int hooked;
 
+#define HAO_INTERPRETER "/usr/libexec/hao"
+static const char hao_shebang[] = "#! " HAO_INTERPRETER " --\n";
+_Static_assert(sizeof hao_shebang <= IMG_SHSIZE, "interpreter line fits XNU's script header");
+
 static int hao_enabled = 1;
-static char hao_interpreter[256] = "/usr/libexec/hao";
 static uint64_t hao_routed;
 
 /* ------------------------------------------------------- classification */
@@ -129,17 +141,16 @@ static int needs_translation(const unsigned char *h, size_t n)
 /* ------------------------------------------------------------ activator */
 
 static void register_sysctls(void);
-static volatile SInt32 sysctls_state;   /* 0 none, 1 registering, 2 registered */
+static volatile SInt32 sysctls_claimed;   /* 0 -> 1 once, by the exec that registers them */
 
 static int hao_mach_imgact(struct hao_imgp *imgp)
 {
-    OSIncrementAtomic(&inflight);
     /* KECs start before the BSD layer is fully up; register the sysctl
-     * nodes from the first exec (process context) instead. */
-    if (sysctls_state == 0 && OSCompareAndSwap(0, 1, &sysctls_state)) {
+     * nodes from the first exec (process context) instead. Exactly one
+     * exec wins the claim; the nodes are never unregistered, because the
+     * kext does not unload once this activator is installed. */
+    if (sysctls_claimed == 0 && OSCompareAndSwap(0, 1, &sysctls_claimed))
         register_sysctls();
-        sysctls_state = 2;
-    }
     int r;
     if (!hao_enabled || !imgp || !imgp->ip_vdata || imgp->ip_origcputype ||
         (imgp->ip_flags & IMGPF_INTERPRET) || !needs_translation((const unsigned char *)imgp->ip_vdata, 4096)) {
@@ -147,14 +158,13 @@ static int hao_mach_imgact(struct hao_imgp *imgp)
     } else {
         char line[IMG_SHSIZE];
         bzero(line, sizeof line);
-        snprintf(line, sizeof line, "#! %s --\n", hao_interpreter);
+        memcpy(line, hao_shebang, sizeof hao_shebang);
         char *saved = imgp->ip_vdata;
         imgp->ip_vdata = line;
         r = orig_shell(imgp);
         imgp->ip_vdata = saved;
         OSIncrementAtomic64((SInt64 *)&hao_routed);
     }
-    OSDecrementAtomic(&inflight);
     return r;
 }
 
@@ -162,7 +172,17 @@ static int hao_mach_imgact(struct hao_imgp *imgp)
 
 static inline uintptr_t get_cr0(void) { uintptr_t v; __asm__ volatile("mov %%cr0, %0" : "=r"(v)); return v; }
 static inline void set_cr0(uintptr_t v) { __asm__ volatile("mov %0, %%cr0" : : "r"(v) : "memory"); }
+static inline uintptr_t get_cr4(void) { uintptr_t v; __asm__ volatile("mov %%cr4, %0" : "=r"(v)); return v; }
+#define CR4_CET ((uintptr_t)1 << 23)
 
+/* One aligned pointer store into the kernel's read-only activator table.
+ * With interrupts off the thread cannot be preempted or migrate, so the
+ * CR0.WP change stays on this CPU and lasts for the one store; other CPUs
+ * keep write protection and see the old or the new pointer, never a torn
+ * one (the caller checks the slot's alignment). An NMI taken inside the
+ * window runs without write protection; nothing here can mask it. Called
+ * once, from HaoExec_start, and only when CR4.CET is clear (clearing
+ * CR0.WP with CET enabled is a #GP). */
 static void write_const_ptr(activator_t *slot, activator_t v)
 {
     boolean_t intr = ml_set_interrupts_enabled(FALSE);
@@ -206,15 +226,12 @@ static int kernel_matches(uintptr_t slide)
 SYSCTL_NODE(_kern, OID_AUTO, hao, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "hao arm64 -> x86_64 translation");
 SYSCTL_INT(_kern_hao, OID_AUTO, enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &hao_enabled, 0,
            "route arm64-only executables to the translator");
-SYSCTL_STRING(_kern_hao, OID_AUTO, interpreter, CTLFLAG_RW | CTLFLAG_LOCKED, hao_interpreter,
-              sizeof(hao_interpreter), "translator executable");
 SYSCTL_QUAD(_kern_hao, OID_AUTO, routed, CTLFLAG_RD | CTLFLAG_LOCKED, &hao_routed, "executables routed");
 
 static void register_sysctls(void)
 {
     sysctl_register_oid(&sysctl__kern_hao);
     sysctl_register_oid(&sysctl__kern_hao_enabled);
-    sysctl_register_oid(&sysctl__kern_hao_interpreter);
     sysctl_register_oid(&sysctl__kern_hao_routed);
 }
 
@@ -237,38 +254,38 @@ kern_return_t HaoExec_start(kmod_info_t *ki, void *d)
         return KERN_FAILURE;
     }
     table = (activator_t *)(hao_id.table + slide);
+    if ((uintptr_t)table & (sizeof(activator_t) - 1)) {
+        printf("HaoExec: image activator table is not pointer aligned; hook inactive\n");
+        return KERN_FAILURE;
+    }
     /* exactly [mach, fat, shell, NULL]: orig_shell below is table[2] */
     if ((uintptr_t)table[0] != hao_id.act_mach + slide || (uintptr_t)table[1] != hao_id.act_fat + slide ||
         (uintptr_t)table[2] != hao_id.act_shell + slide || table[3] != NULL) {
         printf("HaoExec: image activator table differs from the build identity; hook inactive\n");
         return KERN_FAILURE;
     }
+    if (get_cr4() & CR4_CET) {
+        printf("HaoExec: CR4.CET is set, the activator table cannot be written; hook inactive\n");
+        return KERN_FAILURE;
+    }
     orig_mach = table[0];
     orig_shell = table[2];
+    hooked = 1;   /* before the store: from here on the text must stay mapped */
     write_const_ptr(&table[0], hao_mach_imgact);
-    hooked = 1;
-    printf("HaoExec: arm64-only executables now run through %s\n", hao_interpreter);
+    printf("HaoExec: arm64-only executables now run through " HAO_INTERPRETER "\n");
     return KERN_SUCCESS;
 }
 
 kern_return_t HaoExec_stop(kmod_info_t *ki, void *d)
 {
     (void)ki; (void)d;
+    /* See the header comment: there is no point at which the activator is
+     * known to be unused, so a hooked kext stays. The slot is left alone
+     * too; kern.hao.enabled=0 turns routing off. (A start that failed
+     * installed nothing and registered no sysctl node.) */
     if (hooked) {
-        write_const_ptr(&table[0], orig_mach);
-        /* let any exec already inside our activator finish */
-        for (int k = 0; k < 1000 && inflight; k++) IOSleep(1);
-        if (inflight) {
-            write_const_ptr(&table[0], hao_mach_imgact);
-            return KERN_FAILURE;
-        }
-        hooked = 0;
-    }
-    if (sysctls_state == 2) {
-        sysctl_unregister_oid(&sysctl__kern_hao_routed);
-        sysctl_unregister_oid(&sysctl__kern_hao_interpreter);
-        sysctl_unregister_oid(&sysctl__kern_hao_enabled);
-        sysctl_unregister_oid(&sysctl__kern_hao);
+        printf("HaoExec: the exec hook is installed; not unloading (kern.hao.enabled=0 stops routing)\n");
+        return KERN_FAILURE;
     }
     return KERN_SUCCESS;
 }

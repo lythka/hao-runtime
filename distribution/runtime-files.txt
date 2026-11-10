@@ -251,8 +251,15 @@ tests/fuzz/corpus/codesig/codesign-ents
 tests/fuzz/corpus/codesig/linker-adhoc
 tests/fuzz/corpus/fat/fat32
 tests/fuzz/corpus/fat/fat64
+tests/fuzz/corpus/fat/regress-bind-name-no-nul
+tests/fuzz/corpus/fat/regress-cmdsize-zero-arm64
+tests/fuzz/corpus/fat/regress-cmdsize-zero-x86_64
+tests/fuzz/corpus/fat/regress-codesig-cmd-truncated
+tests/fuzz/corpus/fat/regress-fixups-header-truncated
+tests/fuzz/corpus/fat/regress-ifunit-name-not-utf8
 tests/fuzz/corpus/fat/regress-ncmds-hang
 tests/fuzz/corpus/fat/regress-section-name-utf8
+tests/fuzz/corpus/fat/regress-trie-uleb-truncated
 tests/fuzz/corpus/fat/thin
 tests/fuzz/corpus/ifunit/all
 tests/fuzz/corpus/ifunit/many
@@ -633,6 +640,7 @@ tests/tools/stubdeps.sh
 tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
+tests/tools/test_install.py
 tests/tools/test_release.py
 tests/translate/run.sh
 tools/check_distribution.py

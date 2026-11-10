@@ -32,9 +32,7 @@ LC_SEGMENT_64, LC_SYMTAB = 0x19, 0x2
 
 def segments_and_symbols(mo):
     segs, syms = [], {}
-    ncmds, off = struct.unpack_from("<I", mo, 16)[0], 32
-    for _ in range(ncmds):
-        cmd, size = struct.unpack_from("<II", mo, off)
+    for cmd, off, size in hao_fat.load_commands(mo, "dyld"):
         if cmd == LC_SEGMENT_64:
             vmaddr, vmsize, fileoff, filesize = struct.unpack_from("<QQQQ", mo, off + 24)
             segs.append((vmaddr, vmsize, fileoff, filesize))
@@ -45,7 +43,6 @@ def segments_and_symbols(mo):
                 if ntype & 0x0E == 0x0E:  # N_SECT
                     name = mo[stroff + strx:mo.index(b"\0", stroff + strx)].decode(errors="replace")
                     syms[name] = value
-        off += size
     return segs, syms
 
 

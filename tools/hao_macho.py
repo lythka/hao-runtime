@@ -1,11 +1,18 @@
 """Mach-O and dyld-cache format readers used by hao packaging.
 
 Contains no contract inference, SDK probing or boundary classification.
+
+Inputs are files of the image being built. Every reader here terminates and
+refuses malformed or truncated input with ValueError (never struct.error or
+IndexError); load commands are walked by hao_fat.load_commands.
 """
 import bisect
+import functools
 import mmap
 import os
 import struct
+
+import hao_fat
 
 CPU_X86_64, CPU_ARM64 = 0x01000007, 0x0100000C
 LC_SEGMENT_64, LC_SYMTAB, LC_DYSYMTAB, LC_ID_DYLIB, LC_UUID = 0x19, 0x2, 0xb, 0xd, 0x1b
@@ -18,52 +25,77 @@ DYLIB_CMDS = {LC_LOAD_DYLIB: 'load', LC_LOAD_WEAK_DYLIB: 'weak', LC_REEXPORT_DYL
 SELF, MAIN, FLAT, WEAK = 0, -1, -2, -3
 S_ATTR_INSTRUCTIONS = 0x80000400       # S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS (<mach-o/loader.h>)
 SECT_INSTR = {}                        # 'SEG,SECT' -> some image marks it as holding instructions
+MAX_SIZEOFCMDS = 16 << 20              # far above any image's load commands (the kernel's own limit is lower)
+# smallest cmdsize that holds the fields Image reads from each command
+FIXED_SIZE = {LC_SEGMENT_64: 72, LC_ID_DYLIB: 24, LC_RPATH: 12, LC_DYLD_EXPORTS_TRIE: 16, LC_DYLD_CHAINED_FIXUPS: 16,
+              LC_DYLD_INFO: 48, LC_DYLD_INFO_ONLY: 48, LC_SYMTAB: 24, LC_DYSYMTAB: 32, LC_UUID: 24}
+
+
+def _leb(b, i):
+    """the 7-bit groups of one LEB128 number of at most 64 bits: (value, bits, last byte, next index)"""
+    r = s = 0
+    while True:
+        if not 0 <= i < len(b) or s >= 70: raise ValueError('LEB128 number runs past its table or 64 bits')
+        c = b[i]; i += 1
+        r |= (c & 0x7f) << s
+        s += 7
+        if c < 0x80: return r, s, c, i
 
 
 def uleb(b, i):
-    r = s = 0
-    while True:
-        c = b[i]; i += 1
-        r |= (c & 0x7f) << s
-        s += 7
-        if c < 0x80: return r, i
+    r, _, _, i = _leb(b, i)
+    return r, i
 
 
 def sleb(b, i):
-    r = s = 0
-    while True:
-        c = b[i]; i += 1
-        r |= (c & 0x7f) << s
-        s += 7
-        if c < 0x80:
-            if c & 0x40: r -= 1 << s
-            return r, i
+    r, s, c, i = _leb(b, i)
+    if c & 0x40: r -= 1 << s
+    return r, i
 
 
 def cstr(b, i):
-    j = b.find(b'\0', i)
+    """the NUL-terminated string at b[i] and the index after it; the cursor only moves forward"""
+    j = b.find(b'\0', i) if 0 <= i < len(b) else -1
+    if j < 0: raise ValueError('string without a terminator')
     return b[i:j].decode('latin1'), j + 1
+
+
+def _refuses(f):
+    """a reader that refuses with ValueError whatever the malformed input made it trip over"""
+    @functools.wraps(f)
+    def g(*a, **k):
+        try:
+            return f(*a, **k)
+        except (struct.error, IndexError, OverflowError) as e:
+            raise ValueError('malformed or truncated Mach-O data (%s)' % e) from e
+    return g
 
 
 class Image:
     """one Mach-O image: a thin slice of a file, or an image inside a dyld shared cache"""
 
+    @_refuses
     def __init__(self, read, base_off, path, cache=None):
         self.read, self.path, self.cache = read, path, cache
-        h = read(base_off, 32)
+        h = bytes(read(base_off, 32))
+        if len(h) < 32: raise ValueError('truncated Mach-O header: ' + path)
         magic, self.cputype, _, self.filetype, ncmds, sizeofcmds = struct.unpack_from('<IiiIII', h)
         if magic != 0xfeedfacf: raise ValueError('not a 64-bit Mach-O: ' + path)
-        lc = read(base_off + 32, sizeofcmds)
+        if sizeofcmds > MAX_SIZEOFCMDS: raise ValueError('%s: sizeofcmds %#x' % (path, sizeofcmds))
+        # header + commands, so the shared walk checks every cmdsize; p below is the offset into lc
+        lc = bytes(read(base_off + 32, sizeofcmds))
         self.segs, self.sects, self.deps, self.rpaths = [], [], [], []
         self.id = self.trie = self.fixups = self.dyldinfo = self.symtab = self.dysymtab = self.uuid = None
-        p = 0
-        for _ in range(ncmds):
-            cmd, sz = struct.unpack_from('<II', lc, p)
+        for cmd, p, sz in hao_fat.load_commands(h + lc, path):
+            p -= 32
+            need = FIXED_SIZE.get(cmd, 24 if cmd in DYLIB_CMDS else 8)
+            if sz < need: raise ValueError('%s: load command %#x of %d bytes' % (path, cmd, sz))
             if cmd == LC_SEGMENT_64:
                 name = lc[p + 8:p + 24].rstrip(b'\0').decode()
                 vm, vs, fo, fs = struct.unpack_from('<QQQQ', lc, p + 24)
                 self.segs.append((name, vm, vs, fo, fs))
                 ns = struct.unpack_from('<I', lc, p + 64)[0]
+                if ns > (sz - 72) // 80: raise ValueError('%s: %d sections in a %d-byte segment command' % (path, ns, sz))
                 for k in range(ns):
                     q = p + 72 + 80 * k
                     sn = lc[q:q + 16].rstrip(b'\0').decode(); sg = lc[q + 16:q + 32].rstrip(b'\0').decode()
@@ -93,7 +125,6 @@ class Image:
                 self.dysymtab = struct.unpack_from('<6I', lc, p + 8)
             elif cmd == LC_UUID:
                 self.uuid = lc[p + 8:p + 24].hex().upper()
-            p += sz
         self.sects.sort()
         self.sect_starts = [s[0] for s in self.sects]
         self.base = next((vm for n, vm, vs, fo, fs in self.segs if n == '__TEXT'), 0)
@@ -116,6 +147,7 @@ class Image:
             return self.sects[i][2] + ',' + self.sects[i][3]
         return None
 
+    @_refuses
     def exports(self):
         """name -> ('def', section, offset) | ('reexport', ordinal, name) | ('resolver', section, offset);
         offset: from the image's mach header (the trie's address field)"""
@@ -151,11 +183,13 @@ class Image:
         self._exports = ex
         return ex
 
+    @_refuses
     def imports(self):
         """[(ordinal, name, weak)]"""
         if self.fixups:
             b = self.linkedit(*self.fixups)
             _, _, io, so, ic, ifmt, sfmt = struct.unpack_from('<7I', b, 0)
+            if ic > len(b) // 4: raise ValueError('%s: %d chained imports in %d bytes' % (self.path, ic, len(b)))
             out = []
             for k in range(ic):
                 if ifmt == 1:
@@ -180,6 +214,7 @@ class Image:
             symoff, nsyms, stroff, strsize = self.symtab
             iu, nu = self.dysymtab[4], self.dysymtab[5]
             if not nu: return []
+            if nu > nsyms: raise ValueError('%s: %d undefined symbols of %d' % (self.path, nu, nsyms))
             st = self.linkedit(symoff + 16 * iu, 16 * nu)
             strs = self.linkedit(stroff, strsize)
             out = []
@@ -229,14 +264,16 @@ class Cache:
         self.images = {}
         self._img = {}
 
+    @_refuses
     def _add(self, path, main):
-        f = open(path, 'rb')
-        mm = mmap.mmap(f.fileno(), 0, prot=mmap.PROT_READ)
+        with open(path, 'rb') as f:
+            mm = mmap.mmap(f.fileno(), 0, prot=mmap.PROT_READ)
         fi = len(self.files)
         self.files.append(mm)
         h = mm[:0x200]
         if not h.startswith(b'dyld_v1'): raise ValueError('not a dyld shared cache: ' + path)
         moff, mcount = struct.unpack_from('<II', h, 0x10)
+        if moff + 32 * mcount > len(mm): raise ValueError('dyld shared cache mappings past the file: ' + path)
         for k in range(mcount):
             a, s, fo = struct.unpack_from('<QQQ', mm, moff + 32 * k)
             self.maps.append((a, s, fi, fo))
@@ -244,19 +281,23 @@ class Cache:
         self.uuid = h[0x58:0x68].hex().upper()
         sco, scn = struct.unpack_from('<II', h, 0x188)
         v2 = moff > 0x1c8
+        if scn > 4096 or (v2 and sco + 56 * scn > len(mm)): raise ValueError('dyld shared cache subcache table: ' + path)
         for k in range(scn):
             if v2:
                 suffix = mm[sco + 56 * k + 24: sco + 56 * k + 56].split(b'\0')[0].decode()
+                if not suffix or '/' in suffix: raise ValueError('dyld shared cache subcache name: ' + path)
             else:
                 suffix = '.%d' % (k + 1)
             if os.path.exists(path + suffix): self._add(path + suffix, False)
         io, ic = struct.unpack_from('<II', h, 0x1c0)
         if not ic: io, ic = struct.unpack_from('<II', h, 0x18)
+        if io + 32 * ic > len(mm): raise ValueError('dyld shared cache image table past the file: ' + path)
         self.paths = []
         for k in range(ic):
             a, _, _, po = struct.unpack_from('<QQQI', mm, io + 32 * k)
-            p = mm[po:mm.find(b'\0', po)].decode()
-            self.paths.append((p, a))
+            end = mm.find(b'\0', po) if po < len(mm) else -1
+            if end < 0: raise ValueError('dyld shared cache image path: ' + path)
+            self.paths.append((mm[po:end].decode(), a))
         self.addr_of = dict(self.paths)
 
     def read_vm(self, a, n):
@@ -285,7 +326,7 @@ class Cache:
             try:
                 im = self.image(p)
                 if im and im.id: self.images.setdefault(im.id, p)
-            except (ValueError, struct.error):
+            except ValueError:
                 pass
         return self.images
 
@@ -301,13 +342,14 @@ def file_slices(path):
     out = []
     if magic in (0xcafebabe, 0xcafebabf):
         n = struct.unpack_from('>I', h, 4)[0]
-        for k in range(min(n, 40)):
+        size = 20 if magic == 0xcafebabe else 32
+        for k in range(min(n, 40, (len(h) - 8) // size)):   # only whole entries of a truncated table
             if magic == 0xcafebabe:
                 ct, cs, off, size, _ = struct.unpack_from('>iiIII', h, 8 + 20 * k)
             else:
                 ct, cs, off, size, _, _ = struct.unpack_from('>iiQQII', h, 8 + 32 * k)
             out.append((ct & 0xffffffff, cs & 0xff, off))
-    elif struct.unpack_from('<I', h)[0] == 0xfeedfacf:
+    elif len(h) >= 12 and struct.unpack_from('<I', h)[0] == 0xfeedfacf:
         ct, cs = struct.unpack_from('<ii', h, 4)
         out.append((ct & 0xffffffff, cs & 0xff, 0))
     return out

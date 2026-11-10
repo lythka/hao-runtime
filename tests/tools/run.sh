@@ -1,6 +1,7 @@
 #!/bin/bash
 # Image tools: hao-embed --in-place with hard links and symlinks, hao-install.py
-# run twice (idempotent), kext/stamp_identity.py's layout checks, and
+# run twice (idempotent) and its path rules (tests/tools/test_install.py),
+# kext/stamp_identity.py's layout checks, and
 # tests/tools/bundle.sh (bundle main executables: Info.plist and resource seal bound) and
 # tests/tools/stubdeps.sh (the stub links the program's native dependencies; per-stub LC_UUIDs),
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
@@ -48,6 +49,10 @@ python3 -I "$repo/tools/hao-install.py" "$d/sys" "$d/pay" >"$d/2.log" 2>&1; r2=$
 if [ $r1 = 0 ] && [ $r2 = 0 ] && grep -q '"already_embedded": 1' "$d/sys/usr/lib/hao/install.json"; then
     pass "hao-install.py twice: rc $r1, $r2; second run counts the file as already embedded"
 else bad "hao-install.py twice: rc $r1 $r2: $(cat "$d/2.log")"; fi
+# --- hao-install.py keeps manifest names under SYSTEM and PAYLOAD and follows no symlink
+if python3 -I "$here/test_install.py" >"$d/paths.log" 2>&1; then
+    pass "hao-install.py path rules: $(grep '^Ran' "$d/paths.log") (unsafe manifest names and symlinks refused)"
+else bad "hao-install.py path rules: $(tail -15 "$d/paths.log")"; fi
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["inputs_sha256"] and all("stub_sha256" in e for e in m["files"])' \
     "$d/pay/embed/manifest.json" && pass "manifest records per-stub hashes and build inputs" || bad "manifest hashes"
 
