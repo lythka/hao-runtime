@@ -88,6 +88,7 @@ static void *exit_stub;               /* restores host state, returns eax */
 static int (*jit_enter)(hao_cpu *, void *code);
 static uint64_t st_blocks, st_insns, st_native, st_helper, st_links, st_bytes, st_aot_blocks;
 static uint64_t st_sites, st_sites_unaligned, st_link_skips;   /* chainable exits emitted / not 4-aligned; links refused */
+static uint64_t st_fused;             /* instructions folded into the one before them (constant chains) */
 static int jit_disabled_native;       /* HAO_JIT_HELPERS_ONLY=1: every insn via helper */
 
 /* ------------------------------------------------------------ tables */
@@ -280,6 +281,10 @@ typedef struct {
     bool not_pic;           /* ... and one was not (the blob is not written) */
     bool live_out[MAX_BLOCK_INSNS + 1];
     int idx;
+    /* the block being emitted, for translators that look at the next
+     * instructions; `skip` of them were folded into the current one */
+    const uint32_t *insns;
+    int n, skip;
     /* AOT: direct-branch exits to resolve after all blocks are emitted */
     struct aot_link { uint32_t site; uint64_t target; } *links;
     int nlinks, caplinks;
@@ -616,22 +621,78 @@ static bool t_logical_shift(tctx *t, uint32_t i)
     return true;
 }
 
+/* and host, imm (rdx is scratch for a 64-bit mask that is no sign-extended imm32) */
+static void and_imm(tctx *t, int sf, int host, uint64_t m)
+{
+    if (!sf) x_alu_ri(&t->b, XAND, 0, host, (int32_t)(uint32_t)m);
+    else if ((int64_t)m == (int32_t)m) x_alu_ri(&t->b, XAND, 1, host, (int32_t)m);
+    else { x_mov_ri(&t->b, RDX, m); x_alu_rr(&t->b, XAND, 1, host, RDX); }
+}
+
+/*
+ * Constant chains. A constant wider than 16 bits is built by MOVZ or MOVN
+ * and up to three MOVKs on one register, and an address by ADRP and ADD.
+ * The first instruction of such a run is emitted with the run's final
+ * effect and the others emit nothing (t->skip): none of them can fault, a
+ * branch into the middle of a run starts another block, and
+ * hao_jit_locate maps every host address of the one emitted sequence to
+ * the first instruction (register not yet written) and the address after
+ * it to the instruction after the run, so no intermediate value is ever
+ * observable.
+ */
+
+/* The MOVKs on register rd (width sf) that follow instruction `from`:
+ * the bits they replace and their values. Returns how many. */
+static int movk_run(const tctx *t, int from, unsigned rd, int sf, uint64_t *mask, uint64_t *val)
+{
+    int cnt = 0;
+    for (int k = from; k < t->n; k++, cnt++) {
+        uint32_t j = t->insns[k];
+        unsigned hw = BITS(j, 22, 21);
+        if ((j & 0x7F800000) != 0x72800000 || BIT(j, 31) != (unsigned)sf || BITS(j, 4, 0) != rd || (!sf && hw >= 2)) break;
+        *mask |= 0xffffull << (16 * hw);
+        *val = (*val & ~(0xffffull << (16 * hw))) | (uint64_t)BITS(j, 20, 5) << (16 * hw);
+    }
+    return cnt;
+}
+
 static bool t_movewide(tctx *t, uint32_t i)
 {
     int sf = BIT(i, 31);
     unsigned opc = BITS(i, 30, 29), hw = BITS(i, 22, 21), rd = BITS(i, 4, 0);
-    uint64_t imm16 = BITS(i, 20, 5);
+    uint64_t imm16 = BITS(i, 20, 5), all = sf ? ~0ull : 0xffffffffull;
     if (!sf && hw >= 2) return false;
     if (opc == 1) return false;
     if (rd == 31) return true;
-    if (opc == 3) {                                                 /* MOVK: 16-bit store, flag-free */
-        x_mov_mi(&t->b, 2, xm(RBX, CPU_OFF_X(rd) + 2 * (int)hw), (int32_t)imm16);
-        if (!sf) x_mov_mi(&t->b, 4, xm(RBX, CPU_OFF_X(rd) + 4), 0);
+    if (opc == 3) {                                                 /* MOVK */
+        uint64_t mask = 0xffffull << (16 * hw), val = imm16 << (16 * hw);
+        int run = movk_run(t, t->idx + 1, rd, sf, &mask, &val);
+        if (mask == all) {                                          /* every part replaced: a constant */
+            x_mov_ri(&t->b, RAX, val);
+            stx(t, rd, RAX, false);
+        } else if (t->in_eflags && t->dirty && t->live_out[t->idx]) {
+            /* NZCV is live in EFLAGS: store the 16 bits and leave the flags
+             * (from a register: an imm16 store has a length-changing prefix) */
+            x_mov_ri(&t->b, RAX, imm16);
+            x_mov_st(&t->b, 2, xm(RBX, CPU_OFF_X(rd) + 2 * (int)hw), RAX);
+            if (!sf) x_mov_mi(&t->b, 4, xm(RBX, CPU_OFF_X(rd) + 4), 0);
+            return true;
+        } else {                                                    /* one read-modify-write of the register */
+            fl_clobber(t);
+            ldx(t, RAX, rd, sf, false);
+            and_imm(t, sf, RAX, ~mask & all);
+            if (!sf || (int64_t)val == (int32_t)val) { if (val) x_alu_ri(&t->b, XOR_, sf, RAX, (int32_t)(uint32_t)val); }
+            else { x_mov_ri(&t->b, RDX, val); x_alu_rr(&t->b, XOR_, 1, RAX, RDX); }
+            stx(t, rd, RAX, false);
+        }
+        t->skip = run;
         return true;
     }
-    uint64_t v = imm16 << (16 * hw);
+    uint64_t v = imm16 << (16 * hw), mask = 0, val = 0;
     if (opc == 0) v = ~v;
     if (!sf) v = (uint32_t)v;
+    t->skip = movk_run(t, t->idx + 1, rd, sf, &mask, &val);
+    v = (v & ~mask) | val;
     x_mov_ri(&t->b, RAX, v);
     stx(t, rd, RAX, false);
     return true;
@@ -643,17 +704,16 @@ static bool t_adr(tctx *t, uint32_t i, uint64_t pc)
     int64_t imm = sext((uint64_t)BITS(i, 23, 5) << 2 | BITS(i, 30, 29), 21);
     uint64_t v = BIT(i, 31) ? (pc & ~0xfffull) + ((uint64_t)imm << 12) : pc + (uint64_t)imm;
     if (rd == 31) return true;
+    if (BIT(i, 31) && t->idx + 1 < t->n) {                          /* ADRP Xd; ADD Xd, Xd, #imm: one address */
+        uint32_t j = t->insns[t->idx + 1];
+        if ((j & 0xFF800000) == 0x91000000 && BITS(j, 4, 0) == rd && BITS(j, 9, 5) == rd) {
+            v += (uint64_t)BITS(j, 21, 10) << (BIT(j, 22) ? 12 : 0);
+            t->skip = 1;
+        }
+    }
     gaddr(t, RAX, v);
     stx(t, rd, RAX, false);
     return true;
-}
-
-/* and host, imm (rdx is scratch for a 64-bit mask that is no sign-extended imm32) */
-static void and_imm(tctx *t, int sf, int host, uint64_t m)
-{
-    if (!sf) x_alu_ri(&t->b, XAND, 0, host, (int32_t)(uint32_t)m);
-    else if ((int64_t)m == (int32_t)m) x_alu_ri(&t->b, XAND, 1, host, (int32_t)m);
-    else { x_mov_ri(&t->b, RDX, m); x_alu_rr(&t->b, XAND, 1, host, RDX); }
 }
 
 /* BFM (BFI, BFXIL, BFC): the destination field is cleared and the source
@@ -1899,10 +1959,14 @@ static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
         if (e & FL_READ) live = true;
     }
     t->in_eflags = t->dirty = false;
+    t->insns = insns;
+    t->n = n;
+    t->skip = 0;
     int k;
     for (k = 0; k < n; k++) {
         t->idx = k;
         if (t->rec_off) { t->rec_off[k] = (uint32_t)xb_len(&t->b); t->rec_fl[k] = t->in_eflags && t->dirty; t->nrec = k + 1; }
+        if (t->skip) { t->skip--; ST(st_native); ST(st_fused); continue; }   /* folded into an earlier instruction */
         if (translate_insn(t, insns[k], pc + 4u * (unsigned)k)) break;
     }
     if (k == n) {
@@ -3147,13 +3211,13 @@ void hao_jit_stats(void)
     uint32_t maps_grows;
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
-            " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u\n",
+            " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
             (unsigned long long)st_sites_unaligned, (unsigned long long)st_link_skips,
             __atomic_load_n(&table_used, __ATOMIC_RELAXED), table ? table->mask + 1 : 0, (unsigned long long)(st_table_bytes >> 10),
-            (unsigned long long)(maps_mapped >> 10), maps_grows);
+            (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused);
 }
 
 /* Oracle support: run code[0..n) placed at guest address `base` from its

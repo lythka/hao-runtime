@@ -81,6 +81,13 @@ REG2(t_movk, "mov x2, #0x1234\nmovk x2, #0x5678, lsl #16\nmovk x2, #0x9abc, lsl 
 REG2(t_movkw, "mov w2, #0xffff\nmovk w2, #0x8000, lsl #16\neor x2, x2, x1")
 REG2(t_movk2, "mov x2, x0\nmovk x2, #0xbeef, lsl #16\nmovk x2, #0xdead, lsl #48")
 REG2(t_movn, "mov x2, #-0x1235\nmovk x2, #0x1, lsl #32\nsub x2, x2, x1")
+/* MOVK runs without a MOVZ, with NZCV dead (a compare follows) and live */
+REG2(t_movk3, "mov x2, x0\nmovk x2, #0xbeef, lsl #16\nmovk x2, #0xdead, lsl #48\ncmp x2, x1")
+REG2(t_movk4, "mov x2, x1\nmovk w2, #0x1234, lsl #16\ncmn x2, x0")
+REG2(t_movk5, "mov x2, x0\nmovk x2, #0x8000\nmovk x2, #0xffff, lsl #32\nmovk x2, #0x8000, lsl #16\ntst x2, x1")
+REG2(t_movk6, "mov x2, x0\nmovk x2, #1\nmovk x2, #2, lsl #16\nmovk x2, #3, lsl #32\nmovk x2, #4, lsl #48\nmovk x2, #5")
+REG2(t_movk7, "mov x2, x0\nmovk w2, #0xffff\nmovk x2, #0x7777, lsl #48\nmovk x3, #1\nmovk x2, #0x1111, lsl #16")
+REG2(t_movz2, "mov w2, #0x10000\nmovk x2, #0xa, lsl #32\nmov x3, #0x20000\nmovk x3, #0xb\nadd x2, x2, x3\neor x2, x2, x0")
 
 #define ATOM(n, mn)                                    \
     MEM2(t_##n##b, mn "b w1, w2, [x0]")                \
@@ -274,7 +281,7 @@ int main(void)
     R(rbit); R(rbitw); R(rev16); R(rev16w); R(rev32); R(ctz);
     R(bfi0); R(bfi1); R(bfi2); R(bfi3); R(bfi4); R(bfi5);
     R(bfxil0); R(bfxil1); R(bfxil2); R(bfxil3); R(bfxil4); R(bfc); R(bfcw);
-    R(movk); R(movkw); R(movk2); R(movn);
+    R(movk); R(movkw); R(movk2); R(movn); R(movk3); R(movk4); R(movk5); R(movk6); R(movk7); R(movz2);
     RA(ldadd); RA(ldclr); RA(ldeor); RA(ldset); RA(ldsmax); RA(ldsmin); RA(ldumax); RA(ldumin);
     RA(swp); RA(ldaddr); RA(swpl); RA(cas);
     R(stadd); R(stclrb); R(casx2); R(ldapr); R(ldaprb); R(ldraa); R(ldrab); R(stlr);
