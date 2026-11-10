@@ -1,0 +1,16 @@
+#pragma once
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+#define common_objc_reference_type hao_sv_common_objc_reference_type
+#define common_objc_reference_value hao_sv_common_objc_reference_value
+#define discover_empty_plan hao_sv_discover_empty_plan
+#define initialize_empty hao_sv_initialize_empty
+#define collect_empty_patches hao_sv_collect_empty_patches
+#define collect_empty_patches_detail hao_sv_collect_empty_patches_detail
+#define discover_enum_case hao_sv_discover_enum_case
+#define common_leaf_value hao_sv_common_leaf_value
+#define common_byte_optional_case hao_sv_common_byte_optional_case
+#define copy_enum_empty hao_sv_copy_enum_empty
+#define take_enum_empty hao_sv_take_enum_empty
+#define destroy_enum_empty hao_sv_destroy_enum_empty
+#define enum_payloads hao_sv_enum_payloads
+#endif

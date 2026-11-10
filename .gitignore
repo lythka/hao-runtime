@@ -1,0 +1,14 @@
+# Build outputs.
+build/
+build-*/
+*.o
+
+# Python and macOS.
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local editor and agent settings.
+.claude/
+AGENTS.md
+CLAUDE.md

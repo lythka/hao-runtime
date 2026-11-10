@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Extend a frozen payload with its existing generator; never rebuild stubs or runtime.
+
+Usage: python3.14 -I expand.py HAO_CHECKOUT BASE_PAYLOAD RELEASE_ROOT NEW_ARTIFACT
+Build HAO_CHECKOUT with make first. NEW_ARTIFACT may contain this recipe but no payload.
+"""
+import datetime
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+
+
+def arm_identity(path, fat):
+    parts = [s for s in fat.slices(path.read_bytes()) if s[0] == fat.CPU_ARM64]
+    _, _, arm = next((s for s in parts if s[1] & 0xffffff == 2), parts[0])
+    length = 32 + struct.unpack_from('<I', arm, 20)[0]
+    data = arm[:length]
+    # src/aot_policy.c hao_aot_guest_id/hash64, modulo uint64_t.
+    mask = (1 << 64) - 1
+    h = (len(arm) ^ (0x9e3779b97f4a7c15 * (length + 1))) & mask
+    off = 0
+    while len(data) - off >= 8:
+        h = ((h ^ int.from_bytes(data[off:off + 8], 'little')) * 0xff51afd7ed558ccd) & mask
+        h ^= h >> 29
+        off += 8
+    h = ((h ^ int.from_bytes(data[off:], 'little') ^ ((len(data) - off) << 56)) * 0xc4ceb9fe1a85ec53) & mask
+    guest_id = h ^ (h >> 32)
+    off = 32
+    for _ in range(struct.unpack_from('<I', arm, 16)[0]):
+        cmd, size = struct.unpack_from('<II', arm, off)
+        if cmd == 0x1b:
+            return arm[off + 8:off + 24].hex(), guest_id
+        off += size
+    raise ValueError('no arm LC_UUID: ' + str(path))
+
+
+def sha(p):
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for b in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(b)
+    return h.hexdigest()
+
+
+def dump(p, v):
+    p.write_text(json.dumps(v, indent=2) + '\n')
+
+
+def inventory(root):
+    return {str(p.relative_to(root)): {'mode': stat.S_IMODE(p.lstat().st_mode),
+            **({'symlink': os.readlink(p)} if p.is_symlink() else {'sha256': sha(p)})}
+            for p in sorted(root.rglob('*')) if p.is_symlink() or p.is_file()}
+
+
+src, base, root, artifact = map(lambda p: Path(p).resolve(), sys.argv[1:])
+out = artifact / 'payload'
+assert not out.exists(), out
+artifact.mkdir(parents=True, exist_ok=True)
+original = json.loads((base / 'build.json').read_text())
+manifest = json.loads((base / 'embed/manifest.json').read_text())
+old_aot = json.loads((base / 'aot.json').read_text())
+assert not subprocess.check_output(['git', '-C', str(src), 'status', '--porcelain']).strip()
+commit = subprocess.check_output(['git', '-C', str(src), 'rev-parse', 'HEAD'], text=True).strip()
+assert commit.startswith(original['hao_commit'])
+for built, installed in [('hao', 'root/usr/libexec/hao'),
+                         ('libhao.dylib', 'root/usr/lib/hao/libhao.dylib'),
+                         ('libhao_identity.dylib', 'root/usr/lib/hao/libhao_identity.dylib')]:
+    assert sha(src / 'build' / built) == sha(base / installed), built
+for rel, digest in original['files'].items():
+    assert sha(base / rel) == digest, rel
+want = sorted({e['path'] for e in manifest['files']} |
+              {p for e in old_aot['programs'] for p in e['paths']})
+spec = importlib.util.spec_from_file_location('hao_fat', src / 'tools/hao_fat.py')
+fat = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fat)
+identities = {p: arm_identity(root / p, fat) for p in want}
+by_uuid = {}
+for path in want:
+    by_uuid.setdefault(identities[path][0], []).append(path)
+collisions, omitted = [], set()
+for uuid, paths in by_uuid.items():
+    if len({identities[p][1] for p in paths}) < 2:
+        continue
+    # Keep an existing cache's exact identity if there is one. Otherwise the
+    # outer primary bundle wins over its nested helper; fewer path components
+    # also selects the current ExtensionKit service over its legacy prefPane.
+    oldcache = base / 'root/usr/lib/hao/aot' / (uuid + '.aot')
+    prior_id = struct.unpack_from('<Q', oldcache.read_bytes(), 56)[0] if oldcache.exists() else None
+    canonical = min(paths, key=lambda p: (identities[p][1] != prior_id if prior_id is not None else False,
+                                         len(Path(p).parts), p))
+    rejected = [p for p in paths if identities[p][1] != identities[canonical][1]]
+    omitted.update(rejected)
+    collisions.append({'uuid': uuid, 'canonical': canonical, 'omitted': rejected,
+                       'reason': 'retain previous cache identity, else primary outer bundle / shorter installation path',
+                       'guest_ids': {p: '%016x' % identities[p][1] for p in paths}})
+dump(artifact / 'inventory.json', {'paths': want, 'uuid_collisions': collisions})
+selected = [p for p in want if p not in omitted]
+alist = artifact / 'aot-list.txt'
+alist.write_text('\n'.join(selected) + '\n')
+dump(artifact / 'program-inputs.json', {p: sha(root / p) for p in want})
+shutil.copytree(base, out, symlinks=True, copy_function=shutil.copy2)
+# Use the generator verbatim from this exact source revision, without running the
+# surrounding packaging steps (those would rewrite runtime, identities and stubs).
+tool = src / 'tools/hao-image-payload'
+script = tool.read_text().split("if [ $AOT = 1 ]; then\n", 1)[1].split("<<'EOF' || exit 1\n", 1)[1].split('\nEOF\n', 1)[0]
+(artifact / 'aot-generator.py').write_text(script + '\n')
+cmd = [sys.executable, '-I', str(artifact / 'aot-generator.py'), str(src / 'build/hao'),
+       str(src / 'build/libhao.dylib'), str(root), str(out), str(alist), '8']
+with (artifact / 'generation.log').open('w') as log:
+    subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
+aot = json.loads((out / 'aot.json').read_text())
+for entry in aot['programs']:
+    if entry['status'] != 'ok':
+        continue
+    cache = out / 'root/usr/lib/hao/aot' / (entry['uuid'] + '.aot')
+    with cache.open('rb') as f:
+        header = f.read(96)
+    for path in entry['paths']:
+        assert identities[path] == (entry['uuid'], struct.unpack_from('<Q', header, 56)[0]), path
+aot['summary']['inventory_paths'] = len(want)
+aot['summary']['uuid_collision_omissions'] = [{'path': p, 'why': 'same UUID as canonical cache but a different guest identity'} for p in sorted(omitted)]
+dump(out / 'aot.json', aot)
+record = dict(original)
+record['date'] = datetime.date.today().isoformat()
+record['aot'] = aot['summary']
+record['aot_extension'] = {'base_payload': str(base), 'base_build_sha256': sha(base / 'build.json'),
+                         'recipe_sha256': sha(Path(__file__)), 'source_commit': commit,
+                         'generator_tool_sha256': sha(tool), 'generator_python_sha256': sha(artifact / 'aot-generator.py'),
+                         'inventory': 'all embedded programs plus every previous AOT path',
+                         'uuid_collision_policy': collisions,
+                         'list_sha256': sha(alist), 'program_inputs_sha256': sha(artifact / 'program-inputs.json')}
+record['files'] = {str(p.relative_to(out)): sha(p) for p in sorted(out.rglob('*'))
+                   if p.is_file() and p.name != 'build.json' and '/embed/stubs/' not in str(p)}
+dump(out / 'build.json', record)
+before, after = inventory(base), inventory(out)
+changed = [p for p in before if before[p] != after.get(p)]
+added = sorted(after.keys() - before.keys())
+removed = sorted(before.keys() - after.keys())
+assert changed == ['aot.json', 'build.json'], changed
+assert not removed, removed
+assert all(p.startswith('root/usr/lib/hao/aot/') for p in added), added
+oldpaths = {p for e in old_aot['programs'] if e['status'] == 'ok' for p in e['paths']}
+newpaths = {p for e in aot['programs'] if e['status'] == 'ok' for p in e['paths']}
+comparison = {'base_files': len(before), 'new_files': len(after), 'same': len(before) - len(changed),
+              'changed': changed, 'added': added, 'removed': removed,
+              'old_aot_preserved_byte_for_byte': sum(p.startswith('root/usr/lib/hao/aot/') for p in before),
+              'programs_newly_cached': sorted(newpaths - oldpaths),
+              'programs_skipped': aot['summary']['skipped'],
+              'unchanged_payload_inventory_sha256': hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()}
+dump(artifact / 'comparison.json', comparison)
+dump(artifact / 'build.json', {'unit': 'hao-image-payload-aot-extension', 'revision': 1,
+     'date': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'hao_commit': commit,
+     'hao_dirty': False, 'base_payload': str(base), 'base_build_sha256': sha(base / 'build.json'),
+     'payload_build_sha256': sha(out / 'build.json'), 'generator': record['aot_extension'],
+     'command': [sys.executable, '-I', str(Path(__file__).resolve()), str(src), str(base), str(root), str(artifact)],
+     'aot': aot['summary'], 'comparison': {k: v for k, v in comparison.items() if k not in ('added', 'programs_newly_cached')},
+     'memory_policy': 'Exact selected runtime: aot_fits requires estimated 2.25x cache bytes <= half remaining process ledger budget; no override.',
+     'acceptance': 'Offline generation and preservation verified. Target performance and application acceptance OPEN.',
+     'files': {p.name: sha(p) for p in artifact.iterdir() if p.is_file() and p.name != 'build.json'}})
+print(json.dumps({'aot': aot['summary'], 'same': comparison['same'], 'added': len(added)}, indent=2))

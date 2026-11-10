@@ -1,0 +1,20 @@
+#observe	version=1	os=27.2	build=26B123	machine=arm64	observer_translated=0	euid=501	processes=2	launchd=1	task_read=0
+pid	exe	label	class	key	value
+100	/usr/libexec/fixtured	system/com.example.fixtured	identity	exe.path	/usr/libexec/fixtured
+100	/usr/libexec/fixtured	system/com.example.fixtured	identity	arch	arm64e
+100	/usr/libexec/fixtured	system/com.example.fixtured	identity	pgrp.leader	yes
+100	/usr/libexec/fixtured	system/com.example.fixtured	signal	sig.SIGHUP	default
+100	/usr/libexec/fixtured	system/com.example.fixtured	signal	sig.SIGUSR1	ignore
+100	/usr/libexec/fixtured	system/com.example.fixtured	signal	sig.SIGTERM	catch
+100	/usr/libexec/fixtured	system/com.example.fixtured	signal	sigmask.main_thread	unreadable(no-interface)
+100	/usr/libexec/fixtured	system/com.example.fixtured	resource	nice	5
+100	/usr/libexec/fixtured	system/com.example.fixtured	resource	rlimit	unreadable(no-interface)
+100	/usr/libexec/fixtured	system/com.example.fixtured	fd	fd.count	6
+100	/usr/libexec/fixtured	system/com.example.fixtured	fd	fd.count.socket	1
+100	/usr/libexec/fixtured	system/com.example.fixtured	fd	fd.socket:unix/stream:-	1
+100	/usr/libexec/fixtured	system/com.example.fixtured	identity	env:LANG	fr_FR.UTF-8 été 日本
+100	/usr/libexec/fixtured	system/com.example.fixtured	identity	argv.1	a\tb
+200	/usr/bin/fixturetool	-	identity	exe.path	/usr/bin/fixturetool
+200	/usr/bin/fixturetool	-	signal	sig.SIGHUP	default
+200	/usr/bin/fixturetool	-	signal	sig.SIGPIPE	ignore
+200	/usr/bin/fixturetool	-	fd	fd.count	3

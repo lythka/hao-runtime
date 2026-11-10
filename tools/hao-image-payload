@@ -1,0 +1,515 @@
+#!/bin/bash
+# hao-image-payload [--no-embed | --translate TLIST] [--macos-min VER] [--require-dyld-fix]
+#                   [--x86-cache X86_DYLD_DIR] [--coverage-report SUMMARY.json] [--units DIR]
+#                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR] OUT ROOT [LIST]
+#   Build the hao payload for one macOS release image from its System root
+#   (e.g. a read-only mount of the IPSW's filesystem image):
+#     OUT/root/usr/libexec/hao, OUT/root/usr/lib/hao/{libhao,libhao_identity}.dylib,
+#     OUT/root/usr/lib/hao/aot/                  (AOT caches for root and PID 1: hao-install.py
+#                                                 makes it and private/var/db/hao root:wheel 0755;
+#                                                 empty unless --aot or --aot-list)
+#     OUT/root/usr/lib/hao/trusted-cdhashes      (tools/hao-trust-list: cdhashes of every Apple-signed
+#                                                 arm64-only program under ROOT, so hao verifies them
+#                                                 with no daemon running; OUT/trust.log lists the rest)
+#     OUT/HaoExec.kext, OUT/stamp_identity.py   (kernel identity stamped at image build)
+#     OUT/embed/{manifest.json,stubs/}           (tools/hao-embed: every arm64-only program
+#                                                 under ROOT, or the paths in LIST)
+#     OUT/replace/                               (27.x only: ROOT/usr/lib/dyld with the x86_64
+#                                                 PID-1 boot-spec fix, if that dyld needs it)
+#     OUT/hao-install.py, OUT/hao_fat.py, OUT/hao_codesig.py (run by the image builder)
+#     OUT/build.json                             (release, mode, inputs and hashes)
+#     OUT/census/summary.json                    (--coverage-report: supplied offline summary;
+#                                                 build.json bridge_census)
+#     OUT/root/usr/lib/hao/if/<uuid>             (--units DIR: the interface units in DIR, one per
+#                                                 x86_64 library, named by its LC_UUID; each is
+#                                                 validated by tools/hao_ifunit.py check against that
+#                                                 name; and DIR's NAME.thunks, the generated thunk-pair
+#                                                 libraries (arm64e + x86_64, signed); *.tsv and *.json
+#                                                 are skipped; build.json interface_units)
+#   Modes (embed/manifest.json "required" is what hao-install.py must embed):
+#     default          arm64-only programs (LIST, else a scan of ROOT);
+#                      requires sbin/launchd and usr/libexec/xpcproxy
+#     --no-embed       runtime and HaoExec only: empty manifest, "required": []
+#                      (programs run through /usr/libexec/hao or the kext)
+#     --translate TLIST  universal programs in TLIST (one path relative to ROOT per
+#                      line, '#' comments) get the stub in place of their own x86_64
+#                      slice (hao-embed --translate), plus the arm64-only programs in
+#                      LIST if given; every embedded path is required, and every
+#                      TLIST path must be embedded
+#   --macos-min VER builds hao with make MACOS_MIN=VER into build/macos-VER (the
+#   default 27.0 build/ is left alone); e.g. 26.0 for a macOS 26 userspace.
+#   HaoExec.kext is rebuilt on every run by kext/build.sh in the same build
+#   directory, always for 13.0: it loads into the Darwin 27 kernel whatever
+#   the userspace, and that build is the tested one. build.json
+#   records its sha256 and that target (minos).
+#   The dyld fix (tools/dyld-ignition-fix.py) belongs to 27.x: for a 27.x ROOT
+#   an affected dyld gets replace/; for any other release the dyld is only
+#   analysed (never written). Every other outcome (not affected, no dyld, a
+#   layout the fix does not recognise) gives no replace/; build.json dyld_fix
+#   records it. A dyld left unfixed is an error in the default (embed) mode
+#   on a 27.x ROOT, where PID 1 needs the fix, and with --require-dyld-fix in
+#   any mode (the build then needs "fixed" or "not affected"); otherwise a
+#   warning.
+#   --x86-cache names the directory of the release's dyld_shared_cache_x86_64 (RosettaOS, or the
+#   OS cryptex): every stub links the program's dependencies that load natively (that cache's
+#   install names, or files under ROOT with an x86_64 slice; tools/hao-embed), so the images
+#   present at launch are the native program's. Default: the cache under ROOT;
+#   embedding modes fail without one. build.json x86_cache_uuid.
+#   --coverage-report copies a precomputed JSON summary into the build record.
+#   It is supplied evidence, not a claim that this packager recomputed coverage.
+#   --units DIR installs validated interface units (include/hao/bridge.h): files
+#   named by 32 lowercase hex digits, generated for the target x86_64 libraries.
+#   hao loads them from /usr/lib/hao/if, root-owned and not writable by others.
+#   A unit whose UUID no loaded library has is never used. NAME.thunks files
+#   beside the units are the thunk-pair libraries named by their thunk records;
+#   hao loads them under the same ownership rules (src/thunks.c).
+#   --aot ships AOT caches (<LC_UUID>.aot, include/hao/aot.h) for every embedded program;
+#   --aot-list ALIST for the programs ALIST names instead (one per line, relative to ROOT or
+#   absolute as on the target or under ROOT; '#' comments; any arm64/arm64e program under ROOT,
+#   so it also serves --no-embed). Each is generated from ROOT's file by this build's
+#   `hao --aot` (it maps the image and translates every reachable block; no guest code
+#   runs), --aot-jobs at a time (default: the CPU count), into OUT/root/usr/lib/hao/aot,
+#   which hao searches first for every process, PID 1 and daemons included, and trusts
+#   once hao-install.py has made it and its files root-owned (src/aot_policy.c). A cache
+#   is bound to the program's LC_UUID and load commands (embedding copies the arm64e slice
+#   byte for byte) and to this build's libhao LC_UUID, so it is valid only with the
+#   libhao.dylib of the same payload. Fails closed: every program gets a valid cache or
+#   one of three recorded outcomes (nothing to translate; translated code larger than
+#   the generator's 64 MB buffer; an image hao does not load: legacy LC_DYLD_INFO fixups);
+#   any other generation error fails the build. OUT/aot.json lists each program;
+#   build.json aot holds the counts, bytes, skips and the libhao UUID. Off by default:
+#   the 936 embedded 27.0 programs make 919 caches, about 2.1 GB.
+#   Nothing else here is tied to one release.
+set -euo pipefail
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2; }
+TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= X86C= AOT=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --translate) [ $# -ge 2 ] || usage; TLIST=$2; shift 2 ;;
+        --no-embed) NO_EMBED=1; shift ;;
+        --macos-min) [ $# -ge 2 ] || usage; MIN=$2; shift 2 ;;
+        --require-dyld-fix) REQUIRE_DYLD=1; shift ;;
+        --coverage-report) [ $# -ge 2 ] || usage; COVERAGE=$2; shift 2 ;;
+        --x86-cache) [ $# -ge 2 ] || usage; X86C=$2; shift 2 ;;
+        --units) [ $# -ge 2 ] || usage; UNITS=$2; shift 2 ;;
+        --async-provider) [ $# -ge 2 ] || usage; ASYNC_PROVIDER=$2; shift 2 ;;
+        --aot) AOT=1; shift ;;
+        --aot-list) [ $# -ge 2 ] || usage; ALIST=$2; AOT=1; shift 2 ;;
+        --aot-jobs) [ $# -ge 2 ] || usage; AJOBS=$2; shift 2 ;;
+        -h|--help) usage ;;
+        --) shift; while [ $# -gt 0 ]; do POS+=("$1"); shift; done ;;
+        -*) echo "hao-image-payload: unknown option $1" >&2; usage ;;
+        *) POS+=("$1"); shift ;;
+    esac
+done
+OUT=${POS[0]:-}; ROOT=${POS[1]:-}; LIST=${POS[2]:-}
+[ -n "$OUT" ] && [ -n "$ROOT" ] && [ -z "${POS[3]:-}" ] || usage
+if [ "$NO_EMBED" = 1 ]; then
+    [ -z "$TLIST" ] && [ -z "$LIST" ] || { echo "hao-image-payload: --no-embed takes no LIST or --translate" >&2; exit 2; }
+    MODE=runtime
+elif [ -n "$TLIST" ]; then
+    MODE=translate
+    [ -f "$TLIST" ] || { echo "hao-image-payload: no translate list $TLIST" >&2; exit 2; }
+    TLIST=$(cd "$(dirname "$TLIST")" && pwd)/$(basename "$TLIST")
+else
+    MODE=embed
+fi
+if [ -n "$ALIST" ]; then
+    [ -f "$ALIST" ] || { echo "hao-image-payload: no AOT list $ALIST" >&2; exit 2; }
+    ALIST=$(cd "$(dirname "$ALIST")" && pwd)/$(basename "$ALIST")
+elif [ $AOT = 1 ] && [ $MODE = runtime ]; then
+    echo "hao-image-payload: --no-embed embeds nothing for --aot to cache: use --aot-list" >&2; exit 2
+fi
+[ -z "$AJOBS" ] || [[ "$AJOBS" =~ ^[1-9][0-9]{0,2}$ ]] || { echo "hao-image-payload: bad --aot-jobs $AJOBS" >&2; exit 2; }
+if [ -n "$LIST" ]; then
+    [ -f "$LIST" ] || { echo "hao-image-payload: no list $LIST" >&2; exit 2; }
+    LIST=$(cd "$(dirname "$LIST")" && pwd)/$(basename "$LIST")
+fi
+H=$(cd "$(dirname "$0")/.." && pwd)
+[ ! -e "$OUT" ] || { echo "hao-image-payload: $OUT exists" >&2; exit 1; }
+[ -z "$UNITS" ] || [ -d "$UNITS" ] || { echo "hao-image-payload: no units directory $UNITS" >&2; exit 2; }
+[ -d "$ROOT" ] || { echo "hao-image-payload: no ROOT $ROOT" >&2; exit 1; }
+if [ -n "$MIN" ]; then
+    [[ "$MIN" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "hao-image-payload: bad --macos-min $MIN" >&2; exit 2; }
+    BDIR=build/macos-$MIN
+    make -C "$H" B="$BDIR" MACOS_MIN="$MIN" >/dev/null
+else
+    BDIR=build
+    make -C "$H" >/dev/null
+fi
+B=$H/$BDIR
+KEXT_MIN=13.0
+"$H/kext/build.sh" "$B" "$KEXT_MIN" >/dev/null
+KEXT=$B/HaoExec.kext
+RELEASE=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["ProductVersion"])' \
+          "$ROOT/System/Library/CoreServices/SystemVersion.plist")
+mkdir -p "$OUT/root/usr/libexec" "$OUT/root/usr/lib/hao/aot" "$OUT/embed"
+chmod 755 "$OUT/root/usr/lib/hao" "$OUT/root/usr/lib/hao/aot"
+install -m 755 "$B/hao" "$OUT/root/usr/libexec/hao"
+install -m 755 "$B/libhao.dylib" "$OUT/root/usr/lib/hao/libhao.dylib"
+install -m 755 "$B/libhao_identity.dylib" "$OUT/root/usr/lib/hao/libhao_identity.dylib"
+if [ -n "$ASYNC_PROVIDER" ]; then
+    python3.14 -I - "$H/tools" "$ASYNC_PROVIDER" "$ROOT" "$OUT/root/usr/lib/hao" <<'EOF'
+import json, pathlib, plistlib, sys
+tools, source, root, destination = sys.argv[1:]
+sys.path.insert(0, tools)
+from hao_release import stage_async_input
+with open(pathlib.Path(root) / 'System/Library/CoreServices/SystemVersion.plist', 'rb') as f:
+    build = plistlib.load(f)['ProductBuildVersion']
+print('async provider:', json.dumps(stage_async_input(source, destination, build)))
+EOF
+fi
+ditto "$KEXT" "$OUT/HaoExec.kext"
+cp "$H/kext/stamp_identity.py" "$H/tools/hao-install.py" "$H/tools/hao_fat.py" "$H/tools/hao_codesig.py" "$OUT/"
+EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"})
+LOG=$OUT/embed/embed.log
+rc=0
+case $MODE in
+runtime)
+    "${EMBED[@]}" > "$LOG" || rc=$? ;;
+translate)
+    # TLIST paths are relative to ROOT; keep the list as given in the payload.
+    grep -v '^[[:space:]]*\(#\|$\)' "$TLIST" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^/||' > "$OUT/embed/translate.txt" || true
+    [ -s "$OUT/embed/translate.txt" ] || { echo "hao-image-payload: $TLIST lists no program (use --no-embed)" >&2; exit 2; }
+    WORK=$(mktemp -d "${TMPDIR:-/tmp}/hao-image-payload.XXXXXX")
+    trap 'rm -rf "$WORK"' EXIT
+    sed "s|^|${ROOT%/}/|" "$OUT/embed/translate.txt" > "$WORK/programs"
+    [ -z "$LIST" ] || grep -v '^[[:space:]]*$' "$LIST" >> "$WORK/programs" || true
+    "${EMBED[@]}" --translate --require-embedded --list "$WORK/programs" > "$LOG" || rc=$? ;;
+embed)
+    REQ=(--require sbin/launchd --require usr/libexec/xpcproxy)
+    if [ -n "$LIST" ]; then
+        "${EMBED[@]}" "${REQ[@]}" --list "$LIST" > "$LOG" || rc=$?
+    else
+        "${EMBED[@]}" "${REQ[@]}" --scan > "$LOG" || rc=$?
+    fi ;;
+esac
+[ ! -s "$LOG" ] || cut -f1 "$LOG" | sort | uniq -c
+if [ $rc != 0 ]; then
+    grep '^fail' "$LOG" | head -20 >&2 || true
+    echo "hao-image-payload: hao-embed failed (exit $rc; see $LOG)" >&2
+    exit 1
+fi
+# Every stub against its program's arm slice by tools/stub_identity_gate.py's rules (fail closed: a DIFF stops
+# the build); OUT/embed/identity/{summary.md,diff.tsv,programs.tsv}, build.json stub_identity.
+if ! python3 "$H/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"} \
+        --out "$OUT/embed/identity" > "$OUT/embed/identity.log" 2>&1; then
+    grep -h '^| ' "$OUT/embed/identity/summary.md" 2>/dev/null | head -40 >&2 || cat "$OUT/embed/identity.log" >&2
+    echo "hao-image-payload: a stub's load-time identity differs from its program's (see $OUT/embed/identity)" >&2
+    exit 1
+fi
+head -1 "$OUT/embed/identity/summary.md"
+# The daemon-free signature verdict for programs that run through
+# /usr/libexec/hao (src/guest_sig.c): every arm64-only program under ROOT,
+# embedded or not (anyone can run /usr/libexec/hao PROGRAM).
+if [ -n "$UNITS" ]; then
+    mkdir -p "$OUT/root/usr/lib/hao/if"
+    chmod 755 "$OUT/root/usr/lib/hao/if"
+    nu=0 nt=0
+    for u in "$UNITS"/*; do
+        n=$(basename "$u")
+        # the unit generators also leave their records and counts here
+        case "$n" in *.tsv|*.json) continue ;; esac
+        if [[ "$n" =~ ^[A-Za-z0-9_-]{1,64}\.thunks$ ]]; then
+            # a generated thunk-pair library (src/thunks.c): one fat file, the guest halves in its arm64e
+            # slice and the native halves in its x86_64 slice, signed
+            archs=$(lipo -archs "$u" 2>/dev/null) || { echo "hao-image-payload: $u: not a Mach-O" >&2; exit 1; }
+            case " $archs " in *" x86_64 "*) ;; *) echo "hao-image-payload: $u: no x86_64 slice ($archs)" >&2; exit 1 ;; esac
+            case " $archs " in *" arm64e "*) ;; *) echo "hao-image-payload: $u: no arm64e slice ($archs)" >&2; exit 1 ;; esac
+            codesign -v "$u" 2>/dev/null || { echo "hao-image-payload: $u: code signature does not verify" >&2; exit 1; }
+            install -m 644 "$u" "$OUT/root/usr/lib/hao/if/$n"
+            nt=$((nt + 1))
+            continue
+        fi
+        [[ "$n" =~ ^[0-9a-f]{32}$ ]] || { echo "hao-image-payload: $u: not named by a UUID (32 lowercase hex digits) or NAME.thunks" >&2; exit 1; }
+        python3 -I "$H/tools/hao_ifunit.py" check "$u" --uuid "$n" >/dev/null || exit 1
+        install -m 644 "$u" "$OUT/root/usr/lib/hao/if/$n"
+        nu=$((nu + 1))
+    done
+    echo "interface units: $nu, thunk libraries: $nt"
+fi
+python3 "$H/tools/hao-trust-list" "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
+chmod 644 "$OUT/root/usr/lib/hao/trusted-cdhashes"
+head -1 "$OUT/root/usr/lib/hao/trusted-cdhashes"
+# The x86_64 dyld PID-1 boot-spec fix (27.x). The fix's exit status is
+# handled here, so set -e never ends the script inside it, and replace/
+# exists only for a dyld the fix wrote.
+case $RELEASE in 27|27.*) DYLD_27=1 ;; *) DYLD_27=0 ;; esac
+DYLD_OK=1
+if [ ! -f "$ROOT/usr/lib/dyld" ]; then
+    DYLD_FIX="no usr/lib/dyld"; DYLD_OK=0
+elif [ $DYLD_27 = 1 ]; then
+    mkdir -p "$OUT/replace"
+    rc=0; FIXLOG=$(python3 "$H/tools/dyld-ignition-fix.py" "$ROOT/usr/lib/dyld" "$OUT/replace/dyld" 2>&1) || rc=$?
+    echo "$FIXLOG"
+    if [ $rc = 0 ] && [ -f "$OUT/replace/dyld" ]; then
+        DYLD_FIX=fixed
+    else
+        rm -rf "$OUT/replace"
+        if [ $rc = 0 ]; then
+            DYLD_FIX="not affected"
+        else
+            DYLD_FIX="not fixed: $(echo "$FIXLOG" | tail -1)"; DYLD_OK=0
+        fi
+    fi
+else
+    # Analysis only (no OUT argument: nothing is written).
+    rc=0; FIXLOG=$(python3 "$H/tools/dyld-ignition-fix.py" "$ROOT/usr/lib/dyld" 2>&1) || rc=$?
+    echo "$FIXLOG"
+    DYLD_FIX="not applied to $RELEASE: $(echo "$FIXLOG" | tail -1)"
+    [ $rc = 0 ] && [ "$(echo "$FIXLOG" | tail -1)" = "not affected" ] || DYLD_OK=0
+fi
+# The default (embed) mode builds the 27.x Golden Gate image, whose PID 1
+# needs the fix: there an unfixed dyld is an error, as with --require-dyld-fix.
+[ "$MODE" = embed ] && [ $DYLD_27 = 1 ] && REQUIRE_DYLD=1
+if [ $DYLD_OK = 0 ]; then
+    if [ $REQUIRE_DYLD = 1 ]; then
+        echo "hao-image-payload: --require-dyld-fix: $DYLD_FIX" >&2; exit 1
+    fi
+    echo "hao-image-payload: warning: the payload has no dyld fix ($DYLD_FIX)" >&2
+fi
+if [ -n "$COVERAGE" ]; then
+    python3 -I - "$COVERAGE" "$OUT/census/summary.json" <<'EOF'
+import json, pathlib, sys
+source, destination = map(pathlib.Path, sys.argv[1:])
+summary = json.loads(source.read_text())
+if not isinstance(summary, dict): raise SystemExit('coverage report must be a JSON object')
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.write_text(json.dumps(summary, indent=2) + '\n')
+EOF
+fi
+# AOT caches (--aot, --aot-list): this build's hao --aot on each program's file in ROOT,
+# into the directory hao searches first (/usr/lib/hao/aot). OUT/aot.json is the record.
+if [ $AOT = 1 ]; then
+    python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" <<'EOF' || exit 1
+import concurrent.futures, hashlib, json, os, re, struct, subprocess, sys, time
+hao, libhao, root, out, alist, jobs = sys.argv[1:]
+aotdir = os.path.join(out, 'root/usr/lib/hao/aot')
+rroot = os.path.realpath(root)
+
+
+def macho_uuid(path):
+    """LC_UUID of a thin x86_64 Mach-O (libhao.dylib)."""
+    mo = open(path, 'rb').read()
+    if struct.unpack_from('<I', mo, 0)[0] != 0xFEEDFACF:
+        sys.exit('hao-image-payload: %s is not a thin 64-bit Mach-O' % path)
+    ncmds, off = struct.unpack_from('<I', mo, 16)[0], 32
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from('<II', mo, off)
+        if cmd == 0x1B:
+            return mo[off + 8:off + 24].hex()
+        off += size
+    sys.exit('hao-image-payload: %s has no LC_UUID' % path)
+
+
+gen = macho_uuid(libhao)
+if alist:
+    want = []
+    for l in open(alist):
+        l = l.split('#', 1)[0].strip()
+        if not l:
+            continue
+        if l.startswith(rroot + '/') or l.startswith(root.rstrip('/') + '/'):
+            l = l[len(rroot if l.startswith(rroot + '/') else root.rstrip('/')) + 1:]
+        want.append(l.lstrip('/'))
+    source = 'list'
+else:
+    want = [e['path'] for e in json.load(open(os.path.join(out, 'embed/manifest.json')))['files']]
+    source = 'embedded'
+want = list(dict.fromkeys(want))
+if not want:
+    sys.exit('hao-image-payload: no program to make AOT caches for')
+# one generation per file (hard links share it); every path is recorded
+progs, by_ino, bad = [], {}, []
+for rel in want:
+    f = os.path.join(root, rel)
+    real = os.path.realpath(f)
+    if not real.startswith(rroot + '/') or not os.path.isfile(real):
+        bad.append('%s: not a file under ROOT' % rel)
+        continue
+    st = os.stat(real)
+    k = (st.st_dev, st.st_ino)
+    if k in by_ino:
+        by_ino[k]['paths'].append(rel)
+    else:
+        by_ino[k] = {'paths': [rel], 'file': real}
+        progs.append(by_ino[k])
+if bad:
+    sys.exit('hao-image-payload: --aot-list: ' + '; '.join(bad[:10]))
+env = {'PATH': '/usr/bin:/bin', 'HAO_CACHE': os.path.realpath(aotdir)}
+LINE = re.compile(r'^hao-aot: .*: (\d+) blocks, (\d+) insns .* -> .*/([0-9a-f]{32})\.aot$')
+# The generator's outcomes that are not errors: the program has no code hao can reach,
+# its translation does not fit hao --aot's output buffer (src/jit.c), or hao cannot load
+# the image at all (so the JIT never runs it either). Anything else fails the build.
+SKIPS = [(re.compile(r'^hao-aot: output buffer overflow$'), 'too large: translated code exceeds the 64 MB generator buffer'),
+         (re.compile(r'^hao-aot: .*: legacy LC_DYLD_INFO fixups not supported'), 'hao does not load this image (legacy LC_DYLD_INFO fixups)')]
+
+
+def one(p):
+    t = time.monotonic()
+    try:
+        r = subprocess.run([hao, '--aot', p['file']], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, errors='replace', timeout=600)
+        rc, err = r.returncode, (r.stdout + r.stderr).strip()
+    except subprocess.TimeoutExpired:
+        rc, err = -9, 'timed out after 600 s'
+    p['seconds'] = round(time.monotonic() - t, 3)
+    lines = err.splitlines()
+    m = LINE.match(lines[-1]) if rc == 0 and lines else None
+    if m:
+        name = os.path.join(aotdir, m[3] + '.aot')
+        h = open(name, 'rb').read(96) if os.path.isfile(name) else b''   # hao_aot_hdr: 96 bytes, nblocks at 64
+        nblocks = struct.unpack_from('<I', h, 64)[0] if len(h) == 96 else -1
+        if h[:8] != b'HAOAOT2\0' or struct.unpack_from('<I', h, 8)[0] != 5 or h[16:32].hex() != m[3] or h[32:48].hex() != gen:
+            p.update(status='error', why='%s: not a v5 cache of this guest and this libhao' % name)
+        elif nblocks == 0:
+            os.unlink(name)
+            p.update(status='skipped', why='nothing to translate', uuid=m[3])
+        else:
+            p.update(status='ok', uuid=m[3], blocks=int(m[1]), insns=int(m[2]), bytes=os.path.getsize(name))
+        return p
+    for rx, why in SKIPS:
+        if rc != 0 and any(rx.match(l) for l in lines):
+            p.update(status='skipped', why=why)
+            return p
+    p.update(status='error', why='hao --aot rc %d: %s' % (rc, ' | '.join(lines[-3:])[:400]))
+    return p
+
+
+njobs = int(jobs) if jobs else (os.cpu_count() or 4)
+t0 = time.monotonic()
+with concurrent.futures.ThreadPoolExecutor(njobs) as ex:
+    list(ex.map(one, progs))
+wall = round(time.monotonic() - t0, 1)
+for n in os.listdir(aotdir):
+    os.chmod(os.path.join(aotdir, n), 0o644)
+os.chmod(aotdir, 0o755)
+errors = [p for p in progs if p['status'] == 'error']
+ok = [p for p in progs if p['status'] == 'ok']
+files = sorted(n for n in os.listdir(aotdir))
+expect = sorted({p['uuid'] + '.aot' for p in ok})
+if files != expect:
+    errors.append({'paths': ['-'], 'why': 'cache directory holds %s, expected %s' % (sorted(set(files) - set(expect))[:5], sorted(set(expect) - set(files))[:5])})
+summary = {'source': source, 'list_sha256': hashlib.sha256(open(alist, 'rb').read()).hexdigest() if alist else None,
+           'programs': len(want), 'files': len(progs), 'caches': len(files),
+           'bytes': sum(os.path.getsize(os.path.join(aotdir, n)) for n in files),
+           'blocks': sum(p['blocks'] for p in ok), 'guest_insns': sum(p['insns'] for p in ok),
+           'libhao_uuid': gen, 'jobs': njobs, 'seconds': wall,
+           'generator_cpu_seconds': round(sum(p['seconds'] for p in progs), 1),
+           'skipped': [{'path': p['paths'][0], 'why': p['why']} for p in progs if p['status'] == 'skipped'],
+           'failures': [{'path': p['paths'][0], 'why': p['why']} for p in errors]}
+json.dump({'summary': summary, 'programs': progs}, open(os.path.join(out, 'aot.json'), 'w'), indent=1)
+print('AOT caches: %d for %d programs, %.1f MB, %d skipped, %d failed, %.1f s (%d jobs); libhao %s' % (
+    len(files), len(want), summary['bytes'] / 2**20, len(summary['skipped']), len(errors), wall, njobs, gen))
+for p in errors[:20]:
+    print('hao-image-payload: AOT: %s: %s' % (p['paths'][0], p['why']), file=sys.stderr)
+sys.exit(1 if errors else 0)
+EOF
+fi
+python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" <<'EOF'
+import datetime, hashlib, json, os, plistlib, struct, subprocess, sys
+out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min = sys.argv[1:]
+census = os.path.join(out, 'census', 'summary.json')
+census = json.load(open(census)) if os.path.exists(census) else None
+aot = os.path.join(out, 'aot.json')
+aot = json.load(open(aot))['summary'] if os.path.exists(aot) else None
+ifdir = os.path.join(out, 'root/usr/lib/hao/if')
+units = None
+if os.path.isdir(ifdir):
+    import struct as _s
+    names = sorted(os.listdir(ifdir))
+    recs = [_s.unpack_from('<I', open(os.path.join(ifdir, n), 'rb').read(), 32)[0] for n in names if not n.endswith('.thunks')]
+    thunks = {n: hashlib.sha256(open(os.path.join(ifdir, n), 'rb').read()).hexdigest() for n in names if n.endswith('.thunks')}
+    units = {'units': len(recs), 'records': sum(recs), 'thunk_libraries': thunks,
+             'sha256': hashlib.sha256(b''.join(open(os.path.join(ifdir, n), 'rb').read() for n in names)).hexdigest()}
+sha = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
+
+
+def minos(path):
+    mo = open(path, 'rb').read()
+    ncmds, off = struct.unpack_from('<I', mo, 16)[0], 32
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from('<II', mo, off)
+        if cmd == 0x32:  # LC_BUILD_VERSION
+            v = struct.unpack_from('<I', mo, off + 12)[0]
+            return '%d.%d' % (v >> 16, (v >> 8) & 0xFF) + ('.%d' % (v & 0xFF) if v & 0xFF else '')
+        off += size
+    return None
+
+
+rep = os.path.join(out, 'replace')
+entries = []
+if os.path.exists(os.path.join(rep, 'dyld')):
+    entries.append({"path": "usr/lib/dyld", "file": "dyld", "source_sha256": sha(os.path.join(root, 'usr/lib/dyld')),
+                    "result_sha256": sha(os.path.join(rep, 'dyld')),
+                    "why": "x86_64 libignition boot-spec stage count is one more than its stage pointers (PID 1 SIGSEGV after the last stage)"})
+    json.dump({"files": entries}, open(os.path.join(rep, 'manifest.json'), 'w'), indent=1)
+m = json.load(open(os.path.join(out, 'embed/manifest.json')))
+translate = None
+if mode == 'translate':
+    # manifest paths are real paths relative to ROOT (a listed symlink names its target)
+    real = lambda p: os.path.relpath(os.path.realpath(os.path.join(root, p)), os.path.realpath(root))
+    want = list(dict.fromkeys(real(l.strip()) for l in open(os.path.join(out, 'embed/translate.txt')) if l.strip()))
+    got = {e['path']: e for e in m['files']}
+    absent = [p for p in want if p not in got]
+    if absent:
+        sys.exit('hao-image-payload: not translated (see embed/embed.log): ' + ', '.join(absent))
+    translate = {'list_sha256': sha(tlist),
+                 'programs': [{'path': p, 'identifier': got[p]['identifier'], 'mode': got[p].get('mode', 'embed'),
+                               'source_sha256': got[p]['source_sha256'], 'result_sha256': got[p]['result_sha256']}
+                              for p in want]}
+# tools/stub_identity_gate.py over every stub (run above; a DIFF stopped the build): programs, and the denied
+# fields that differ (KNOWN: Team ID, platform identifier, library-validation flag) by field
+stub_identity = None
+idir = os.path.join(out, 'embed/identity')
+if os.path.exists(os.path.join(idir, 'diff.tsv')):
+    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(idir, 'diff.tsv'))][1:]
+    known = {}
+    for r in rows:
+        if r[2] == 'KNOWN':
+            known[r[1]] = known.get(r[1], 0) + 1
+    stub_identity = {'programs': sum(1 for _ in open(os.path.join(idir, 'programs.tsv'))) - 1,
+                     'diff': sum(r[2] == 'DIFF' for r in rows), 'known': known}
+files = {os.path.relpath(os.path.join(b, n), out): sha(os.path.join(b, n))
+         for b, _, ns in os.walk(out) for n in ns if '/embed/stubs/' not in os.path.join(b, n) and n != 'build.json'}
+src = {os.path.relpath(os.path.join(b, n), h): sha(os.path.join(b, n))
+       for d in ('src', 'include', 'kext/HaoExec', 'kext', 'tools') for b, _, ns in os.walk(os.path.join(h, d)) for n in ns
+       if not n.endswith('.pyc')}
+ver = plistlib.load(open(os.path.join(root, 'System/Library/CoreServices/SystemVersion.plist'), 'rb'))
+commit = subprocess.run(['git', '-C', h, 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
+dirty = bool(subprocess.run(['git', '-C', h, 'status', '--porcelain', '--', '.'], capture_output=True, text=True).stdout.strip())
+built = {'hao': 'hao', 'libhao.dylib': 'libhao.dylib', 'libhao_identity.dylib': 'libhao_identity.dylib',
+         'hao-stub': 'hao-stub', 'front/stub.o': 'front/stub.o'}
+json.dump({'unit': 'hao-image-payload', 'revision': 10, 'date': datetime.date.today().isoformat(),
+           'hao_commit': commit, 'hao_dirty': dirty,
+           'async_contract_package_abis': [1],
+           'release': {'version': ver['ProductVersion'], 'build': ver['ProductBuildVersion']},
+           'mode': mode, 'macos_min': macos_min or minos(os.path.join(h, bdir, 'front/stub.o')), 'build_dir': bdir,
+           # The kext has no LC_BUILD_VERSION: its entry is the target kext/build.sh used.
+           'minos': {**{k: minos(os.path.join(h, bdir, v)) for k, v in built.items()}, 'HaoExec.kext': kext_min},
+           'embedded': len(m['files']), 'translated': sum(e.get('mode') == 'translate' for e in m['files']),
+           # bundle main executables whose stub binds the bundle's Info.plist (slot -1) and seal (slot -3)
+           'bound_info_plist': sum(any(b['slot'] == -1 and 'file' in b for b in e.get('bound', [])) for e in m['files']),
+           'bound_resources': sum(any(b['slot'] == -3 for b in e.get('bound', [])) for e in m['files']),
+           'trusted_cdhashes': sum(1 for l in open(os.path.join(out, 'root/usr/lib/hao/trusted-cdhashes')) if l[:1] not in '#\n'),
+           'required': m['required'],
+           'stub_sha256': m['stub_sha256'], 'x86_cache_uuid': m.get('x86_cache_uuid'),
+           # stubs whose launch images include CoreFoundation (linked, or loaded by what they link)
+           'stubs_with_corefoundation': sum(bool(e.get('corefoundation')) for e in m['files']),
+           'stub_uuids': len({e.get('uuid') for e in m['files']}),
+           'kext_sha256': sha(os.path.join(out, 'HaoExec.kext/Contents/MacOS/HaoExec')),
+           'translate': translate, 'embed_list_sha256': sha(plist) if plist else None,
+           'dyld_fix': dyld_fix, 'replace': [e['path'] for e in entries],
+           'bridge_census': census, 'interface_units': units,
+           'stub_identity': stub_identity,
+           # AOT caches in root/usr/lib/hao/aot (--aot, --aot-list; aot.json per program), bound to libhao_uuid
+           'aot': aot,
+           'files': files, 'hao_source_sha256': hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()},
+          open(os.path.join(out, 'build.json'), 'w'), indent=1)
+print('build.json:', ver['ProductVersion'], ver['ProductBuildVersion'], mode, 'minos', minos(os.path.join(h, bdir, 'hao')),
+      len(m['files']), 'embedded;',
+      sum(any(b['slot'] == -1 and 'file' in b for b in e.get('bound', [])) for e in m['files']), "bind their bundle's Info.plist;",
+      'required',
+      m['required'] if len(m['required']) <= 4 else len(m['required']),
+      '; dyld fix:', dyld_fix, '; replace', [e['path'] for e in entries])
+EOF

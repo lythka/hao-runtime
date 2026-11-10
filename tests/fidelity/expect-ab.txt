@@ -1,0 +1,10 @@
+# tests/fidelity/run.sh: what native mode a vs mode b of target.c must show
+# (class, key, diff.py status; the b side is diff.py's "hao" side). Exactly these.
+identity	argv.1	DIFF
+identity	pgrp.leader	DIFF
+identity	pgrp.same_as_parent	DIFF
+resource	nice	DIFF
+signal	sig.SIGUSR1	DIFF
+fd	fd.count	DIFF
+fd	fd.count.socket	MISSING-HAO
+fd	fd.socket:unix/stream:-	MISSING-HAO

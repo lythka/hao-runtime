@@ -1,0 +1,62 @@
+bin/echo hello world
+bin/expr 6 * 7
+usr/bin/uname -s
+bin/cat /etc/shells
+usr/bin/wc -l /etc/shells
+bin/ls /private/tmp/ipsw27-fs
+usr/bin/sort -r /etc/shells
+bin/ls -la /private/tmp/ipsw27-fs/usr
+bin/ls -R /private/tmp/ipsw27-fs/usr/share/zoneinfo/America
+usr/bin/head -3 /etc/passwd
+usr/bin/tail -2 /etc/services
+usr/bin/grep -c tcp /etc/services
+usr/bin/sed -n s/http/HTTP/p /etc/services
+usr/bin/awk -F: NR<3 /etc/passwd
+usr/bin/tr a-z A-Z /etc/shells
+usr/bin/cut -d: -f1,3 /etc/passwd
+usr/bin/uniq -c /etc/shells
+usr/bin/od -c /etc/shells
+usr/bin/hexdump -C /bin/ls
+usr/bin/shasum -a 256 /etc/services
+sbin/md5 /etc/services
+usr/bin/basename /a/b/c.txt .txt
+usr/bin/dirname /a/b/c.txt
+bin/date -u -r 0
+usr/bin/cal 9 2026
+usr/bin/seq 1 3 20
+usr/bin/printf %s-%05.2f-%x\n abc 3.14159 255
+bin/test -d /etc
+usr/bin/find /private/tmp/ipsw27-fs/usr/share/zoneinfo/Europe -name P*
+usr/bin/xxd -l 64 /bin/ls
+usr/bin/bc -l
+usr/bin/column -t /etc/shells
+usr/bin/fold -w 20 /etc/shells
+usr/bin/paste -s -d, /etc/shells
+usr/bin/rev /etc/shells
+usr/bin/strings -n 12 /bin/echo
+usr/bin/file /bin/ls
+usr/bin/plutil -p /System/Library/CoreServices/SystemVersion.plist
+usr/bin/sw_vers
+usr/bin/id -un
+usr/bin/getconf PAGESIZE
+bin/pwd
+usr/bin/env -i A=1 /usr/bin/printenv
+usr/bin/diff /etc/shells /etc/hosts
+usr/bin/cmp /etc/shells /etc/hosts
+usr/bin/comm -12 /etc/shells /etc/shells
+usr/bin/nl /etc/shells
+usr/bin/expand /etc/services
+bin/stat -f %z%t%N /etc/services
+usr/bin/du -sk /private/tmp/ipsw27-fs/usr/share/zoneinfo
+bin/df -k /private/tmp/ipsw27-fs
+usr/bin/xargs echo
+usr/bin/perl -e print(6*7)
+usr/bin/python3 -c print(42)
+usr/bin/sqlite3 :memory: select(6*7)
+usr/bin/openssl dgst -sha256 /etc/services
+usr/bin/gzip -c /etc/services
+usr/bin/bzip2 -c /etc/shells
+usr/bin/zip -q - /etc/shells
+usr/bin/tar -cf - /etc/shells
+usr/bin/jq -n 1+1
+usr/bin/plutil -lint /System/Library/CoreServices/SystemVersion.plist
