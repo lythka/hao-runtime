@@ -85,6 +85,7 @@
 #include <mach-o/loader.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <sys/mman.h>
 #include <sys/sysctl.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
@@ -111,8 +112,17 @@ typedef struct {
 
 /* ------------------------------------------------ disposition table */
 
-typedef struct { uint64_t handler; int flags; sigset_t mask; } gsig_t;
-static gsig_t gsig[NSIG];                     /* fields read atomically by tramp */
+/* A disposition is one immutable record, published by pointer: a delivery
+ * racing sigaction sees the old handler with the old flags and mask or the
+ * new ones, never a mix, and its SA_RESETHAND reset replaces only the record
+ * it delivered. Records are interned (one per distinct disposition, never
+ * freed: a handler may still be reading one) in mmap'd memory, as sigaction
+ * may run in a signal handler. Written under disp_lock. */
+typedef struct gsig_rec { uint64_t handler; int flags; sigset_t mask; struct gsig_rec *next; } gsig_t;
+static const gsig_t gsig_none;                /* SIG_DFL, no flags */
+static const gsig_t *gsig[NSIG];              /* NULL: gsig_none */
+static gsig_t *gsig_recs, *gsig_free;
+static size_t gsig_nfree;
 static uint64_t st_delivered, st_deferred, st_moved;
 uint64_t hao_sig_native_installs;
 static pthread_mutex_t disp_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -121,14 +131,46 @@ static pthread_mutex_t disp_lock = PTHREAD_MUTEX_INITIALIZER;
 /* the flags Darwin's sigaction reports back (kern_sig.c): never SA_RESETHAND */
 #define REPORTED_FLAGS (SA_ONSTACK | SA_RESTART | SA_SIGINFO | SA_NODEFER | SA_NOCLDSTOP | SA_NOCLDWAIT)
 
-static uint64_t ld_handler(int s) { return __atomic_load_n(&gsig[s].handler, __ATOMIC_ACQUIRE); }
-static int ld_flags(int s) { return __atomic_load_n(&gsig[s].flags, __ATOMIC_ACQUIRE); }
-static sigset_t ld_mask(int s) { return __atomic_load_n(&gsig[s].mask, __ATOMIC_ACQUIRE); }
+static const gsig_t *ld_gsig(int s)
+{
+    const gsig_t *g = __atomic_load_n(&gsig[s], __ATOMIC_ACQUIRE);
+    return g ? g : &gsig_none;
+}
+
+/* under disp_lock (or before other threads exist) */
 static void st_gsig(int s, uint64_t h, int fl, sigset_t m)
 {
-    __atomic_store_n(&gsig[s].mask, m, __ATOMIC_RELEASE);
-    __atomic_store_n(&gsig[s].flags, fl, __ATOMIC_RELEASE);
-    __atomic_store_n(&gsig[s].handler, h, __ATOMIC_RELEASE);
+    const gsig_t *g = NULL;
+    if (h || fl || m) {
+        gsig_t *r;
+        for (r = gsig_recs; r && !(r->handler == h && r->flags == fl && r->mask == m); r = r->next) {}
+        if (!r) {
+            if (!gsig_nfree) {
+                void *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+                if (p == MAP_FAILED) {
+                    static const char msg[] = "hao: signal dispositions: out of memory\n";
+                    write(2, msg, sizeof msg - 1);
+                    abort();
+                }
+                gsig_free = p;
+                gsig_nfree = 4096 / sizeof *gsig_free;
+            }
+            r = gsig_free++;
+            gsig_nfree--;
+            *r = (gsig_t){h, fl, m, gsig_recs};
+            gsig_recs = r;
+        }
+        g = r;
+    }
+    __atomic_store_n(&gsig[s], g, __ATOMIC_RELEASE);
+}
+
+/* SA_RESETHAND after delivering `was`: SIG_DFL, unless a sigaction has
+ * meanwhile installed another disposition (which the kernel has too) */
+static void reset_gsig(int s, const gsig_t *was)
+{
+    const gsig_t *exp = was == &gsig_none ? NULL : was;
+    __atomic_compare_exchange_n(&gsig[s], &exp, NULL, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 
 static bool is_guest_fn(uint64_t h)
@@ -333,10 +375,18 @@ static void giveup_line(int sig, const siginfo_t *si, int why)
     if (n > 0) hao_diag_write(m, (size_t)n < sizeof m ? (size_t)n : sizeof m - 1);
 }
 
+/* A signal handler of hao's leaves the interrupted code's errno as it
+ * found it, or as the guest or native handler it ran left it: hao's own
+ * calls in between must not change it. SAVED_ERRNO(e) restores e when the
+ * scope ends; paths that leave without returning restore it themselves. */
+static void errno_restore(const int *e) { errno = *e; }
+#define SAVED_ERRNO(v) __attribute__((cleanup(errno_restore))) int v = errno
+
 /* hao_sig_resume; a give-up (giveup_sig, path HAO_RESUME_GIVEUP) also
  * writes its line first */
 static __attribute__((noinline)) void sig_resume(ucontext_t *uc, int path, int giveup_sig, const siginfo_t *si)
 {
+    SAVED_ERRNO(e);
     hao_resume_blk b;
     /* this frame (b, then hao_sig_resume_ctx's call below it) is all the handler still uses */
     if (path < 0 || path >= HAO_RESUME_NPATHS) path = 0;
@@ -371,6 +421,7 @@ static __attribute__((noinline)) void sig_resume(ucontext_t *uc, int path, int g
     b.rsp_slot = ss->__rsp - 136;
     uint64_t rip = ss->__rip;
     __atomic_fetch_add(&st_res_user[path], 1, __ATOMIC_RELAXED);
+    errno = e;   /* a call (__error), made before the slot store below */
     /* the ucontext may hold the slot (xnu: uc_mcontext64, uc + 48): read before this store */
     *(volatile uint64_t *)(uintptr_t)b.rsp_slot = rip;
     hao_sig_resume_ctx(&b);   /* the signal mask is already the ucontext's (see above) */
@@ -461,7 +512,7 @@ static void set_default(int sig)
 
 /* Run guest handler h for sig on thread t, which the signal interrupted in
  * the state described by the native context nuc. */
-static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo_t *si, ucontext_t *nuc)
+static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo_t *si, ucontext_t *nuc, int *err)
 {
     hao_cpu *c = &t->cpu;
     _STRUCT_X86_THREAD_STATE64 *hs = &nuc->uc_mcontext->__ss;
@@ -527,7 +578,9 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
     c->pc = guest_entry(h);
     int sig_depth = t->sig_depth;
     t->sig_depth = t->depth + 1;      /* the handler's segment: no first-call binding (dladdr) inside it */
+    errno = *err;   /* the interrupted code's; the handler's own goes back */
     hao_run(t, &saved);
+    *err = errno;
     t->sig_depth = sig_depth;
     *c = saved;
 
@@ -561,6 +614,7 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
         t->in_fault_handler = 0;
         if (t->sig_nest > 0) t->sig_nest--;   /* tramp's or hao_signal_forward's, which never see this return */
         pthread_sigmask(SIG_SETMASK, &nuc->uc_sigmask, NULL);
+        errno = *err;
         _longjmp(t->seg->jb, 1);   /* the interrupted segment's hao_run (runtime.c) */
     }
 }
@@ -584,8 +638,9 @@ static bool synchronous(int sig, const siginfo_t *si)
 
 static void tramp(int sig, siginfo_t *info, void *ctx)
 {
+    SAVED_ERRNO(e);
     uint32_t bit = 1u << sig;
-    hao_fault_act_note(HAO_ACT_TRAMP, sig, ld_handler(sig), ((ucontext_t *)ctx)->uc_mcontext->__ss.__rip, ctx, 0);
+    hao_fault_act_note(HAO_ACT_TRAMP, sig, ld_gsig(sig)->handler, ((ucontext_t *)ctx)->uc_mcontext->__ss.__rip, ctx, 0);
     if (hao_crit_depth() > 0) {
         if (synchronous(sig, info)) {
             static const char m[] = "hao: synchronous signal inside a hao critical section\n";
@@ -606,10 +661,11 @@ static void tramp(int sig, siginfo_t *info, void *ctx)
         __atomic_fetch_and(&t->sig_redeliver, ~bit, __ATOMIC_ACQ_REL);
         if (info->si_code == SI_USER && info->si_pid == getpid()) si = t->sig_info[sig];
     }
-    uint64_t h = ld_handler(sig);
-    int fl = ld_flags(sig);
+    const gsig_t *g = ld_gsig(sig);
+    uint64_t h = g->handler;
+    int fl = g->flags;
     /* the kernel already reset its disposition; the shadow follows */
-    if (fl & SA_RESETHAND) st_gsig(sig, 0, 0, 0);
+    if (fl & SA_RESETHAND) reset_gsig(sig, g);
     if (!is_guest_fn(h)) {
         /* the disposition changed while this signal was on its way: the shadow
          * of a signal that is not OWNED holds only guest handlers, so a native
@@ -619,7 +675,9 @@ static void tramp(int sig, siginfo_t *info, void *ctx)
         if (h == (uint64_t)(uintptr_t)SIG_IGN) return;
         if (h > 1) {
             t->sig_nest++;   /* the kernel's mask holds this handler's sa_mask meanwhile */
+            errno = e;
             ((void (*)(int, siginfo_t *, void *))(uintptr_t)h)(sig, &si, ctx);
+            e = errno;
             sync_mask_from(t, ctx);
             t->sig_nest--;
             return;
@@ -629,7 +687,7 @@ static void tramp(int sig, siginfo_t *info, void *ctx)
         return;
     }
     t->sig_nest++;
-    deliver(t, sig, h, fl, &si, ctx);
+    deliver(t, sig, h, fl, &si, ctx, &e);
     sync_mask_from(t, ctx);   /* what __sigreturn restores (the handler may have edited it) */
     t->sig_nest--;
 }
@@ -738,12 +796,13 @@ __attribute__((noreturn)) static void bad_sigreturn(int sig, uint64_t h, int cha
     __builtin_unreachable();
 }
 
-uint64_t hao_signal_shadow_handler(int sig) { return sig > 0 && sig < NSIG && OWNED(sig) ? ld_handler(sig) : 0; }
+uint64_t hao_signal_shadow_handler(int sig) { return sig > 0 && sig < NSIG && OWNED(sig) ? ld_gsig(sig)->handler : 0; }
 
 /* Called by the fault handler for faults hao does not own (never inside a
  * hao critical section); false: the default action. */
 bool hao_signal_forward(int sig, siginfo_t *info, void *ctx)
 {
+    SAVED_ERRNO(e);
     if (sig <= 0 || sig >= NSIG) return false;
     /* a native handler that blocks the signal is running on this thread
      * (whatever the disposition has become since) */
@@ -760,16 +819,17 @@ bool hao_signal_forward(int sig, siginfo_t *info, void *ctx)
         __atomic_fetch_or(&pt->nh_deferred, 1u << sig, __ATOMIC_RELAXED);
         return true;
     }
-    uint64_t h = ld_handler(sig);
-    int fl = ld_flags(sig);
-    sigset_t mask = ld_mask(sig);
+    const gsig_t *g = ld_gsig(sig);
+    uint64_t h = g->handler;
+    int fl = g->flags;
+    sigset_t mask = g->mask;
     if (h <= 1) return false;   /* SIG_DFL; SIG_IGN of a fault is fatal too */
     hao_thread *t = hao_current();
     /* natively the signal is blocked while its handler runs, and a fault
      * with it blocked is fatal; hao cannot block it (it carries native->guest
      * calls), so it emulates that */
     if (t->in_fault_handler) return false;
-    if (fl & SA_RESETHAND) st_gsig(sig, 0, 0, 0);
+    if (fl & SA_RESETHAND) reset_gsig(sig, g);
     uint32_t blocks = owned_bits(&mask) | (fl & SA_NODEFER ? 0 : 1u << sig);
     sigdelset(&mask, SIGSEGV);
     sigdelset(&mask, SIGBUS);
@@ -779,7 +839,7 @@ bool hao_signal_forward(int sig, siginfo_t *info, void *ctx)
     if (is_guest_fn(h)) {
         int prev = t->in_fault_handler;
         if (!(fl & SA_NODEFER)) t->in_fault_handler = 1;
-        deliver(t, sig, h, fl, info, ctx);
+        deliver(t, sig, h, fl, info, ctx, &e);
         t->in_fault_handler = prev;
     } else {
         static uint64_t seq;
@@ -791,7 +851,9 @@ bool hao_signal_forward(int sig, siginfo_t *info, void *ctx)
             t->nh_blocked = outer | blocks;
             __atomic_store_n(&t->nh_at, (uint64_t)(uintptr_t)&mark, __ATOMIC_RELEASE);
         }
+        errno = e;
         int changed = hao_sig_call_native(h, sig, info, ctx);
+        e = errno;
         t->nh_at = at;
         t->nh_tok = tok;
         t->nh_blocked = outer;
@@ -860,9 +922,10 @@ static int do_sigaction(int sig, const struct sigaction *act, struct sigaction *
     hao_crit_enter();
     pthread_mutex_lock(&disp_lock);
     if (OWNED(sig)) {
-        cur.sa_handler = (void (*)(int))(uintptr_t)ld_handler(sig);
-        cur.sa_flags = ld_flags(sig) & REPORTED_FLAGS;
-        cur.sa_mask = ld_mask(sig);
+        const gsig_t *g0 = ld_gsig(sig);
+        cur.sa_handler = (void (*)(int))(uintptr_t)g0->handler;
+        cur.sa_flags = g0->flags & REPORTED_FLAGS;
+        cur.sa_mask = g0->mask;
         if (act) {
             uint64_t h = (uint64_t)(uintptr_t)act->sa_handler;
             sigset_t m = act->sa_mask;
@@ -873,14 +936,15 @@ static int do_sigaction(int sig, const struct sigaction *act, struct sigaction *
     } else {
         if (hao_sys_sigaction(sig, NULL, &cur) < 0) { r = -1; goto out; }   /* SIGKILL/SIGSTOP: EINVAL, as natively */
         if (cur.sa_sigaction == tramp) {
-            int gf = ld_flags(sig);
-            cur.sa_handler = (void (*)(int))(uintptr_t)ld_handler(sig);
+            const gsig_t *g0 = ld_gsig(sig);
+            int gf = g0->flags;
+            cur.sa_handler = (void (*)(int))(uintptr_t)g0->handler;
             cur.sa_flags = (cur.sa_flags & ~(SA_SIGINFO | SA_ONSTACK)) | (gf & (SA_SIGINFO | SA_ONSTACK));
         }
         if (act) {
             uint64_t h = (uint64_t)(uintptr_t)act->sa_handler;
             struct sigaction na = *act;
-            gsig_t was = {ld_handler(sig), ld_flags(sig), ld_mask(sig)};
+            const gsig_t *was = ld_gsig(sig);
             if (is_guest_fn(h)) {
                 /* committed first: a signal delivered as soon as the kernel
                  * has the trampoline must find the handler */
@@ -891,7 +955,7 @@ static int do_sigaction(int sig, const struct sigaction *act, struct sigaction *
                 na.sa_flags = (act->sa_flags | SA_SIGINFO) & ~SA_ONSTACK;
             }
             if (hao_sys_sigaction(sig, &na, NULL) < 0) {
-                st_gsig(sig, was.handler, was.flags, was.mask);
+                st_gsig(sig, was->handler, was->flags, was->mask);
                 r = -1;
                 goto out;
             }
