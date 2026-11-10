@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""hao-trust-list ROOT [LIST] > trusted-cdhashes
+       hao-trust-list --cdhash FILE...
+
+The cdhash list that lets hao (src/guest_sig.c) recognise a release's
+Apple-signed arm64-only code without a daemon: the programs it runs, and the
+guest libraries they load (library validation, src/libval.c: an x86_64 kernel
+cannot hold their 16 KiB-page signatures, so hao decides). One line per file:
+
+    <40 hex: cdhash of the arm64 slice's best CodeDirectory>  <path under ROOT>
+
+for every arm64-only LC_MAIN executable under ROOT (as tools/hao-embed --scan)
+and every arm64-only dylib or bundle (MH_DYLIB, MH_BUNDLE: a guest image),
+or the paths in LIST (one per line, absolute or relative to ROOT), whose arm64
+slice (the one hao runs: plain arm64e > arm64e.* > arm64) satisfies
+`codesign --verify --strict --ignore-resources -R='anchor apple'` here, at
+image build, where trustd runs (bundle resources are not code: neither the
+kernel nor hao checks them at exec). A program that does not verify is left out (reported on stderr):
+at run time hao then authenticates its CMS by the slower routes.
+
+The cdhash is computed as xnu does (cs_validate_csblob: the CodeDirectory of
+highest hash rank, SHA-1 < SHA-256/20 < SHA-256 < SHA-384, hashed with its own
+type, first 20 bytes). hao-image-payload installs the list as
+usr/lib/hao/trusted-cdhashes; hao reads it only if root owns it and its
+directories and nobody else can write them. --cdhash prints the cdhash of
+each FILE's arm64 slice (tests use it).
+"""
+import concurrent.futures
+import hashlib
+import importlib.machinery
+import importlib.util
+import os
+import plistlib
+import struct
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import hao_fat  # noqa: E402
+
+_spec = importlib.util.spec_from_loader("hao_embed", importlib.machinery.SourceFileLoader("hao_embed", os.path.join(HERE, "hao-embed")))
+hao_embed = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(hao_embed)
+
+LC_CODE_SIGNATURE = 0x1D
+CSMAGIC_EMBEDDED_SIGNATURE = 0xFADE0CC0
+CSMAGIC_CODEDIRECTORY = 0xFADE0C02
+RANK = {1: 1, 3: 2, 2: 3, 4: 4}                      # xnu hashPriorities
+HASH = {1: hashlib.sha1, 2: hashlib.sha256, 3: hashlib.sha256, 4: hashlib.sha384}
+
+
+def slice_and_arch(data):
+    """(arm64 slice bytes, codesign --arch name) of the slice hao runs."""
+    best, rank, arch = None, 0, None
+    for c, sub, payload in hao_fat.slices(data) or []:
+        if c != hao_fat.CPU_ARM64:
+            continue
+        caps = sub & 0xFF000000
+        r = (3 if caps in (0, 0x80000000) else 2) if sub & 0x00FFFFFF == 2 else 1
+        if r > rank:
+            best, rank, arch = payload, r, "arm64e" if sub & 0x00FFFFFF == 2 else "arm64"
+    return best, arch
+
+
+def cdhash(macho):
+    """The xnu cdhash (hex) of a thin arm64 Mach-O, or None if unsigned."""
+    sig = None
+    for cmd, off, _ in hao_embed.load_commands(macho):
+        if cmd == LC_CODE_SIGNATURE:
+            dataoff, datasize = struct.unpack_from("<II", macho, off + 8)
+            sig = macho[dataoff:dataoff + datasize]
+    if sig is None:
+        return None
+    magic, length, count = struct.unpack_from(">III", sig, 0)
+    if magic != CSMAGIC_EMBEDDED_SIGNATURE:
+        raise ValueError("not an embedded signature")
+    best = None
+    for k in range(count):
+        typ, off = struct.unpack_from(">II", sig, 12 + 8 * k)
+        if typ == 0 or 0x1000 <= typ < 0x1005:
+            m, ln = struct.unpack_from(">II", sig, off)
+            if m != CSMAGIC_CODEDIRECTORY:
+                raise ValueError("bad CodeDirectory magic")
+            ht = sig[off + 37]
+            if ht not in RANK:
+                raise ValueError("hash type %d" % ht)
+            if best is None or RANK[ht] > best[0]:
+                best = (RANK[ht], ht, sig[off:off + ln])
+    if best is None:
+        raise ValueError("no CodeDirectory")
+    return HASH[best[1]](best[2]).hexdigest()[:40]
+
+
+MH_DYLIB, MH_BUNDLE = 6, 8
+
+
+def guest_library(data):
+    """An arm64-only dylib or bundle: hao loads it as a guest image."""
+    sl = hao_fat.slices(data)
+    if not sl or any(c == hao_fat.CPU_X86_64 for c, _, _ in sl):
+        return False
+    mo, _ = slice_and_arch(data)
+    return mo is not None and len(mo) >= 32 and int.from_bytes(mo[12:16], "little") in (MH_DYLIB, MH_BUNDLE)
+
+
+def scan(root):
+    """Every arm64-only LC_MAIN executable under ROOT, as tools/hao-embed --scan
+    finds them but whatever their mode bits (an unpacked tree may have lost
+    them; the installed image has them), and every arm64-only dylib or bundle."""
+    seen, found = set(), []
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
+        for name in files:
+            path = os.path.join(base, name)
+            try:
+                st = os.lstat(path)
+                if not os.path.isfile(path) or os.path.islink(path) or st.st_size < 4096 or (st.st_dev, st.st_ino) in seen:
+                    continue
+                with open(path, "rb") as f:
+                    if f.read(4) not in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                        continue
+                seen.add((st.st_dev, st.st_ino))
+                data = open(path, "rb").read()
+                if hao_embed.executable_arm_only(data) is None or guest_library(data):
+                    found.append(path)
+            except OSError:
+                continue
+    return sorted(found)
+
+
+def verdict(root, path):
+    """(cdhash, relpath, None) if PATH is listed, else (None, relpath, why)."""
+    rel = os.path.relpath(os.path.realpath(path), root)
+    try:
+        data = open(path, "rb").read()
+        mo, arch = slice_and_arch(data)
+        if mo is None:
+            return None, rel, "no arm64 slice"
+        h = cdhash(mo)
+        if h is None:
+            return None, rel, "not signed"
+    except (OSError, ValueError, struct.error) as e:
+        return None, rel, str(e)
+    r = subprocess.run(["codesign", "--verify", "--strict", "--ignore-resources", "-R=anchor apple", "--arch", arch, path],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, rel, (r.stderr.strip().splitlines() or ["codesign exit %d" % r.returncode])[-1]
+    return h, rel, None
+
+
+def main():
+    a = sys.argv[1:]
+    if a and a[0] == "--cdhash":
+        for p in a[1:]:
+            mo, _ = slice_and_arch(open(p, "rb").read())
+            print(cdhash(mo) if mo is not None else "-", p)
+        return 0
+    if len(a) not in (1, 2) or a[0].startswith("-"):
+        sys.exit(__doc__.split("\n\n")[0])
+    root = os.path.realpath(a[0])
+    if len(a) == 2:
+        progs = [l.strip() for l in open(a[1]) if l.strip() and not l.lstrip().startswith("#")]
+        progs = [p if os.path.isabs(p) else os.path.join(root, p) for p in progs]
+    else:
+        progs = scan(root)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as ex:
+        res = list(ex.map(lambda p: verdict(root, p), progs))
+    try:
+        v = plistlib.load(open(os.path.join(root, "System/Library/CoreServices/SystemVersion.plist"), "rb"))
+        rel = "%s %s" % (v["ProductVersion"], v["ProductBuildVersion"])
+    except (OSError, KeyError, plistlib.InvalidFileException):
+        rel = "unknown release"
+    ok = sorted((h, r) for h, r, why in res if h)
+    print("# hao trusted cdhashes v1: %s, %d of %d programs and guest libraries (anchor apple, arm64 slice hao runs)" % (rel, len(ok), len(res)))
+    for h, r in ok:
+        print("%s  %s" % (h, r))
+    for h, r, why in res:
+        if not h:
+            print("hao-trust-list: not listed: %s: %s" % (r, why), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

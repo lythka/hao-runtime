@@ -1,0 +1,54 @@
+/*
+ * hao — the switch snapshot. Every HAO_* switch and hao_* boot argument is
+ * read once, at startup, before any guest code or second thread runs, into
+ * hao_opt; readers load its fields. A guest's own setenv cannot change hao's
+ * behaviour, and no hot path calls getenv.
+ */
+#ifndef HAO_OPTS_H
+#define HAO_OPTS_H
+
+#include <stdbool.h>
+#include <stddef.h>
+
+typedef struct {
+    int verbose;                /* -v/-vv, HAO_VERBOSE=N, PID 1: hao=v|V, hao_verbose=N */
+    bool interp, stats;         /* --interp/HAO_INTERP, --stats (PID 1: hao=i|s) */
+    bool allow_unsigned;        /* --allow-unsigned (HAO_FLAGS u): run an unsigned CLI guest */
+    unsigned watchdog;          /* HAO_WATCHDOG=N seconds */
+    unsigned jit_cache_mb;      /* HAO_JIT_CACHE_MB=N: translated-code space (0 = default) */
+    unsigned aot_limit_kb;      /* HAO_AOT_LIMIT_KB=N: AOT loading's memory limit instead of the kernel's (tests; jit.c aot_fits) */
+    /* boolean knobs: environment HAO_<NAME>, boot argument hao_<name>=1 */
+    bool nx_stats, crash_trace, jit_helpers_only, no_aot, no_chain, no_msgsend, no_closures, no_swiftreg,
+         no_block_thunks, no_fixup_thunks, no_struct_thunks, aot_learn, no_jit_memory, bridge_check, bridge_abort,
+         no_varsniff, no_libval, bridge_stats, no_ifunits, no_swift_thunks, no_thunks, no_swift_values,
+         native_libcxx,          /* HAO_NATIVE_LIBCXX: libc++ stays native (no guest libc++ from the arm64e cache) */
+         sigreturn_kernel,       /* HAO_SIGRETURN_KERNEL: hao's signal handlers return through __sigreturn (signals.c) */
+         sigreturn_user,         /* HAO_SIGRETURN_USER: resume in user space under Rosetta too (tests; signals.c) */
+         no_probe,               /* HAO_NO_PROBE: no fault-tolerant reads; blocks.c reads candidates through Mach (signals.c) */
+         code_alias,             /* HAO_CODE_ALIAS: hao reads guest code from an alias, the guest's text pages poisoned (code.c) */
+         libval_user;            /* HAO_LIBVAL_USER: library validation's signer checks in user space, as on an x86_64 kernel (tests; libval.c) */
+    char cache[1024];           /* HAO_CACHE ("" = unset) */
+    char guest_root[1024];      /* HAO_GUEST_ROOT ("" = unset) */
+    char if_dir[1024];          /* HAO_IF_DIR: interface units (hao/bridge.h) instead of /usr/lib/hao/if ("" = unset) */
+    char async_contract_library[1024]; /* explicitly selected own-code async provider; open tier only */
+    char trust_list[1024];      /* HAO_TRUST_LIST: extra cdhash list for CLI guests (guest_sig.c; "" = unset) */
+    char diag_dir[1024];        /* HAO_DIAG_DIR: diagnostics log directory (runtime.c; "" = unset: hao_crash=1's) */
+    char swift_pop[16];         /* HAO_SWIFT_POP: "signature" or "frame" ("" = both; runtime.c callee_pop) */
+    char ignored[512];          /* comma-separated switches the tier ignored */
+    bool ready;
+} hao_opts_t;
+
+extern hao_opts_t hao_opt;
+
+/* Pure (src/opts.c, in libhaocore.a): fill o from an environment block, the
+ * HAO_FLAGS letters (v, V, i, s; NULL = none), the kernel boot arguments
+ * (NULL = none) and the environment tier (hao/aot.h). Precedence, lowest to
+ * highest: defaults, boot argument hao_<knob>=1 (every process), PID 1 only
+ * hao=FLAGS and hao_verbose=N, flags, environment. flags and the
+ * environment are filtered by hao_env_switch_allowed(); boot arguments are
+ * set by root and honoured in every tier. */
+void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *bootargs, bool pid1, int tier);
+/* Runtime (src/trust.c): once per process, from environ and kern.bootargs. */
+void hao_opts_init(const char *flags);
+
+#endif

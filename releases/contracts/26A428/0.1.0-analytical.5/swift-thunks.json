@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "kind": "hao-swift-associated-thunks",
+  "library": "confirmed-associated.thunks",
+  "library_sha256": "0655bfb897aa8f47d2ad2178db632fcf0b3ce75f29f83a59d5c37314d7277c79",
+  "keys": [
+    "k0613e88e4b899ea63993558c",
+    "k4f39ec6da741b511c305bb1a",
+    "k572ef6cce6400c8b73ddb2d5",
+    "k727244f54050944ded7cbba8",
+    "k87d9645131df7f9c1a9778d7",
+    "ke4cb6faa69cd656a6b2a5624"
+  ],
+  "symbols": [
+    "_$s12ExtensionKit03AppA5SceneP4body4BodyQzvgTj",
+    "_$s7SwiftUI12WidgetBundleP4body4BodyQzvgTj",
+    "_$s7SwiftUI13ControlWidgetP4body4BodyQzvgTj",
+    "_$s7SwiftUI19WidgetConfigurationP4body4BodyQzvgTj",
+    "_$s7SwiftUI6WidgetP4body4BodyQzvgTj",
+    "_$s9WidgetKit20ControlValueProviderP07previewD00D0QzvgTj"
+  ],
+  "source_sha256": {
+    "tools/gen_swift.py": "a4aca1b4fcebdc7e2885c1591171672f4278716c9b54ac151389a97c600bb484",
+    "tools/swift_probe.py": "a33f19b5a8c4ad8ecdd7c67570da3b8fadc93d24c24489e679060ca86bbdbc7e",
+    "tools/gen_bridge.py": "018087325e24fd7325d6bc4e3a3731fe9c327721cfe42f12ac09a5039e25c6d5",
+    "tools/hao_ifunit.py": "30cc0df47f824b906aedb33c40c9368f9f7eb54284ffe520e4d4f053a9eabee8",
+    "tools/gen_swift_hints.tsv": "be1498fc27c65a018c1375205aa5957dbe5f06ba915b73f60c8f61c770d277d1",
+    "include/hao/swift_reverse.h": "69386e89967f4f582784cd64ee771598b88c2df54515b0a583350b5657d65e8d",
+    "src/thunks.c": "2ebb85f6d3e1414cc5ee2a46069d5371c96683be69b7b94b85fb0f2db6b8e742"
+  },
+  "symbols_sha256": "eb20bc162f7c7b5e47bbf3161c05532b2ae4a9b6bbffbc637280d263a3b7616a",
+  "records_sha256": "b40ddde721d1cecdce72f1eacc0f38cd175ef833c549ffbbd2d4c0c6490abdb0",
+  "swiftc_sha256": "448457da9a8a56741f2c8c4b8931e85b7377fc009c16918cd8ac1a8a3210ea1f",
+  "recipe_sha256": "6a31eae89af1b0febf0f5f730c907d609d41e4a1d8e1c6dad709b1c218763eab",
+  "helper_sha256": "04fc9cbc95a3a01a4afbe6b4aaa575e1bc9a61e21635044a0dda18097a68e4d6",
+  "architectures": [
+    "arm64e",
+    "x86_64"
+  ],
+  "reproduction": "byte-identical compiler-generated paired thunks and v2 Copyable result companions",
+  "scope": "generated carrier/result-role contracts only; no value or application acceptance"
+}
