@@ -648,13 +648,49 @@ static bool t_adr(tctx *t, uint32_t i, uint64_t pc)
     return true;
 }
 
+/* and host, imm (rdx is scratch for a 64-bit mask that is no sign-extended imm32) */
+static void and_imm(tctx *t, int sf, int host, uint64_t m)
+{
+    if (!sf) x_alu_ri(&t->b, XAND, 0, host, (int32_t)(uint32_t)m);
+    else if ((int64_t)m == (int32_t)m) x_alu_ri(&t->b, XAND, 1, host, (int32_t)m);
+    else { x_mov_ri(&t->b, RDX, m); x_alu_rr(&t->b, XAND, 1, host, RDX); }
+}
+
+/* BFM (BFI, BFXIL, BFC): the destination field is cleared and the source
+ * field, shifted into place, is or-ed in. Decode checks are t_bitfield's. */
+static bool t_bfm(tctx *t, uint32_t i)
+{
+    int sf = BIT(i, 31);
+    unsigned immr = BITS(i, 21, 16), imms = BITS(i, 15, 10), rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), W = sf ? 64 : 32;
+    if (rd == 31) return true;
+    unsigned width, lsb;
+    if (imms >= immr) { width = imms - immr + 1; lsb = 0; }       /* BFXIL: Rn<imms:immr> -> Rd<width-1:0> */
+    else { width = imms + 1; lsb = W - immr; }                    /* BFI: Rn<imms:0> -> Rd<lsb+imms:lsb> */
+    uint64_t all = sf ? ~0ull : 0xffffffffull;
+    uint64_t fm = (width == 64 ? ~0ull : ((1ull << width) - 1)) << lsb;
+    fl_clobber(t);
+    if (fm == all) { ldx(t, RAX, rn, sf, false); stx(t, rd, RAX, false); return true; }
+    ldx(t, RAX, rd, sf, false);
+    and_imm(t, sf, RAX, ~fm & all);
+    if (rn != 31) {
+        ldx(t, RCX, rn, sf, false);
+        if (imms >= immr) { if (immr) x_shift_ri(&t->b, XSHR, sf, RCX, (uint8_t)immr); }
+        else x_shift_ri(&t->b, XSHL, sf, RCX, (uint8_t)lsb);
+        and_imm(t, sf, RCX, fm);
+        x_alu_rr(&t->b, XOR_, sf, RAX, RCX);
+    }
+    stx(t, rd, RAX, false);
+    return true;
+}
+
 static bool t_bitfield(tctx *t, uint32_t i)
 {
     int sf = BIT(i, 31);
     unsigned opc = BITS(i, 30, 29), N = BIT(i, 22), immr = BITS(i, 21, 16), imms = BITS(i, 15, 10);
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), W = sf ? 64 : 32;
-    if (N != (unsigned)sf || opc == 3 || opc == 1) return false;   /* BFM via helper */
+    if (N != (unsigned)sf || opc == 3) return false;
     if (!sf && (immr >= 32 || imms >= 32)) return false;
+    if (opc == 1) return t_bfm(t, i);
     /* flag-free fast paths */
     if (immr == 0 && opc == 2 && (imms == 7 || imms == 15)) {        /* UXTB/UXTH */
         x_mov_ld(&t->b, imms == 7 ? 1 : 2, RAX, XR(rn));
@@ -758,6 +794,25 @@ static bool t_ccmp(tctx *t, uint32_t i)
     return true;
 }
 
+/* ADC/SBC/ADCS/SBCS. Guest C is NOT CF: SBB computes a - b - !C as it
+ * stands and leaves CF = borrow = !C; ADC needs CF = C on the way in and
+ * leaves C on the way out, hence the CMCs. N, Z and V are SF, ZF and OF. */
+static bool t_adc(tctx *t, uint32_t i)
+{
+    int sf = BIT(i, 31), op = BIT(i, 30), S = BIT(i, 29);
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    if (BITS(i, 15, 10)) return false;                            /* RMIF, SETF8/16: helper */
+    fl_load(t);
+    if (!S) fl_clobber(t);                                         /* EFLAGS still holds NZCV until the adc/sbb */
+    ldx(t, RAX, rn, sf, false);
+    ldx(t, RCX, rm, sf, false);
+    if (!op) x_cmc(&t->b);
+    x_alu_rr(&t->b, op ? XSBB : XADC, sf, RAX, RCX);
+    if (S) { if (!op) x_cmc(&t->b); fl_defined(t); }
+    stx(t, rd, RAX, false);
+    return true;
+}
+
 static bool t_dp3(tctx *t, uint32_t i)
 {
     int sf = BIT(i, 31);
@@ -803,7 +858,37 @@ static bool t_dp2(tctx *t, uint32_t i)
 {
     int sf = BIT(i, 31);
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), opc = BITS(i, 15, 10);
-    if (opc < 8 || opc > 11 || BIT(i, 29)) return false;   /* shifts only; div/crc/pacga via helper */
+    if (BIT(i, 29)) return false;
+    if (opc == 2 || opc == 3) {
+        /* UDIV/SDIV. A64 defines what x86 traps on: x / 0 = 0, and the
+         * most negative value / -1 is itself (every x / -1 is -x). */
+        fl_clobber(t);
+        ldx(t, RCX, rm, sf, false);
+        ldx(t, RAX, rn, sf, false);
+        size_t zero = x_jrcxz8(&t->b), neg = 0, d1, d2 = 0;      /* a 32-bit divisor is zero-extended in rcx */
+        if (opc == 3) {
+            x_alu_ri(&t->b, XCMP, sf, RCX, -1);
+            neg = x_jcc8(&t->b, XCC_E);
+            x_cqo(&t->b, sf);
+            x_unary(&t->b, XIDIV, sf, RCX);
+        } else {
+            x_mov_ri(&t->b, RDX, 0);
+            x_unary(&t->b, XDIV, sf, RCX);
+        }
+        d1 = x_jmp8(&t->b);
+        if (opc == 3) {
+            x_patch8(&t->b, neg, xb_len(&t->b));
+            x_unary(&t->b, XNEG, sf, RAX);
+            d2 = x_jmp8(&t->b);
+        }
+        x_patch8(&t->b, zero, xb_len(&t->b));
+        x_mov_ri(&t->b, RAX, 0);
+        x_patch8(&t->b, d1, xb_len(&t->b));
+        if (opc == 3) x_patch8(&t->b, d2, xb_len(&t->b));
+        stx(t, rd, RAX, false);
+        return true;
+    }
+    if (opc < 8 || opc > 11) return false;                 /* shifts; crc/pacga via helper */
     static const int ops[4] = {XSHL, XSHR, XSAR, XROR};
     fl_clobber(t);
     ldx(t, RCX, rm, sf, false);
@@ -811,6 +896,23 @@ static bool t_dp2(tctx *t, uint32_t i)
     x_shift_cl(&t->b, ops[opc - 8], sf, RAX);
     stx(t, rd, RAX, false);
     return true;
+}
+
+/* rax = (rax & m) << sh | (rax >> sh) & m; rcx, rdx scratch */
+static void swap_step(tctx *t, int sf, uint64_t m, unsigned sh)
+{
+    x_mov_rr(&t->b, sf, RCX, RAX);
+    x_shift_ri(&t->b, XSHR, sf, RCX, (uint8_t)sh);
+    if (sf) {
+        x_mov_ri(&t->b, RDX, m);
+        x_alu_rr(&t->b, XAND, 1, RAX, RDX);
+        x_alu_rr(&t->b, XAND, 1, RCX, RDX);
+    } else {
+        x_alu_ri(&t->b, XAND, 0, RAX, (int32_t)(uint32_t)m);
+        x_alu_ri(&t->b, XAND, 0, RCX, (int32_t)(uint32_t)m);
+    }
+    x_shift_ri(&t->b, XSHL, sf, RAX, (uint8_t)sh);
+    x_alu_rr(&t->b, XOR_, sf, RAX, RCX);
 }
 
 static bool t_dp1(tctx *t, uint32_t i)
@@ -823,6 +925,27 @@ static bool t_dp1(tctx *t, uint32_t i)
     if ((opc == 3 && sf) || (opc == 2 && !sf)) { /* REV */
         ldx(t, RAX, rn, sf, false);
         x_bswap(&t->b, sf, RAX);
+        stx(t, rd, RAX, false);
+        return true;
+    }
+    if (opc == 0 || opc == 1) {                  /* RBIT: bytes, then nibbles, pairs, bits; REV16 */
+        fl_clobber(t);
+        ldx(t, RAX, rn, sf, false);
+        if (opc == 0) {
+            x_bswap(&t->b, sf, RAX);
+            swap_step(t, sf, 0x0f0f0f0f0f0f0f0full, 4);
+            swap_step(t, sf, 0x3333333333333333ull, 2);
+            swap_step(t, sf, 0x5555555555555555ull, 1);
+        } else
+            swap_step(t, sf, 0x00ff00ff00ff00ffull, 8);
+        stx(t, rd, RAX, false);
+        return true;
+    }
+    if (opc == 2) {                              /* REV32 (sf; REV Wd is above) */
+        fl_clobber(t);
+        ldx(t, RAX, rn, 1, false);
+        x_bswap(&t->b, 1, RAX);
+        x_shift_ri(&t->b, XROR, 1, RAX, 32);
         stx(t, rd, RAX, false);
         return true;
     }
@@ -840,11 +963,103 @@ static bool t_dp1(tctx *t, uint32_t i)
     return false;
 }
 
+/* zero-extend the low `bytes` of a host register in place (no flags) */
+static void zext(tctx *t, int host, int bytes)
+{
+    if (bytes == 1) x_movzx8_rr(&t->b, host, host);
+    else if (bytes == 2) x_movzx16_rr(&t->b, host, host);
+    else if (bytes == 4) x_mov_rr(&t->b, 0, host, host);
+}
+
+/*
+ * LSE atomic memory operations (LDADD, LDCLR, LDEOR, LDSET, LDSMAX, LDSMIN,
+ * LDUMAX, LDUMIN, SWP, each in four sizes and four orderings; ST<op> is
+ * Rt = ZR) and LDAPR. x86 locked instructions are sequentially consistent,
+ * which is at least every A64 ordering. SWP is xchg and LDADD is lock xadd;
+ * the others have no x86 instruction that returns the old value, so they
+ * retry lock cmpxchg, as the interpreter does. Rt gets the old value
+ * zero-extended.
+ */
+static bool t_atomic(tctx *t, uint32_t i)
+{
+    int bytes = 1 << BITS(i, 31, 30);
+    unsigned rs = BITS(i, 20, 16), o3 = BIT(i, 15), op = BITS(i, 14, 12), rn = BITS(i, 9, 5), rt = BITS(i, 4, 0);
+    if (o3 && op == 4) {                                           /* LDAPR */
+        if (!BIT(i, 23) || BIT(i, 22) || rs != 31) return false;
+        ldx(t, RAX, rn, 1, true);
+        x_mov_ld(&t->b, bytes, RDX, xm(RAX, 0));
+        stx(t, rt, RDX, false);
+        return true;
+    }
+    if (o3 && op) return false;
+    if (o3) {                                                      /* SWP: xchg leaves EFLAGS alone */
+        ldx(t, RDX, rs, 1, false);
+        ldx(t, RAX, rn, 1, true);
+        x_xchg_mr(&t->b, bytes, xm(RAX, 0), RDX);
+        zext(t, RDX, bytes);
+        stx(t, rt, RDX, false);
+        return true;
+    }
+    fl_clobber(t);
+    if (op == 0) {                                                 /* LDADD */
+        ldx(t, RDX, rs, 1, false);
+        ldx(t, RAX, rn, 1, true);
+        x_lock_xadd(&t->b, bytes, xm(RAX, 0), RDX);
+        zext(t, RDX, bytes);
+        stx(t, rt, RDX, false);
+        return true;
+    }
+    /* rcx = address, rsi = operand, rax = old value (zero-extended), rdx = new value */
+    ldx(t, RCX, rn, 1, true);
+    if (rs == 31) x_mov_ri(&t->b, RSI, 0);
+    else if ((op == 4 || op == 5) && bytes < 8) x_movs_ld(&t->b, bytes, 1, RSI, XR(rs));   /* signed compare */
+    else x_mov_ld(&t->b, op >= 6 ? bytes : 8, RSI, XR(rs));
+    if (op == 1) x_unary(&t->b, XNOT, 1, RSI);                    /* LDCLR: and with the complement */
+    x_mov_ld(&t->b, bytes, RAX, xm(RCX, 0));
+    size_t loop = xb_len(&t->b);
+    if ((op == 4 || op == 5) && bytes < 8) x_movsx_rr(&t->b, bytes, 1, RDX, RAX);
+    else x_mov_rr(&t->b, 1, RDX, RAX);
+    switch (op) {
+    case 1: x_alu_rr(&t->b, XAND, 1, RDX, RSI); break;
+    case 2: x_alu_rr(&t->b, XXOR, 1, RDX, RSI); break;
+    case 3: x_alu_rr(&t->b, XOR_, 1, RDX, RSI); break;
+    default: {                                                     /* new = old unless the operand wins */
+        static const int win[4] = {XCC_L, XCC_G, XCC_B, XCC_A};   /* SMAX, SMIN, UMAX, UMIN */
+        x_alu_rr(&t->b, XCMP, 1, RDX, RSI);
+        x_cmov_rr(&t->b, win[op - 4], 1, RDX, RSI);
+        break;
+    }
+    }
+    x_lock_cmpxchg(&t->b, bytes, xm(RCX, 0), RDX);               /* a failure reloads al/ax/eax/rax */
+    x_patch8(&t->b, x_jcc8(&t->b, XCC_NE), loop);
+    stx(t, rt, RAX, false);
+    return true;
+}
+
+/* LDRAA/LDRAB (arm64e): a 64-bit load at Xn + simm10 * 8, with optional
+ * pre-index writeback. Pointers are unsigned here (see a64_interp.c), so
+ * the authentication of the base is the identity. */
+static bool t_ldraa(tctx *t, uint32_t i)
+{
+    unsigned rt = BITS(i, 4, 0), rn = BITS(i, 9, 5);
+    int32_t off = (int32_t)sext((uint64_t)BIT(i, 22) << 9 | BITS(i, 20, 12), 10) * 8;
+    if (BIT(i, 11) && rn != 31 && rn == rt) return false;         /* UNDEFINED */
+    ldx(t, RAX, rn, 1, true);
+    x_mov_ld(&t->b, 8, RDX, xm(RAX, off));
+    stx(t, rt, RDX, false);
+    if (BIT(i, 11)) { x_lea(&t->b, 1, RAX, xm(RAX, off)); stx(t, rn, RAX, true); }
+    return true;
+}
+
 /* address = base(rn, SP ok) [+ offset] into RAX, returns xmem relative to RAX */
 static bool t_ldst_reg(tctx *t, uint32_t i)
 {
     unsigned size = BITS(i, 31, 30), opc = BITS(i, 23, 22), rt = BITS(i, 4, 0), rn = BITS(i, 9, 5);
     int V = BIT(i, 26), bytes, kind;   /* kind: 0 st, 1 ldzx, 2 ldsx64, 3 ldsx32 */
+    if (!V && !BIT(i, 24) && BIT(i, 21) && BITS(i, 11, 10) != 2) {
+        if (BITS(i, 11, 10) == 0) return t_atomic(t, i);
+        return size == 3 && t_ldraa(t, i);
+    }
     if (V) {
         if (BIT(opc, 1)) { if (size) return false; bytes = 16; }
         else bytes = 1 << size;
@@ -885,7 +1100,7 @@ static bool t_ldst_reg(tctx *t, uint32_t i)
         if (scale == 16) { fl_clobber(t); x_shift_ri(&t->b, XSHL, 1, RCX, 4); scale = 1; }
         m = xmi(RAX, RCX, scale, 0);
     } else {
-        return false;   /* atomics, LDRAA: helper */
+        return false;   /* SIMD encodings of the atomics/LDRAA space: UNDEFINED, helper */
     }
     if (V) {
         if (kind) {
@@ -1028,8 +1243,23 @@ static bool t_ordered(tctx *t, uint32_t i)
 {
     /* LDAR/STLR (o2=1, o1=0): x86 TSO loads are acquire; release-store via xchg */
     unsigned size = BITS(i, 31, 30), L = BIT(i, 22), rt = BITS(i, 4, 0), rn = BITS(i, 9, 5);
-    if ((i & 0x3FA00000) != 0x08800000) return false;
     int bytes = 1 << size;
+    if ((i & 0x3FA00000) == 0x08A00000) {
+        /* CAS{,A,L,AL}{B,H,,}: lock cmpxchg compares al/ax/eax/rax with
+         * memory and loads it on a mismatch; Rs gets the old value
+         * zero-extended either way. CASP and the exclusives: helper. */
+        unsigned rs = BITS(i, 20, 16);
+        if (BITS(i, 14, 10) != 31) return false;
+        fl_clobber(t);
+        ldx(t, RAX, rs, 1, false);
+        ldx(t, RDX, rt, 1, false);
+        ldx(t, RCX, rn, 1, true);
+        x_lock_cmpxchg(&t->b, bytes, xm(RCX, 0), RDX);
+        zext(t, RAX, bytes);
+        stx(t, rs, RAX, false);
+        return true;
+    }
+    if ((i & 0x3FA00000) != 0x08800000) return false;
     ldx(t, RAX, rn, 1, true);
     if (L) { x_mov_ld(&t->b, bytes, RDX, xm(RAX, 0)); stx(t, rt, RDX, false); }
     else { ldx(t, RDX, rt, 1, false); x_xchg_mr(&t->b, bytes, xm(RAX, 0), RDX); }
@@ -1248,6 +1478,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         if ((i & 0x1F000000) == 0x0A000000) ok = t_logical_shift(t, i);
         else if ((i & 0x1F200000) == 0x0B000000) ok = t_addsub_shift(t, i);
         else if ((i & 0x1F200000) == 0x0B200000) ok = t_addsub_ext(t, i);
+        else if ((i & 0x1FE00000) == 0x1A000000) ok = t_adc(t, i);
         else if ((i & 0x1FE00000) == 0x1A800000) ok = t_csel(t, i);
         else if ((i & 0x1FE00000) == 0x1A400000) ok = t_ccmp(t, i);
         else if ((i & 0x1F000000) == 0x1B000000) ok = t_dp3(t, i);
