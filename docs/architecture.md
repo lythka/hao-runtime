@@ -38,8 +38,9 @@ Guest `__TEXT` is mapped non-executable. hao runs it in one of three modes:
 - **Interpreter** (`src/a64_interp.c`, `src/a64_simd.c`, `src/a64_fp.c`): the
   reference implementation, checked against native ARM by the oracle tests.
 - **AOT** (`include/hao/aot.h`): caches of translated code bound to the guest
-  image and the runtime that produced them, loaded only from trusted
-  directories and validated before use.
+  image's code (its cdhash) and the runtime that produced them, loaded only
+  from trusted directories and validated before use
+  ([security model](security-model.md#aot-caches)).
 
 ## Native boundary
 

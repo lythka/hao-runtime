@@ -902,3 +902,15 @@ out:
     free(blob);
     return rc;
 }
+
+/* The cdhash of a signature held in memory (the AOT loader's identity of a
+ * signed image, jit.c): sig_parse's structure checks and nothing else. */
+bool hao_guest_sig_cdhash(const uint8_t *blob, size_t len, uint8_t cdhash[CS_CDHASH_LEN_], uint8_t *hash_type, char *why, size_t n)
+{
+    sig_info s;
+    if (len > CS_MAX_BLOB_) { snprintf(why, n, "a %zu-byte signature", len); return false; }
+    if (!sig_parse(blob, len, &s, why, n)) return false;
+    memcpy(cdhash, s.cdhash, CS_CDHASH_LEN_);
+    *hash_type = s.h.hashType;
+    return true;
+}

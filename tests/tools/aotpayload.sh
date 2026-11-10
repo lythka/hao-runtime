@@ -10,14 +10,15 @@
 # at sbin/launchd, usr/libexec/xpcproxy and usr/bin/prog (+ a hard link usr/sbin/prog2).
 # Cases:
 #  A  embed mode --aot: one cache per file (the hard link shares one), named by the
-#     program's arm64e LC_UUID, bound to the payload's libhao, 0644 in a 0755
+#     program's arm64e LC_UUID, bound to the payload's libhao and to the program's
+#     cdhash (as tools/hao-trust-list computes it), 0644 in a 0755
 #     root/usr/lib/hao/aot; build.json aot and aot.json agree
 #  B  hao-install.py into a copy of ROOT: caches installed, the cache directory and
 #     files get 0755/0644 whatever the payload's modes, a stale cache (another libhao)
-#     is removed; install.json aot_caches
+#     and one bound to an unsigned guest's code hash are removed; install.json aot_caches
 #  C  the installed embedded program (the fat file the installer wrote) under build/hao
 #     -v with HAO_CACHE at the installed directory: the cache loads (guest UUID, load
-#     commands and libhao all match) and the output is the program's; HAO_NO_AOT=1 the same
+#     commands, cdhash and libhao all match) and the output is the program's; HAO_NO_AOT=1 the same
 #  D  root ownership: the installed paths pass the loader's system-directory rules
 #     (tests/aot/installed.c) once root-owned, as hao-install.py makes them in the
 #     image builder, and fail on the owner alone as this non-root run left them
@@ -95,22 +96,37 @@ assert b['bytes'] == sum(os.path.getsize(os.path.join(d, n)) for n in os.listdir
 assert sorted(x['uuid'] for x in a['programs']) == sorted(uu), a['programs']
 assert [x['paths'] for x in a['programs'] if x['uuid'] == uu[2]] == [['usr/bin/prog', 'usr/sbin/prog2']], 'hard link'
 for n in os.listdir(d):
-    h = open(os.path.join(d, n), 'rb').read(96)
+    h = open(os.path.join(d, n), 'rb').read(136)
     assert h[:8] == b'HAOAOT2\0' and h[16:32].hex() == n[:32] and h[32:48].hex() == gen, n
+    assert int.from_bytes(h[8:12], 'little') == 6 and int.from_bytes(h[12:16], 'little') == 136, 'format of ' + n
+    assert int.from_bytes(h[96:100], 'little') == 1 and not any(h[124:136]), 'code identity kind of ' + n
     assert os.path.relpath(os.path.join(d, n), p) in json.load(open(os.path.join(p, 'build.json')))['files'], 'hash of ' + n
 PY
+
+# every cache is bound to its program's cdhash (computed independently by tools/hao-trust-list)
+okc=1
+for f in sbin/launchd usr/libexec/xpcproxy usr/bin/prog; do
+    u=$(uuid_of "$R/$f"); want_cd=$(python3 -I "$repo/tools/hao-trust-list" --cdhash "$R/$f" | awk '{print $1}')
+    got_cd=$(xxd -s 104 -l 20 -p "$A/$u.aot" 2>/dev/null)
+    [ ${#want_cd} = 40 ] && [ "$got_cd" = "$want_cd" ] || { okc=0; bad "A $f: cache header cdhash [$got_cd], the program's is [$want_cd]"; }
+done
+[ $okc = 1 ] && pass "A each cache header carries its program's cdhash (tools/hao-trust-list --cdhash)"
 
 # --- B: hao-install.py, with modes the installer must fix and a stale cache
 S=$OUT/sys
 cp -R "$R" "$S"
 mkdir -p "$S/usr/lib/hao/aot"
 f1=$(ls "$A" | head -1)
-python3 - "$A/$f1" "$S/usr/lib/hao/aot/0123456789abcdef0123456789abcdef.aot" <<'PY'
+python3 - "$A/$f1" "$S/usr/lib/hao/aot/0123456789abcdef0123456789abcdef.aot" "$S/usr/lib/hao/aot/fedcba9876543210fedcba9876543210.aot" <<'PY'
 import sys
 b = bytearray(open(sys.argv[1], 'rb').read())
 b[16:32] = bytes.fromhex('0123456789abcdef0123456789abcdef')   # its own name ...
 b[32:48] = bytes(16)                                            # ... from another libhao build
 open(sys.argv[2], 'wb').write(b)
+b = bytearray(open(sys.argv[1], 'rb').read())
+b[16:32] = bytes.fromhex('fedcba9876543210fedcba9876543210')   # its own name, this libhao ...
+b[96:100] = (2).to_bytes(4, 'little')                           # ... bound to an unsigned guest's code hash
+open(sys.argv[3], 'wb').write(b)
 PY
 chmod 775 "$A"; chmod 664 "$A/$f1"
 python3 -I "$P/hao-install.py" "$S" "$P" >"$OUT/b.log" 2>&1; rc=$?
@@ -118,14 +134,14 @@ chmod 755 "$A"; chmod 644 "$A/$f1"
 SA=$S/usr/lib/hao/aot
 [ $rc = 0 ] && pass "B hao-install.py rc 0: $(grep -o 'AOT caches [^;]*' "$OUT/b.log")" || bad "B hao-install.py rc $rc: $(tail -5 "$OUT/b.log")"
 got=$(cd "$SA" && ls | sort | tr '\n' ' ')
-[ "$got" = "$want" ] && pass "B installed caches are the payload's; the stale one is removed" || bad "B installed: [$got]"
+[ "$got" = "$want" ] && pass "B installed caches are the payload's; the stale one and the one for unsigned code are removed" || bad "B installed: [$got]"
 modes=$(stat -f %Lp "$SA"; for f in "$SA"/*; do stat -f %Lp "$f"; done | sort -u)
 [ "$(echo $modes)" = "755 644" ] && pass "B installed cache directory 0755, caches 0644 (payload had 0775/0664)" || bad "B modes: $(echo $modes)"
 python3 -c '
 import json, sys
 r = json.load(open(sys.argv[1]))["aot_caches"]
-assert (r["caches"], r["libhao_uuid"], r["removed_stale"]) == (3, sys.argv[2], ["0123456789abcdef0123456789abcdef.aot"]), r
-' "$S/usr/lib/hao/install.json" "$GEN" && pass "B install.json aot_caches: 3 caches of libhao $GEN, 1 stale removed" || bad "B install.json aot_caches: $(grep -A6 aot_caches "$S/usr/lib/hao/install.json")"
+assert (r["caches"], r["libhao_uuid"], r["removed_stale"]) == (3, sys.argv[2], ["0123456789abcdef0123456789abcdef.aot", "fedcba9876543210fedcba9876543210.aot"]), r
+' "$S/usr/lib/hao/install.json" "$GEN" && pass "B install.json aot_caches: 3 caches of libhao $GEN, 2 removed (another libhao; unsigned code)" || bad "B install.json aot_caches: $(grep -A6 aot_caches "$S/usr/lib/hao/install.json")"
 for f in "$SA"/*.aot; do cmp -s "$f" "$A/$(basename "$f")" || bad "B $(basename "$f") differs from the payload's"; done
 
 # --- C: the installed (embedded) program loads its installed cache

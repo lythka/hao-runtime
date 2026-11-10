@@ -2,11 +2,29 @@
  * hao — AOT cache format and trust policy.
  *
  * An AOT cache (<LC_UUID>.aot) is x86_64 code that hao copies into its
- * executable code cache, so it is trusted exactly as far as the file and
- * every directory above it are: owned by root (or, for an ordinary user
- * process, by that user), not writable by anyone else, and not symlinks.
- * The format checks below catch corruption and caches from another guest
- * or another hao build; they cannot make an untrusted file safe.
+ * executable code cache. Two things make that safe, and both are needed:
+ *
+ *  - who could write it: the file and every directory above it are owned by
+ *    root (or, for an ordinary user process, by that user), not writable by
+ *    anyone else, and not symlinks;
+ *  - what it was translated from: the header carries a cryptographic
+ *    identity of the guest code (HAO_AOT_ID_*), and a cache is used only for
+ *    an image whose own code gives the same identity. The LC_UUID, vmsize
+ *    and load-command hash only name a guest; a file with another program's
+ *    header and its own instructions has all three.
+ *
+ * The code identity of a signed guest is the cdhash of the slice hao runs
+ * (the hash of its best CodeDirectory, which holds a hash of every page of
+ * the slice: header, load commands and code). `hao --aot` records it only
+ * after checking every page against it; the loader recomputes it from the
+ * signature in the image it mapped. The identity of an unsigned guest is a
+ * SHA-256 over its mach header, load commands and executable segments, which
+ * the loader has to compute over the mapped image each time it finds a
+ * candidate cache; such caches are never written to, or loaded from, a
+ * system directory.
+ *
+ * The other format checks below catch corruption and caches from another
+ * hao build; they cannot make an untrusted file safe.
  *
  * The pure parts (format validation, the directory list, the owner/mode
  * rules, the environment tiers) live in aot_policy.c, which is in
@@ -21,35 +39,50 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-/* ------------------------------------------------------------ format v5
+/* ------------------------------------------------------------ format v6
  * file = hdr | ents[nblocks] | links[nlinks] | code[code_size]
  * code[0..15] is the base slot (the image base, patched at load).
  * payload_hash = hao_aot_hash64(ents..end of code). It is an integrity
- * check only; trust comes from ownership. */
+ * check only; trust comes from ownership and from the code identity. */
 #define HAO_AOT_MAGIC "HAOAOT2"
-#define HAO_AOT_VERSION 5
+#define HAO_AOT_VERSION 6
 #define HAO_AOT_MAX_FILE (1024ull << 20)
 
+/* What code_id holds. */
+enum {
+    HAO_AOT_ID_CDHASH = 1,  /* code_id[0..19]: cdhash of the slice's best CodeDirectory, rest zero;
+                             * id_hash: that CodeDirectory's hash type (cs_blobs.h CS_HASHTYPE_*) */
+    HAO_AOT_ID_CODE = 2,    /* code_id: hao_aot_code_id() of an unsigned slice; id_hash 0 */
+};
+#define HAO_AOT_ID_LEN 32
+#define HAO_AOT_CDHASH_LEN 20
+
 typedef struct {
-    char magic[8];
-    uint32_t version, hdr_size;
-    uint8_t uuid[16];       /* guest LC_UUID */
-    uint8_t gen[16];        /* LC_UUID of the libhao that generated the code */
-    uint64_t vmsize;        /* guest image vmsize */
-    uint64_t guest_id;      /* hao_aot_guest_id() of the guest slice */
-    uint32_t nblocks, nlinks;
-    uint64_t code_size, file_size, payload_hash;
-} hao_aot_hdr;
+    char magic[8];                               /*   0 */
+    uint32_t version, hdr_size;                  /*   8, 12 */
+    uint8_t uuid[16];                            /*  16: guest LC_UUID */
+    uint8_t gen[16];                             /*  32: LC_UUID of the libhao that generated the code */
+    uint64_t vmsize;                             /*  48: guest image vmsize */
+    uint64_t guest_id;                           /*  56: hao_aot_guest_id() of the guest slice */
+    uint32_t nblocks, nlinks;                    /*  64, 68 */
+    uint64_t code_size, file_size, payload_hash; /*  72, 80, 88 */
+    uint32_t id_kind, id_hash;                   /*  96, 100: HAO_AOT_ID_* and its hash type */
+    uint8_t code_id[HAO_AOT_ID_LEN];             /* 104: the guest code's identity */
+} hao_aot_hdr;                                   /* 136 bytes */
 
 typedef struct { uint32_t guest_off, code_off; } hao_aot_ent;      /* strictly increasing code_off */
 typedef struct { uint32_t site, target; } hao_aot_link;           /* rel32 at code+site jumps to ents[target] */
 
-/* What the loading image expects. Code ranges are image-relative [lo, hi). */
+/* What the loading image expects. Code ranges are image-relative [lo, hi).
+ * id_kind says whether the image is signed; code_id (with id_hash) is its
+ * code identity, or NULL while it has not been computed (see hao_aot_check). */
 typedef struct {
     const uint8_t *uuid, *gen;
     uint64_t vmsize, guest_id;
     const uint64_t *range_lo, *range_hi;
     int nranges;
+    uint32_t id_kind, id_hash;
+    const uint8_t *code_id;
 } hao_aot_expect;
 
 typedef struct {
@@ -60,13 +93,26 @@ typedef struct {
 } hao_aot_view;
 
 /* Validate a whole cache file held in memory. 0 = valid (v filled in);
- * -1 = rejected, with the reason in why. Never reads outside buf[0..size). */
+ * -1 = rejected, with the reason in why. Never reads outside buf[0..size).
+ * With x->code_id NULL it never returns 0: it returns HAO_AOT_NEED_ID when
+ * the header names this guest, this hao build and this kind of identity, so
+ * the caller computes the identity (an unsigned guest's costs a hash of its
+ * code) only for a file that can still match, and checks again. */
+#define HAO_AOT_NEED_ID 1
 int hao_aot_check(const void *buf, uint64_t size, const hao_aot_expect *x, hao_aot_view *v, char *why, size_t n);
 
 uint64_t hao_aot_hash64(const void *p, size_t n, uint64_t seed);
-/* Identity of a guest slice beyond its UUID: slice size, mach header and
- * load commands (segment layout, code-signature location). */
+/* A cheap name for a guest slice beyond its UUID: slice size, mach header
+ * and load commands (segment layout, code-signature location). Not
+ * cryptographic and not a statement about the code: see code_id. */
 uint64_t hao_aot_guest_id(const void *mach_header, uint64_t avail, uint64_t slice_size);
+
+/* The code identity of an unsigned slice: SHA-256 over a domain tag, the
+ * mach header and load commands (cmds_len bytes at mach_header), and each
+ * executable range as mapped (image-relative [lo, hi) and its hi - lo bytes
+ * at code[k]). Lengths and offsets are hashed as little-endian 64-bit. */
+void hao_aot_code_id(const void *mach_header, uint64_t cmds_len, const uint64_t *lo, const uint64_t *hi,
+                     const uint8_t *const *code, int nranges, uint8_t out[HAO_AOT_ID_LEN]);
 
 /* ------------------------------------------------- environment trust
  * OPEN:    an ordinary user's process. Every HAO_* switch is honoured
@@ -117,6 +163,13 @@ enum { HAO_AOT_SYS_RO, HAO_AOT_SYS, HAO_AOT_USER, HAO_AOT_EXPLICIT };
 #define HAO_AOT_SYS_RO_DIR "/usr/lib/hao/aot"
 #define HAO_AOT_SYS_DIR "/private/var/db/hao"
 #define HAO_AOT_MAX_DIRS 3
+
+/* Is this cache directory one every process trusts: a system kind, or a
+ * canonical path that is, or lies inside, one of the system directories
+ * (HAO_CACHE may name them)? Such a directory holds caches for signed code
+ * only: `hao --aot` writes no HAO_AOT_ID_CODE cache there and the loader
+ * takes none from there. */
+bool hao_aot_dir_is_system(int kind, const char *canon);
 
 typedef struct { char path[1024]; int kind; } hao_aot_dir;
 

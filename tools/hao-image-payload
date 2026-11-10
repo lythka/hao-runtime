@@ -358,10 +358,15 @@ def one(p):
     m = LINE.match(lines[-1]) if rc == 0 and lines else None
     if m:
         name = os.path.join(aotdir, m[3] + '.aot')
-        h = open(name, 'rb').read(96) if os.path.isfile(name) else b''   # hao_aot_hdr: 96 bytes, nblocks at 64
-        nblocks = struct.unpack_from('<I', h, 64)[0] if len(h) == 96 else -1
-        if h[:8] != b'HAOAOT2\0' or struct.unpack_from('<I', h, 8)[0] != 5 or h[16:32].hex() != m[3] or h[32:48].hex() != gen:
-            p.update(status='error', why='%s: not a v5 cache of this guest and this libhao' % name)
+        # hao_aot_hdr (include/hao/aot.h): 136 bytes, nblocks at 64, the kind of code identity at 96
+        h = open(name, 'rb').read(136) if os.path.isfile(name) else b''
+        nblocks = struct.unpack_from('<I', h, 64)[0] if len(h) == 136 else -1
+        if len(h) != 136 or h[:8] != b'HAOAOT2\0' or struct.unpack_from('<II', h, 8) != (6, 136) or h[16:32].hex() != m[3] or h[32:48].hex() != gen:
+            p.update(status='error', why='%s: not a v6 cache of this guest and this libhao' % name)
+        elif struct.unpack_from('<I', h, 96)[0] != 1:
+            # bound to a code hash, not a cdhash: hao takes no such cache from /usr/lib/hao/aot
+            os.unlink(name)
+            p.update(status='error', why='not code signed: a system cache directory serves signed code only')
         elif nblocks == 0:
             os.unlink(name)
             p.update(status='skipped', why='nothing to translate', uuid=m[3])

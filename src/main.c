@@ -220,12 +220,8 @@ static int aot_main(int argc, char **argv)
     int bad = 0;
     hao_opts_init(NULL);
     hao_verbose = 1;
-    for (int k = 2; k < argc; k++) {
-        char err[512];
-        hao_image *im = hao_map_image_only(argv[k], err, sizeof err);
-        if (!im) { fprintf(stderr, "hao-aot: %s\n", err); bad++; continue; }
-        if (hao_aot_generate_path(im, true) < 0) bad++;
-    }
+    for (int k = 2; k < argc; k++)
+        if (hao_aot_generate_file(argv[k], true) < 0) bad++;   /* maps a private copy of the file (jit.c) */
     return bad ? 1 : 0;
 }
 
