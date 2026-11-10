@@ -4,9 +4,21 @@
  * are folded into one hash per instruction. The output must equal a native arm64 run's
  * (tests/guest/jitinsns.sh). */
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/ucontext.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define SET_PC_RAW(uc, a) do { void (*f_)(void) = ptrauth_sign_unauthenticated((void (*)(void))(a), ptrauth_key_function_pointer, 0); \
+        __darwin_arm_thread_state64_set_pc_fptr((uc)->uc_mcontext->__ss, f_); } while (0)
+#else
+#define SET_PC_RAW(uc, a) ((uc)->uc_mcontext->__ss.__pc = (a))
+#endif
+#define SS(uc) ((uc)->uc_mcontext->__ss)
+#define GET_PC(uc) ((uintptr_t)__darwin_arm_thread_state64_get_pc(SS(uc)))
 
 #define NOINL __attribute__((noinline))
 static const uint64_t vals[] = {
@@ -238,6 +250,63 @@ VEC2(t_sshr2, "sshr v2.2s, v0.2s, #5")
 VEC2(t_sshr3, "sshr v2.2d, v1.2d, #7")
 VEC2(t_sshr4, "sshr d2, d0, #64")
 
+/* Signal contexts. A load faults with NZCV live from the compare before
+ * it: the handler must see the load's pc, the compare's NZCV and x0, and
+ * what it writes to cpsr and x3 must be what the code after the load sees,
+ * whether it skips the load (pc + 4) or repairs the page and returns to it. */
+static volatile uint64_t sg_pc, sg_seen_pc, sg_seen_nzcv, sg_seen_x0, sg_flip, sg_count, sg_repair;
+static uint64_t *sg_page;
+static void sg_fault(int sig, siginfo_t *si, void *ctx)
+{
+    (void)sig; (void)si;
+    ucontext_t *uc = ctx;
+    uintptr_t pc = GET_PC(uc);
+    sg_seen_pc = pc - sg_pc;
+    sg_seen_nzcv = SS(uc).__cpsr >> 28;
+    sg_seen_x0 = SS(uc).__x[0];
+    sg_count++;
+    SS(uc).__cpsr ^= (uint32_t)sg_flip << 28;
+    if (sg_repair) mprotect(sg_page, 16384, PROT_READ | PROT_WRITE);
+    else { SS(uc).__x[3] = 0x1234 + sg_count; SET_PC_RAW(uc, pc + 4); }
+}
+NOINL static uint64_t sg_probe(uint64_t a, uint64_t b, uint64_t *p, uint64_t *fl)
+{
+    register uint64_t x0 __asm__("x0") = a, x1 __asm__("x1") = b;
+    register uint64_t *x2 __asm__("x2") = p;
+    register uint64_t x3 __asm__("x3") = 0, x4 __asm__("x4") = 0;
+    register volatile uint64_t *x5 __asm__("x5") = &sg_pc;
+    __asm__ volatile("adr x9, 1f\nstr x9, [x5]\ncmp x0, x1\n1: ldr x3, [x2]\nmrs x4, nzcv"
+                     : "+r"(x3), "+r"(x4) : "r"(x0), "r"(x1), "r"(x2), "r"(x5) : "cc", "memory", "x9");
+    *fl = x4;
+    return x3;
+}
+static void sigctx(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = sg_fault;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sg_page = mmap(NULL, 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    for (int repair = 0; repair < 2; repair++) {
+        uint64_t h = 14695981039346656037ull;
+        for (unsigned i = 0; i < NV; i += 3)
+            for (unsigned j = 0; j < NV; j += 5)
+                for (unsigned flip = 0; flip < 16; flip += 5) {
+                    uint64_t fl = 0, r;
+                    sg_repair = (uint64_t)repair;
+                    sg_flip = flip;
+                    if (repair) { sg_page[0] = vals[i] ^ 0x77; mprotect(sg_page, 16384, PROT_NONE); }
+                    r = sg_probe(vals[i], vals[j], repair ? sg_page : (uint64_t *)(uintptr_t)0x10, &fl);
+                    h = mix(mix(mix(mix(mix(mix(h, r), fl), sg_seen_pc), sg_seen_nzcv), sg_seen_x0), sg_count);
+                }
+        printf("%-10s %016llx\n", repair ? "sig-repair" : "sig-skip", (unsigned long long)h);
+    }
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGBUS, SIG_DFL);
+}
+
 typedef uint64_t (*fn2)(uint64_t, uint64_t, uint64_t *);
 static void run(const char *name, fn2 f)
 {
@@ -300,6 +369,7 @@ int main(void)
     R(smov0); R(smov1); R(smov2); R(smov3); R(smov4);
     R(shl0); R(shl1); R(shl2); R(shl3); R(shl4); R(shl5); R(shl6);
     R(ushr0); R(ushr1); R(ushr2); R(ushr3); R(ushr4); R(ushr5); R(sshr0); R(sshr1); R(sshr2); R(sshr3); R(sshr4);
+    sigctx();
     pthread_t th[NT];
     for (uintptr_t k = 0; k < NT; k++) pthread_create(&th[k], NULL, worker, (void *)k);
     for (int k = 0; k < NT; k++) pthread_join(th[k], NULL);

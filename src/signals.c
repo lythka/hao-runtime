@@ -499,7 +499,7 @@ void hao_sig_resume_print(FILE *f)
 
 static uint64_t rflags_to_image(uint64_t rf)
 {
-    return HAO_RF_BASE | (rf & (HAO_RF_CF | HAO_RF_ZF | HAO_RF_SF | HAO_RF_OF));
+    return hao_flags_from_rflags(rf);
 }
 
 static void set_default(int sig)
@@ -597,8 +597,7 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
     if ((m->ss.cpsr ^ orig.ss.cpsr) >> 28) {
         hao_set_nzcv(&tmp, m->ss.cpsr >> 28);
         if (flags_in_host && !moved)
-            hs->__rflags = (hs->__rflags & ~(uint64_t)(HAO_RF_CF | HAO_RF_ZF | HAO_RF_SF | HAO_RF_OF)) |
-                           (tmp.flags & (HAO_RF_CF | HAO_RF_ZF | HAO_RF_SF | HAO_RF_OF));
+            hs->__rflags = hao_flags_to_rflags(tmp.flags, hs->__rflags);
         else c->flags = tmp.flags;
     } else if (flags_in_host && moved) c->flags = fl_image;
     if (m->ss.pc != orig.ss.pc && !moved && hao_verbose)

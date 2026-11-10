@@ -345,6 +345,9 @@ int main(int argc, char **argv)
     begin(); x_mfence(&B); end("mfence");
     begin(); x_int3(&B); end("int3");
     begin(); x_nop(&B); end("nop");
+    begin(); x_lahf(&B); end("lahf");
+    begin(); x_sahf(&B); end("sahf");
+    begin(); x_add_al_i8(&B, 0x7f); end("add al, 127");
     begin(); x_pushfq(&B); end("pushfq");
     begin(); x_popfq(&B); end("popfq");
     begin(); x_cmc(&B); end("cmc");
