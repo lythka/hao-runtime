@@ -314,23 +314,31 @@ static void trap_os_log_internal(hao_thread *t, uint64_t a)
     vlog((void *)(uintptr_t)c->x[0], (void *)(uintptr_t)c->x[1], (uint8_t)c->x[2], (const char *)(uintptr_t)c->x[3], va);
 }
 
+typedef const void *cfref;
+static cfref (*cf_fmt_args)(cfref alloc, cfref opts, cfref fmt, void *va);
+static void (*cf_log)(int32_t level, cfref fmt, ...);
+static void (*cf_release)(cfref);
+static cfref cf_percent_at;
+static pthread_once_t cf_once = PTHREAD_ONCE_INIT;
+
+static void cflog_init(void)
+{
+    cfref (*with_cstr)(cfref, const char *, uint32_t) = (cfref (*)(cfref, const char *, uint32_t))dlsym(RTLD_DEFAULT, "CFStringCreateWithCString");
+    cf_fmt_args = (cfref (*)(cfref, cfref, cfref, void *))dlsym(RTLD_DEFAULT, "CFStringCreateWithFormatAndArguments");
+    cf_release = (void (*)(cfref))dlsym(RTLD_DEFAULT, "CFRelease");
+    cf_log = (void (*)(int32_t, cfref, ...))dlsym(RTLD_DEFAULT, "CFLog");
+    if (!cf_fmt_args || !with_cstr || !cf_release || !cf_log) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "CFLog: CoreFoundation not loaded\n"); abort(); }
+    cf_percent_at = with_cstr(NULL, "%@", 0x08000100 /* kCFStringEncodingUTF8 */);
+}
+
 static void trap_cflog(hao_thread *t, uint64_t a)
 {
     (void)a;
-    typedef const void *cfref;
-    static cfref (*fmt_args)(cfref alloc, cfref opts, cfref fmt, void *va);
-    static cfref (*with_cstr)(cfref alloc, const char *s, uint32_t enc);
-    static void (*cflog)(int32_t level, cfref fmt, ...);
-    static void (*cfrelease)(cfref);
-    static cfref percent_at;
-    if (!cflog) {
-        fmt_args = (cfref (*)(cfref, cfref, cfref, void *))dlsym(RTLD_DEFAULT, "CFStringCreateWithFormatAndArguments");
-        with_cstr = (cfref (*)(cfref, const char *, uint32_t))dlsym(RTLD_DEFAULT, "CFStringCreateWithCString");
-        cfrelease = (void (*)(cfref))dlsym(RTLD_DEFAULT, "CFRelease");
-        cflog = (void (*)(int32_t, cfref, ...))dlsym(RTLD_DEFAULT, "CFLog");
-        if (!fmt_args || !with_cstr || !cfrelease || !cflog) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "CFLog: CoreFoundation not loaded\n"); abort(); }
-        percent_at = with_cstr(NULL, "%@", 0x08000100 /* kCFStringEncodingUTF8 */);
-    }
+    pthread_once(&cf_once, cflog_init);   /* every pointer set before any thread uses one */
+    cfref (*fmt_args)(cfref, cfref, cfref, void *) = cf_fmt_args;
+    void (*cflog)(int32_t, cfref, ...) = cf_log;
+    void (*cfrelease)(cfref) = cf_release;
+    cfref percent_at = cf_percent_at;
     hao_cpu *c = &t->cpu;
     x86_va_list va;
     make_va(va, c->x[31]);
@@ -464,6 +472,7 @@ static void trap_sbx_check_token(hao_thread *t, uint64_t a)
     (void)a;
     static int (*f)(hao_atok, const char *, int, ...);
     if (!f) f = (int (*)(hao_atok, const char *, int, ...))dlsym(RTLD_DEFAULT, "sandbox_check_by_audit_token");
+    if (!f) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "sandbox_check_by_audit_token: not found\n"); abort(); }
     hao_cpu *c = &t->cpu;
     const uint64_t *sp = (const uint64_t *)(uintptr_t)c->x[31];
     int r = f(*(const hao_atok *)(uintptr_t)c->x[0], (const char *)(uintptr_t)c->x[1], (int)c->x[2],
@@ -477,6 +486,7 @@ static void trap_sbx_signal_target(hao_thread *t, uint64_t a)
     (void)a;
     static int (*f)(hao_atok, int, hao_atok, int);
     if (!f) f = (int (*)(hao_atok, int, hao_atok, int))dlsym(RTLD_DEFAULT, "sandbox_check_process_signal_target");
+    if (!f) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "sandbox_check_process_signal_target: not found\n"); abort(); }
     hao_cpu *c = &t->cpu;
     int r = f(*(const hao_atok *)(uintptr_t)c->x[0], (int)c->x[1], *(const hao_atok *)(uintptr_t)c->x[2], (int)c->x[3]);
     c->x[0] = (uint64_t)(int64_t)r;
@@ -633,7 +643,7 @@ static void trap_tlv_get(hao_thread *t, uint64_t imgp)
     uint8_t *blk = pthread_getspecific(key);
     if (!blk) {
         hao_crit_enter();   /* malloc: a guest signal handler waits until it is done */
-        blk = calloc(1, img->tlv_total_size ? img->tlv_total_size : 1);
+        blk = hao_alloc_check(calloc(1, img->tlv_total_size ? img->tlv_total_size : 1), "thread-local variables");
         memcpy(blk, (void *)(uintptr_t)img->tlv_init_start, img->tlv_init_size);
         pthread_setspecific(key, blk);
         hao_crit_leave();
@@ -645,7 +655,8 @@ void hao_tlv_setup(hao_image *img)
 {
     if (!img->tlv_desc_count) return;
     pthread_key_t key;
-    pthread_key_create(&key, free);
+    int e = pthread_key_create(&key, free);
+    if (e) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "%s: thread-local variables: pthread_key_create: %s\n", img->path, strerror(e)); abort(); }
     uint64_t thunk = hao_trap_address("tlv_get_addr", trap_tlv_get, (uint64_t)(uintptr_t)img);
     tlv_desc *d = (tlv_desc *)(uintptr_t)img->tlv_desc;
     for (uint64_t k = 0; k < img->tlv_desc_count; k++) { d[k].thunk = thunk; d[k].key = key; }
