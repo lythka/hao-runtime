@@ -4,8 +4,8 @@
  * Embedded stubs run with the program's own identity: its setuid/setgid
  * bits, its entitlements, PID 1. The environment of such a process comes
  * from someone less privileged (or, for PID 1 and daemons, from launchd),
- * so HAO_* switches that choose code or paths are honoured only in an
- * ordinary process. The tier is computed once; children re-exec and
+ * so HAO_* switches that choose code, paths, checks or bridging are
+ * honoured only in an ordinary user's process (never root's). The tier is computed once; children re-exec and
  * compute their own.
  */
 #include "hao/runtime.h"

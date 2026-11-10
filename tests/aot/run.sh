@@ -5,7 +5,10 @@
 # ancestors except sticky ones (a scratch directory, not /tmp itself).
 # Builds tests/guest/hello.c for arm64e (exit 7) and checks that hao loads a
 # valid cache and rejects every untrusted or malformed one while still
-# running the program correctly. Prints PASS/FAIL per case; exit 1 on FAIL.
+# running the program correctly. Also the other rules of the environment
+# tiers that need a running guest: dependency paths in a set-ID process (L)
+# and the diagnostics log's lock and mode (M). Prints PASS/FAIL per case;
+# exit 1 on FAIL.
 # Writes nothing outside OUT except case H, which runs `hao --aot` with no
 # HOME and no HAO_CACHE and removes the one cache file it creates in
 # ~/Library/Caches/hao.
@@ -256,5 +259,72 @@ clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/policy" "$here/policy.c" "$B/l
 mkdir -p "$OUT/ut" && chmod 755 "$OUT/ut"
 if timeout -s KILL 120 "$OUT/policy" "$OUT/ut" >"$OUT/policy.log"; then pass "F $(tail -1 "$OUT/policy.log" | sed 's/^PASS //'); $(grep '^fuzz' "$OUT/policy.log")"
 else bad "F policy: $(grep FAIL "$OUT/policy.log" | head -5)"; fi
+
+# --- L: dependency paths. In a set-ID process (HAO_DISTRUST_ENV=2 stands in
+# for the credentials) dyld expands no @executable_path, no @loader_path from
+# the main executable's LC_RPATH and no relative path; the launch then ends
+# as a missing library does (dyld's message, SIGABRT). An absolute LC_RPATH
+# and @loader_path in a load command still load. Ordinary and guarded
+# processes load all of them. Each program returns 42 (35 from its library).
+L=$OUT/dep
+mkdir -p "$L/lib"
+printf 'int dep_value(void) { return 35; }\n' > "$L/dep.c"
+printf 'int dep_value(void);\nint main(void) { return dep_value() + 7; }\n' > "$L/main.c"
+lok=1
+for n in "dep @rpath/libdep.dylib" "rel lib/librel.dylib" "ld @loader_path/lib/libld.dylib" "ex @executable_path/lib/libex.dylib"; do
+    set -- $n
+    clang -arch arm64e -O1 -dynamiclib -install_name "$2" -o "$L/lib/lib$1.dylib" "$L/dep.c" && codesign -s - -f "$L/lib/lib$1.dylib" 2>/dev/null || lok=0
+done
+# program, its library, its LC_RPATH ("" = none), set-ID result, dyld's reason
+lcase() {
+    local name=$1 lib=$2 rpath=$3 want=$4 reason=$5 rc t
+    clang -arch arm64e -O1 -o "$L/$name" "$L/main.c" "$L/lib/$lib" ${rpath:+-Wl,-rpath,"$rpath"} && codesign -s - -f "$L/$name" 2>/dev/null || lok=0
+    for t in 0 1 2; do
+        (cd "$L" && env HAO_DISTRUST_ENV=$t timeout -s KILL "$T" "$HAO" "./$name" >/dev/null 2>"$L/$name.$t.err"); rc=$?
+        if [ $t != 2 ] || [ "$want" = 42 ]; then
+            [ $rc = 42 ] && pass "L $name tier $t: loads, rc 42" || bad "L $name tier $t: rc=$rc $(tail -2 "$L/$name.$t.err")"
+        else
+            [ $rc = 134 ] && grep -q "Library not loaded" "$L/$name.$t.err" && grep -q "Reason: tried: .*($reason)" "$L/$name.$t.err" \
+                && pass "L $name set-ID tier: not loaded ($reason), rc 134" || bad "L $name set-ID tier: rc=$rc $(tail -2 "$L/$name.$t.err")"
+        fi
+    done
+}
+lcase rp_exe libdep.dylib @executable_path/lib 134 "security policy does not allow @ path expansion"
+lcase rp_ldr libdep.dylib @loader_path/lib 134 "security policy does not allow @ path expansion"
+lcase rp_rel libdep.dylib lib 134 "relative path not allowed in hardened program"
+lcase rp_abs libdep.dylib "$L/lib" 42 ""
+lcase in_rel librel.dylib "" 134 "relative path not allowed in hardened program"
+lcase in_exe libex.dylib "" 134 "security policy does not allow @ path expansion"
+lcase in_ldr libld.dylib "" 42 ""
+[ $lok = 1 ] || bad "L build"
+
+# --- M: the diagnostics log. Its lock is a 0600 file in the log directory,
+# not the directory: another process holding an flock on the directory (any
+# user can take one on a 0755 directory) neither delays the start nor loses
+# the log. The log is 0600, and one an earlier hao left 0644 becomes 0600.
+M=$OUT/diag
+mkdir -p "$M" && chmod 755 "$M"
+env HAO_DIAG_DIR="$M" timeout -s KILL "$T" "$HAO" "$G" >/dev/null 2>&1; rc=$?
+m1=$(stat -f %Lp "$M/console.log" 2>/dev/null); m2=$(stat -f %Lp "$M/.lock" 2>/dev/null)
+[ $rc = 7 ] && [ "$m1" = 600 ] && [ "$m2" = 600 ] && pass "M log and lock are 0600" || bad "M modes: rc=$rc console.log $m1 .lock $m2"
+chmod 644 "$M/console.log"
+m=$(python3 -I - "$HAO" "$G" "$M" "$T" <<'EOF'
+import fcntl, os, subprocess, sys, time
+hao, guest, d, t = sys.argv[1:]
+fd = os.open(d, os.O_RDONLY)
+fcntl.flock(fd, fcntl.LOCK_EX)
+runs = []
+for k in range(5):
+    t0 = time.monotonic()
+    r = subprocess.run(['timeout', '-s', 'KILL', t, hao, guest], env={'HAO_DIAG_DIR': d, 'PATH': '/usr/bin:/bin'}, capture_output=True)
+    runs.append((time.monotonic() - t0, r.returncode))
+mode = os.stat(d + '/console.log').st_mode & 0o7777
+print('%s %o %.0f' % ('ok' if all(rc == 7 for _, rc in runs) else 'rc', mode, 1000 * min(s for s, _ in runs)))
+EOF
+)
+set -- $m
+# the old lock waited 200 ms for the directory's flock and then opened no log (so no mode repair)
+[ "$1" = ok ] && [ "$2" = 600 ] && [ "$3" -lt 150 ] && pass "M directory flock held elsewhere: log opened (0644 -> 0600), start ${3} ms" \
+    || bad "M directory flock held: $m"
 
 exit $fail

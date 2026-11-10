@@ -1,6 +1,6 @@
 /*
- * hao — the switch snapshot. Every HAO_* switch and hao_* boot argument is
- * read once, at startup, before any guest code or second thread runs, into
+ * hao — the switch snapshot. Every HAO_* switch and hao_* boot argument hao
+ * honours is read once, at startup, before any guest code or second thread runs, into
  * hao_opt; readers load its fields. A guest's own setenv cannot change hao's
  * behaviour, and no hot path calls getenv.
  */
@@ -13,11 +13,11 @@
 typedef struct {
     int verbose;                /* -v/-vv, HAO_VERBOSE=N, PID 1: hao=v|V, hao_verbose=N */
     bool interp, stats;         /* --interp/HAO_INTERP, --stats (PID 1: hao=i|s) */
-    bool allow_unsigned;        /* --allow-unsigned (HAO_FLAGS u): run an unsigned CLI guest */
-    unsigned watchdog;          /* HAO_WATCHDOG=N seconds */
+    bool allow_unsigned;        /* --allow-unsigned (HAO_FLAGS u, open tier): run an unsigned CLI guest */
+    unsigned watchdog;          /* HAO_WATCHDOG=N seconds (open tier: it takes SIGALRM and exits 124) */
     unsigned jit_cache_mb;      /* HAO_JIT_CACHE_MB=N: translated-code space (0 = default) */
     unsigned aot_limit_kb;      /* HAO_AOT_LIMIT_KB=N: AOT loading's memory limit instead of the kernel's (tests; jit.c aot_fits) */
-    /* boolean knobs: environment HAO_<NAME>, boot argument hao_<name>=1 */
+    /* boolean knobs: environment HAO_<NAME>; boot argument hao_<name>=1 for those listed below */
     bool nx_stats, crash_trace, jit_helpers_only, no_aot, no_chain, no_msgsend, no_closures, no_swiftreg,
          no_block_thunks, no_fixup_thunks, no_struct_thunks, aot_learn, no_jit_memory, bridge_check, bridge_abort,
          no_varsniff, no_libval, bridge_stats, no_ifunits, no_swift_thunks, no_thunks, no_swift_values,
@@ -41,12 +41,22 @@ typedef struct {
 extern hao_opts_t hao_opt;
 
 /* Pure (src/opts.c, in libhaocore.a): fill o from an environment block, the
- * HAO_FLAGS letters (v, V, i, s; NULL = none), the kernel boot arguments
+ * HAO_FLAGS letters (v, V, i, s, u; NULL = none), the kernel boot arguments
  * (NULL = none) and the environment tier (hao/aot.h). Precedence, lowest to
- * highest: defaults, boot argument hao_<knob>=1 (every process), PID 1 only
- * hao=FLAGS and hao_verbose=N, flags, environment. flags and the
- * environment are filtered by hao_env_switch_allowed(); boot arguments are
- * set by root and honoured in every tier. */
+ * highest: defaults, boot arguments, flags, environment.
+ *
+ * Boot arguments are set by root and apply in every tier, so only these are
+ * read: in every process hao_nx_stats=1, hao_crash_trace=1,
+ * hao_bridge_stats=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1;
+ * in PID 1 also hao=FLAGS (v, V, i, s) and hao_verbose=N. No boot argument
+ * turns a check off (there is no hao_no_libval and no hao=u). A build with
+ * HAO_TEST_SWITCHES defined also reads the bring-up knobs that change
+ * bridging or signal return (src/opts.c: BOOT_DEV).
+ *
+ * flags and the environment are filtered by hao_env_switch_allowed(). The
+ * test switches (HAO_LIBVAL_USER, HAO_SIGRETURN_USER, HAO_AOT_LIMIT_KB,
+ * HAO_BRIDGE_ABORT, HAO_NO_JIT_MEMORY, HAO_CODE_ALIAS) are read only by a
+ * HAO_TEST_SWITCHES build, from an open-tier environment. */
 void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *bootargs, bool pid1, int tier);
 /* Runtime (src/trust.c): once per process, from environ and kern.bootargs. */
 void hao_opts_init(const char *flags);

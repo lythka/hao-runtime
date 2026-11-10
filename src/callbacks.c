@@ -29,8 +29,9 @@
  * Swift generic class metadata gets the same treatment when
  * swift_allocateGenericClassMetadata builds it (see below).
  *
- * Off with HAO_NO_STRUCT_THUNKS=1, or boot argument hao_no_struct_thunks=1:
- * the imports then bind to the native functions directly, as before.
+ * Off with HAO_NO_STRUCT_THUNKS=1 (an ordinary process), or in a
+ * HAO_TEST_SWITCHES build with boot argument hao_no_struct_thunks=1: the
+ * imports then bind to the native functions directly, as before.
  *
  * Not covered: callbacks of structures that native code fills in itself.
  */
@@ -346,7 +347,7 @@ static void trap_swift_class_metadata(hao_thread *t, uint64_t arg)
     __atomic_fetch_add(&st_swift_meta, 1, __ATOMIC_RELAXED);
 }
 
-/* HAO_NO_STRUCT_THUNKS=1 or boot argument hao_no_struct_thunks=1 (hao_opt) */
+/* HAO_NO_STRUCT_THUNKS=1 (hao_opt; hao/opts.h says who may set it) */
 static bool enabled(void) { return !hao_opt.no_struct_thunks; }
 
 const char *hao_sigdb_enc(const char *name);   /* interpose.c */

@@ -38,8 +38,9 @@
  * a candidate function counts, whatever happens in between.
  *
  * Skipped: __mod_init_func/__mod_term_func (only hao reads them), slots
- * outside the __DATA and __AUTH segments. Off with HAO_NO_FIXUP_THUNKS=1, or boot
- * argument hao_no_fixup_thunks=1.
+ * outside the __DATA and __AUTH segments. Off with HAO_NO_FIXUP_THUNKS=1
+ * (an ordinary process), or in a HAO_TEST_SWITCHES build with boot argument
+ * hao_no_fixup_thunks=1.
  */
 #include "hao/runtime.h"
 #include <mach-o/loader.h>
