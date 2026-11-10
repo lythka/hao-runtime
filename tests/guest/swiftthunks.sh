@@ -24,7 +24,7 @@ fail=0
 check() {
     v=$1 d=$2 prog=$3
     rm -rf "$d/aot"; mkdir -m 700 "$d/aot"
-    HAO_CACHE="$d/aot" timeout -s KILL "$T" "$HAO" --aot "$d/$prog.arm64e" >"$d/aot.gen" 2>&1 || echo "$v: aot generation failed"
+    timeout -s KILL "$T" "$HAO" --aot --cache "$d/aot" "$d/$prog.arm64e" >"$d/aot.gen" 2>&1 || echo "$v: aot generation failed"
     timeout -s KILL "$T" "$d/$prog.arm64" >"$d/native.out" 2>"$d/native.err"
     rc=$?
     echo "$v native        rc=$rc lines=$(wc -l <"$d/native.out" | tr -d ' ')"

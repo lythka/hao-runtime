@@ -32,7 +32,7 @@ set +e
 # pql's scratch databases (left behind when a run crashes) stay under OUT
 mkdir -p "$OUT/tmp"; export TMPDIR="$OUT/tmp"
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/objcva.arm64e" >"$OUT/aotgen.out" 2>&1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/objcva.arm64e" >"$OUT/aotgen.out" 2>&1
 fail=0
 case " $MODES " in *" aot "*)
     if ls "$OUT/aot"/*.aot >/dev/null 2>&1; then :; else echo "objcva aot: no cache written"; cat "$OUT/aotgen.out"; fail=1; fi ;;

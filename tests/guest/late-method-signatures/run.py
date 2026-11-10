@@ -49,7 +49,7 @@ cache=OUT/'aot'
 cache.mkdir(exist_ok=True)
 aot_env=dict(env, HAO_CACHE=str(cache), HAO_VERBOSE='1')
 aot_env.pop('HAO_NO_AOT')
-p=subprocess.run(['timeout','-s','KILL','60',str(HAO),'--aot',str(OUT/'guest.arm64e')],env=aot_env,capture_output=True)
+p=subprocess.run(['timeout','-s','KILL','60',str(HAO),'--aot','--cache',str(cache),str(OUT/'guest.arm64e')],env=aot_env,capture_output=True)
 (OUT/'aot-build.log').write_bytes(p.stdout+p.stderr)
 if p.returncode: raise SystemExit('AOT generation failed; see aot-build.log')
 rows=[]

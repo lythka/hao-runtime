@@ -55,7 +55,7 @@ clang++ -arch arm64 -O1 -std=c++17 -I"$here" -L"$OUT/arm" -luresumehelper -o "$O
 codesign -s - -f "$OUT/uresume.arm64e" "$OUT/uresume.arm64" 2>/dev/null
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 case " $VARIANTS " in *" aot "*)
-    HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/uresume.arm64e" >/dev/null 2>&1 ;;
+    timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/uresume.arm64e" >/dev/null 2>&1 ;;
 esac
 set +e
 # the NX fault counts of a run: "N M" (native->guest, native->trap)

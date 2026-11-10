@@ -40,7 +40,7 @@ clang -arch arm64e -O1 -L"$OUT/g" -lnativesighelper -o "$OUT/nativesig.arm64e" "
 clang -arch arm64 -O1 -L"$OUT/arm" -lnativesighelper -o "$OUT/nativesig.arm64" "$here/nativesig.c"
 codesign -s - -f "$OUT/nativesig.arm64e" "$OUT/nativesig.arm64" 2>/dev/null
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/nativesig.arm64e" >/dev/null 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/nativesig.arm64e" >/dev/null 2>&1
 set +e
 fail=0
 for m in $MODES; do

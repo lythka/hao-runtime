@@ -66,7 +66,7 @@ Run an ARM64 command-line program, or generate its AOT cache:
 timeout -s KILL 60 build/hao /path/to/arm64-program [ARGS...]
 timeout -s KILL 60 build/hao --interp /path/to/arm64-program    # interpreter only
 timeout -s KILL 60 build/hao -v --stats /path/to/arm64-program  # diagnostics
-build/hao --aot /path/to/arm64-program                          # AOT cache, no execution
+build/hao --aot [--cache DIR] /path/to/arm64-program            # AOT cache, no execution
 ```
 
 Application bundles, extensions and system services run on the target system,

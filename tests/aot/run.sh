@@ -12,7 +12,7 @@
 # and the diagnostics log's lock and mode (M). Prints PASS/FAIL per case;
 # exit 1 on FAIL.
 # Writes nothing outside OUT except case H, which runs `hao --aot` with no
-# HOME and no HAO_CACHE and removes the one cache file it creates in
+# HOME, no --cache and no HAO_CACHE and removes the one cache file it creates in
 # ~/Library/Caches/hao.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -59,7 +59,7 @@ fresh() { rm -rf "$1"; mkdir -p "$1"; chmod "${2:-700}" "$1"; }
 # --- B: a valid cache loads and runs
 C=$OUT/c
 fresh "$C"
-if ! HAO_CACHE=$C timeout -s KILL "$T" "$HAO" --aot "$G" >"$OUT/gen.err" 2>&1; then bad "B generate: $(cat "$OUT/gen.err")"; fi
+if ! timeout -s KILL "$T" "$HAO" --aot --cache $C "$G" >"$OUT/gen.err" 2>&1; then bad "B generate: $(cat "$OUT/gen.err")"; fi
 AOT=$(ls "$C"/*.aot 2>/dev/null | head -1)
 NAME=$(basename "${AOT:-none}")
 run good HAO_CACHE="$C"
@@ -76,7 +76,7 @@ if [ $rc = 7 ] && grep -q "loaded:" "$OUT/sticky.err"; then pass "B2 0700 dir un
 
 # --- D: generated file mode does not depend on the umask
 fresh "$OUT/u"
-(umask 000; HAO_CACHE=$OUT/u timeout -s KILL "$T" "$HAO" --aot "$G" >/dev/null 2>&1)
+(umask 000; timeout -s KILL "$T" "$HAO" --aot --cache $OUT/u "$G" >/dev/null 2>&1)
 m=$(stat -f %Lp "$OUT/u/$NAME" 2>/dev/null)
 [ "$m" = 644 ] && pass "D umask 000: generated cache is mode $m" || bad "D umask 000: mode '$m'"
 
@@ -168,7 +168,7 @@ EOF
 # T1: the twin keeps the program's signature, which no longer matches its code: no cache at all
 twin "$G" "$TW/hello.stolen-sig" && chmod 755 "$TW/hello.stolen-sig" || bad "T1 make twin"
 fresh "$OUT/t1"
-HAO_CACHE=$OUT/t1 timeout -s KILL "$T" "$HAO" --aot "$TW/hello.stolen-sig" >"$OUT/t1.err" 2>&1; rc=$?
+timeout -s KILL "$T" "$HAO" --aot --cache $OUT/t1 "$TW/hello.stolen-sig" >"$OUT/t1.err" 2>&1; rc=$?
 if same_cmds "$G" "$TW/hello.stolen-sig" && [ $rc != 0 ] && grep -q "code signature invalid (page .* does not match its hash): no cache written" "$OUT/t1.err" \
    && [ -z "$(ls -A "$OUT/t1")" ]; then
     pass "T1 twin with the program's signature: hao --aot refuses ($(sed 's/^hao-aot: [^:]*: //' "$OUT/t1.err" | head -1)), directory left empty"
@@ -177,7 +177,7 @@ else bad "T1 twin with stolen signature: rc=$rc $(head -2 "$OUT/t1.err") dir: $(
 # commands stay the program's). Its cache is valid for the twin and must be refused by the program.
 cp "$TW/hello.stolen-sig" "$TW/hello.arm64e" && codesign -s - -f -i "$ident" "$TW/hello.arm64e" 2>/dev/null || bad "T2 sign twin"
 fresh "$OUT/t2"
-HAO_CACHE=$OUT/t2 timeout -s KILL "$T" "$HAO" --aot "$TW/hello.arm64e" >"$OUT/t2.gen" 2>&1; rc=$?
+timeout -s KILL "$T" "$HAO" --aot --cache $OUT/t2 "$TW/hello.arm64e" >"$OUT/t2.gen" 2>&1; rc=$?
 if same_cmds "$G" "$TW/hello.arm64e" && [ $rc = 0 ] && [ "$(ls -A "$OUT/t2")" = "$NAME" ]; then
     pass "T2 signed twin: same mach header, load commands and LC_UUID as the program, other code; hao --aot writes $NAME"
 else bad "T2 signed twin: rc=$rc same_cmds=$(same_cmds "$G" "$TW/hello.arm64e"; echo $?) $(head -2 "$OUT/t2.gen") dir: $(ls -A "$OUT/t2")"; fi
@@ -190,12 +190,12 @@ U=$OUT/unsigned; mkdir -p "$U"
 clang -arch arm64e -O1 -Wl,-no_adhoc_codesign -o "$U/hello.arm64e" "$repo/tests/guest/hello.c" && twin "$U/hello.arm64e" "$U/twin.arm64e" \
     && chmod 755 "$U/twin.arm64e" || bad "T3 build unsigned"
 fresh "$OUT/t3"
-HAO_CACHE=$OUT/t3 timeout -s KILL "$T" "$HAO" --aot "$U/hello.arm64e" >"$OUT/t3.gen" 2>&1; rc=$?
+timeout -s KILL "$T" "$HAO" --aot --cache $OUT/t3 "$U/hello.arm64e" >"$OUT/t3.gen" 2>&1; rc=$?
 env HAO_VERBOSE=1 HAO_CACHE="$OUT/t3" timeout -s KILL "$T" "$HAO" --allow-unsigned "$U/hello.arm64e" >"$OUT/t3.out" 2>"$OUT/t3.err"; rc2=$?
 [ $rc = 0 ] && [ $rc2 = 7 ] && grep -q "loaded:" "$OUT/t3.err" && pass "T3 unsigned program: its own cache (code-hash identity) loads, rc 7" \
     || bad "T3 unsigned own cache: gen rc=$rc run rc=$rc2 $(head -1 "$OUT/t3.gen") $(grep AOT "$OUT/t3.err" | head -2)"
 fresh "$OUT/t3t"
-HAO_CACHE=$OUT/t3t timeout -s KILL "$T" "$HAO" --aot "$U/twin.arm64e" >"$OUT/t3t.gen" 2>&1; rc=$?
+timeout -s KILL "$T" "$HAO" --aot --cache $OUT/t3t "$U/twin.arm64e" >"$OUT/t3t.gen" 2>&1; rc=$?
 env HAO_VERBOSE=1 HAO_CACHE="$OUT/t3t" timeout -s KILL "$T" "$HAO" --allow-unsigned "$U/hello.arm64e" >"$OUT/t3t.out" 2>"$OUT/t3t.err"; rc2=$?
 if same_cmds "$U/hello.arm64e" "$U/twin.arm64e" && [ $rc = 0 ] && [ $rc2 = 7 ] && [ "$(cat "$OUT/t3t.out")" = "$WANT" ] \
    && grep -q "rejected: guest code differs: this image's code hash is" "$OUT/t3t.err" && ! grep -q "loaded:" "$OUT/t3t.err"; then
@@ -231,7 +231,7 @@ flipper=$!
 wrote=0 refused=0 wrong=0
 for i in $(seq 60); do
     rm -f "$OUT/t6/$NAME"
-    HAO_CACHE=$OUT/t6 timeout -s KILL "$T" "$HAO" --aot "$TW/flip" >"$OUT/t6.err" 2>&1; rc=$?
+    timeout -s KILL "$T" "$HAO" --aot --cache $OUT/t6 "$TW/flip" >"$OUT/t6.err" 2>&1; rc=$?
     if [ -e "$OUT/t6/$NAME" ]; then
         if [ $rc = 0 ] && cmp -s "$OUT/t6/$NAME" "$AOT"; then wrote=$((wrote + 1)); else wrong=$((wrong + 1)); fi
     elif [ $rc != 0 ] && grep -q "code signature invalid" "$OUT/t6.err"; then refused=$((refused + 1))
@@ -261,7 +261,7 @@ EOF
 codesign -s - -f "$OUT/other/libhao.dylib" 2>/dev/null; codesign -s - -f "$OUT/other/libhao_identity.dylib" 2>/dev/null
 codesign -s - -f --entitlements "$repo/tools/hao.entitlements" "$OUT/other/hao" 2>/dev/null
 fresh "$OUT/c11c"
-HAO_CACHE=$OUT/c11c timeout -s KILL "$T" "$OUT/other/hao" --aot "$G" >/dev/null 2>&1 || bad "C11c generate with the other build"
+timeout -s KILL "$T" "$OUT/other/hao" --aot --cache $OUT/c11c "$G" >/dev/null 2>&1 || bad "C11c generate with the other build"
 expect_reject C11c-cache-from-another-build "$OUT/c11c" "another hao build"
 
 # relative HAO_CACHE: not used at all
@@ -269,6 +269,36 @@ expect_reject C11c-cache-from-another-build "$OUT/c11c" "another hao build"
 if [ $rc = 7 ] && grep -q "not absolute; AOT is off" "$OUT/c14.err" && ! grep -q "loaded:" "$OUT/c14.err"; then
     pass "C14 relative HAO_CACHE: AOT off, rc 7"
 else bad "C14 relative HAO_CACHE: rc=$rc $(head -2 "$OUT/c14.err")"; fi
+
+# --- K: `hao --aot --cache DIR` names the output on the command line. A guarded process
+# (root is one) ignores HAO_CACHE, and DIR passes the same trust rules as HAO_CACHE's directory.
+fresh "$OUT/k1"; fresh "$OUT/k1e"
+env HAO_DISTRUST_ENV=1 HAO_CACHE="$OUT/k1e" timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k1" "$G" >"$OUT/k1.err" 2>&1; rc=$?
+[ $rc = 0 ] && cmp -s "$OUT/k1/$NAME" "$AOT" && [ -z "$(ls -A "$OUT/k1e")" ] && grep -q -- "-> $OUT/k1/$NAME\$" "$OUT/k1.err" \
+    && pass "K1 guarded process: --cache DIR written (the same bytes as B's cache), HAO_CACHE untouched" \
+    || bad "K1 guarded --cache: rc=$rc $(tail -2 "$OUT/k1.err")"
+env HAO_DISTRUST_ENV=1 HAO_CACHE="$OUT/k1e" timeout -s KILL "$T" "$HAO" --aot "$G" >"$OUT/k2.err" 2>&1; rc=$?
+[ $rc != 0 ] && [ -z "$(ls -A "$OUT/k1e")" ] && grep -q "no trusted AOT cache directory" "$OUT/k2.err" \
+    && pass "K2 guarded process without --cache: HAO_CACHE ignored, nothing written there (rc $rc)" \
+    || bad "K2 guarded HAO_CACHE: rc=$rc $(tail -2 "$OUT/k2.err")"
+fresh "$OUT/k3"
+env HAO_DISTRUST_ENV=2 timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k3" "$G" >"$OUT/k3.err" 2>&1; rc=$?
+[ $rc != 0 ] && [ -z "$(ls -A "$OUT/k3")" ] && grep -q "setuid/setgid" "$OUT/k3.err" && pass "K3 set-ID tier: --cache refused (rc $rc)" \
+    || bad "K3 set-ID --cache: rc=$rc $(tail -2 "$OUT/k3.err")"
+fresh "$OUT/k4" 775
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k4" "$G" >"$OUT/k4.err" 2>&1; rc=$?
+[ $rc != 0 ] && [ -z "$(ls -A "$OUT/k4")" ] && grep -q "rejected: .*writable by group or others" "$OUT/k4.err" \
+    && pass "K4 --cache names a 0775 directory: rejected, nothing written" || bad "K4 --cache 0775: rc=$rc $(tail -2 "$OUT/k4.err")"
+fresh "$OUT/k5t"; ln -s "$OUT/k5t" "$OUT/k5"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k5" "$G" >"$OUT/k5.err" 2>&1; rc=$?
+[ $rc != 0 ] && [ -z "$(ls -A "$OUT/k5t")" ] && grep -q "symlink owned by uid" "$OUT/k5.err" \
+    && pass "K5 --cache through the user's own symlink: rejected, nothing written" || bad "K5 --cache symlink: rc=$rc $(tail -2 "$OUT/k5.err")"
+fresh "$OUT/k6"
+(cd "$OUT" && timeout -s KILL "$T" "$HAO" --aot --cache k6/new -- "$G" >"$OUT/k6.err" 2>&1); rc=$?
+[ $rc = 0 ] && cmp -s "$OUT/k6/new/$NAME" "$AOT" && pass "K6 relative --cache: taken from the working directory, created, written" \
+    || bad "K6 relative --cache: rc=$rc $(tail -2 "$OUT/k6.err")"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k6" >"$OUT/k7.err" 2>&1; rc=$?
+[ $rc = 64 ] && grep -q -- "--aot \[--cache DIR\]" "$OUT/k7.err" && pass "K7 --cache without a file: usage, rc 64" || bad "K7 usage: rc=$rc $(head -2 "$OUT/k7.err")"
 
 # --- E: a planted, well-formed cache (int3 code, hash fixed) would run if
 # trusted (control), and is never reached from an untrusted environment

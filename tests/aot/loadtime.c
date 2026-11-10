@@ -3,7 +3,7 @@
  *   clang -arch x86_64 -O1 -Iinclude -o loadtime tests/aot/loadtime.c -Lbuild -lhao -Wl,-rpath,$PWD/build
  *   codesign -s - -f loadtime
  *   HAO_CACHE=dir timeout -s KILL 300 ./loadtime GUEST [COPIES [HAO_AOT_ARGS...]]
- * HAO_CACHE holds GUEST's cache (`HAO_CACHE=dir build/hao --aot GUEST`), or
+ * HAO_CACHE holds GUEST's cache (`build/hao --aot --cache dir GUEST`), or
  * nothing to time a miss. GUEST is mapped COPIES times (default 9; no
  * fixups, no guest code runs), each copy at its own address, and the cache is
  * loaded into each: the file is opened through the trust checks, read,

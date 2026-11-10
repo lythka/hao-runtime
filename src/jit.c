@@ -2319,8 +2319,13 @@ fail:
  *    only, and the loader would have to hash the code on every load. In the
  *    user's own or an explicit directory it is allowed: the user can write
  *    any file there already, and only that user's ordinary processes read it.
+ *
+ * cache_dir is `--cache DIR`, already absolute, or NULL for the directory
+ * this process writes to by default. It is checked as HAO_CACHE's directory
+ * is (ownership, modes, ACLs and symlinks of every element; the rule for
+ * unsigned guests if it is, or lies in, a system directory).
  */
-int hao_aot_generate_file(const char *path, bool verbose)
+int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
 {
     const uint8_t *gen = aot_gen();
     if (!gen) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return -1; }
@@ -2328,7 +2333,13 @@ int hao_aot_generate_file(const char *path, bool verbose)
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
     int w, rc = -1;
     char why[700], canon[PATH_MAX], tmp[64], tpath[PATH_MAX + 80], err[512];
-    aot_dirs(dirs, &w, why, sizeof why);
+    if (cache_dir) {
+        /* --cache: named on the command line, so taken whatever the tier ignores of the environment */
+        if (!hao_aot_dir_explicit(hao_env_tier(), cache_dir, &dirs[0], why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return -1; }
+        w = 0;
+    } else {
+        aot_dirs(dirs, &w, why, sizeof why);
+    }
     if (w < 0) { fprintf(stderr, "hao-aot: no trusted AOT cache directory%s%s\n", why[0] ? ": " : "", why); return -1; }
     int dfd = aot_open_dir_create(&dirs[w], canon, sizeof canon, why, sizeof why);
     if (dfd < 0) { fprintf(stderr, "hao-aot: %s rejected: %s\n", dirs[w].path, why); return -1; }

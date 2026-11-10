@@ -182,6 +182,14 @@ typedef struct { char path[1024]; int kind; } hao_aot_dir;
 int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_cache, hao_aot_dir *out,
                      int *write_idx, char *why, size_t n);
 
+/* The directory `hao --aot --cache DIR` writes to. The command line is the
+ * invoking user's own choice, unlike the environment, which a guarded
+ * process inherits from whoever started it: DIR is taken at every tier but
+ * SETUGID, where the caller is not the user the process runs as. It is an
+ * EXPLICIT directory like HAO_CACHE's: absolute, and held to the same
+ * ownership and system-directory rules by the caller. false: why says. */
+bool hao_aot_dir_explicit(int tier, const char *dir, hao_aot_dir *out, char *why, size_t n);
+
 /* Owner and mode rules for one path element. role: 0 = ancestor directory,
  * 1 = the cache directory, 2 = the cache file. Owners: root for SYS kinds;
  * root or euid for USER/EXPLICIT. No group/other write bit, except that an

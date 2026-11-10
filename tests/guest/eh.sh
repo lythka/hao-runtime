@@ -47,7 +47,7 @@ done
 # AOT leg: a private cache directory (owner-only, as hao's trust rules want)
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 case " $MODES " in *" aot "*)
-    HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/eh.arm64e" >/dev/null 2>&1 ;;
+    timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/eh.arm64e" >/dev/null 2>&1 ;;
 esac
 set +e
 # the termination lines of a fatal run's stderr

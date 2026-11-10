@@ -34,7 +34,7 @@ for a in arm64e arm64; do
 done
 set +e
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/msgfnptr.arm64e" >"$OUT/aotgen.out" 2>&1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/msgfnptr.arm64e" >"$OUT/aotgen.out" 2>&1
 fail=0
 case " $MODES " in *" aot "*)
     if ls "$OUT/aot"/*.aot >/dev/null 2>&1; then :; else echo "msgfnptr aot: no cache written"; cat "$OUT/aotgen.out"; fail=1; fi ;;

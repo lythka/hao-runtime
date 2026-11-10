@@ -26,7 +26,7 @@ for a in arm64e arm64; do
 done
 # AOT leg: a private cache directory (owner-only, as hao's trust rules want)
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/signals.arm64e" >/dev/null 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/signals.arm64e" >/dev/null 2>&1
 set +e
 fail=0
 for m in $MODES; do

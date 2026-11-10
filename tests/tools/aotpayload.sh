@@ -5,7 +5,7 @@
 # hao-image-payload builds and uses the checkout's build/ (its caches are bound to that
 # libhao), so this test runs that build's hao and libhaocore.a too.
 # OUT must be a directory tree this user owns whose ancestors are not group- or
-# other-writable except sticky ones (hao --aot writes there through HAO_CACHE).
+# other-writable except sticky ones (hao --aot --cache writes there).
 # A scratch ROOT (release 26.0) holds three arm64e builds of tests/guest/hello.c
 # at sbin/launchd, usr/libexec/xpcproxy and usr/bin/prog (+ a hard link usr/sbin/prog2).
 # Cases:

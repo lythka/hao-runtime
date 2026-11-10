@@ -20,7 +20,7 @@ for a in arm64 arm64e; do
     codesign -s - -f "$OUT/chkstk.$a" 2>/dev/null || exit 2
 done
 timeout -s KILL 20 "$OUT/chkstk.arm64" >"$OUT/native.out" 2>&1 || { echo "chkstk: native rc=$?"; exit 2; }
-HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/chkstk.arm64e" >"$OUT/aotgen.log" 2>&1 || { echo "chkstk: hao --aot failed"; fail=1; }
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/chkstk.arm64e" >"$OUT/aotgen.log" 2>&1 || { echo "chkstk: hao --aot failed"; fail=1; }
 for mode in jit interp aot; do
     flag=; [ $mode = interp ] && flag=--interp
     cache=$OUT/none; noaot=1; [ $mode = aot ] && { cache=$OUT/aot; noaot=; }

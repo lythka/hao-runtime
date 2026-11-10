@@ -62,7 +62,7 @@ done
 # An AOT cache that loads under the JIT is skipped when there is no code
 # cache to install it in, and the program still runs correctly.
 mkdir -p "$OUT/cache"; chmod 755 "$OUT/cache"; rm -f "$OUT/cache/"*
-timeout -s KILL "$T" env HAO_CACHE="$OUT/cache" "$HAO" --aot "$OUT/sorts.arm64e" >/dev/null 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/cache" "$OUT/sorts.arm64e" >/dev/null 2>&1
 timeout -s KILL "$T" env HAO_CACHE="$OUT/cache" HAO_VERBOSE=1 "$HAO" "$OUT/sorts.arm64e" >"$OUT/aot.jit.out" 2>"$OUT/aot.jit.err"
 timeout -s KILL "$T" env HAO_CACHE="$OUT/cache" HAO_VERBOSE=1 HAO_NO_JIT_MEMORY=1 "$HAO" "$OUT/sorts.arm64e" \
     >"$OUT/aot.nojit.out" 2>"$OUT/aot.nojit.err"

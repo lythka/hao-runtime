@@ -318,6 +318,17 @@ int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_c
 
 #define FAIL(...) do { if (why && n) snprintf(why, n, __VA_ARGS__); return false; } while (0)
 
+bool hao_aot_dir_explicit(int tier, const char *dir, hao_aot_dir *out, char *why, size_t n)
+{
+    if (why && n) why[0] = 0;
+    if (tier == HAO_ENV_SETUGID) FAIL("--cache is refused in a setuid/setgid process");
+    if (!dir || dir[0] != '/') FAIL("--cache %s is not an absolute path", dir ? dir : "");
+    if (strlen(dir) >= sizeof out->path) FAIL("--cache names a path that is too long");
+    snprintf(out->path, sizeof out->path, "%s", dir);
+    out->kind = HAO_AOT_EXPLICIT;
+    return true;
+}
+
 bool hao_aot_stat_ok(const struct stat *st, int kind, int role, uid_t euid, char *why, size_t n)
 {
     bool sys = kind == HAO_AOT_SYS || kind == HAO_AOT_SYS_RO;

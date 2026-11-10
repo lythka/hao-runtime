@@ -58,7 +58,7 @@ for c in $CASES; do
     done
     [ $ok = 1 ] || { echo "$c: build failed"; fail=1; continue; }
     rm -rf aot.$c; mkdir -m 700 aot.$c
-    HAO_CACHE="$OUT/aot.$c" timeout -s KILL "$T" "$HAO" --aot "./$c.arm64e" >/dev/null 2>&1
+    timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot.$c" "./$c.arm64e" >/dev/null 2>&1
     case $c in repair) runs="count keypath" ;; *) runs="count fields conf" ;; esac
     for w in $runs; do
         timeout -s KILL "$T" ./$c.arm64 $w >$c.$w.native.out 2>$c.$w.native.err

@@ -14,7 +14,7 @@ timeout -s KILL $T $O/oss265.arm64 > $O/arm64.out 2>/dev/null || true
 rm -rf $O/aot && mkdir -m 700 $O/aot
 HAO_NO_AOT=1 timeout -s KILL $T build/hao $O/oss265.arm64e > $O/hao-jit.out
 timeout -s KILL $T build/hao --interp $O/oss265.arm64e > $O/hao-interp.out
-HAO_CACHE=$PWD/$O/aot timeout -s KILL $T build/hao --aot $O/oss265.arm64e 2>$O/aot-gen.err
+timeout -s KILL $T build/hao --aot --cache $PWD/$O/aot $O/oss265.arm64e 2>$O/aot-gen.err
 HAO_CACHE=$PWD/$O/aot HAO_VERBOSE=1 timeout -s KILL $T build/hao $O/oss265.arm64e > $O/hao-aot.out 2>$O/hao-aot.err
 fail=0
 if grep -q "AOT cache .* loaded" $O/hao-aot.err; then echo "PASS hao-aot cache loaded"; else echo "FAIL hao-aot cache not loaded: $(grep -m1 AOT $O/hao-aot.err)"; fail=1; fi

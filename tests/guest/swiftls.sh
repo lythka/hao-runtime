@@ -41,7 +41,7 @@ for s in _swift_cvw_initWithCopy _swift_cvw_instantiateLayoutString _swift_cvw_i
 done
 case " $MODES " in *" aot "*)
     rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-    HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/swiftls.arm64e" >"$OUT/aot.log" 2>&1 ||
+    timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/swiftls.arm64e" >"$OUT/aot.log" 2>&1 ||
         echo "aot: --aot failed: $(tail -1 "$OUT/aot.log")" ;;
 esac
 

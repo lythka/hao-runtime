@@ -20,7 +20,7 @@ for a in arm64e arm64; do
     codesign -s - -f "$OUT/keypath.$a" 2>/dev/null
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/keypath.arm64e" >"$OUT/aot.gen" 2>&1 || echo "keypath: aot generation failed"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/keypath.arm64e" >"$OUT/aot.gen" 2>&1 || echo "keypath: aot generation failed"
 timeout -s KILL "$T" "$OUT/keypath.arm64" >"$OUT/native.out" 2>"$OUT/native.err"
 rc=$?
 echo "native    rc=$rc lines=$(wc -l <"$OUT/native.out" | tr -d ' ')"

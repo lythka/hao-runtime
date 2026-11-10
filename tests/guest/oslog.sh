@@ -54,7 +54,7 @@ for p in $PROGS; do
     python3 "$repo/tools/hao-embed" --stub "$B/hao-stub" --host-test -o "emb/$p" "plain/$p" >/dev/null || exit 2
     python3 "$repo/tools/hao-embed" --stub "$OUT/oldstub/hao-stub" --host-test -o "emb-old/$p" "plain/$p" >/dev/null || exit 2
 done
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot plain/oslog libosloghelper.dylib plain/oslogswift >aot.gen 2>&1 ||
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" plain/oslog libosloghelper.dylib plain/oslogswift >aot.gen 2>&1 ||
     { echo "FAIL AOT generation: $(head -c 300 aot.gen)"; exit 2; }
 for p in $PROGS; do
     case " $MODES " in *" aot "*)

@@ -29,7 +29,7 @@ set +e
 nm -u "$OUT/swiftmeta.arm64e" | grep -q '_swift_cvw_initWithCopy$' || { echo "swiftmeta: no layout-string witnesses in the build"; exit 1; }
 case " $MODES " in *" aot "*)
     rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-    HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/swiftmeta.arm64e" >"$OUT/aot.log" 2>&1 ||
+    timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/swiftmeta.arm64e" >"$OUT/aot.log" 2>&1 ||
         echo "aot: --aot failed: $(tail -1 "$OUT/aot.log")" ;;
 esac
 
