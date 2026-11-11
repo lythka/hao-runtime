@@ -125,6 +125,10 @@ RULES = {
     0x2B: ("LC_DYLIB_CODE_SIGN_DRS", "deny", "the linker's record of the dylibs' designated requirements; "
                                               "the stub's signature is its own"),
     0x2E: ("LC_LINKER_OPTIMIZATION_HINT", "deny", "arm64 instruction hints for the linker"),
+    0x1E: ("LC_SEGMENT_SPLIT_INFO", "deny",
+           "the linker's record of the arm64 slice's references between segments, for the shared-cache "
+           "builder to adjust when it places an image in a cache; a main executable is never placed in one "
+           "and nothing reads it at load"),
     0x2D: ("LC_LINKER_OPTION", "deny", "a linker input (object files' autolink options); not read at load"),
     0x31: ("LC_NOTE", "deny", "data for debuggers and core-file readers; not read at load"),
     0x2C: ("LC_ENCRYPTION_INFO_64", "deny",
