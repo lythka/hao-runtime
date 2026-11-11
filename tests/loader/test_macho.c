@@ -874,6 +874,60 @@ int main(int argc, char **argv)
         expect("LC_CODE_SIGNATURE too short for its range", d, n, "cmdsize 8 < 16");
     }
 
+    /* an embedded program's stub names the ARM slice it was made for (hao_libval_bound) */
+    {
+        char path[1100], err[512];
+        snprintf(path, sizeof path, "%s/bound.bin", scratch);
+        put_file(path, seed, n, n);
+        int fd = open(path, O_RDONLY);
+        hao_slice *sl = hao_slice_open(fd, err, sizeof err);
+        hao_slice_record r = {.version = 1};
+        bool ok = sl && hao_slice_verify(sl, NULL, err, sizeof err) == 0;
+        if (ok) {
+            memcpy(r.magic, HAO_SLICE_MAGIC, sizeof r.magic);
+            r.hash_type = sl->sig.hash_type;
+            memcpy(r.cdhash, sl->sig.cdhash, sizeof r.cdhash);
+        }
+        hao_slice_close(sl);
+        sl = hao_slice_open(fd, err, sizeof err);                     /* as the loader has it: not yet verified */
+        note(ok && sl && hao_libval_bound(&r, sizeof r, sl, err, sizeof err) == 0 && sl->sig.cd,
+             "stub record: the slice it names is accepted, verified");
+        hao_slice_record x = r;
+        x.cdhash[19] ^= 1;
+        note(sl && hao_libval_bound(&x, sizeof x, sl, err, sizeof err) != 0 && strstr(err, "is not the code its x86_64 slice was made for"),
+             "stub record: another cdhash refused");
+        x = r; x.hash_type ^= 3;
+        note(sl && hao_libval_bound(&x, sizeof x, sl, err, sizeof err) != 0 && strstr(err, "is not the code"),
+             "stub record: the same cdhash under another hash type refused");
+        x = r; x.version = 2;
+        bool b1 = sl && hao_libval_bound(&x, sizeof x, sl, err, sizeof err) != 0;
+        x = r; x.magic[0] = 'H';
+        bool b2 = sl && hao_libval_bound(&x, sizeof x, sl, err, sizeof err) != 0;
+        bool b3 = sl && hao_libval_bound(&r, sizeof r - 1, sl, err, sizeof err) != 0 && hao_libval_bound(&r, 0, sl, err, sizeof err) != 0;
+        note(b1 && b2 && b3, "stub record: another version, magic or size refused");
+        hao_slice_close(sl);
+        close(fd);
+        uint8_t *t = copy_of(seed, n);
+        t[sig_at(t) - 1] ^= 1;
+        put_file(path, t, n, n);
+        fd = open(path, O_RDONLY);
+        sl = hao_slice_open(fd, err, sizeof err);
+        note(sl && hao_libval_bound(&r, sizeof r, sl, err, sizeof err) != 0 && strstr(err, "does not match its hash"),
+             "stub record: the named slice with a changed byte refused");
+        hao_slice_close(sl);
+        close(fd);
+        memcpy(t, seed, n);
+        wr32(t, find_cmd(t, LC_CODE_SIGNATURE, NULL) + 12, 0);
+        put_file(path, t, n, n);
+        fd = open(path, O_RDONLY);
+        sl = hao_slice_open(fd, err, sizeof err);
+        note(sl && hao_libval_bound(&r, sizeof r, sl, err, sizeof err) != 0 && strstr(err, "not code signed"),
+             "stub record: an unsigned slice refused");
+        hao_slice_close(sl);
+        close(fd);
+        free(t);
+    }
+
     /* the loader's gate (src/libval.c): the main executable's policy and each library, in processes of their own */
     fflush(stdout);
     fails += in_child(gate_plain, seed, n, lib, ln, &passes);

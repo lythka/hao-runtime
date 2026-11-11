@@ -41,6 +41,34 @@ else bad "in-place hard link: b is $(lipo -archs "$d/b"), inodes $(stat -f %i "$
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/x" --scan >/dev/null 2>"$d/scan.err"
 grep -q "needs --root" "$d/scan.err" && pass "--scan without --root: usage error" || bad "--scan without --root: $(cat "$d/scan.err")"
 
+# --- every stub names the ARM slice it was made for (src/libval.c loads no other under it)
+python3 -I - "$repo/tools" "$d/a" <<'PY' && pass "stub names its ARM slice: __TEXT,__hao_slice holds the slice's hash type and cdhash" || bad "stub's __hao_slice record"
+import struct, sys
+sys.path.insert(0, sys.argv[1])
+import hao_codesig, hao_fat
+parts = hao_fat.slices(open(sys.argv[2], "rb").read())
+arm = [bytes(p) for c, s, p in parts if c == hao_fat.CPU_ARM64][0]
+stub = [bytes(p) for c, s, p in parts if c == hao_fat.CPU_X86_64][0]
+have = None
+for cmd, off, size in hao_fat.load_commands(stub):
+    if cmd == 0x19:
+        for k in range(struct.unpack_from("<I", stub, off + 64)[0]):
+            so = off + 72 + 80 * k
+            if stub[so:so + 16].rstrip(b"\0") == b"__hao_slice" and stub[so + 16:so + 32].rstrip(b"\0") == b"__TEXT":
+                ssize, foff = struct.unpack_from("<QI", stub, so + 40)
+                have = stub[foff:foff + ssize]
+c = hao_codesig.check(arm)
+assert c["verdict"] == "valid" and have == b"haoslice" + bytes([1, c["hash_type"], 0, 0]) + c["cdhash"], (have, c["verdict"])
+PY
+cp "$G" "$OUT/unsigned" && codesign --remove-signature "$OUT/unsigned"
+"$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$OUT/unsigned.emb" "$OUT/unsigned" >"$OUT/unsigned.log" 2>&1
+grep -q "^fail.*not code signed" "$OUT/unsigned.log" && [ ! -e "$OUT/unsigned.emb" ] && pass "hao-embed refuses a program whose ARM slice is not signed" ||
+    bad "hao-embed with an unsigned program: $(cat "$OUT/unsigned.log")"
+cp "$G" "$OUT/badpage" && printf 'X' | dd of="$OUT/badpage" bs=1 seek=16390 conv=notrunc 2>/dev/null
+"$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$OUT/badpage.emb" "$OUT/badpage" >"$OUT/badpage.log" 2>&1
+grep -q "^fail.*code signature is not valid" "$OUT/badpage.log" && [ ! -e "$OUT/badpage.emb" ] && pass "hao-embed refuses a program whose ARM slice does not match its page hashes" ||
+    bad "hao-embed with a changed program: $(cat "$OUT/badpage.log")"
+
 # --- hao-install.py twice on the same System
 d=$OUT/install; mkdir -p "$d/src/usr/bin" "$d/sys/usr/bin" "$d/sys/usr/lib/hao" "$d/pay/root/usr/lib/hao"
 cp "$G" "$d/src/usr/bin/prog"; cp "$G" "$d/sys/usr/bin/prog"
