@@ -957,6 +957,25 @@ static char diag_buf[16384];      /* hao_diag_file's line buffer */
 
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[%s:%d]: ", getprogname(), (int)getpid()); }
 
+/* HAO_LOG's line: prefix and message formatted together and written with one
+ * fputs, so that it reaches an unbuffered stderr, the console or the log in
+ * one piece; a longer line is written as prefix, then message. */
+void hao_log_line(const char *fmt, ...)
+{
+    FILE *f = HAO_DIAG;
+    char buf[1024];
+    int p = snprintf(buf, sizeof buf, "hao[%s:%d]: ", getprogname(), (int)getpid());
+    va_list ap;
+    va_start(ap, fmt);
+    int n = p > 0 && (size_t)p < sizeof buf ? vsnprintf(buf + p, sizeof buf - (size_t)p, fmt, ap) : -1;
+    va_end(ap);
+    if (n >= 0 && (size_t)p + (size_t)n < sizeof buf) { fputs(buf, f); return; }
+    hao_diag_prefix(f);
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+}
+
 void hao_oom(const char *what)
 {
     hao_diag_prefix(HAO_DIAG);
@@ -964,11 +983,20 @@ void hao_oom(const char *what)
     abort();
 }
 
-void hao_diag_guest_addr(FILE *f, uint64_t a)
+const char *hao_diag_guest_where(uint64_t a, char *buf, size_t n)
 {
     hao_image *im = hao_image_for_code(a);
-    if (im) fprintf(f, " (%s+%#llx, file vmaddr %#llx)", strrchr(im->path, '/') ? strrchr(im->path, '/') + 1 : im->path,
-                    (unsigned long long)(a - im->base), (unsigned long long)(a - im->slide));
+    if (!n) return buf;
+    buf[0] = 0;
+    if (im) snprintf(buf, n, " (%s+%#llx, file vmaddr %#llx)", strrchr(im->path, '/') ? strrchr(im->path, '/') + 1 : im->path,
+                     (unsigned long long)(a - im->base), (unsigned long long)(a - im->slide));
+    return buf;
+}
+
+void hao_diag_guest_addr(FILE *f, uint64_t a)
+{
+    char where[1100];
+    fputs(hao_diag_guest_where(a, where, sizeof where), f);
 }
 
 static bool diag_write_all(int fd, const char *b, size_t n)

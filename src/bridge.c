@@ -147,7 +147,7 @@ static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
         hao_plan_table *n = bits <= 28 ? tab_new(bits) : NULL;
         if (!n) {
             static int warned;
-            if (!warned++) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "bridge plan table cannot grow: later entry points are UNKNOWN\n"); }
+            if (!warned++) { HAO_LOG(0, "bridge plan table cannot grow: later entry points are UNKNOWN\n"); }
             return NULL;
         }
         for (uint32_t k = 0; k <= t->mask; k++)
@@ -198,7 +198,7 @@ static void units_init(void)
     if (hao_opt.no_ifunits) return;
     char why[512];
     int nd = hao_if_dirs_for(hao_env_tier(), hao_opt.if_dir, &if_dir, why, sizeof why);
-    if (!nd) { if (why[0] && hao_verbose) fprintf(stderr, "hao: %s\n", why); return; }
+    if (!nd) { if (why[0]) HAO_LOG(1, "%s\n", why); return; }
     /* nothing to bind against without at least one unit: skip the per-import library lookup */
     DIR *d = opendir(if_dir.path);
     if (!d) return;
@@ -206,7 +206,7 @@ static void units_init(void)
     while ((e = readdir(d)))
         if (strlen(e->d_name) == 32 && strspn(e->d_name, "0123456789abcdef") == 32) { units_on = true; break; }
     closedir(d);
-    if (hao_verbose && units_on) fprintf(stderr, "hao: interface units from %s\n", if_dir.path);
+    if (units_on) HAO_LOG(1, "interface units from %s\n", if_dir.path);
 }
 
 static bool header_uuid(const struct mach_header_64 *h, uint8_t uuid[16])
@@ -406,7 +406,7 @@ static void trie_walk(const trie_t *t, trie_name_fn nm, const void *nctx, size_t
 static void unit_reject(const char *name, const char *why)
 {
     units_rejected++;
-    if (hao_verbose || hao_bridge_counting) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "interface unit %s/%s rejected: %s\n", if_dir.path, name, why); }
+    if (hao_verbose || hao_bridge_counting) { HAO_LOG(0, "interface unit %s/%s rejected: %s\n", if_dir.path, name, why); }
 }
 
 static const char *unit_name(const void *ctx, size_t i)
@@ -479,7 +479,7 @@ static void unit_load(native_lib *l)
     l->have = true;
     units_loaded++;
     unit_index(l);
-    if (hao_verbose) fprintf(stderr, "hao: interface unit %s/%s (%s): %u records, %u at their addresses\n", if_dir.path, name,
+    HAO_LOG(1, "interface unit %s/%s (%s): %u records, %u at their addresses\n", if_dir.path, name,
                              l->path, l->v.nrecs, l->nax);
 }
 
@@ -594,14 +594,12 @@ static void init_once(void)
     if (hao_verbose) {
         char build[32];
         if (!hao_gen_stamp_check(build, sizeof build)) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "generated tables describe macOS %s (%s), table format %d; this system is %s\n",
+            HAO_LOG(0, "generated tables describe macOS %s (%s), table format %d; this system is %s\n",
                     HAO_GEN_OS_VERSION, HAO_GEN_OS_BUILD, HAO_GEN_FORMAT, build[0] ? build : "an unknown build");
         }
         char why[512];
         if (hao_cxx_demangle_selfcheck(why, sizeof why) > 0) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "demangler spelling changed: %s\n", why);
+            HAO_LOG(0, "demangler spelling changed: %s\n", why);
         }
     }
     identity_original = (const void *(*)(const void *))dlsym(RTLD_DEFAULT, "hao_identity_original");
@@ -964,8 +962,7 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
         if (tsrc && !thunk && (tkind != p->kind || (tenc && (!p->enc || strcmp(tenc, p->enc))))) {
             __atomic_fetch_add(&st_conflicts, 1, __ATOMIC_RELAXED);
             if (hao_opt.bridge_check) {
-                hao_diag_prefix(HAO_DIAG);
-                fprintf(HAO_DIAG, "bridge: %s: unit says %s kind %c, the compiled-in table kind %c%s%s\n", gname,
+                HAO_LOG(0, "bridge: %s: unit says %s kind %c, the compiled-in table kind %c%s%s\n", gname,
                         cls_name(r->cls), p->kind ? p->kind : '-',
                         tkind ? tkind : '-', tenc ? " " : "", tenc ? tenc : "");
             }
@@ -1395,8 +1392,7 @@ static void alias_report(const char *gname, const addr_type *o)
     if (!o->conflict) return;
     __atomic_fetch_add(&st_alias_refused, 1, __ATOMIC_RELAXED);
     if (hao_opt.bridge_check) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "bridge: REFUSED %s (also named %s): %s\n", gname, o->other ? o->other : "?", o->conflict);
+        HAO_LOG(0, "bridge: REFUSED %s (also named %s): %s\n", gname, o->other ? o->other : "?", o->conflict);
     }
 }
 
@@ -1410,8 +1406,7 @@ static void cxx_refuse(hao_plan *p, const char *name, const char *why)
     p->kind = 0;
     p->enc = NULL;
     if (hao_opt.bridge_check) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "bridge: REFUSED %s: %s\n", name, why);
+        HAO_LOG(0, "bridge: REFUSED %s: %s\n", name, why);
     }
 }
 
@@ -1624,8 +1619,7 @@ const hao_plan *hao_bridge_objc_recheck(const struct hao_cpu *c, const hao_plan 
     *tmp = *p;
     /* one IMP behind methods of different types (a forwarding or shared implementation): this call's own */
     if (!__atomic_fetch_add(&st_objc_other, 1, __ATOMIC_RELAXED) || hao_opt.bridge_check) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "bridge: native IMP %#llx typed %s for %s, called as %s with %s: typed per call\n",
+        HAO_LOG(0, "bridge: native IMP %#llx typed %s for %s, called as %s with %s: typed per call\n",
                 (unsigned long long)p->native, p->enc ? p->enc : "(register-exact)", sel_name(p->sel), enc,
                 sel_name(c->x[1]));
     }
@@ -1783,36 +1777,30 @@ void hao_bridge_count(hao_thread *t, const hao_plan *p, uint64_t pc)
     uint64_t n = __atomic_fetch_add(&((hao_plan *)p)->calls, 1, __ATOMIC_RELAXED);
     if (n || !hao_opt.bridge_check || p->cls != HAO_BR_UNKNOWN || in_signal_handler(t)) return;
     if (__atomic_exchange_n(&((hao_plan *)p)->reported, 1, __ATOMIC_RELAXED)) return;
-    FILE *f = HAO_DIAG;
-    hao_diag_prefix(f);
-    fprintf(f, "bridge: UNKNOWN %s (%#llx)%s%s first call, lr=%#llx", p->name ? p->name : "?", (unsigned long long)pc,
-            p->why ? ": " : "", p->why ? p->why : "", (unsigned long long)t->cpu.x[30]);
-    hao_diag_guest_addr(f, t->cpu.x[30]);
-    fprintf(f, "\n");
+    char where[1100];
+    HAO_LOG(0, "bridge: UNKNOWN %s (%#llx)%s%s first call, lr=%#llx%s\n", p->name ? p->name : "?", (unsigned long long)pc,
+            p->why ? ": " : "", p->why ? p->why : "", (unsigned long long)t->cpu.x[30],
+            hao_diag_guest_where(t->cpu.x[30], where, sizeof where));
 }
 
 void hao_bridge_check_mask(hao_thread *t, const hao_plan *p)
 {
     unsigned skipped = hao_args_code_slots(t) & ~(unsigned)p->argmask;
     if (!skipped) return;
-    FILE *f = HAO_DIAG;
-    hao_diag_prefix(f);
-    fprintf(f, "bridge: CHECK %s: argument slots %#x hold guest code addresses the plan's mask %#x skips, lr=%#llx",
-            p->name ? p->name : "?", skipped, p->argmask, (unsigned long long)t->cpu.x[30]);
-    hao_diag_guest_addr(f, t->cpu.x[30]);
-    fprintf(f, "\n");
+    char where[1100];
+    HAO_LOG(0, "bridge: CHECK %s: argument slots %#x hold guest code addresses the plan's mask %#x skips, lr=%#llx%s\n",
+            p->name ? p->name : "?", skipped, p->argmask, (unsigned long long)t->cpu.x[30],
+            hao_diag_guest_where(t->cpu.x[30], where, sizeof where));
     if (hao_opt.bridge_abort) abort();
 }
 
 void hao_bridge_refused(hao_thread *t, const hao_plan *p)
 {
-    FILE *f = HAO_DIAG;
-    hao_diag_prefix(f);
-    fprintf(f, "bridge: REFUSED call to %s (%#llx): %s; lr=%#llx", p->name ? p->name : "?", (unsigned long long)p->native,
-            p->why ? p->why : "no reason recorded", (unsigned long long)t->cpu.x[30]);
-    hao_diag_guest_addr(f, t->cpu.x[30]);
-    fprintf(f, "\n");
-    fflush(f);
+    char where[1100];
+    HAO_LOG(0, "bridge: REFUSED call to %s (%#llx): %s; lr=%#llx%s\n", p->name ? p->name : "?", (unsigned long long)p->native,
+            p->why ? p->why : "no reason recorded", (unsigned long long)t->cpu.x[30],
+            hao_diag_guest_where(t->cpu.x[30], where, sizeof where));
+    fflush(HAO_DIAG);
     if (hao_opt.bridge_stats) hao_bridge_stats();
     abort();
 }

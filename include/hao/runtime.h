@@ -164,12 +164,20 @@ typedef struct { FILE *f; char *buf; size_t len; } hao_diag_blk;
 FILE *hao_diag_block(hao_diag_blk *b);
 void hao_diag_block_end(hao_diag_blk *b);
 void hao_diag_prefix(FILE *f);            /* "hao[prog:pid]: " */
+/* hao's diagnostic line: HAO_LOG(level, fmt, ...) writes "hao[prog:pid]: "
+ * and the message to HAO_DIAG (stderr, or the console and hao_crash's log)
+ * in one write, when level <= hao_verbose: 0 always, 1 under -v, 2 under
+ * -vv, 3 under -vvv. The arguments are evaluated only then. fmt ends the
+ * line itself ("\n"). Not in signal handlers (stdio). */
+#define HAO_LOG(level, ...) do { if ((level) <= hao_verbose) hao_log_line(__VA_ARGS__); } while (0)
+void hao_log_line(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* hao's own bookkeeping got no memory (`what` names the table): one
  * diagnostic, then abort, never a table that silently lost an entry. Not in
  * signal handlers. hao_alloc_check: p, or hao_oom(what) when p is NULL. */
 __attribute__((noreturn, cold)) void hao_oom(const char *what);
 static inline void *hao_alloc_check(void *p, const char *what) { if (!p) hao_oom(what); return p; }
 void hao_diag_guest_addr(FILE *f, uint64_t a);   /* " (image+off, file vmaddr V)" when a is guest code */
+const char *hao_diag_guest_where(uint64_t a, char *buf, size_t n);   /* the same text in buf ("" otherwise) */
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 /* Load the main executable from fd, the open descriptor its launcher has
  * checked (main.c); path only names it. The loader owns fd from here on.

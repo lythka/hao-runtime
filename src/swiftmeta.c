@@ -208,7 +208,7 @@ static void bad_desc_at(const walk *w, int line, uint64_t at, uint64_t to)
     if (hao_verbose < 2) return;
     Dl_info d = {0};
     bool named = to && !hao_is_trap(to) && dladdr((void *)(uintptr_t)to, &d) && d.dli_sname;
-    fprintf(stderr, "hao: swiftmeta: descriptor not followed (swiftmeta.c:%d) at %#llx%s%s%s%s\n", line,
+    HAO_LOG(0, "swiftmeta: descriptor not followed (swiftmeta.c:%d) at %#llx%s%s%s%s\n", line,
             (unsigned long long)(at - w->img->slide), to ? " -> " : "", !to ? "" : hao_is_trap(to) ? "unresolved import" : named ? d.dli_sname : "?",
             named && d.dli_fname ? " in " : "", named && d.dli_fname ? (strrchr(d.dli_fname, '/') ? strrchr(d.dli_fname, '/') + 1 : d.dli_fname) : "");
 }
@@ -1107,8 +1107,7 @@ static void abs_slots(walk *w)
         if (taken[f]) {
             if (w->a[k].kind != K_VWT && w->a[k].kind != K_WTPAT) { st_abs_kept++; continue; }
             st_abs_taken++;
-            if (hao_verbose > 1)
-                fprintf(stderr, "hao: swiftmeta: %s slot %#llx -> %#llx: address taken in code, thunked (Swift ABI slot)\n",
+            HAO_LOG(2, "swiftmeta: %s slot %#llx -> %#llx: address taken in code, thunked (Swift ABI slot)\n",
                         kinds[w->a[k].kind].name, (unsigned long long)(w->a[k].field - w->img->slide),
                         (unsigned long long)(w->a[k].target - w->img->slide));
         }
@@ -1287,8 +1286,7 @@ void hao_swiftmeta_image(hao_image *img)
     value_metadata(&w, desc, nd);
     free(desc);
     if (st_bad_ls > bad_ls) {                            /* fail closed: said, not skipped silently */
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "%s: %llu layout strings not parsed: their functions keep the NX-fault path\n",
+        HAO_LOG(0, "%s: %llu layout strings not parsed: their functions keep the NX-fault path\n",
                 strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path, (unsigned long long)(st_bad_ls - bad_ls));
     }
     typerefs(&w);
@@ -1323,8 +1321,7 @@ void hao_swiftmeta_image(hao_image *img)
     if (!isl) {
         st_unplaced += w.n;
         st_isl_failed++;
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "%s: no island within 2 GB of its Swift metadata: %zu entries keep the NX-fault path "
+        HAO_LOG(0, "%s: no island within 2 GB of its Swift metadata: %zu entries keep the NX-fault path "
                 "(fields [%#llx, %#llx), %llu KB; room %s)\n",
                 strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path, w.n, (unsigned long long)lo,
                 (unsigned long long)hi, (unsigned long long)(size >> 10),
@@ -1361,8 +1358,7 @@ void hao_swiftmeta_image(hao_image *img)
     st_fields += done;
     uint64_t us = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1000;
     st_us += us;
-    if (hao_verbose)
-        fprintf(stderr, "hao: %s: %zu Swift metadata fields -> %zu island entries (%llu KB, %llu us)\n",
+    HAO_LOG(1, "%s: %zu Swift metadata fields -> %zu island entries (%llu KB, %llu us)\n",
                 strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path, done, nt, (unsigned long long)(size >> 10),
                 (unsigned long long)us);
     free(w.e);
@@ -1461,8 +1457,7 @@ static uint64_t task_entry(uint64_t afp, bool arg)
             memcpy(rec + 4, &size, 4);
             r = (uint64_t)(uintptr_t)rec;
             __atomic_fetch_add(arg ? &st_afp_arg : &st_afp, 1, __ATOMIC_RELAXED);
-            if (hao_verbose > 1)
-                fprintf(stderr, "hao: swiftmeta: async function record %#llx (%s %#llx) -> %#llx for %s\n",
+            HAO_LOG(2, "swiftmeta: async function record %#llx (%s %#llx) -> %#llx for %s\n",
                         (unsigned long long)(afp - im->slide), strrchr(im->path, '/') ? strrchr(im->path, '/') + 1 : im->path,
                         (unsigned long long)(fn - im->slide), (unsigned long long)r, arg ? "a native Swift function's async parameter" : "a task");
         } else
@@ -1679,8 +1674,7 @@ static void kp_slot(hao_image *img, uint64_t slot)
     if (hao_dsc_bind_slot(slot)) st_kp_slots++;
     else {
         if (!st_kp_slots_left++ || hao_verbose) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "%s: key path pattern slot %#llx outside the image not bound\n", img->path,
+            HAO_LOG(0, "%s: key path pattern slot %#llx outside the image not bound\n", img->path,
                     (unsigned long long)(slot - img->slide));
         }
     }
@@ -1799,8 +1793,7 @@ void hao_swiftmeta_layout_template(uint64_t ls)
         uint64_t lim = hao_image_extent(img, ls);
         if (!lim || (ls & 7) || !ls_ops(&w, ls + 16, lim, 0) || w.oom) {
             if (!st_ls_tmpl_bad++ || hao_verbose) {
-                hao_diag_prefix(HAO_DIAG);
-                fprintf(HAO_DIAG, "%s: layout string %#llx (swift_cvw_instantiateLayoutString) not parsed: its functions "
+                HAO_LOG(0, "%s: layout string %#llx (swift_cvw_instantiateLayoutString) not parsed: its functions "
                         "keep the NX-fault path\n", strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path,
                         (unsigned long long)(ls - img->slide));
             }

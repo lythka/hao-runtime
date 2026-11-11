@@ -275,7 +275,7 @@ static void patch_struct(hao_thread *t, const cb_arg *ca)
             if (!slots) return;
         }
     }
-    if (!guest_owned(t, a, size)) { if (hao_verbose > 1) fprintf(stderr, "hao: %s at %#llx (%u bytes) is not guest-owned\n", l->name, (unsigned long long)a, size); return; }
+    if (!guest_owned(t, a, size)) { HAO_LOG(2, "%s at %#llx (%u bytes) is not guest-owned\n", l->name, (unsigned long long)a, size); return; }
     uint64_t *s = (uint64_t *)(uintptr_t)a;
     if (l->ver >= 0) {
         int64_t v = l->ver4 ? (int64_t)*(const uint32_t *)((const uint8_t *)s + l->ver) : *(const int64_t *)((const uint8_t *)s + l->ver);
@@ -284,7 +284,7 @@ static void patch_struct(hao_thread *t, const cb_arg *ca)
     for (uint32_t m = slots; m; m &= m - 1) {
         int k = __builtin_ctz(m);
         uint64_t g = __atomic_load_n(&s[k], __ATOMIC_RELAXED);
-        if (hao_verbose > 1) fprintf(stderr, "hao: %s+%d = %#llx%s\n", l->name, 8 * k, (unsigned long long)g, hao_is_guest_function(g) ? " (guest)" : "");
+        HAO_LOG(2, "%s+%d = %#llx%s\n", l->name, 8 * k, (unsigned long long)g, hao_is_guest_function(g) ? " (guest)" : "");
         if (!hao_is_guest_function(g)) continue;
         uint64_t e = hao_thunk_for(g);
         if (e != g && __atomic_compare_exchange_n(&s[k], &g, e, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))

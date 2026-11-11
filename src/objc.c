@@ -469,7 +469,7 @@ static uint64_t dsc_class(uint64_t c)
     uint64_t ro = hao_dsc_load_ptr(c + offsetof(class_t, data)) & ~7ull;
     const char *name = ro ? (const char *)(uintptr_t)hao_dsc_load_ptr(ro + offsetof(class_ro_t, name)) : NULL;
     Class k = name && hao_dsc_foreign((uint64_t)(uintptr_t)name) ? objc_getClass(name) : Nil;
-    if (hao_verbose) fprintf(stderr, "hao: objc: cache class %#llx (%s) -> %p\n", (unsigned long long)c, name ? name : "?", (void *)k);
+    HAO_LOG(1, "objc: cache class %#llx (%s) -> %p\n", (unsigned long long)c, name ? name : "?", (void *)k);
     return (uint64_t)(uintptr_t)k;
 }
 
@@ -553,7 +553,7 @@ static void ignore_class(class_t *cls, class_ro_t *ro, const char *why)
 {
     if (set_add(&ignored_classes, (uint64_t)(uintptr_t)cls)) nignored++;
     if (cls->isa && set_add(&ignored_classes, cls->isa)) nignored++;   /* its metaclass */
-    if (hao_verbose) fprintf(stderr, "hao: objc class %s ignored: %s\n", ro && ro->name ? (const char *)(uintptr_t)ro->name : "?", why);
+    HAO_LOG(1, "objc class %s ignored: %s\n", ro && ro->name ? (const char *)(uintptr_t)ro->name : "?", why);
 }
 
 /* each class's own +load, read from its class_ro_t before registration: a
@@ -647,9 +647,9 @@ static void register_class(class_t *cls, class_ro_t *ro, const struct objc_image
     bool realized = !ro || (*(const uint32_t *)(uintptr_t)(cls->data & 0x00007ffffffffff8ull) & RO_REALIZED) != 0;
     Class c;
     if (realized) {
-        if (hao_verbose > 1) fprintf(stderr, "hao: objc class %s was realized by guest code first\n", class_getName((Class)cls));
+        HAO_LOG(2, "objc class %s was realized by guest code first\n", class_getName((Class)cls));
         if (!(c = objc_readClassPair((Class)cls, info))) {
-            fprintf(stderr, "hao: objc_readClassPair failed for %s\n", class_getName((Class)cls));
+            HAO_LOG(0, "objc_readClassPair failed for %s\n", class_getName((Class)cls));
             ignore_class(cls, ro, "objc_readClassPair failed");
             return;
         }
@@ -671,17 +671,17 @@ static void register_class(class_t *cls, class_ro_t *ro, const struct objc_image
         uint64_t args[2] = {(uint64_t)(uintptr_t)cls, 0};
         c = (Class)(uintptr_t)hao_call_guest(hao_current(), ro->swiftMetadataInitializer, args, 2);
         if (c != (Class)cls || !(c = objc_readClassPair(c, info))) {
-            fprintf(stderr, "hao: swift metadata initializer failed for %s\n", (const char *)(uintptr_t)ro->name);
+            HAO_LOG(0, "swift metadata initializer failed for %s\n", (const char *)(uintptr_t)ro->name);
             ignore_class(cls, ro, "swift metadata initializer failed");
             return;
         }
     } else if (!(c = objc_readClassPair((Class)cls, info))) {
-        fprintf(stderr, "hao: objc_readClassPair failed for %s\n", (const char *)(uintptr_t)ro->name);
+        HAO_LOG(0, "objc_readClassPair failed for %s\n", (const char *)(uintptr_t)ro->name);
         ignore_class(cls, ro, "objc_readClassPair failed");
         return;
     }
     bind_guest_imps(c);
-    if (hao_verbose > 1) fprintf(stderr, "hao: objc class %s registered\n", class_getName(c));
+    HAO_LOG(2, "objc class %s registered\n", class_getName(c));
 }
 
 /* class and super references to ignored classes read nil, as the runtime's
@@ -790,8 +790,7 @@ static void defer_category(const category_t *cat, bool class_props)
     pthread_mutex_unlock(&pend_lock);
     hao_crit_leave();
     __atomic_fetch_add(&st_deferred, 1, __ATOMIC_RELAXED);
-    if (hao_verbose)
-        fprintf(stderr, "hao: objc category %s on %s deferred until the Swift runtime realizes the class\n",
+    HAO_LOG(1, "objc category %s on %s deferred until the Swift runtime realizes the class\n",
                 cat->name ? (const char *)(uintptr_t)cat->name : "?", class_getName((Class)(uintptr_t)cat->cls));
 }
 
@@ -823,7 +822,7 @@ static void class_realized(uint64_t c, bool force)
     __atomic_fetch_add(&st_late_classes, 1, __ATOMIC_RELAXED);
     bind_guest_imps((Class)(uintptr_t)c);   /* class_copyMethodList realizes it (no +initialize) */
     if (!data_realized(c)) {
-        fprintf(stderr, "hao: objc class %s not realized after its Swift metadata completed: %zu categories not attached\n",
+        HAO_LOG(0, "objc class %s not realized after its Swift metadata completed: %zu categories not attached\n",
                 class_getName((Class)(uintptr_t)c), n);
         free(mine);
         return;
@@ -832,7 +831,7 @@ static void class_realized(uint64_t c, bool force)
     free(mine);
     __atomic_fetch_add(&st_attached_late, n, __ATOMIC_RELAXED);
     if (hao_verbose > 1 || (hao_verbose && n))
-        fprintf(stderr, "hao: objc class %s realized by the Swift runtime: %zu deferred categories attached\n",
+        HAO_LOG(0, "objc class %s realized by the Swift runtime: %zu deferred categories attached\n",
                 class_getName((Class)(uintptr_t)c), n);
 }
 
@@ -961,7 +960,7 @@ void hao_objc_read_image(hao_image *img)
         remap_ignored_refs(img, "__objc_classrefs");
         remap_ignored_refs(img, "__objc_superrefs");
     }
-    if (hao_verbose > 1) fprintf(stderr, "hao: objc: classes done\n");
+    HAO_LOG(2, "objc: classes done\n");
     /* 4. categories */
     a = hao_image_section(img, NULL, "__objc_catlist", &n);
     for (uint64_t k = 0; k < n / 8; k++) {
@@ -976,14 +975,14 @@ void hao_objc_read_image(hao_image *img)
         bool class_props = (info->flags & (1u << 6)) != 0;   /* HasCategoryClassProperties: category_t has classProperties */
         if (guest_class_unknown(cat->cls)) {
             if (is_stub_class(cat->cls))
-                fprintf(stderr, "hao: objc category %s on a Swift class stub (%s) is not attached\n",
+                HAO_LOG(0, "objc category %s on a Swift class stub (%s) is not attached\n",
                         cat->name ? (const char *)(uintptr_t)cat->name : "?", img->path);
             else defer_category(cat, class_props);
             continue;
         }
         attach_category(cat, cls, class_props);
     }
-    if (hao_verbose > 1) fprintf(stderr, "hao: objc: categories done\n");
+    HAO_LOG(2, "objc: categories done\n");
 }
 
 /* +load: classes, then categories */
@@ -1259,18 +1258,15 @@ uint64_t hao_objcva_imps, hao_objcva_calls, hao_objcva_untyped, hao_objcva_decli
 static void objcva_note(hao_thread *t, Class cls, SEL sel, uint64_t imp, const char *what)
 {
     Dl_info d;
-    FILE *f = HAO_DIAG;
     hao_crit_enter();          /* dyld's lock: no guest signal handler meanwhile */
     bool named = dladdr((void *)(uintptr_t)imp, &d) && d.dli_fname;
     hao_crit_leave();
     const char *b = named ? strrchr(d.dli_fname, '/') : NULL;
-    hao_diag_prefix(f);
-    fprintf(f, "bridge: objc variadic %c[%s %s] (%s+%#llx): %s, lr=%#llx", class_isMetaClass(cls) ? '+' : '-',
+    char where[1100];
+    HAO_LOG(0, "bridge: objc variadic %c[%s %s] (%s+%#llx): %s, lr=%#llx%s\n", class_isMetaClass(cls) ? '+' : '-',
             class_getName(cls), sel_getName(sel), named ? (b ? b + 1 : d.dli_fname) : "?",
             (unsigned long long)(named ? imp - (uint64_t)(uintptr_t)d.dli_fbase : imp), what,
-            (unsigned long long)t->cpu.x[30]);
-    hao_diag_guest_addr(f, t->cpu.x[30]);
-    fprintf(f, "\n");
+            (unsigned long long)t->cpu.x[30], hao_diag_guest_where(t->cpu.x[30], where, sizeof where));
 }
 
 /* The bridge's plan for a native IMP whose prologue says variadic with g fixed GPR and f fixed FP
@@ -1414,7 +1410,7 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
         cls = kind == 1 ? class_getSuperclass(su->super_class) : su->super_class;
     }
     IMP imp = class_getMethodImplementation(cls, sel);
-    if (hao_verbose > 2) fprintf(stderr, "hao: msgSend [%s %s]\n", class_getName(cls), sel_getName(sel));
+    HAO_LOG(3, "msgSend [%s %s]\n", class_getName(cls), sel_getName(sel));
     c->x[0] = (uint64_t)(uintptr_t)recv;
     uint64_t g = hao_guest_of_entry((uint64_t)(uintptr_t)imp);
     if (g) { c->pc = g; return; }               /* guest method: stay in translated code */

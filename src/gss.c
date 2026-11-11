@@ -368,6 +368,6 @@ bool hao_gss_interpose(const char *name, uint64_t *addr)
     }
     }
     U();
-    if (hao_verbose > 1) fprintf(stderr, "hao: GSS data %s (%c) bound to an arm64-layout copy\n", name, kind);
+    HAO_LOG(2, "GSS data %s (%c) bound to an arm64-layout copy\n", name, kind);
     return true;
 }
