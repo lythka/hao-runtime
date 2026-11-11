@@ -33,6 +33,10 @@ static void test_tiers(void)
     CHECK(hao_env_tier_for(&g) == HAO_ENV_GUARDED, "root daemon (ppid 1) is GUARDED");
     g = f; g.ppid = 1;
     CHECK(hao_env_tier_for(&g) == HAO_ENV_OPEN, "user agent (ppid 1, uid 501) is OPEN");
+    g = f; g.identity = true;
+    CHECK(hao_env_tier_for(&g) == HAO_ENV_GUARDED, "a listed Apple program (stub-identities) run by a user is GUARDED");
+    g.setugid = true;
+    CHECK(hao_env_tier_for(&g) == HAO_ENV_SETUGID, "a listed set-ID program stays SETUGID");
     g = f; g.uid = g.euid = 0;
     CHECK(hao_env_tier_for(&g) == HAO_ENV_GUARDED, "root shell (ppid != 1) is GUARDED");
     g = f; g.uid = g.euid = 0; g.gid = g.egid = 0; g.ppid = 77;

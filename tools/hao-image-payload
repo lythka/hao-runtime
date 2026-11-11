@@ -11,6 +11,8 @@
 #     OUT/root/usr/lib/hao/trusted-cdhashes      (tools/hao-trust-list: cdhashes of every Apple-signed
 #                                                 arm64-only program under ROOT, so hao verifies them
 #                                                 with no daemon running; OUT/trust.log lists the rest)
+#     OUT/root/usr/lib/hao/stub-identities       (tools/hao-trust-list --stubs: stub cdhash, Apple arm64
+#                                                 slice cdhash and path of each embedded Apple program)
 #     OUT/HaoExec.kext, OUT/stamp_identity.py   (kernel identity stamped at image build)
 #     OUT/embed/{manifest.json,stubs/}           (tools/hao-embed: every arm64-only program
 #                                                 under ROOT, or the paths in LIST)
@@ -231,6 +233,11 @@ fi
 python3 "$H/tools/hao-trust-list" "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
 chmod 644 "$OUT/root/usr/lib/hao/trusted-cdhashes"
 head -1 "$OUT/root/usr/lib/hao/trusted-cdhashes"
+# Which stub runs which Apple program: the stubs whose named arm slice is in the list above
+python3 "$H/tools/hao-trust-list" --stubs "$OUT/embed" "$OUT/root/usr/lib/hao/trusted-cdhashes" "$ROOT" \
+    > "$OUT/root/usr/lib/hao/stub-identities" 2> "$OUT/stub-identities.log"
+chmod 644 "$OUT/root/usr/lib/hao/stub-identities"
+head -1 "$OUT/root/usr/lib/hao/stub-identities"
 # The x86_64 dyld PID-1 boot-spec fix (27.x). The fix's exit status is
 # handled here, so set -e never ends the script inside it, and replace/
 # exists only for a dyld the fix wrote.
@@ -502,6 +509,7 @@ json.dump({'unit': 'hao-image-payload', 'revision': 10, 'date': datetime.date.to
            'bound_info_plist': sum(any(b['slot'] == -1 and 'file' in b for b in e.get('bound', [])) for e in m['files']),
            'bound_resources': sum(any(b['slot'] == -3 for b in e.get('bound', [])) for e in m['files']),
            'trusted_cdhashes': sum(1 for l in open(os.path.join(out, 'root/usr/lib/hao/trusted-cdhashes')) if l[:1] not in '#\n'),
+           'stub_identities': sum(1 for l in open(os.path.join(out, 'root/usr/lib/hao/stub-identities')) if l[:1] not in '#\n'),
            'required': m['required'],
            'stub_sha256': m['stub_sha256'], 'x86_cache_uuid': m.get('x86_cache_uuid'),
            # stubs whose launch images include CoreFoundation (linked, or loaded by what they link)

@@ -379,6 +379,76 @@ file, else the kernel's path for its vnode, and never another file. A process
 whose credentials changed at exec (set-user-ID or set-group-ID: `issetugid()`,
 or a real ID that differs from the effective one) does not re-execute.
 
+### Apple identity for listed programs
+
+The kernel runs an embedded program's stub, which is signed ad hoc. With
+AMFI's checks off, as on the MacBookPro9,2 image (`amfi_get_out_of_my_way=1`),
+the kernel already reports a stub much as it reports the native program:
+platform binary, the program's signing identifier, no Team ID. Measured on
+26B131 with `csops`, SecCode and SecTask for `loginwindow` and `Dock`. Two
+things differ: the cdhash is the stub's, and the signature has no Apple
+anchor. So every check of a code requirement (`anchor apple`,
+`certificate leaf[...]`, `cdhash`) fails against a stub. An example is authd's
+gate on `FUSAutologinDataKey`, which requires `anchor apple` and the identifier
+`com.apple.loginwindow`. Native programs that the image builder re-signs ad hoc
+fail the same way.
+
+Two lists, both in `/usr/lib/hao`, say which code stands for which Apple
+program (`include/hao/idlist.h`):
+
+- `stub-identities` is written by `tools/hao-image-payload` through
+  `tools/hao-trust-list --stubs`. It holds each embedded program's stub cdhash
+  next to the cdhash of its arm64 slice. A stub is listed only if its signed
+  `__hao_slice` record names that slice and the slice's cdhash is in
+  `trusted-cdhashes`, that is, it is Apple's.
+- `native-identities` is written by the image builder. It maps a native
+  program it re-signed ad hoc to the Apple-signed original it was made from.
+
+A list is read only if root owns it and every directory above it, none of
+them can be written by group or others, none is a symbolic link and none has
+an extended ACL. A row whose reference is itself listed is dropped, so a
+reference is never followed further.
+
+The image's x86_64 Security.framework calls `hao_codeid_decide`
+(`src/code_identity.c`, `build/libhao_codeid.a`, no libhao) after its own
+validity checks. The decision changes nothing but a requirement failure
+(`errSecCSReqFailed`) of a listed code. For running code, the code must first
+pass the check with no requirement, so the running code is its file and its
+cdhash is the kernel's. The listed reference is then opened at its path and
+architecture and must have exactly the listed cdhash. The caller's own
+requirement is evaluated against that reference's Apple signature, and that
+verdict is returned. A listed stub therefore satisfies exactly the requirements
+its Apple program satisfies. Kernel flags, entitlements and TCC grants do not
+change, and `/usr/libexec/hao` (the routed path) is never listed.
+`tests/tools/codeid.sh` checks this against Apple's `true` and `sleep`.
+
+What this trusts, and what stops an attacker:
+
+- **A stub someone else made.** Anyone can sign an x86_64 slice ad hoc and
+  name an Apple arm64 slice in its `__hao_slice`. Its cdhash is not in the
+  list, so it gets nothing. The list holds only stubs the image builder made,
+  on the sealed System volume. Their x86_64 code is `hao-stub` and libhao, and
+  hao runs only the arm64 slice the stub names, which it verifies first.
+- **Rewriting a listed file.** The System volume is sealed, and the kernel
+  checks the running stub's pages against its CodeDirectory.
+- **`HAO_*` switches.** A process whose own cdhash is listed runs in the
+  guarded tier (`src/trust.c`). A user's `HAO_TRUST_LIST`, `HAO_FLAGS` or
+  `HAO_IF_DIR` therefore cannot load foreign code into a process that then
+  passes as Apple's.
+- **`DYLD_*` variables.** With AMFI's checks off, dyld honours
+  `DYLD_INSERT_LIBRARIES` in every process. Measured on 26B131: the library
+  was inserted into the stub of `/usr/bin/sw_vers`, a platform, hardened and
+  `restrict` program, for an ordinary user and for root. The same policy
+  applies to Apple-signed native programs; that is inferred, not measured. So
+  on such an image any local user can already run code in a process that passes
+  `anchor apple` with an Apple identifier, for example an Apple-signed x86_64
+  program from an earlier release with an inserted library. The lists do not
+  widen that. Where AMFI's dyld policy is in force, dyld ignores `DYLD_*` for a
+  listed stub, because hao-embed signs platform and hardened programs' stubs
+  with the hardened runtime, and the guarded tier covers hao's own switches.
+- **A translator bug reachable from input** inside such a process is the same
+  class of risk as a memory bug in the native Apple program.
+
 Because any user can run any ARM code through it, **`/usr/libexec/hao` must
 never be given privileges**: no TCC grants, configuration profiles, extra
 entitlements, platform or trust-cache status, or set-ID bits. Its own
@@ -405,6 +475,12 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   nothing else changes the System volume during the install, as in an image
   builder.
 - A routed process cannot take on the guest's code identity or entitlements.
+  An embedded program's stub keeps its own cdhash and ad hoc signature in the
+  kernel. Only Security.framework's requirement checks answer for a listed stub
+  as its Apple program (Apple identity for listed programs), and only where
+  the image's Security.framework calls `hao_codeid_decide`. Checks that
+  compare cdhashes through `csops` (a pinned cdhash, a trust cache) still see
+  the stub. `SecCodeCopySigningInformation` still describes the stub.
 - In the command-line route, native library initializers run before hao's
   check. If one of them asks for the main executable's path or sections, it
   is answered from the file `HAO_EXEC` names, unchecked. A file that fails

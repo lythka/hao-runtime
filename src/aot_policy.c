@@ -158,6 +158,9 @@ int hao_env_tier_for(const hao_proc_facts *f)
      * through sudo, a login session or a job's plist from someone who is not
      * root, and what it would choose (code, paths, checks) runs as root. */
     if (f->pid == 1 || f->euid == 0 || f->restricted || f->entitled) t = HAO_ENV_GUARDED;
+    /* A program Security.framework may answer for as Apple's (docs/security-model.md, Identity):
+     * nothing from the environment may change what it loads or trusts. */
+    if (f->identity) t = HAO_ENV_GUARDED;
     if (f->setugid || f->uid != f->euid || f->gid != f->egid) t = HAO_ENV_SETUGID;
     if (f->distrust > t) t = f->distrust > HAO_ENV_SETUGID ? HAO_ENV_SETUGID : f->distrust;
     return t;

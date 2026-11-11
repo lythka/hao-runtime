@@ -36,7 +36,7 @@ CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c
         src/a64_imm.c src/a64_cond.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
-RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/guest_sig.c src/main.c src/unwind.c
+RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
 RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c
 RT += src/swiftvalue/Recipe.c src/swiftvalue/Enum.c src/swiftvalue/Common.c src/swiftvalue/Aggregate.c
@@ -53,7 +53,7 @@ FRONT_LD := -Wl,-rpath,@executable_path -Wl,-rpath,$(HAO_LIBDIR)
 FRONT_CFLAGS := $(ARCH) -O2 $(WARN)
 
 .PHONY: all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke
-all: $(B)/libhaocore.a $(B)/libhao.dylib $(B)/hao $(B)/hao-stub $(B)/front/stub.o
+all: $(B)/libhaocore.a $(B)/libhao.dylib $(B)/hao $(B)/hao-stub $(B)/front/stub.o $(B)/libhao_codeid.a
 
 $(MIN_STAMP):
 	@mkdir -p $(B)
@@ -90,6 +90,15 @@ $(B)/hao: src/front/cli.c $(B)/libhao.dylib $(B)/libhao_identity.dylib
 $(B)/front/stub.o: src/front/stub.c $(MIN_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(FRONT_CFLAGS) -c $< -o $@
+
+# The code identity Security.framework gives listed stubs and re-signed native programs
+# (include/hao/codeid.h): no libhao, for the image's x86_64 Security.framework to link.
+CODEID_O := $(B)/codeid/code_identity.o $(B)/codeid/idlist.o
+$(B)/codeid/%.o: src/%.c include/hao/codeid.h include/hao/idlist.h $(MIN_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(FRONT_CFLAGS) $(REPRO) -c $< -o $@
+$(B)/libhao_codeid.a: $(CODEID_O)
+	rm -f $@ && libtool -static -o $@ $(CODEID_O)
 
 # Unsigned: tools/hao-embed signs each copy with its program's identity.
 $(B)/hao-stub: src/front/stub.c $(B)/libhao.dylib $(B)/libhao_identity.dylib $(MIN_STAMP)

@@ -17,10 +17,12 @@ include/hao/aot.h
 include/hao/async_contract.h
 include/hao/bridge.h
 include/hao/code.h
+include/hao/codeid.h
 include/hao/cpu.h
 include/hao/gen_stamp.h
 include/hao/gmap.h
 include/hao/identity.h
+include/hao/idlist.h
 include/hao/macho.h
 include/hao/native_bundle.h
 include/hao/opts.h
@@ -166,6 +168,7 @@ src/bridge.c
 src/bridge_x86_64.S
 src/callbacks.c
 src/code.c
+src/code_identity.c
 src/commpage.c
 src/cxxstr.c
 src/cxxstr_gen.inc
@@ -178,6 +181,7 @@ src/gmap.c
 src/gss.c
 src/gss_gen.inc
 src/guest_sig.c
+src/idlist.c
 src/ifunit.c
 src/interpose.c
 src/intvarargs_gen.inc
@@ -646,6 +650,8 @@ tests/oss265/rename.h
 tests/oss265/run.sh
 tests/tools/aotpayload.sh
 tests/tools/bundle.sh
+tests/tools/codeid.sh
+tests/tools/codeid_test.c
 tests/tools/identity.sh
 tests/tools/identity_helper.c
 tests/tools/identity_main.c
