@@ -893,6 +893,7 @@ _Unwind_Reason_Code hao_eh_personality(int version, _Unwind_Action actions, uint
             t->swift_values = s->prev ? s->prev->swift_values_at_entry : NULL;
             t->seg = s->prev;
             t->depth = s->depth - 1;
+            hao_ncache_abandon(t, s->depth);
             if (hao_verbose > 1) fprintf(stderr, "hao: unwind: left segment depth %d\n", s->depth);
         }
         return _URC_CONTINUE_UNWIND;
@@ -923,6 +924,7 @@ _Unwind_Reason_Code hao_eh_personality(int version, _Unwind_Action actions, uint
 /* The NATIVE guard stopped an exception: start running guest pads. */
 void hao_eh_landed(hao_thread *t)
 {
+    hao_ncache_abandon(t, t->depth);   /* the frames above the guard, among them a cache store at this depth */
     struct _Unwind_Exception *ue = t->eh_landed;
     t->eh_landed = NULL;
     seg_continue(t, ue);

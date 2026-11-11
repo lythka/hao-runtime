@@ -435,18 +435,22 @@ static uint64_t trace_word(uint64_t a)
  *
  * Concurrency. Only the owning thread reads or writes its table, so there is
  * no sharing; but a guest signal handler may run on top of a probe or a
- * store on the same thread and use the table itself. A store marks the
- * thread busy for its whole duration and counts itself (ncache_wseq) when
- * done: a handler that interrupts a store misses on every probe and skips
+ * store on the same thread and use the table itself. A store owns the
+ * thread's table for its whole duration (ncache_owner: its segment depth,
+ * set and cleared by single stores, so a handler sees either no owner or
+ * the real one) and counts itself (ncache_wseq) when done: a handler that interrupts a store misses on every probe and skips
  * its own stores, so no entry is ever written by two stores at once; a
  * probe that a handler's completed store interrupted sees the count change
  * and misses. Either way the slow path runs instead. A handler that leaves
  * by a nonlocal jump (a guest siglongjmp, or a pc it moved) re-enters some
  * segment's hao_run and abandons every frame above it there: a store running
  * at that segment's depth or deeper never finishes, so the re-entry clears
- * its busy mark (a jump into a handler above the store leaves the store, and
- * its mark, alone). Nothing here allocates or locks. The fork child invalidates every table (fork_child): a plan
- * published just before the fork may not have bumped the generation yet. */
+ * its ownership; so does an exception that unwinds through it (unwind.c: the
+ * NATIVE guard's landing, and leaving a segment). A jump or an exception
+ * into a handler above the store leaves the suspended store's ownership
+ * alone. Nothing here allocates or locks. The fork child invalidates every
+ * table (fork_child): a plan published just before the fork may not have
+ * bumped the generation yet. */
 
 static inline unsigned ncache_slot(uint64_t pc)
 {
@@ -458,23 +462,21 @@ static inline bool ncache_get(hao_thread *t, uint64_t pc, uint64_t *target, uint
     __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
     uint32_t seq = __atomic_load_n(&t->ncache_wseq, __ATOMIC_RELAXED);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    if (__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED) || e->pc != pc) return false;
+    if (__atomic_load_n(&t->ncache_owner, __ATOMIC_RELAXED) || e->pc != pc) return false;
     uint64_t gen = e->gen;
     *target = e->target;
     *x1 = e->x1;
     *plan = e->plan;
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    return __atomic_load_n(&t->ncache_wseq, __ATOMIC_RELAXED) == seq && !__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED) &&
+    return __atomic_load_n(&t->ncache_wseq, __ATOMIC_RELAXED) == seq && !__atomic_load_n(&t->ncache_owner, __ATOMIC_RELAXED) &&
            __atomic_load_n(&e->pc, __ATOMIC_RELAXED) == pc && gen == __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE);
 }
 
 static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target, uint64_t x1, const hao_plan *plan)
 {
     if (!pc || gen != __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE)) return;
-    if (__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED)) return;   /* a handler on top of an unfinished store */
-    t->ncache_busy_depth = t->depth;
-    __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    __atomic_store_n(&t->ncache_busy, 1, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&t->ncache_owner, __ATOMIC_RELAXED)) return;   /* a handler on top of an unfinished store */
+    __atomic_store_n(&t->ncache_owner, t->depth > 0 ? t->depth : 1, __ATOMIC_RELAXED);   /* ownership and depth in one store */
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
     __atomic_store_n(&e->pc, 0, __ATOMIC_RELAXED);
@@ -488,7 +490,7 @@ static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     __atomic_store_n(&t->ncache_wseq, t->ncache_wseq + 1, __ATOMIC_RELAXED);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    __atomic_store_n(&t->ncache_busy, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&t->ncache_owner, 0, __ATOMIC_RELAXED);
 }
 
 /* One native call or trap of segment `arg`. Runs inside a NATIVE guard
@@ -657,7 +659,7 @@ void hao_run(hao_thread *t, const hao_cpu *outer)
     if (_setjmp(seg.jb)) {
         t->swift_values = seg.swift_values_at_entry;
         /* frames above this hao_run are gone, among them an interrupted cache store at this depth or deeper */
-        if (t->ncache_busy && t->ncache_busy_depth >= seg.depth) __atomic_store_n(&t->ncache_busy, 0, __ATOMIC_RELAXED);
+        hao_ncache_abandon(t, seg.depth);
     }
     hao_eh_guard(run_loop, &seg, HAO_GUARD_ENTRY);
     t->seg = seg.prev;
