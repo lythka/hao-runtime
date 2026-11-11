@@ -6,7 +6,8 @@
 # tests/tools/stubdeps.sh (the stub links the program's native dependencies; per-stub LC_UUIDs),
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
 # tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
-# tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted) and
+# tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
+# tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
 # Supply KC explicitly for read-only kernel collection checks; stamp cases
@@ -142,6 +143,8 @@ OUT=$OUT/platform B=$B X86_CACHE=$X86 "$here/platform.sh" || bad "tests/tools/pl
 OUT=$OUT/identity B=$B X86_CACHE=$X86 "$here/identity.sh" || bad "tests/tools/identity.sh"
 # --- AOT caches in the payload (hao-image-payload --aot) and as hao-install.py installs them
 OUT=$OUT/aotpayload X86_CACHE=$X86 "$here/aotpayload.sh" || bad "tests/tools/aotpayload.sh"
+# --- the code identity of listed stubs and re-signed native programs (stub-identities, native-identities)
+OUT=$OUT/codeid B=$B "$here/codeid.sh" || bad "tests/tools/codeid.sh"
 # --- the packaging tools' signature reader and the runtime's give one answer (the fuzz corpus and mutations of it)
 if make -s -C "$repo" B="$B" "$B/test_macho" >"$OUT/codesig.build.log" 2>&1 &&
    r=$(python3 -I "$here/test_codesig.py" "$B/test_macho" "$OUT" 2>&1); then pass "code signature readers: $r"

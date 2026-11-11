@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """hao-trust-list ROOT [LIST] > trusted-cdhashes
+       hao-trust-list --stubs EMBED_DIR TRUSTED ROOT > stub-identities
        hao-trust-list --cdhash FILE...
 
 The cdhash list that lets hao (src/guest_sig.c) recognise a release's
@@ -24,11 +25,25 @@ type, first 20 bytes). hao-image-payload installs the list as
 usr/lib/hao/trusted-cdhashes; hao reads it only if root owns it and its
 directories and nobody else can write them. --cdhash prints the cdhash of
 each FILE's arm64 slice (tests use it).
+
+--stubs lists the stubs that tools/hao-embed made for Apple programs (EMBED_DIR
+holds its manifest.json and stubs/), one line each:
+
+    <40 hex: the stub's cdhash>  <40 hex: the arm64 slice's cdhash>  <arch>  <path under ROOT>
+
+A stub is listed only if the arm slice its signed __TEXT,__hao_slice record
+names is the arm64 slice of ROOT/path and that cdhash is in TRUSTED (the list
+above, so `anchor apple`). The stub's cdhash is the one the kernel reports for
+the running program. hao-image-payload installs the list as
+usr/lib/hao/stub-identities, read under the same ownership rules (the format
+of include/hao/idlist.h, shared with native-identities): it says which x86_64
+stubs run which Apple program (docs/security-model.md, Identity).
 """
 import concurrent.futures
 import hashlib
 import importlib.machinery
 import importlib.util
+import json
 import os
 import plistlib
 import struct
@@ -149,8 +164,67 @@ def verdict(root, path):
     return h, rel, None
 
 
+LC_SEGMENT_64 = 0x19
+SLICE_SECTION = (b"__TEXT", b"__hao_slice")
+
+
+def section(macho, segname, sectname):
+    """The bytes of a thin 64-bit Mach-O's section, or None."""
+    for cmd, off, _ in hao_embed.load_commands(macho):
+        if cmd != LC_SEGMENT_64 or macho[off + 8:off + 24].rstrip(b"\0") != segname:
+            continue
+        nsects = struct.unpack_from("<I", macho, off + 64)[0]
+        for k in range(nsects):
+            s = off + 72 + 80 * k
+            if macho[s:s + 16].rstrip(b"\0") == sectname:
+                size, fileoff = struct.unpack_from("<QI", macho, s + 40)
+                return macho[fileoff:fileoff + size]
+    return None
+
+
+def stub_identities(embed, trusted_path, root):
+    """[(stub cdhash, arm cdhash, arch, path)] for the stubs of EMBED whose named arm slice is trusted."""
+    trusted = {l.split()[0].lower() for l in open(trusted_path) if l.strip() and not l.startswith("#")}
+    manifest = json.load(open(os.path.join(embed, "manifest.json")))
+    out, why = [], []
+    for e in manifest["files"]:
+        path = e["path"]
+        try:
+            stub = open(os.path.join(embed, e["stub"]), "rb").read()
+            rec = section(stub, *SLICE_SECTION)
+            if rec is None or len(rec) != 32 or rec[:8] != hao_embed.SLICE_MAGIC or rec[8] != 1:
+                why.append((path, "the stub has no __hao_slice record v1"))
+                continue
+            named = rec[12:32].hex()
+            mo, arch = slice_and_arch(open(os.path.join(root, path), "rb").read())
+            if mo is None or cdhash(mo) != named:
+                why.append((path, "the stub's __hao_slice does not name the program's arm64 slice"))
+                continue
+            if named not in trusted:
+                why.append((path, "arm64 slice not in the trusted list"))
+                continue
+            sh = cdhash(stub)
+            if sh is None:
+                why.append((path, "the stub is not signed"))
+                continue
+            out.append((sh, named, arch, path))
+        except (OSError, ValueError, KeyError, struct.error) as ex:
+            why.append((path, str(ex)))
+    return sorted(out), why
+
+
 def main():
     a = sys.argv[1:]
+    if a and a[0] == "--stubs":
+        if len(a) != 4:
+            sys.exit(__doc__.split("\n\n")[0])
+        ok, why = stub_identities(a[1], a[2], os.path.realpath(a[3]))
+        print("# hao stub identities v1: %d stubs (stub cdhash, Apple arm64 slice cdhash, arch, path)" % len(ok))
+        for s, h, ar, p in ok:
+            print("%s  %s  %s  %s" % (s, h, ar, p))
+        for p, w in why:
+            print("hao-trust-list: stub not listed: %s: %s" % (p, w), file=sys.stderr)
+        return 0
     if a and a[0] == "--cdhash":
         for p in a[1:]:
             mo, _ = slice_and_arch(open(p, "rb").read())

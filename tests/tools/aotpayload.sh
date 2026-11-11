@@ -112,6 +112,28 @@ for f in sbin/launchd usr/libexec/xpcproxy usr/bin/prog; do
 done
 [ $okc = 1 ] && pass "A each cache header carries its program's cdhash (tools/hao-trust-list --cdhash)"
 
+# stub-identities: none for these ad hoc programs; with a list that trusts usr/bin/prog's arm slice,
+# its stub (and the hard link's) are listed with the cdhash the kernel would report for the stub
+SI=$P/root/usr/lib/hao/stub-identities
+[ -f "$SI" ] && [ "$(grep -vc '^#' "$SI")" = 0 ] && [ "$(stat -f %Lp "$SI")" = 644 ] \
+    && python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["stub_identities"] == 0' "$P/build.json" \
+    && pass "A stub-identities 0644, empty for ad hoc programs (build.json stub_identities 0)" || bad "A stub-identities: $(cat "$SI" 2>&1 | head -3)"
+arm=$(python3 -I "$repo/tools/hao-trust-list" --cdhash "$R/usr/bin/prog" | awk '{print $1}')
+printf '# test\n%s  usr/bin/prog\n' "$arm" >"$OUT/trusted-prog"
+python3 -I "$repo/tools/hao-trust-list" --stubs "$P/embed" "$OUT/trusted-prog" "$R" >"$OUT/stubids" 2>"$OUT/stubids.err"
+python3 - "$OUT/stubids" "$P/embed" "$arm" <<'PY' && pass "A --stubs lists exactly the trusted program's stubs: stub cdhash (codesign's), arm cdhash, path" || bad "A --stubs: $(cat "$OUT/stubids" "$OUT/stubids.err" | head -6)"
+import json, os, subprocess, sys
+lst, embed, arm = sys.argv[1:]
+rows = [l.split() for l in open(lst) if not l.startswith('#')]
+m = {e['path']: e for e in json.load(open(os.path.join(embed, 'manifest.json')))['files']}
+want = sorted(p for p in m if p in ('usr/bin/prog', 'usr/sbin/prog2'))
+assert want and sorted(r[3] for r in rows) == want and all(r[2] == 'arm64e' for r in rows), rows
+for stub, a, _, p in rows:
+    out = subprocess.run(['codesign', '-dvvv', os.path.join(embed, m[p]['stub'])], capture_output=True, text=True).stderr
+    cd = [l.split('=', 1)[1] for l in out.splitlines() if l.startswith('CDHash=')]
+    assert a == arm and cd == [stub], (stub, a, p, cd)
+PY
+
 # --- B: hao-install.py, with modes the installer must fix and a stale cache
 S=$OUT/sys
 cp -R "$R" "$S"

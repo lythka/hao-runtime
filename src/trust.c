@@ -5,11 +5,14 @@
  * bits, its entitlements, PID 1. The environment of such a process comes
  * from someone less privileged (or, for PID 1 and daemons, from launchd),
  * so HAO_* switches that choose code, paths, checks or bridging are
- * honoured only in an ordinary user's process (never root's). The tier is computed once; children re-exec and
- * compute their own.
+ * honoured only in an ordinary user's process (never root's), and never in a
+ * program Security.framework answers for as an Apple program (its cdhash in
+ * stub-identities or native-identities, hao/idlist.h). The tier is computed
+ * once; children re-exec and compute their own.
  */
 #include "hao/runtime.h"
 #include "hao/aot.h"
+#include "hao/idlist.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <pthread.h>
@@ -22,6 +25,15 @@
 int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define CS_OPS_ENTITLEMENTS_BLOB 7
 #define CS_OPS_DER_ENTITLEMENTS_BLOB 16
+#define CS_OPS_CDHASH 5
+
+/* Is this process listed as an Apple program's stand-in (stub-identities, native-identities)?
+ * Its cdhash as the kernel holds it. Unknown counts as not listed (the other facts still apply). */
+static bool listed(void)
+{
+    uint8_t h[20];
+    return csops(getpid(), CS_OPS_CDHASH, h, sizeof h) == 0 && hao_idlist_find(h) != NULL;
+}
 
 /* Entitlements beyond hao's own (allow-jit, disable-library-validation).
  * Anything we cannot read counts as entitled. */
@@ -50,6 +62,7 @@ static void tier_init(void)
     bool (*restricted)(void) = (bool (*)(void))dlsym(RTLD_DEFAULT, "dyld_process_is_restricted");
     f.restricted = restricted && restricted();
     f.entitled = entitled();
+    f.identity = listed();
     f.pid = getpid();
     f.ppid = getppid();
     f.uid = getuid(); f.euid = geteuid();

@@ -135,6 +135,8 @@ typedef struct {
     bool setugid;           /* issetugid() */
     bool restricted;        /* dyld_process_is_restricted() */
     bool entitled;          /* entitlements beyond allow-jit/disable-library-validation */
+    bool identity;          /* its cdhash is in stub-identities or native-identities: it may
+                             * be answered for as an Apple program (hao/idlist.h) */
     long pid, ppid;
     uid_t uid, euid;
     gid_t gid, egid;
