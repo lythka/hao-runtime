@@ -2,7 +2,8 @@
 # Guest calls of libswiftCore's Optional, tuple and array witnesses on nested Optionals whose outer nil is
 # a pointer extra inhabitant (tests/guest/optwitness.swift): guest code writes that nil inline as arm64's
 # 1, the x86_64 witnesses read 2; a lazy `(any P)?` property destroyed unread is one such call. Payloads: an existential, a class-bound existential, a Swift class, AnyObject and
-# [Int]. The program is arm64 natively and arm64e under hao (JIT, --interp, AOT); every line must equal
+# [Int]; and a guest struct whose nil is carried by a resilient native struct's Optional (OSSignposter?).
+# The program is arm64 natively and arm64e under hao (JIT, --interp, AOT); every line must equal
 # native arm64.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/optwitness.sh
 set -u

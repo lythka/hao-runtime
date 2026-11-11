@@ -84,7 +84,16 @@ arm64 inhabitants are kept. A borrowed source is converted in a scratch copy
 and an owned one in place. A value the witness produces gets back its
 source's bits at those offsets, so a value keeps the encoding it came with:
 a native-made value passing through guest generic code stays x86_64. A nil
-made from nothing (storing or injecting a tag) gets the guest's encoding.
+made from nothing (storing or injecting a tag) gets the guest's encoding
+where guest code can read it inline: every struct on the path to its word
+is defined by a guest image (or is `Array` or `String`). Inside a struct of
+a native module, which may be resilient (libswiftos `OSSignposter`), the
+nil keeps the native encoding. Only native witnesses read it there,
+including those native code reaches while handling an enclosing guest
+struct, and no conversion sees those. Converting it anyway once made a
+guest `Optional` of a struct whose first field is `OSSignposter?` read as
+present when nil: the native tag read took the guest's 1 for a payload,
+copies duplicated garbage, and a force unwrap in the guest trapped.
 Only the outer-nil words change, never a live payload. A value the walk
 cannot prove is handed over unchanged, as before. The walk follows
 existential payloads (opaque and class-bound; not the Error box or other
@@ -98,7 +107,11 @@ of an existential, a class-bound existential, a Swift class, `AnyObject` and
 `[Int]`, in each of nil, some(nil) and some(some) form, plus a class whose
 lazy `(any P)?` property is destroyed unread, read as nil, and read as a
 value. Before the change it crashed under JIT, `--interp` and AOT at the
-first copy; after it, all 94 lines equal native arm64.
+first copy; after it, all 94 lines equal native arm64. It now also copies,
+assigns, tests and drops nil, full and empty values of `Optional` of such a
+guest struct, and makes a nil one through generic code. Before the narrower
+nil rule that case stopped with "Unexpectedly found nil" in all three modes;
+now all 101 lines equal native arm64.
 
 Remaining limitations:
 - Native code that reads such a value itself, rather than a witness the guest
@@ -107,6 +120,9 @@ Remaining limitations:
   it with the witness natively) and `swift_dynamicCast` out of `Any`. Memory
   that guest inline code and native code both read can hold only one
   encoding. That is the open part of `guest/xinhab`, which stays `xfail`.
+- A frozen struct of a native module other than `Array` and `String`,
+  which guest code could read inline, gets no guest-encoded nil when one is
+  made inside it. The descriptor does not say whether a struct is frozen.
 - Witnesses of native generic structs and enums other than Optional (each
   type has its own) are not recognized. Neither are value boxes (an `Any`
   holding such a value is destroyed by the box's witness).
