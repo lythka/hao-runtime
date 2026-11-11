@@ -238,6 +238,7 @@ tests/a64/test_imm_cond.c
 tests/abi/test_layout.m
 tests/aot/helper_descriptor.c
 tests/aot/installed.c
+tests/aot/jit_vector.c
 tests/aot/loadtime.c
 tests/aot/opts_test.c
 tests/aot/patch.py
@@ -585,6 +586,7 @@ tests/guest/varsniff.m
 tests/guest/varsniff.sh
 tests/guest/varsniffhelper.c
 tests/guest/varsniffhelper.h
+tests/guest/vbench.c
 tests/guest/x8.c
 tests/guest/x8helper.c
 tests/guest/x8helper.h

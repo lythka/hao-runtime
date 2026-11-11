@@ -229,8 +229,14 @@ $(B)/test_helper_descriptor: tests/aot/helper_descriptor.c $(B)/jit.o $(B)/stubs
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	codesign -s - -f $@
 
-unit: $(B)/test_helper_descriptor $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap
+# Translated vector FP, shifts and structure loads/stores against the interpreter.
+$(B)/test_jit_vector: tests/aot/jit_vector.c $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
+	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
+	codesign -s - -f $@
+
+unit: $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap
 	timeout -s KILL 90 $(B)/test_helper_descriptor
+	timeout -s KILL 120 $(B)/test_jit_vector
 	$(B)/test_imm_cond
 	timeout -s KILL 120 $(B)/test_gmap
 	$(B)/test_abi_layout

@@ -294,6 +294,9 @@ typedef struct {
     uint64_t base;          /* guest image base the code is relative to */
     uint8_t *base_slot;     /* where the runtime stores `base` (rip-relative) */
     bool in_eflags, dirty;
+    /* xmm5-7 hold t_vfp32's constants: set by a vector FP translation,
+     * kept for the next instruction only (vfp_prev while it is emitted) */
+    bool vfp_consts, vfp_prev;
     bool pic;               /* AOT: every guest address must be base-relative */
     bool not_pic;           /* ... and one was not (the blob is not written) */
     bool live_out[MAX_BLOCK_INSNS + 1];
@@ -1726,10 +1729,22 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
     return true;
 }
 
+static void vnarrow(tctx *t, int oes);
+static void vst_narrow(tctx *t, unsigned rd, int Q);
+static bool t_vfp_absneg(tctx *t, uint32_t i);
+
 static bool t_simd_two_misc(tctx *t, uint32_t i)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 16, 12);
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (op == 0x0F && (size & 2)) return t_vfp_absneg(t, i);    /* FABS / FNEG */
+    if (op == 0x12 && !U) {                                      /* XTN, XTN2 (SQXTUN: helper) */
+        if (size == 3) return false;                             /* unallocated */
+        vld(t, 0, rn);
+        vnarrow(t, 1 << size);
+        vst_narrow(t, rd, (int)Q);
+        return true;
+    }
     if (op == 0x05) {
         if (size) return false;                                  /* RBIT: helper */
         vld(t, 0, rn);
@@ -1860,40 +1875,400 @@ static bool t_simd_copy(tctx *t, uint32_t i)
     }
 }
 
-/* SHL, USHR, SSHR by an immediate, for the lane sizes SSE2 shifts (no
- * bytes, no arithmetic 64-bit). A right shift by the lane size is in range
- * on both sides: zero, or the sign in every bit. */
+/* xmm0 = the low half of each 2*oes-byte lane of xmm0, packed into its low
+ * 64 bits (XTN): bytes by packuswb of the masked words, halfwords by packssdw
+ * of the sign-extended low halves (both exact: no lane saturates),
+ * words by pshufd. */
+static void vnarrow(tctx *t, int oes)
+{
+    if (oes == 1) { vconst(t, 2, 0x00ff00ff00ff00ffull, true); P(0xDB, 0, 2); P(0x67, 0, 0); }
+    else if (oes == 2) { x_sse_shift_ri(&t->b, 0x72, 6, 0, 16); x_sse_shift_ri(&t->b, 0x72, 4, 0, 16); P(0x6B, 0, 0); }
+    else x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0x08);
+}
+/* a narrowed result in the low half of xmm0: Vd = result (upper half zero),
+ * or for the "2" forms Vd's lower half and the result above it */
+static void vst_narrow(tctx *t, unsigned rd, int Q)
+{
+    if (!Q) { vst(t, rd, 0, 0); return; }
+    vld(t, 1, rd);
+    P(0x6C, 1, 0);                                               /* punpcklqdq */
+    x_movdqu_st(&t->b, VR(rd), 1);
+}
+
+/* SHL, USHR, SSHR by an immediate, and the right shifts' accumulating
+ * (USRA, SSRA) and rounding (URSHR, SRSHR, URSRA, SRSRA) forms. Words,
+ * doublewords and quadwords map onto the SSE2 shifts; bytes shift as words
+ * and drop the bits that crossed into the neighbouring byte, and the
+ * arithmetic forms without an SSE2 shift (bytes, quadwords) sign-extend the
+ * logical result. A right shift by the lane size is in range on both sides:
+ * zero, or the sign in every bit. Rounding adds bit rsh - 1 of the operand
+ * to the shifted value, which is (x + 2^(rsh-1)) >> rsh without the carry
+ * out of the lane.
+ * Also SHRN (shift, then XTN) and SSHLL/USHLL (UXTL/SXTL: widen the lower or
+ * upper half, then shift left). */
 static bool t_simd_shift(tctx *t, uint32_t i, bool scalar)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), immh = BITS(i, 22, 19), op = BITS(i, 15, 11);
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
     if (!immh) return false;
     int es = 1 << (31 - __builtin_clz(immh)), bits = es * 8, immhb = (int)BITS(i, 22, 16);
-    if (scalar ? es != 8 : (es == 1 || (es == 8 && !Q))) return false;
-    uint8_t grp = es == 2 ? 0x71 : es == 4 ? 0x72 : 0x73;
-    if (op == 0x00) {                                            /* SSHR / USHR */
-        if (!U && es == 8) return false;
+    int rsh = 2 * bits - immhb, lsh = immhb - bits;
+    if (!scalar && op == 0x14) {                                 /* SSHLL / USHLL: es is the source lane size */
+        if (es == 8) return false;                               /* unallocated */
         vld(t, 0, rn);
-        x_sse_shift_ri(&t->b, grp, U ? 2 : 4, 0, (uint8_t)(2 * bits - immhb));
+        if (Q) x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0xEE);         /* the upper half to the lower */
+        vzero(t, 1);
+        if (!U) P(pcmpgt[es >> 1], 1, 0);                        /* the sign of each lane */
+        P(es == 1 ? 0x60 : es == 2 ? 0x61 : 0x62, 0, 1);         /* punpckl{bw,wd,dq}: widened */
+        if (lsh) x_sse_shift_ri(&t->b, es == 1 ? 0x71 : es == 2 ? 0x72 : 0x73, 6, 0, (uint8_t)lsh);
+        vst(t, rd, 0, 1);
+        return true;
+    }
+    if (!scalar && op == 0x10 && !U) {                           /* SHRN: es is the destination lane size */
+        if (es == 8) return false;                               /* unallocated */
+        vld(t, 0, rn);
+        x_sse_shift_ri(&t->b, es == 1 ? 0x71 : es == 2 ? 0x72 : 0x73, 2, 0, (uint8_t)rsh);
+        vnarrow(t, es);
+        vst_narrow(t, rd, (int)Q);
+        return true;
+    }
+    if (scalar ? es != 8 : (es == 8 && !Q)) return false;
+    uint8_t grp = es == 2 ? 0x71 : es == 4 ? 0x72 : 0x73;
+    if (!(op & ~6u)) {                                           /* [SU]SHR, [SU]SRA, [SU]RSHR, [SU]RSRA */
+        bool rnd = op & 4, acc = op & 2;
+        vld(t, 0, rn);
+        if (rnd) P(0x6F, 3, 0);
+        if (es == 1) {                                           /* bytes */
+            if (rsh == 8) {
+                if (!U) P(0x6F, 1, 0);
+                vzero(t, 0);
+                if (!U) P(pcmpgt[0], 0, 1);                      /* 0 > x: the sign in every bit */
+            } else {
+                x_sse_shift_ri(&t->b, 0x71, 2, 0, (uint8_t)rsh);
+                vconst(t, 1, 0x0101010101010101ull * (0xffu >> rsh), true);
+                P(0xDB, 0, 1);
+                if (!U) {                                        /* (x ^ m) - m sign-extends from bit 7 - rsh */
+                    vconst(t, 1, 0x0101010101010101ull * (0x80u >> rsh), true);
+                    P(0xEF, 0, 1);
+                    P(0xF8, 0, 1);
+                }
+            }
+        } else if (es == 8 && !U) {                              /* arithmetic, quadwords */
+            x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0xF5);            /* each quadword's high doubleword, twice */
+            x_sse_shift_ri(&t->b, 0x72, 4, 1, 31);               /* the sign in every bit */
+            x_sse_shift_ri(&t->b, 0x73, 2, 0, (uint8_t)rsh);     /* rsh = 64 leaves 0 */
+            x_sse_shift_ri(&t->b, 0x73, 6, 1, (uint8_t)(64 - rsh));
+            P(0xEB, 0, 1);
+        } else
+            x_sse_shift_ri(&t->b, grp, U ? 2 : 4, 0, (uint8_t)rsh);
+        if (rnd) {                                               /* + bit rsh - 1 of x: the rounding, without overflow */
+            if (es == 1) {
+                x_sse_shift_ri(&t->b, 0x71, 2, 3, (uint8_t)(rsh - 1));
+                vconst(t, 2, 0x0101010101010101ull, true);
+                P(0xDB, 3, 2);
+            } else {
+                x_sse_shift_ri(&t->b, grp, 2, 3, (uint8_t)(rsh - 1));
+                x_sse_shift_ri(&t->b, grp, 6, 3, (uint8_t)(bits - 1));
+                x_sse_shift_ri(&t->b, grp, 2, 3, (uint8_t)(bits - 1));
+            }
+            P(padd[es == 8 ? 3 : es >> 1], 0, 3);
+        }
+        if (acc) { vld(t, 1, rd); P(padd[es == 8 ? 3 : es >> 1], 0, 1); }
     } else if (op == 0x0A && !U) {                               /* SHL */
         vld(t, 0, rn);
-        x_sse_shift_ri(&t->b, grp, 6, 0, (uint8_t)(immhb - bits));
+        if (es == 1) {
+            if (lsh) {
+                x_sse_shift_ri(&t->b, 0x71, 6, 0, (uint8_t)lsh);
+                vconst(t, 1, 0x0101010101010101ull * ((0xffu << lsh) & 0xffu), true);
+                P(0xDB, 0, 1);
+            }
+        } else
+            x_sse_shift_ri(&t->b, grp, 6, 0, (uint8_t)lsh);
     } else
         return false;
     vst(t, rd, 0, scalar ? 0 : (int)Q);
     return true;
 }
 
+/* ---- vector floating point, single precision, on SSE2.
+ *
+ * The forms the interpreter computes with fp_vec32 / fp_vec32_select
+ * (a64_fp.c): FADD, FSUB, FMUL (vector and by element), FMAX(NM), FMIN(NM),
+ * FCMEQ, FCMGE, FCMGT, .2S and .4S. The emitted code is that function's
+ * fast path, instruction for instruction: the same integer admission of the
+ * operands (every lane zero or normal, before any FP instruction), the same
+ * SSE operation under the guest's MXCSR (cpu.h), and for arithmetic the same
+ * check of the result (normal and above the minimum normal, or an exact zero
+ * of the operands) with the MXCSR saved around the operation and restored
+ * when the result is declined. Whatever fp_vec32 would decline goes to the
+ * interpreter helper, which declines it again and takes the per-lane
+ * FPProcessNaNs/FPRound path: results and FPSR are the interpreter's.
+ *
+ * Nothing here touches EFLAGS (SSE, pmovmskb, jrcxz, stmxcsr, ldmxcsr), so
+ * NZCV stays where it is on the fast path; the declining path saves it
+ * around the helper call when it is live (helper_keep_flags). The MXCSR is
+ * saved in the 8 bytes at [rsp], the padding the entry stub reserves in
+ * every frame translated code runs in (build_stubs).
+ *
+ * xmm0 = Vn, xmm1 = Vm (or the broadcast element), xmm5 = 0,
+ * xmm6 = 0x7fffffff, xmm7 = 0x7f800000 in every lane; xmm2-4, xmm8, xmm9
+ * scratch. The three constants stay for a vector FP instruction that
+ * directly follows in the block (tctx.vfp_consts; nothing else uses
+ * xmm5-7, and the declining path loads them again after its call). A .2S
+ * form clears both operands' upper lanes first: zero lanes are admitted,
+ * raise nothing and give exact zeros, so they never decline, and the store
+ * clears them in Vd. */
+#define MXCSR_SLOT xm(RSP, 0)
+
+/* jmp rel32 when rcx != 0, EFLAGS untouched; returns the rel32 to patch */
+static size_t jrcxnz32(tctx *t)
+{
+    size_t z = x_jrcxz8(&t->b);
+    size_t j = x_jmp32(&t->b);
+    x_patch8(&t->b, z, xb_len(&t->b));
+    return j;
+}
+
+/* The interpreter helper for an instruction a native translation declined
+ * at run time. NZCV that is live after it stays in EFLAGS: it is stored
+ * before the call (the helper and a signal inside it read it from memory)
+ * and loaded back after; the path that did not call keeps EFLAGS as it was. */
+static void helper_keep_flags(tctx *t, uint32_t insn, uint64_t pc)
+{
+    bool keep = t->in_eflags && t->live_out[t->idx], dirty = t->dirty;
+    helper(t, insn, pc);
+    st_helper -= !t->dry;                                        /* counted as native */
+    if (keep) { x_mov_ld(&t->b, 2, RAX, FLAGS); fl_from_eax(t); }
+    t->in_eflags = keep;
+    t->dirty = keep && dirty;
+}
+
+/* xmm4 |= the lanes of xmm `s` that are not zero or normal: exponent all
+ * ones (infinity, NaN), or zero with a nonzero fraction (subnormal) */
+static void vfp_special(tctx *t, int s)
+{
+    P(0x6F, 2, s); P(0xDB, 2, 7);                                /* e = s & exp */
+    P(0x6F, 3, 2); P(0x76, 3, 5);                                /* e == 0 */
+    P(0x76, 2, 7); P(0xEB, 4, 2);                                /* e == exp */
+    P(0x6F, 2, s); P(0xDB, 2, 6); P(0x76, 2, 5);                 /* |s| == 0 */
+    P(0xDF, 2, 3); P(0xEB, 4, 2);                                /* e == 0 && |s| != 0 */
+}
+
+enum { VFP_ADD, VFP_SUB, VFP_MUL, VFP_MAX, VFP_MIN, VFP_EQ, VFP_GE, VFP_GT };
+
+static void vfp_constants(tctx *t)
+{
+    vzero(t, 5);
+    vones(t, 6); x_sse_shift_ri(&t->b, 0x72, 2, 6, 1);                                     /* 0x7fffffff */
+    vones(t, 7); x_sse_shift_ri(&t->b, 0x72, 2, 7, 24); x_sse_shift_ri(&t->b, 0x72, 6, 7, 23); /* 0x7f800000 */
+}
+
+/* Vd = Vn op Vm (idx < 0) or Vn op Vm.S[idx] */
+static void t_vfp32(tctx *t, int op, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
+{
+    static const uint8_t arith[3] = {0x58, 0x5C, 0x59};
+    vld(t, 0, rn);
+    vld(t, 1, rm);
+    if (idx >= 0) x_sse_rri(&t->b, 0x66, 0x70, 1, 1, (uint8_t)(0x55 * idx));
+    if (!Q) { x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0); x_sse_rr(&t->b, 0xF3, 0x7E, 0, 1, 1); }
+    if (!t->vfp_prev) vfp_constants(t);
+    vzero(t, 4);
+    vfp_special(t, 0);
+    vfp_special(t, 1);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);                      /* pmovmskb ecx, xmm4 */
+    size_t decline = jrcxnz32(t), done;
+    if (op <= VFP_MUL) {
+        x_stmxcsr(&t->b, MXCSR_SLOT);
+        P(0x6F, 2, 0);
+        x_sse_rr(&t->b, 0, arith[op], 0, 2, 1);                  /* addps / subps / mulps */
+        /* declined result lanes: exponent all ones, zero or minimum normal
+         * (exponent & 0xfe == 0) */
+        P(0x6F, 3, 2); P(0xDB, 3, 7); P(0x76, 3, 7);
+        vones(t, 4); x_sse_shift_ri(&t->b, 0x72, 2, 4, 25); x_sse_shift_ri(&t->b, 0x72, 6, 4, 24);   /* 0x7f000000 */
+        P(0xDB, 4, 2); P(0x76, 4, 5); P(0xEB, 4, 3);
+        x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+        size_t exact = jrcxnz32(t);
+        size_t store = xb_len(&t->b);
+        vst(t, rd, 2, Q);
+        done = x_jmp32(&t->b);
+        /* a zero result is kept when it is exact: a zero operand of a
+         * multiplication, two zeros or an exact cancellation (x == -y for
+         * FADD, x == y for FSUB) of a sum */
+        x_patch32(&t->b, exact, xb_len(&t->b));
+        P(0x6F, 3, 0); P(0xDB, 3, 6); P(0x76, 3, 5);             /* |x| == 0 */
+        P(0x6F, 8, 1); P(0xDB, 8, 6); P(0x76, 8, 5);             /* |y| == 0 */
+        if (op == VFP_MUL) P(0xEB, 3, 8);
+        else {
+            P(0xDB, 3, 8);
+            if (op == VFP_ADD) { vones(t, 9); x_sse_shift_ri(&t->b, 0x72, 6, 9, 31); P(0xEF, 9, 1); }  /* y ^ sign */
+            else P(0x6F, 9, 1);
+            P(0x76, 9, 0); P(0xEB, 3, 9);
+        }
+        P(0x6F, 8, 2); P(0xDB, 8, 6); P(0x76, 8, 5); P(0xDB, 3, 8);   /* exact && the result is zero */
+        P(0xDF, 3, 4);                                           /* declined lanes that are not */
+        x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 3);
+        size_t restore = jrcxnz32(t);
+        x_patch32(&t->b, x_jmp32(&t->b), store);
+        x_patch32(&t->b, restore, xb_len(&t->b));
+        x_ldmxcsr(&t->b, MXCSR_SLOT);
+    } else {
+        if (op == VFP_MAX || op == VFP_MIN) {
+            /* maxps/minps give their second operand for two zeros; A64
+             * gives +0 for FMAX and -0 for FMIN of opposite-signed zeros */
+            P(0x6F, 2, 0);
+            x_sse_rr(&t->b, 0, op == VFP_MAX ? 0x5F : 0x5D, 0, 2, 1);
+            P(0x6F, 3, 0); P(0xDB, 3, 6); P(0x76, 3, 5);
+            P(0x6F, 8, 1); P(0xDB, 8, 6); P(0x76, 8, 5); P(0xDB, 3, 8);   /* both zero */
+            P(0x6F, 8, 0); P(op == VFP_MAX ? 0xDB : 0xEB, 8, 1);          /* x & y / x | y */
+            P(0xDB, 8, 3); P(0xDF, 3, 2); P(0xEB, 3, 8);
+            vst(t, rd, 3, Q);
+        } else {
+            /* cmpeqps x, y; cmpleps y, x (x >= y); cmpltps y, x (x > y) */
+            P(0x6F, 2, op == VFP_EQ ? 0 : 1);
+            x_sse_rri(&t->b, 0, 0xC2, 2, op == VFP_EQ ? 1 : 0, op == VFP_EQ ? 0 : op == VFP_GE ? 2 : 1);
+            vst(t, rd, 2, Q);
+        }
+        done = x_jmp32(&t->b);
+    }
+    x_patch32(&t->b, decline, xb_len(&t->b));
+    helper_keep_flags(t, insn, pc);
+    vfp_constants(t);                                            /* the call clobbered them */
+    x_patch32(&t->b, done, xb_len(&t->b));
+    t->vfp_consts = true;
+}
+
+/* three-same, floating point: the single-precision forms of t_vfp32 */
+static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
+{
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 11);
+    if (size & 1) return false;                                  /* double precision: helper */
+    int o;
+    switch (U << 6 | (size >> 1) << 5 | (op & 7)) {
+    case 0x02: o = VFP_ADD; break;
+    case 0x22: o = VFP_SUB; break;
+    case 0x43: o = VFP_MUL; break;
+    case 0x00: case 0x06: o = VFP_MAX; break;                    /* FMAXNM, FMAX: no NaN is admitted */
+    case 0x20: case 0x26: o = VFP_MIN; break;
+    case 0x04: o = VFP_EQ; break;
+    case 0x44: o = VFP_GE; break;
+    case 0x64: o = VFP_GT; break;
+    default: return false;
+    }
+    t_vfp32(t, o, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, (int)Q, i, pc);
+    return true;
+}
+
+/* FMUL (by element), single precision: 0 Q 0 01111 10 L M Rm 1001 H 0 Rn Rd */
+static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
+{
+    if (BIT(i, 29) || BITS(i, 23, 22) != 2 || BITS(i, 15, 12) != 9) return false;
+    unsigned rm = BITS(i, 20, 16), idx = BIT(i, 11) << 1 | BIT(i, 21);
+    t_vfp32(t, VFP_MUL, BITS(i, 4, 0), BITS(i, 9, 5), rm, (int)idx, (int)BIT(i, 30), i, pc);
+    return true;
+}
+
+/* FABS, FNEG (vector): sign-bit operations, no exceptions */
+static bool t_vfp_absneg(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), dbl = BIT(i, 22);
+    if (dbl && !Q) return false;                                 /* .1D: reserved */
+    vld(t, 0, BITS(i, 9, 5));
+    vones(t, 1);
+    uint8_t grp = dbl ? 0x73 : 0x72;
+    if (U) x_sse_shift_ri(&t->b, grp, 6, 1, dbl ? 63 : 31);      /* the sign bit */
+    else x_sse_shift_ri(&t->b, grp, 2, 1, 1);                    /* everything else */
+    P(U ? 0xEF : 0xDB, 0, 1);
+    vst(t, BITS(i, 4, 0), 0, (int)Q);
+    return true;
+}
+
+/*
+ * Advanced SIMD structure loads and stores without interleaving: LD1/ST1
+ * of one to four consecutive registers, LD1R, LD1/ST1 of one lane; no
+ * offset, or post-indexed by the transfer size (Rm = 31) or by Xm. As in
+ * the interpreter (a64_ldst_simd), registers are transferred one at a time
+ * in order and the base is written back after the last access, so a fault
+ * part way leaves the earlier registers loaded (or stored) and Xn unchanged;
+ * accesses are the plain unaligned moves of t_ldst_reg. LD2-LD4/ST2-ST4 and
+ * the reserved encodings stay with the helper.
+ */
+static bool t_ldst_simd(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), L = BIT(i, 22), post = BIT(i, 23), rm = BITS(i, 20, 16), rn = BITS(i, 9, 5), rt = BITS(i, 4, 0);
+    unsigned size = BITS(i, 11, 10);
+    int32_t total;
+    if (!post && rm) return false;
+    if (!BIT(i, 24)) {                                           /* multiple structures */
+        int regs, bytes = Q ? 16 : 8;
+        if (BIT(i, 21)) return false;
+        switch (BITS(i, 15, 12)) {
+        case 0x7: regs = 1; break;
+        case 0xA: regs = 2; break;
+        case 0x6: regs = 3; break;
+        case 0x2: regs = 4; break;
+        default: return false;                                   /* LD2-LD4 / ST2-ST4, unallocated */
+        }
+        ldx(t, RAX, rn, 1, true);
+        for (int r = 0; r < regs; r++) {
+            xmem m = xm(RAX, r * bytes), v = VR((rt + (unsigned)r) & 31);
+            if (L) {
+                if (Q) x_movdqu_ld(&t->b, 0, m); else x_movq_ld(&t->b, 0, m);
+                x_movdqu_st(&t->b, v, 0);
+            } else if (Q) {
+                x_movdqu_ld(&t->b, 0, v); x_movdqu_st(&t->b, m, 0);
+            } else {
+                x_movq_ld(&t->b, 0, v); x_movq_st(&t->b, m, 0);
+            }
+        }
+        total = regs * bytes;
+    } else {                                                     /* single structure */
+        unsigned opc = BITS(i, 15, 13), S = BIT(i, 12);
+        int es, idx;
+        if (BIT(i, 21) || (opc & 1)) return false;               /* LD2-LD4 / ST2-ST4 (and LDnR) */
+        if (opc == 6) {                                          /* LD1R */
+            if (!L || S) return false;
+            es = 1 << size;
+            ldx(t, RDX, rn, 1, true);
+            x_mov_ld(&t->b, es, RAX, xm(RDX, 0));
+            vdup_rax(t, es, (int)Q);
+            x_movdqu_st(&t->b, VR(rt), 0);
+            x_mov_rr(&t->b, 1, RAX, RDX);
+        } else {
+            switch (opc >> 1) {
+            case 0: es = 1; idx = (int)(Q << 3 | S << 2 | size); break;
+            case 1: if (size & 1) return false; es = 2; idx = (int)(Q << 2 | S << 1 | size >> 1); break;
+            case 2:
+                if (size == 0) { es = 4; idx = (int)(Q << 1 | S); }
+                else if (size == 1 && !S) { es = 8; idx = (int)Q; }
+                else return false;
+                break;
+            default: return false;
+            }
+            ldx(t, RAX, rn, 1, true);
+            if (L) { x_mov_ld(&t->b, es, RCX, xm(RAX, 0)); x_mov_st(&t->b, es, velem(rt, es, idx), RCX); }
+            else { x_mov_ld(&t->b, es, RCX, velem(rt, es, idx)); x_mov_st(&t->b, es, xm(RAX, 0), RCX); }
+        }
+        total = es;
+    }
+    if (post) {
+        if (rm == 31) x_lea(&t->b, 1, RAX, xm(RAX, total));
+        else { x_mov_ld(&t->b, 8, RCX, XR(rm)); x_lea(&t->b, 1, RAX, xmi(RAX, RCX, 1, 0)); }
+        stx(t, rn, RAX, true);
+    }
+    return true;
+}
+
 /* The groups in a64_exec_simd's order (none of the masks overlap an
  * earlier group of that decoder). */
-static bool t_simd(tctx *t, uint32_t i)
+static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
 {
-    if ((i & 0x9F200400) == 0x0E200400) return t_simd_three_same(t, i);
+    if ((i & 0x9F200400) == 0x0E200400) return BITS(i, 15, 11) >= 0x18 ? t_vfp_three_same(t, i, pc) : t_simd_three_same(t, i);
     if ((i & 0x9F3E0C00) == 0x0E200800) return t_simd_two_misc(t, i);
     if ((i & 0x9F3E0C00) == 0x0E300800) return t_simd_across(t, i);
     if ((i & 0x9FF80400) == 0x0F000400) return t_simd_modimm(t, i);
     if ((i & 0x9FE08400) == 0x0E000400) return t_simd_copy(t, i);
     if ((i & 0x9F800400) == 0x0F000400) return t_simd_shift(t, i, false);
+    if ((i & 0x9F000400) == 0x0F000000) return t_vfp_indexed(t, i, pc);
     return false;
 }
 
@@ -1918,6 +2293,8 @@ static bool t_simd_scalar(tctx *t, uint32_t i)
 static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
 {
     bool ok = false;
+    t->vfp_prev = t->vfp_consts;
+    t->vfp_consts = false;
     if (!jit_disabled_native) switch (BITS(i, 28, 25)) {
     case 0x8: case 0x9:
         switch (BITS(i, 25, 23)) {
@@ -1946,6 +2323,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         else if ((i & 0x3A000000) == 0x28000000) ok = t_ldst_pair(t, i);
         else if ((i & 0x3B000000) == 0x18000000) ok = t_ldr_lit(t, i, pc);
         else if ((i & 0x3F000000) == 0x08000000) ok = t_ordered(t, i);
+        else if ((i & 0xBE000000) == 0x0C000000) ok = t_ldst_simd(t, i);
         break;
     case 0xA: case 0xB:
         if ((i & 0xFFC00000) == 0xD5000000) ok = t_system(t, i);
@@ -1956,7 +2334,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         break;
     case 0x7:
         if ((i & 0xFFC08000) == 0xCE000000) ok = t_eor3_bcax(t, i);
-        else ok = t_simd(t, i);
+        else ok = t_simd(t, i, pc);
         break;
     default: break;
     }
@@ -2075,6 +2453,7 @@ static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
         if (e & FL_READ) live = true;
     }
     t->in_eflags = t->dirty = false;
+    t->vfp_consts = false;
     t->insns = insns;
     t->n = n;
     t->skip = 0;
@@ -3148,7 +3527,7 @@ static void build_stubs(void)
     /* int enter(hao_cpu *cpu, void *code) */
     void *enter = cache_ptr;
     x_push_r(&b, RBP); x_push_r(&b, RBX); x_push_r(&b, R12); x_push_r(&b, R13); x_push_r(&b, R14); x_push_r(&b, R15);
-    x_alu_ri(&b, XSUB, 1, RSP, 8);
+    x_alu_ri(&b, XSUB, 1, RSP, 8);     /* alignment; translated code keeps the MXCSR there (MXCSR_SLOT) */
     x_mov_rr(&b, 1, RBX, RDI);
     x_jmp_r(&b, RSI);
     while (xb_len(&b) & 15) x_int3(&b);
