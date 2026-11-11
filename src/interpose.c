@@ -98,6 +98,16 @@ static const vlist_map vlists[] = {
     {"_os_log_with_args", 3},
     /* libsystem_platform private SPI (launchd's early console log) */
     {"__simple_vsnprintf", 3}, {"__simple_vsprintf", 2}, {"__simple_vdprintf", 2}, {"__simple_vesprintf", 3},
+    /* CoreUtils (private, so not in vlist_gen.inc, which comes from SDK declarations): every export whose
+     * argument register reaches the va_list of PrintFCoreVAList (2) or of a function reading it in place,
+     * by register flow in the arm64e code; all of them only in CoreUtils in the 26B131 x86_64 cache.
+     * tests/guest/cuvalist.sh. To be replaced by generated rows. */
+    {"_CFAppendPrintV", 2}, {"_CFCreateV", 2}, {"_CFPropertyListCreateFormattedVAList", 3}, {"_CFStringAppendV", 2},
+    {"_CFStringCreateV", 2}, {"_CUAppendV", 3}, {"_CUFatalErrorV", 2}, {"_FatalErrorV", 1}, {"_LogCategoryReplaceV", 2},
+    {"_LogPrintV", 4}, {"_NSAppendPrintV", 2}, {"_NSAppendPrintV_safe", 2}, {"_NSErrorNestedV", 4},
+    {"_NSErrorNestedV_safe", 4}, {"_NSErrorV", 3}, {"_NSErrorV_safe", 3}, {"_NSPrintV", 1}, {"_NSPrintV_safe", 1},
+    {"_PrintFCoreVAList", 2}, {"_TULogV", 4}, {"_VASPrintF", 2}, {"_VCPrintF", 3}, {"_VFPrintF", 2},
+    {"_VFPrintF_safe", 2}, {"_VSNPrintF", 3}, {"_VSNScanF", 3},
 #include "vlist_gen.inc"
 };
 

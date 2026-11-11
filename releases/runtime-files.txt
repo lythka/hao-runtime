@@ -375,6 +375,8 @@ tests/guest/cli.sh
 tests/guest/crypto.c
 tests/guest/crypto.sh
 tests/guest/cssm-callbacks.c
+tests/guest/cuvalist.m
+tests/guest/cuvalist.sh
 tests/guest/cxxabi.cpp
 tests/guest/cxxabi.sh
 tests/guest/cxxabihelper.cpp

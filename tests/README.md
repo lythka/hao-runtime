@@ -54,7 +54,7 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 | `jitlocktest` (added to `make test`) | PASS | 37 | `/usr/bin/awk` copies |
 | `tools/check_x86.sh` | PASS | 1 | |
 
-`make test-guest` (159 s in all: 63 PASS, 1 XFAIL, 8 expected SKIP):
+`make test-guest` (159 s in all, before guest/cuvalist: 63 PASS, 1 XFAIL, 8 expected SKIP):
 
 | Entry | At b5dfc26 | Now | Time | Needs / skip reason |
 |---|---|---|---|---|
@@ -70,6 +70,7 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 | guest/chkstk | PASS | PASS | 1 | |
 | guest/cli | PASS | PASS | 3 | 27.0 System at `HAO_FS` (two cases; otherwise an unexpected SKIP); `sandbox-exec` |
 | guest/crypto | PASS | PASS | 1 | |
+| guest/cuvalist | (new) | PASS | 2 | private CoreUtils on the host (`VSNPrintF`, `NSErrorV`, ...) |
 | guest/cxxabi | PASS | PASS | 10 | |
 | guest/datacall | PASS | PASS | 1 | |
 | guest/dsc | PASS | PASS | 3 | the host's arm64e shared cache |
