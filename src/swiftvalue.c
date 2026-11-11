@@ -8,6 +8,7 @@
 #include "hao/swiftvalue.h"
 #include "hao/swiftschema.h"
 #include "hao/opts.h"
+#include "hao/gmap.h"
 #define HAO_SWIFT_VALUE_RUNTIME 1
 #include "swiftvalue/Aggregate.h"
 #include "swiftvalue/Common.h"
@@ -39,9 +40,10 @@ typedef struct {
     kind_fn *kind; count_fn *count; offset_fn *offset; field_fn *field;
     node nodes[NODE_LIMIT]; entry entries[ENTRY_LIMIT];
     unsigned nnode, nentry;
-    bool failed;
+    bool failed, existentials;
 } builder;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t witness_setup_lock = PTHREAD_MUTEX_INITIALIZER;   /* guest calls of witnesses, below */
 static plan *plans;
 static const witnesses *vwt(const void *type) { return ((const witnesses *const *)type)[-1]; }
 static bool native_function(uint64_t pc)
@@ -51,6 +53,7 @@ static bool native_function(uint64_t pc)
 void hao_swift_value_fork_child(void)
 {
     lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    witness_setup_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     hao_sv_native_leaf_fork_child();
 }
 static void refuse(const void *type, const char *why)
@@ -74,7 +77,8 @@ static bool graph(builder *b, const void *type, unsigned depth)
     if (v->size > 4096 || v->stride < v->size || (v->flags & 0x00800000)) { b->failed = true; return false; }
     uintptr_t kind = b->kind(type);
     empty_plan empty;
-    bool affected = discover_empty_plan(type,&empty) && empty.consumed == 2;
+    bool affected = (b->existentials ? discover_witness_plan(type,&empty) : discover_empty_plan(type,&empty)) &&
+                    empty.consumed == 2;
     if (kind == 0x200 || kind == 0x301) {
         intptr_t count = b->count(type);
         if (count < 0 || count > 64) { b->failed = true; return false; }
@@ -316,4 +320,324 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
     }
     if (hao_opt.bridge_check) fprintf(HAO_DIAG,"hao: Swift value published metadata=%p patches=%d changed=%u\n",scope->plan->type,count,changed);
     t->swift_values = scope->previous;
+}
+
+/* ------------------------------ guest calls of Optional and tuple witnesses
+ *
+ * Guest code that is not specialized (generic code, outlined copies and
+ * destroys through metadata from a mangled name) handles an Optional through
+ * its value witnesses, which under hao are libswiftCore's x86_64 ones: every
+ * Optional instantiation shares them ($sSqwCP, wxx, wcp, wca, wtk, wta, wet,
+ * wst, wug, wup, wui; measured on x86_64), and every tuple one of a few
+ * tuple_* sets that hand each element to its own witnesses. A nested Optional whose outer nil
+ * sits in a pointer's extra inhabitants (`C??`, `[Int]??`, `(any P)??`) is
+ * written by guest code inline with the arm64 encoding, inhabitant 1 = the
+ * value 1, and the x86_64 witness reads its own, 2: it takes the guest's
+ * outer nil for a live payload and copies or destroys garbage, e.g. destroying
+ * a lazy `(any P)?` property that was never read.
+ *
+ * Such a call is recognized by its target, one of those witnesses, and by
+ * its metadata argument, whose own table must hold that target in the slot
+ * the call is made through. The witness then gets the value with each outer
+ * nil in its own encoding (receiver_empty_bits asks the type's witnesses, so
+ * a guest payload type's arm64 extra inhabitants are kept): a scratch copy of
+ * a borrowed source, the storage itself when the callee owns it. A value it
+ * produces gets back the source's bits at those offsets, so a value keeps the
+ * encoding it came with (a native-made value passing through guest generic
+ * code stays x86_64); a nil it makes from nothing (store or inject a tag) gets
+ * the guest's, since guest code made the call. Only the bounded outer-nil
+ * words of collect_witness_patches change, never a live payload. A value the
+ * walk cannot prove is handed over unchanged, as before. */
+#define WITNESS_MAX 48
+static struct { uint64_t pc; unsigned slot; } witness_pc[WITNESS_MAX];
+static unsigned witness_count;
+uint64_t hao_swift_witness_lo = 1, hao_swift_witness_hi = 0;   /* empty until set up */
+static hao_gmap witness_types = HAO_GMAP_INIT(2, 1, 6, 14);       /* metadata -> 1 affected, 2 not */
+typedef struct { const void *metadata; uintptr_t state; } SWIFT_RESPONSE;
+typedef SWIFT_RESPONSE SWIFT optional_accessor(uintptr_t, const void *);
+static optional_accessor *optional_metadata;
+
+/* Array operations get pseudo-slots: (begin, count, T) to destroy,
+ * (dest, src, count, T) for the others. */
+enum { ARRAY_DESTROY = 20, ARRAY_INIT_COPY, ARRAY_INIT_TAKE, ARRAY_ASSIGN_COPY, ARRAY_ASSIGN_TAKE };
+static const struct { const char *name; unsigned slot; } array_ops[] = {
+    {"swift_arrayDestroy",ARRAY_DESTROY},
+    {"swift_arrayInitWithCopy",ARRAY_INIT_COPY},
+    {"swift_arrayInitWithTakeNoAlias",ARRAY_INIT_TAKE},
+    {"swift_arrayInitWithTakeFrontToBack",ARRAY_INIT_TAKE},
+    {"swift_arrayInitWithTakeBackToFront",ARRAY_INIT_TAKE},
+    {"swift_arrayAssignWithCopyNoAlias",ARRAY_ASSIGN_COPY},
+    {"swift_arrayAssignWithCopyFrontToBack",ARRAY_ASSIGN_COPY},
+    {"swift_arrayAssignWithCopyBackToFront",ARRAY_ASSIGN_COPY},
+    {"swift_arrayAssignWithTake",ARRAY_ASSIGN_TAKE},
+};
+/* The metadata argument of each slot (ValueWitness.def): x1 for destroy,
+ * getEnumTag and destructiveProjectEnumData, x3 for
+ * storeEnumTagSinglePayload, x2 otherwise; x2 or x3 for an array operation. */
+static unsigned witness_metadata_reg(unsigned slot)
+{
+    if (slot >= ARRAY_DESTROY) return slot == ARRAY_DESTROY ? 2 : 3;
+    return slot == 1 || slot == 11 || slot == 12 ? 1 : slot == 7 ? 3 : 2;
+}
+
+static void witness_setup_locked(void);
+void hao_swift_witness_setup(void)
+{
+    if (__atomic_load_n(&witness_count,__ATOMIC_ACQUIRE) || hao_opt.no_swift_values) return;
+    pthread_mutex_lock(&witness_setup_lock);
+    if (!witness_count) witness_setup_locked();
+    pthread_mutex_unlock(&witness_setup_lock);
+}
+static void witness_setup_locked(void)
+{
+    optional_accessor *opt = dlsym(RTLD_DEFAULT,"$sSqMa");
+    const void *int_type = dlsym(RTLD_DEFAULT,"$sSiN");
+    if (!opt || !int_type) return;   /* no Swift runtime yet: a later image retries */
+    typedef SWIFT_RESPONSE SWIFT tuple2_fn(uintptr_t, const void *, const void *, const char *, const void *);
+    tuple2_fn *tuple2 = dlsym(RTLD_DEFAULT,"swift_getTupleTypeMetadata2");
+    const void *string_type = dlsym(RTLD_DEFAULT,"$sSSN");
+    if (!tuple2 || !string_type) return;
+    const void *one = opt(0,int_type).metadata, *two = one ? opt(0,one).metadata : NULL;
+    /* Tuple witnesses (Metadata.cpp tuple_*) are chosen by the tuple's
+     * layout (POD, inline storage, bitwise take): take them from the shapes
+     * this path converts, a nested Optional of AnyObject (fits a buffer)
+     * and of Any (does not), and from String pairs of both sizes. */
+    typedef const void *SWIFT existential_fn(uintptr_t, const void *, size_t, const void *);
+    existential_fn *existential = dlsym(RTLD_DEFAULT,"swift_getExistentialTypeMetadata");
+    const void *any_object = existential ? existential(0,NULL,0,NULL) : NULL;   /* ProtocolClassConstraint::Class */
+    const void *any = existential ? existential(1,NULL,0,NULL) : NULL;          /* ::Any */
+    if (!one || !two || !any_object || !any) return;
+    const void *any_object2 = opt(0,opt(0,any_object).metadata).metadata, *any2 = opt(0,opt(0,any).metadata).metadata;
+    const void *types[] = {one, two,
+        tuple2(0,int_type,any_object2,NULL,NULL).metadata, tuple2(0,int_type,any2,NULL,NULL).metadata,
+        tuple2(0,int_type,string_type,NULL,NULL).metadata, tuple2(0,string_type,string_type,NULL,NULL).metadata};
+    for (unsigned k = 0; k < sizeof types / sizeof *types; ++k) if (!types[k]) return;
+    static const unsigned slots[] = {0,1,2,3,4,5,6,7,11,12,13};
+    unsigned n = 0; uint64_t lo = UINT64_MAX, hi = 0;
+    for (unsigned k = 0; k < sizeof types / sizeof *types; ++k)
+        for (unsigned i = 0; i < (k < 2 ? 11u : 8u); ++i) {   /* enum witnesses (11-13) only in an enum's table */
+            uint64_t pc = (uint64_t)(uintptr_t)((void *const *)vwt(types[k]))[slots[i]];
+            if (!native_function(pc)) continue;
+            bool dup = false;
+            for (unsigned j = 0; j < n; ++j) dup |= witness_pc[j].pc == pc && witness_pc[j].slot == slots[i];
+            if (dup || n == WITNESS_MAX) continue;
+            witness_pc[n++] = (typeof(witness_pc[0])){pc,slots[i]};
+            if (pc < lo) lo = pc;
+            if (pc > hi) hi = pc;
+        }
+    /* The runtime's array operations (Array.cpp), which guest code calls
+     * from inlined Array code: each element through its type's witnesses. */
+    for (unsigned k = 0; k < sizeof array_ops / sizeof *array_ops; ++k) {
+        uint64_t pc = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT,array_ops[k].name);
+        if (!native_function(pc) || n == WITNESS_MAX) continue;
+        witness_pc[n++] = (typeof(witness_pc[0])){pc,array_ops[k].slot};
+        if (pc < lo) lo = pc;
+        if (pc > hi) hi = pc;
+    }
+    if (!n) return;
+    optional_metadata = opt;
+    hao_swift_witness_hi = hi;
+    __atomic_store_n(&witness_count,n,__ATOMIC_RELEASE);
+    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+}
+
+/* Whether a value of this Optional may hold an outer nil in a pointer's
+ * extra inhabitants anywhere in it (graph() with existential payloads). */
+static bool witness_affected(const void *type)
+{
+    const uint64_t *e = hao_gmap_get1(&witness_types,(uint64_t)(uintptr_t)type);
+    if (e) return e[1] == 1;
+    builder *b = calloc(1,sizeof *b);
+    if (!b) return false;
+    b->existentials = true;
+    b->kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    b->count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
+    b->offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
+    b->field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    bool affected = b->kind && b->count && b->offset && b->field && graph(b,type,0) && !b->failed;
+    free(b);
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim1(&witness_types,(uint64_t)(uintptr_t)type,&fresh);
+    if (slot && fresh) { slot[1] = affected ? 1 : 2; hao_gmap_publish1(&witness_types,slot,(uint64_t)(uintptr_t)type); }
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    return affected;
+}
+
+typedef struct { int count; empty_patch p[64]; } witness_patches;
+/* The outer nils of a value; count -1 when the walk cannot prove it. */
+static void witness_walk(const void *type, const void *value, witness_patches *w)
+{
+    w->count = value ? collect_witness_patches(type,value,w->p,64) : -1;
+}
+/* Rewrite the walked outer nils to the witness's own encoding. */
+static void witness_encode(void *value, const witness_patches *w)
+{
+    for (int i = 0; i < w->count; ++i) memcpy((char *)value + w->p[i].offset,&w->p[i].receiver_bits,8);
+}
+/* Put back the bits the walk found (a source's encoding on its copy). */
+static void witness_restore(void *value, const witness_patches *w)
+{
+    for (int i = 0; i < w->count; ++i) memcpy((char *)value + w->p[i].offset,&w->p[i].bits,8);
+}
+/* A nil the witness made: the guest's encoding, extra inhabitant
+ * consumed - 1 as the value consumed - 1 (arm64). */
+static void witness_to_guest(const void *type, void *value)
+{
+    witness_patches w;
+    witness_walk(type,value,&w);
+    for (int i = 0; i < w.count; ++i) { uint64_t bits = w.p[i].consumed - 1; memcpy((char *)value + w.p[i].offset,&bits,8); }
+}
+
+/* Each element's outer nils in the witness's encoding, in place; their
+ * original bits recorded by element index and offset (rec, count *nrec). */
+typedef struct { uint64_t at, bits; } witness_bits;
+static bool witness_encode_elements(const void *type, char *base, uint64_t count, witness_bits **rec, size_t *nrec)
+{
+    uint64_t stride = vwt(type)->stride;
+    size_t cap = 0;
+    *rec = NULL; *nrec = 0;
+    for (uint64_t i = 0; i < count; ++i) {
+        witness_patches w;
+        witness_walk(type,base + i * stride,&w);
+        if (w.count < 0) continue;   /* not proven: this element as before */
+        if (*nrec + (size_t)w.count > cap) {
+            size_t ncap = cap ? cap * 2 : 16;
+            while (ncap < *nrec + (size_t)w.count) ncap *= 2;
+            witness_bits *grown = realloc(*rec,ncap * sizeof **rec);
+            if (!grown) { free(*rec); *rec = NULL; return false; }
+            *rec = grown; cap = ncap;
+        }
+        for (int k = 0; k < w.count; ++k) (*rec)[(*nrec)++] = (witness_bits){i * stride + w.p[k].offset,w.p[k].bits};
+        witness_encode(base + i * stride,&w);
+    }
+    return true;
+}
+
+static bool witness_array(hao_thread *t, uint64_t pc, unsigned slot, const void *type)
+{
+    hao_cpu *c = &t->cpu;
+    if (!witness_affected(type)) return false;
+    char *dest = (char *)(uintptr_t)c->x[0], *src = (char *)(uintptr_t)c->x[1];
+    uint64_t count = slot == ARRAY_DESTROY ? c->x[1] : c->x[2], stride = vwt(type)->stride;
+    if (!count) return false;
+    if (!stride || count > (UINT64_MAX >> 1) / stride) return false;
+    witness_bits *in = NULL, *old = NULL;
+    size_t nin = 0, nold = 0;
+    char *scratch = NULL;
+    if (slot == ARRAY_DESTROY) {
+        if (!witness_encode_elements(type,dest,count,&in,&nin)) return false;
+    } else {
+        if (slot == ARRAY_INIT_COPY || slot == ARRAY_ASSIGN_COPY) {   /* borrowed source: a converted copy */
+            scratch = malloc((size_t)(count * stride));
+            if (!scratch) return false;
+            memcpy(scratch,src,(size_t)(count * stride));
+            src = scratch;
+        }
+        if ((slot == ARRAY_ASSIGN_COPY || slot == ARRAY_ASSIGN_TAKE) &&
+            !witness_encode_elements(type,dest,count,&old,&nold)) { free(scratch); return false; }
+        if (!witness_encode_elements(type,src,count,&in,&nin)) { free(scratch); free(old); return false; }
+    }
+    typedef void SWIFT destroy_fn(void *, size_t, const void *);
+    typedef void SWIFT move_fn(void *, void *, size_t, const void *);
+    if (slot == ARRAY_DESTROY) ((destroy_fn *)(uintptr_t)pc)(dest,(size_t)count,type);
+    else {
+        ((move_fn *)(uintptr_t)pc)(dest,src,(size_t)count,type);
+        for (size_t k = 0; k < nin; ++k) memcpy(dest + in[k].at,&in[k].bits,8);   /* each source's encoding */
+    }
+    if (hao_opt.bridge_check)
+        fprintf(HAO_DIAG,"hao: Swift array witness op=%u metadata=%p count=%llu patches=%zu\n",slot,type,(unsigned long long)count,nin);
+    free(scratch); free(in); free(old);
+    t->native_calls++;
+    c->pc = c->x[30];
+    return true;
+}
+
+bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
+{
+    hao_cpu *c = &t->cpu;
+    for (unsigned i = 0; i < witness_count; ++i) {
+        if (witness_pc[i].pc != pc) continue;
+        unsigned slot = witness_pc[i].slot;
+        const void *type = (const void *)(uintptr_t)c->x[witness_metadata_reg(slot)];
+        if (slot >= ARRAY_DESTROY) return type && witness_array(t,pc,slot,type);
+        if (!type || (uint64_t)(uintptr_t)((void *const *)vwt(type))[slot] != pc) continue;
+        /* Single-payload tag witnesses act on an enclosing enum of the
+         * type; with one empty case that is the type's own Optional. A
+         * tuple's table has no enum witnesses (11-13): only an Optional's
+         * pcs carry those slots, and the table check above reads them only
+         * for such a pc. */
+        const void *walked = type;
+        if (slot == 6 || slot == 7) {
+            if (c->x[slot == 6 ? 1 : 2] != 1) return false;
+            walked = optional_metadata(0,type).metadata;
+            if (!walked) return false;
+        }
+        if (!witness_affected(walked)) return false;
+        const witnesses *v = vwt(walked);
+        if (slot == 0 && (vwt(type)->flags & 0x00020000)) return false;   /* out-of-line buffer: a box */
+        void *dest = (void *)(uintptr_t)c->x[0], *src = (void *)(uintptr_t)c->x[1];
+        bool borrowed_src = slot == 0 || slot == 2 || slot == 3;
+        bool two = slot <= 5 && slot != 1;
+        _Alignas(16) unsigned char local[512];
+        void *scratch = NULL;
+        witness_patches in, old;
+        in.count = old.count = 0;
+        if (slot == 6 || slot == 11) {                        /* borrowed value: x0 */
+            witness_walk(walked,dest,&in);
+            if (in.count > 0) {
+                scratch = v->size <= sizeof local ? local : malloc((size_t)v->size);
+                if (!scratch) return false;
+                memcpy(scratch,dest,(size_t)v->size);
+                witness_encode(scratch,&in);
+            }
+        } else if (two) {
+            witness_walk(type,src,&in);
+            if (slot == 3 || slot == 5) { witness_walk(type,dest,&old); witness_encode(dest,&old); }
+            if (in.count > 0 && borrowed_src) {
+                scratch = v->size <= sizeof local ? local : malloc((size_t)v->size);
+                if (!scratch) return false;
+                memcpy(scratch,src,(size_t)v->size);
+                witness_encode(scratch,&in);
+            } else witness_encode(src,&in);                    /* owned by the callee */
+        } else if (slot == 1 || slot == 12) {
+            witness_walk(type,dest,&in);
+            witness_encode(dest,&in);
+        }
+        typedef void *SWIFT ptr3_fn(void *, void *, const void *);
+        typedef void SWIFT void2_fn(void *, const void *);
+        typedef unsigned SWIFT tag_fn(const void *, const void *);
+        typedef unsigned SWIFT single_get_fn(const void *, unsigned, const void *);
+        typedef void SWIFT single_store_fn(void *, unsigned, unsigned, const void *);
+        typedef void SWIFT inject_fn(void *, unsigned, const void *);
+        void *f = (void *)(uintptr_t)pc;
+        uint64_t result = c->x[0];
+        switch (slot) {
+        case 0: case 2: case 3: case 4: case 5:
+            result = (uint64_t)(uintptr_t)((ptr3_fn *)f)(dest,scratch ? scratch : src,type);
+            witness_restore(dest,&in);                         /* the source's encoding */
+            break;
+        case 1: ((void2_fn *)f)(dest,type); break;
+        case 6: result = ((single_get_fn *)f)(scratch ? scratch : dest,(unsigned)c->x[1],type); break;
+        case 7:   /* case 0 is the payload: no nil is made, its encoding stays */
+            ((single_store_fn *)f)(dest,(unsigned)c->x[1],(unsigned)c->x[2],type);
+            if ((unsigned)c->x[1]) witness_to_guest(walked,dest);
+            break;
+        case 11: result = ((tag_fn *)f)(scratch ? scratch : dest,type); break;
+        case 12: ((void2_fn *)f)(dest,type); witness_restore(dest,&in); break;
+        case 13:
+            ((inject_fn *)f)(dest,(unsigned)c->x[1],type);
+            if ((unsigned)c->x[1]) witness_to_guest(type,dest);
+            break;
+        default: return false;
+        }
+        if (scratch && scratch != local) free(scratch);
+        if (hao_opt.bridge_check)
+            fprintf(HAO_DIAG,"hao: Swift Optional witness slot=%u metadata=%p patches=%d\n",slot,type,in.count);
+        c->x[0] = result;
+        t->native_calls++;
+        c->pc = c->x[30];
+        return true;
+    }
+    return false;
 }

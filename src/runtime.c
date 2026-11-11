@@ -424,6 +424,8 @@ static void native_step(void *arg)
         if (hao_opt.bridge_check && p && (p->flags & HAO_PLAN_MASKED)) hao_bridge_check_mask(t, p);
     }
     if (t->swift_values && hao_swift_value_native(t,pc)) return;
+    if (pc >= __atomic_load_n(&hao_swift_witness_lo,__ATOMIC_ACQUIRE) && pc <= hao_swift_witness_hi &&
+        hao_swift_witness_native(t,pc)) return;
     if (p && p->thunk_guest) {
         hao_swift_objects_args(t);   /* swiftself need not appear in the pair's code-argument mask */
         /* a generated thunk pair (hao/bridge.h): the guest half runs with

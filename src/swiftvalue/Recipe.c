@@ -37,6 +37,7 @@ typedef struct {
     field_fn *field;
     const void *array, *optional, *string;
     const void *unresolved;
+    int existentials;   /* admit existential and Swift class payloads (guest calls of native witnesses only) */
 } reflection;
 
 static const witnesses *vwt(const void *type)
@@ -75,10 +76,39 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
 {
     if (depth > 16) return 0;
     uintptr_t kind = r->kind(type);
-    if (kind != 0x200 && kind != 0x202 && kind != 0x301 && kind != 0x305) return 0;
+    if (kind != 0x200 && kind != 0x202 && kind != 0x301 && kind != 0x305 &&
+        ((kind != 0x303 && kind != 0) || !r->existentials)) return 0;
     const void *const *m = type;
     const witnesses *v = vwt(type);
     if (v->size < 8 || v->size > 4096) return 0;
+    /* Existentials and Swift class references, only for guest calls of
+     * native value witnesses (the value stays where it is; see
+     * collect_witness_patches). Metadata.h
+     * TargetExistentialTypeMetadata: after the kind a flags word (witness
+     * tables in bits 0-23, special protocol in 24-29, superclass bit 30,
+     * bit 31 set when not class-bound). The opaque container is three buffer
+     * words, the type metadata word, the tables; the class-bound one the
+     * object word, then the tables. That metadata or object word carries the
+     * extra inhabitants: 0 first, then 1 on arm64 and 2 on x86_64, measured
+     * for `(any P)??`, `(any Q: AnyObject)??` and `AnyObject??` in native
+     * programs of both. The Error box (special protocol 1) and any other
+     * special representation stay out. */
+    /* A Swift class reference (MetadataKind::Class, its table Builtin.NativeObject's,
+     * native): the same inhabitants, measured for `C??` (1 arm64, 2 x86_64). */
+    if (kind == 0) {
+        if (v->size != 8 || v->stride != 8 || (v->flags & 255) != 7 || v->extra < 2) return 0;
+        *out = (empty_plan){8, 0, 0};
+        return 1;
+    }
+    if (kind == 0x303) {
+        uint32_t flags; memcpy(&flags, (const char *)type + 8, 4);
+        uint64_t tables = flags & 0xffffff, offset = (flags & 0x80000000u) ? 24 : 0;
+        if ((flags & 0x3f000000u) || (offset && (flags & 0x40000000u)) || tables > 64 ||
+            v->size != 8 * ((offset ? 4 : 1) + tables) || v->stride != v->size ||
+            (v->flags & 255) != 7 || v->extra < 2) return 0;
+        *out = (empty_plan){v->size, offset, 0};
+        return 1;
+    }
     /* ObjCRetainableBox consumes null first, then ARM1/Intel2. Its exact
      * runtime witness identity distinguishes it from raw pointers, weak
      * references and class-bound existentials. Two consumed XIs remain the
@@ -101,7 +131,9 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
     if (kind == 0x200 && m[1] == r->array) {
         /* Only non-Optional enum Elements are admitted by this policy.
          * A class/ObjC existential Array must not inherit this proof. */
-        if (r->kind(m[2]) != 0x201 || v->size != 8 || v->stride != 8 ||
+        /* The guest-call path rewrites only the buffer word's outer nil,
+         * whose inhabitants are the BridgeObject's for any Element. */
+        if ((r->kind(m[2]) != 0x201 && !r->existentials) || v->size != 8 || v->stride != 8 ||
             v->extra != 0x7fffffff || (v->flags & 255) != 7) return 0;
         *out = (empty_plan){8, 0, 0};
         return 1;
@@ -139,14 +171,14 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
     return 1;
 }
 
-int discover_empty_plan(const void *type, empty_plan *out)
+static int discover(const void *type, empty_plan *out, int existentials)
 {
     reflection r = {
         dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
-        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL,
+        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
     };
     if (!type || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional ||
         r.kind(type) != 0x202) return 0;
@@ -155,6 +187,9 @@ int discover_empty_plan(const void *type, empty_plan *out)
     *out = result;
     return 1;
 }
+
+int discover_empty_plan(const void *type, empty_plan *out) { return discover(type, out, 0); }
+int discover_witness_plan(const void *type, empty_plan *out) { return discover(type, out, 1); }
 
 int initialize_empty(void *destination, const void *source, const void *type, int arm)
 {
@@ -273,15 +308,15 @@ static int collect(reflection *r, const void *type, const unsigned char *value,
     return ok;
 }
 
-int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
-                                 unsigned capacity, const void **unresolved)
+static int collect_patches(const void *type, const void *value, empty_patch *out,
+                           unsigned capacity, const void **unresolved, int existentials)
 {
     reflection r = {
         dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
-        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL,
+        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
     };
     unsigned used = 0;
     if (unresolved) *unresolved = type;
@@ -292,6 +327,17 @@ int collect_empty_patches_detail(const void *type, const void *value, empty_patc
     }
     if (unresolved) *unresolved = NULL;
     return (int)used;
+}
+
+int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
+                                 unsigned capacity, const void **unresolved)
+{
+    return collect_patches(type,value,out,capacity,unresolved,0);
+}
+
+int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)
+{
+    return collect_patches(type,value,out,capacity,NULL,1);
 }
 
 int collect_empty_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)

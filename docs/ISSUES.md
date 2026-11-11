@@ -1,5 +1,68 @@
 # Runtime issues and measured scope
 
+## Guest calls of native Optional, tuple and array witnesses
+
+A nested Optional whose outer nil is a pointer's extra inhabitant (`C??`,
+`[Int]??`, `AnyObject??`, `(any P)??`, the storage of a `lazy var` of
+Optional type) is written by guest code inline with the arm64 encoding:
+inhabitant 1 is the value 1. libswiftCore's x86_64 witnesses read 2. This
+was measured in native programs of both architectures; for an existential
+the inhabitants are in its type-metadata word (opaque) or object word
+(class-bound). Guest code that is not specialized hands such values to those
+witnesses: generic code, and outlined copies and destroys through metadata
+from a mangled name, such as a class's ivar destroyer destroying a lazy
+property that was never read. The x86_64 witness takes the outer nil for a
+live payload and copies or destroys garbage. For `(any P)??` that is a
+destroy of an existential whose type is 1, a fault at 0xfffffffffffffff9.
+
+hao now recognizes a guest call of these native witnesses:
+- the Optional value witnesses, which every Optional instantiation shares
+  (`$sSqwCP`, `wxx`, `wcp`, `wca`, `wtk`, `wta`, `wet`, `wst`, `wug`, `wup`,
+  `wui`);
+- the tuple witnesses, a few `tuple_*` sets chosen by layout;
+- the runtime's array operations (`swift_arrayDestroy`,
+  `swift_arrayInitWithCopy`, `...WithTake*`, `swift_arrayAssign*`), which
+  inlined Array code calls.
+
+The witness addresses are read at image registration from Optional and tuple
+instantiations of the converted shapes, and the array operations by name. A
+call counts only when its metadata argument's own table holds the called
+witness in that slot. For a type that can hold such an outer nil (cached per
+metadata), the witness gets each outer nil in its own encoding:
+`receiver_empty_bits` asks the type's witnesses, so a guest payload type's
+arm64 inhabitants are kept. A borrowed source is converted in a scratch copy
+and an owned one in place. A value the witness produces gets back its
+source's bits at those offsets, so a value keeps the encoding it came with:
+a native-made value passing through guest generic code stays x86_64. A nil
+made from nothing (storing or injecting a tag) gets the guest's encoding.
+Only the outer-nil words change, never a live payload. A value the walk
+cannot prove is handed over unchanged, as before. The walk follows
+existential payloads (opaque and class-bound; not the Error box or other
+special protocols), Swift class references, and Arrays of any element, but
+only for these calls. Published values (below) keep their narrower rules,
+because there native code takes the value.
+
+`tests/guest/optwitness.sh` has unspecialized generic guest code copy,
+destroy, assign and test values through these witnesses: nested Optionals
+of an existential, a class-bound existential, a Swift class, `AnyObject` and
+`[Int]`, in each of nil, some(nil) and some(some) form, plus a class whose
+lazy `(any P)?` property is destroyed unread, read as nil, and read as a
+value. Before the change it crashed under JIT, `--interp` and AOT at the
+first copy; after it, all 94 lines equal native arm64.
+
+Remaining limitations:
+- Native code that reads such a value itself, rather than a witness the guest
+  calls, still sees the guest's encoding. Examples: native generic code (an
+  Array element read through the non-inlined `Array` subscript, which copies
+  it with the witness natively) and `swift_dynamicCast` out of `Any`. Memory
+  that guest inline code and native code both read can hold only one
+  encoding. That is the open part of `guest/xinhab`, which stays `xfail`.
+- Witnesses of native generic structs and enums other than Optional (each
+  type has its own) are not recognized. Neither are value boxes (an `Any`
+  holding such a value is destroyed by the box's witness).
+- Two consumed inhabitants are the bound, as for published values: a third
+  nesting level is handed over unchanged.
+
 ## `Optional<AnyObject>` in a published Swift value
 
 On the 26B131 image Notification Center crash-looped 20 times in one session,
@@ -52,9 +115,7 @@ in values crossing the boundary:
 `tests/host/swiftvalue.sh` covers both (nil and live values beside the
 `NSObject??` field): refused before, walked after. Its URLs all have native
 witness tables, so the refusal of a guest witness table is not exercised
-there. Still open: WeatherWidget and WeatherIntents crash inside native
-value-witness calls (`swift_retain` in `swift_cvw_initWithCopy`, an
-`OpaqueExistentialBox` destroy at an address ending in fff9).
+there.
 
 ## `%a` slots of variadics whose format family is assumed
 
