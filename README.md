@@ -15,8 +15,9 @@ This repository builds:
 - `HaoExec`, a kernel extension that routes the exec of an ARM-only executable
   to `/usr/libexec/hao`.
 
-With these, macOS 27 (26A428), whose userspace ships ARM-only, boots through
-Setup Assistant to the desktop on a **13-inch 2012 MacBook Pro (MacBookPro9,2)**.
+With these, macOS 27 (27.0 26A428 and 27.2.1 26B131), whose userspace ships
+ARM-only, boots through Setup Assistant to the desktop on a **13-inch 2012
+MacBook Pro (MacBookPro9,2)**.
 
 ![Maps on macOS 27 on a 2012 MacBook Pro (MacBookPro9,2)](docs/images/maps-intel.png)
 
@@ -30,7 +31,7 @@ Experimental. The system integration target is MacBookPro9,2 with Intel HD 4000.
 | Instructions | Base A64, LSE atomics, integer and FP SIMD, FP16, AES/SHA/PMULL and arm64e pointer-authentication forms; some forms are unsupported. |
 | Native libraries | C, Objective-C, C++ and supported Swift boundaries; private APIs and some Swift value layouts are incomplete. |
 | Callbacks | Blocks, function pointers, Objective-C methods and Swift async continuations called from native code. |
-| Desktop | Setup Assistant, account creation, Finder and several built-in apps. |
+| Desktop | Setup Assistant, account creation, Finder, Dock, Control Center, Notification Center, widgets and several built-in apps. |
 | Performance | Usable on the desktop; sustained heavy workloads are not yet tuned. |
 
 [Compatibility](docs/compatibility.md) lists what is supported, the known
@@ -80,8 +81,8 @@ and debugging.
 hao is installed into a macOS System volume as a payload:
 
 - `tools/hao-image-payload` builds the payload from a System root: runtime,
-  launcher, embedded stubs, interface units, trusted cdhash list and optional
-  AOT caches.
+  launcher, embedded stubs, interface units (checked against the target's
+  x86_64 shared cache), trusted cdhash list and optional AOT caches.
 - `tools/hao-install.py` installs the payload into a System volume.
 - `kext/` holds HaoExec and `kext/stamp_identity.py`, which stamps it for the
   target kernel.
