@@ -410,6 +410,7 @@ tests/guest/fnhelper.mm
 tests/guest/fnslots.mm
 tests/guest/footprint.m
 tests/guest/footprint.sh
+tests/guest/footprint_front.c
 tests/guest/fork.c
 tests/guest/fork.sh
 tests/guest/fork_dyld.c

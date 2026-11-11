@@ -22,6 +22,13 @@
 #            BUDGET_SPREAD (its 6000 function pointers get thunks at load).
 # Each judged case fails when its overhead exceeds its budget (KB):
 #   BUDGET_C (2048), BUDGET_OBJC (2048), BUDGET_SPREAD (3072)
+# The judged runs use tests/guest/footprint_front.c, hao's launcher with every
+# guest file mapped: that is how hao takes a file only root can change (a
+# system daemon's), and the budgets are about those. The test's guests are
+# the user's own files, which hao otherwise reads into anonymous memory
+# (include/hao/macho.h hao_slice): each case ends with a "copied" line, the
+# same guest under the real launcher with the JIT, printed and not judged.
+# Its overhead is larger by about the size of the guest's file.
 # Why: a 15 MB InactiveHard jetsam limit (modelmanagerd, findmylocateagent
 # on 27.0) minus such a daemon's native footprint (findmylocateagent: 13.7 MB
 # natively on this 27.2 host, KernelEventAgent 2.8 MB) leaves 1 to 12 MB;
@@ -44,6 +51,11 @@ BUDGET_SPREAD=${BUDGET_SPREAD:-3072}
 T=${T:-90}
 mkdir -p "$OUT"
 case $HAO in /*) ;; *) echo "HAO must be an absolute path"; exit 2 ;; esac
+B=${B:-$(dirname "$HAO")}
+MAPPED=$OUT/hao-mapped
+clang -arch x86_64 -O2 -o "$MAPPED" "$here/footprint_front.c" -L"$B" -lhao -lhao_identity -Wl,-rpath,"$B" &&
+    codesign -s - -f --entitlements "$here/../../tools/hao.entitlements" "$MAPPED" 2>/dev/null ||
+    { echo "build of the mapped front end failed"; exit 2; }
 
 # spread: N functions, one per 4 KB page; big: BIG_FNS functions of 48 statements
 python3 - "$OUT" "$N" "$BIG_FNS" <<'EOF' || exit 2
@@ -132,11 +144,11 @@ for cs in c objc spread bigaot limited; do
     nat=$1; natpt=$2
     for m in $modes; do
         case $cs:$m in
-        limited:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_AOT_LIMIT_KB="$LIMIT_KB" "$HAO" "$OUT/$g.arm64e" $args) ;;
-        *:jit) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$HAO" "$OUT/$g.arm64e" $args) ;;
-        *:interp) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$HAO" --interp "$OUT/$g.arm64e" $args) ;;
-        bigaot:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_VERBOSE=1 "$HAO" "$OUT/$g.arm64e" $args) ;;
-        *:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" "$HAO" "$OUT/$g.arm64e" $args) ;;
+        limited:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_AOT_LIMIT_KB="$LIMIT_KB" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+        *:jit) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+        *:interp) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" --interp "$OUT/$g.arm64e" $args) ;;
+        bigaot:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_VERBOSE=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+        *:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
         esac
         h=$1; hpt=$2
         want=$(sed -n 1p "$OUT/$cs-native.out")
@@ -156,6 +168,12 @@ for cs in c objc spread bigaot limited; do
         case $r in PASS|info*) ;; *) fails=$((fails + 1)) ;; esac
         printf '%-8s %-7s %9s %9s %9s %9s %7s  %s\n' "$cs" "$m" "$nat" "$h" "$ov" "$ptd" "$budget" "$r"
     done
+    # the same guest as hao takes a file its owner may write: read into memory (not judged)
+    case $cs in bigaot|limited) continue ;; esac
+    set -- $(measure "$cs-copied" env HAO_NO_AOT=1 "$HAO" "$OUT/$g.arm64e" $args)
+    if [ "$nat" = - ] || [ "$1" = - ]; then ov=-; ptd=-; else ov=$(($1 - nat)); ptd=$(($2 - natpt)); fi
+    printf '%-8s %-7s %9s %9s %9s %9s %7s  %s\n' "$cs" copied "$nat" "$1" "$ov" "$ptd" info \
+        "info (guest file $(($(stat -f %z "$OUT/$g.arm64e") / 1024)) KB, read into memory)"
 done
 [ $fails = 0 ] && echo "footprint: all PASS" || echo "footprint: $fails FAIL"
 [ $fails = 0 ]

@@ -93,7 +93,7 @@ signer and the library-validation policy are all decided on the one
 CodeDirectory that reader chose, in the bytes the image is built from.
 `tools/hao_codesig.py` reads signatures for the packaging tools by the same
 rules; `tests/tools/test_codesig.py` requires the same verdict, cdhash and
-policy from both over the fuzz corpus and 8168 variations of it.
+policy from both for 8168 inputs: the fuzz corpus and fixed changes to it.
 
 ### Who signed it
 
@@ -150,8 +150,9 @@ file:
 A copied image shares no memory with its file or with other processes. It
 costs its slice's size in anonymous memory, per process, for as long as it
 is loaded: 7.2 MB more peak footprint for an 8.4 MB library and 66 MB for a
-67 MB one, measured; the time to load them did not change. Guest libraries
-are taken the same way as the main executable.
+67 MB one, measured. The programs that loaded them ran in 0.04 s and 0.21 s,
+against 0.04 s and 0.20 s with the files mapped. Guest libraries are taken
+the same way as the main executable.
 
 The loader also bounds what a guest file may claim: 4 MiB of load commands,
 256 MiB for an exports trie, chained fixups, a legacy dyld stream or
@@ -276,7 +277,7 @@ running: it asks the kernel for the device and inode of the vnode behind its
 own Mach-O header (`proc_pidinfo`, or the `executable_file=` pair the kernel
 passes at exec where a sandbox denies that), opens the executable's path,
 and refuses with status 126 unless the descriptor is that file. The slice is
-mapped from that descriptor. A link in the path that was repointed after the
+taken from that descriptor. A link in the path that was repointed after the
 exec therefore cannot put another file's ARM code into the process.
 
 The stub's signature does not cover the ARM slice, so the stub names the
@@ -309,6 +310,10 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - A guest file that only root can change is mapped, not copied. If root
   rewrites such a file in place while hao loads it, hao does not notice;
   natively the kernel would kill the process at the changed page.
+- Whether only root can change a file is judged from its owner, mode and ACL
+  and from its volume being local. A local volume whose storage someone else
+  can write (a disk image or removable disk mounted with ownership enabled)
+  can hold root-owned files that change all the same; hao maps them.
 - HaoExec hands hao a path, not the file the kernel examined, and hao opens
   it again. Routing grants nothing, so a path that names another file by then
   only runs that file under the same checks.

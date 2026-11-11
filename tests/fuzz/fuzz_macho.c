@@ -1,8 +1,9 @@
 /*
  * Fuzz target: the guest Mach-O loader (src/macho.c). Each input is written
  * to a file and loaded the way hao loads a guest: slice choice, load
- * commands, segment mapping, chained fixups (odd-sized inputs map only), the
- * exports trie and function starts. A loaded image is then touched where
+ * commands, segment mapping (from the mapped file or from a copy of it, by
+ * a bit of the input's size), chained fixups (odd-sized inputs map only),
+ * the exports trie and function starts. A loaded image is then touched where
  * the runtime reads it (every section, initializer and TLV range, exports,
  * function starts) and unloaded. Built with ASan and coverage by
  * `make fuzz`; run by tests/fuzz/run.sh.
@@ -60,6 +61,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     if (write(fd, data, size) != (ssize_t)size) abort();
     close(fd);
     char err[512];
+    hao_slice_test_path = size & 2 ? 1 : 2;     /* both ways of taking the slice: the file mapped, or a copy of it */
     hao_image *img = size & 1 ? hao_map_image_only(path, err, sizeof err) : hao_load_image(path, resolver, err, sizeof err);
     static int verbose = -1;
     if (verbose < 0) verbose = getenv("FUZZ_VERBOSE") != NULL;

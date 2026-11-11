@@ -238,6 +238,38 @@ for v in plain runtime; do
 done
 grep -q "Library not loaded" "$OUT/strong-runtime.native.err" || { echo "FAIL native: dyld launched strong-runtime"; fail=1; }
 
+# --- a library with two LC_CODE_SIGNATURE commands is not loaded, whatever the policy: one reader, one signature
+mkdir -p "$OUT/twosig"
+python3 -I - "$OUT/libgplug.dylib" "$OUT/twosig/libgplug.dylib" arm64e <<'EOF'
+import struct, sys
+src, dst = sys.argv[1], sys.argv[2]
+d = bytearray(open(src, "rb").read())
+n = 0
+for k in range(struct.unpack_from(">I", d, 4)[0]):           # every slice of the fat library
+    base = struct.unpack_from(">I", d, 8 + 20 * k + 8)[0]
+    ncmds, sizeofcmds = struct.unpack_from("<II", d, base + 16)
+    o = base + 32
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from("<II", d, o)
+        if cmd == 0x1d: sig = bytes(d[o:o + 16])
+        o += size
+    assert not any(d[o:o + 16]), "no room in the header padding"
+    d[o:o + 16] = sig
+    struct.pack_into("<II", d, base + 16, ncmds + 1, sizeofcmds + 16)
+    n += 1
+assert n
+open(dst, "wb").write(d)
+EOF
+cp "$OUT/libval.plain.arm64e" "$OUT/twosig/prog"
+for mode in $MODES; do
+    [ $mode = aot ] && continue
+    flag=(); [ $mode = interp ] && flag=(--interp)
+    got=$(cd "$OUT/twosig" && timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" -v ${flag[@]+"${flag[@]}"} "$OUT/twosig/prog" 2>&1)
+    if echo "$got" | grep -q "^weak libgplug: missing" && echo "$got" | grep -q "more than one LC_CODE_SIGNATURE"; then
+        echo "PASS library with two LC_CODE_SIGNATURE commands ($mode): not loaded"
+    else echo "FAIL library with two LC_CODE_SIGNATURE commands ($mode): $(echo "$got" | grep -i "libgplug" | head -3)"; fail=1; fi
+done
+
 # --- a guest file rewritten in place between hao's check and its mapping
 RW=$OUT/rw; rm -rf "$RW"; mkdir -p "$RW"
 rwok=1
