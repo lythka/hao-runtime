@@ -29,10 +29,23 @@ double, `%.6a` and `%@` conversions. Before the change it crashed with
 SIGSEGV under JIT, `--interp` and AOT; after it, all 6 lines equal native
 arm64.
 
+`src/vlist_gen.inc` now also has rows derived from code: both slices of the
+26B131 caches, x86_64 `__va_list_tag` reads, arm64e `va_arg` loads and
+argument forwarding to a fixpoint, kept only when the two slices agree on the
+index. Without seeds, that derivation reproduced 55 (x86_64) and 30 (arm64e)
+of the 76 SDK and hand rows and never gave a wrong index. It confirms the
+CoreUtils hand rows: 23 from both slices, `CFCreateV` and
+`CFPropertyListCreateFormattedVAList` from x86_64 only, and none contradicted.
+`VSNScanF`, a scanf consumer, is outside what it can derive. Over all 17,745
+C/C++ guest imports of 26B131, the only `va_list` parameters beyond the SDK
+and hand rows are `NSErrorV`, `NSErrorNestedV` (hand rows) and `_ISDVLog`
+(SyncServices, index 3, the one new generated row).
+
 Remaining limitations:
-- Other private libraries' `va_list` parameters are still unconverted. These
-  hand rows are meant to give way to generated rows derived from code for
-  every library.
+- The derivation does not cover a `va_list` passed as the seventh or a later
+  argument, scanf consumers, or ObjC methods (those go through their type
+  encoding in `src/objc.c`). A private function of those kinds needs a hand
+  row.
 - A function with a floating-point argument before its `va_list`, or with more
   than five integer arguments before it, cannot go through `call_with_va`. No
   CoreUtils row has either.
