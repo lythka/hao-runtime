@@ -43,15 +43,9 @@ still passes:
 
 | Input | Used by | What to supply |
 |---|---|---|
-| `HAO_FS` | `guest/cli` (Apple-signed `ls`, trusted cdhash list), `tools` (MenuBarAgent bundle), `corpus27_df` | the path of a mounted macOS 27 System volume (read-only is enough) |
+| `HAO_FS` | `guest/cli` (Apple-signed `ls`, trusted cdhash list), `tools` (MenuBarAgent bundle) | the path of a mounted macOS 27 System volume (read-only is enough) |
 | `KC` | `tools` stamp cases | a BootKernelExtensions.kc of the target kernel |
 | `PROFILE` | `host/sigpolicy` profile cases | a sandbox profile to check |
-
-The remaining expected skips are maintainer tooling that is not distributed:
-the offline scanners and oracle inputs (`tests/host/swiftslots.c`,
-`SCANNER_ROOT`, `ORACLE265`/`IPSW27`, `OSS265`, `OBSERVE`/`DIFF`) and the
-corpus runner `tools/run27.sh`. Their cases always skip in this tree; the
-runtime paths they would add evidence for are covered by the other tests.
 
 ## Inventory
 
@@ -74,7 +68,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | `jitlocktest` (added to `make test`) | PASS | 37 | `/usr/bin/awk` copies |
 | `tools/check_x86.sh` | PASS | 1 | |
 
-`make test-guest` (159 s in all, before guest/cuvalist: 63 PASS, 1 XFAIL, 8 expected SKIP):
+`make test-guest` (about 150 s; 72 entries: 69 PASS, 1 XFAIL, 2 expected SKIP with `HAO_FS` set, 3 without it):
 
 | Entry | Expected | Time | Needs / skip reason |
 |---|---|---|---|
@@ -115,7 +109,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/objcimp | PASS | 4 | |
 | guest/objcva | PASS | 3 | |
 | guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals; see below |
-| guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below |
+| guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below. Under heavy parallel load one `oslogswift` mode can miss its records; it passes alone |
 | guest/signals | PASS | 36 | |
 | guest/sret-forward | PASS | 3 | |
 | guest/stackargs | PASS | 2 | |
@@ -124,19 +118,18 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/swiftlate | PASS | 4 | |
 | guest/swiftls | PASS | 5 | |
 | guest/swiftmeta | PASS | 8 | |
-| guest/swiftpop | SKIP (expected) | 4 | scan stage: `tests/host/swiftslots.c` is not in this tree; the runtime modes pass |
+| guest/swiftpop | PASS | 4 | |
 | guest/swiftthunks | PASS | 6 | |
 | guest/threads | PASS | 2 | |
 | guest/uresume | PASS | 26 | |
 | guest/varsniff | PASS | 2 | |
 | guest/xinhab | XFAIL | 2 | see known failures |
 | guest/xpac | PASS | 1 | |
-| guest/run-async | SKIP (expected) | 9 | 15 async cases pass; the modelmanagerdump cases need `ORACLE265` (and `IPSW27`) |
+| guest/run-async | PASS | 9 | |
 | guest/keypath-identity | PASS | 2 | |
 | guest/late-method-signatures | PASS | 10 | |
 | guest/native-bundle | PASS | 5 | loads a plug-in `.bundle` into a command-line guest |
 | guest/objc-class-order | PASS | 6 | |
-| guest/sret-spill | SKIP (expected) | 1 | `tools/codesig.py` under `SCANNER_ROOT` (not in this tree) |
 | guest/objcvascope | PASS | 2 | |
 | host/runtime | PASS | 2 | |
 | host/chain | PASS | 6 | |
@@ -149,10 +142,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | tools | SKIP (expected) | 25 | runs bundle, stubdeps, platform, identity and aotpayload; stamp cases need `KC` (a kernel collection); MenuBarAgent case needs `HAO_FS` |
 | tools/release | PASS | 1 | python3.14 |
 | translate | PASS | 3 | |
-| oss265 | SKIP (expected) | 1 | `OSS265`: the 26.5 Libc sources, not in this tree |
-| fidelity | SKIP (expected) | 1 | `OBSERVE`/`DIFF` (`tools/fidelity/`), not in this tree |
 | fuzz-smoke | PASS | 100 | 20 s per target, random seed |
-| corpus27_df | SKIP (expected), run alone | 1 | `tools/run27.sh`, not in this tree; 27.0 System; writes to the Data volume |
 
 Not entries of `tests/check.list`:
 
@@ -163,7 +153,7 @@ Not entries of `tests/check.list`:
 | `tests/host/jitlock.sh` | `make jitlocktest` (in `make test`) |
 | `tests/tools/{bundle,stubdeps,platform,identity,aotpayload}.sh` | run by `tests/tools/run.sh` |
 | `tests/fuzz/run.sh`, `tests/fuzz/fuzz_hao_fat.py` | `make fuzz-smoke` |
-| `tests/fuzz/make_seeds.sh`, `tests/guest/bridgeunit_gen.py`, `tests/oss265/build.sh`, `tests/aot/patch.py` | generators and helpers, not tests |
+| `tests/fuzz/make_seeds.sh`, `tests/guest/bridgeunit_gen.py`, `tests/aot/patch.py` | generators and helpers, not tests |
 
 No script was left out for launching a GUI application, bundle, extension
 or XPC service: `tests/tools/bundle.sh` only signs and inspects its `.app`
