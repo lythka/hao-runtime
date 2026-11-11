@@ -591,6 +591,7 @@ tests/guest/varsniff.sh
 tests/guest/varsniffhelper.c
 tests/guest/varsniffhelper.h
 tests/guest/vbench.c
+tests/guest/vbench2.c
 tests/guest/x8.c
 tests/guest/x8helper.c
 tests/guest/x8helper.h

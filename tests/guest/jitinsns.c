@@ -148,7 +148,7 @@ MEM2(t_stlr, "stlrh w1, [x0]\nldarb w2, [x0]")
         __asm__ volatile("ldp q0, q1, [x4]\nldr q2, [x4, #32]\ncmp x0, x1\n" insn     \
                          "\nmrs x3, nzcv\nstr q2, [x5]"                                \
                          : "+r"(x2), "=r"(x3) : "r"(x0), "r"(x1), "r"(x4), "r"(x5)      \
-                         : "cc", "memory", "v0", "v1", "v2");                           \
+                         : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5");         \
         *fl = x3;                                                                       \
         return mix(mix(x2, out[0]), out[1]);                                            \
     }
@@ -166,6 +166,57 @@ V4(vadd, "add") V4(vsub, "sub") V4(vcmeq, "cmeq") V4(vcmgt, "cmgt") V4(vcmge, "c
 V4(vcmhi, "cmhi") V4(vcmhs, "cmhs") V4(vumax, "umax") V4(vumin, "umin") V4(vsmax, "smax") V4(vsmin, "smin") V4(vmul, "mul")
 V4Z(vcmeqz, "cmeq", ", #0") V4Z(vcmgtz, "cmgt", ", #0") V4Z(vcmgez, "cmge", ", #0") V4Z(vcmlez, "cmle", ", #0")
 V4Z(vcmltz, "cmlt", ", #0") V4Z(vneg, "neg", "") V4Z(vabs, "abs", "")
+V4(vmla, "mla") V4(vmls, "mls")
+VEC2(t_vcmgt2d, "cmgt v2.2d, v0.2d, v1.2d")
+VEC2(t_vcmge2d, "cmge v2.2d, v1.2d, v0.2d")
+VEC2(t_vcmhi2d, "cmhi v2.2d, v0.2d, v1.2d")
+VEC2(t_vcmhs2d, "cmhs v2.2d, v1.2d, v0.2d")
+VEC2(t_vcmhs2d2, "cmhs v2.2d, v0.2d, v0.2d")
+VEC2(t_vcmtst2d, "cmtst v2.2d, v0.2d, v1.2d")
+VEC2(t_vcmgtz2d, "cmgt v2.2d, v0.2d, #0")
+VEC2(t_vcmgez2d, "cmge v2.2d, v1.2d, #0")
+VEC2(t_vcmeqz2d, "cmeq v2.2d, v0.2d, #0")
+VEC2(t_vcmlez2d, "cmle v2.2d, v1.2d, #0")
+VEC2(t_vcmltz2d, "cmlt v2.2d, v0.2d, #0")
+VEC2(t_vabs2d, "abs v2.2d, v1.2d")
+VEC2(t_vabs2d2, "abs v2.2d, v0.2d")
+VEC2(t_vcmhi4s2, "cmhi v2.4s, v1.4s, v0.4s")
+VEC2(t_vcmhs2s, "cmhs v2.2s, v0.2s, v1.2s")
+VEC2(t_vabs2s, "abs v2.2s, v0.2s")
+VEC2(t_vabs8b2, "abs v2.8b, v1.8b")
+VEC2(t_vmule0, "mul v2.4s, v0.4s, v1.s[3]")
+VEC2(t_vmule1, "mul v2.2s, v1.2s, v0.s[1]")
+VEC2(t_vmule2, "mul v2.8h, v0.8h, v1.h[5]")
+VEC2(t_vmule3, "mul v2.4h, v1.4h, v0.h[7]")
+VEC2(t_vmlae0, "mla v2.4s, v0.4s, v1.s[0]")
+VEC2(t_vmlae1, "mla v2.8h, v1.8h, v0.h[2]")
+VEC2(t_vmlse0, "mls v2.2s, v0.2s, v1.s[2]")
+VEC2(t_vmlse1, "mls v2.4h, v1.4h, v0.h[6]")
+VEC2(t_vmul16b2, "mul v2.16b, v1.16b, v1.16b")
+VEC2(t_tbl1, "tbl v2.16b, {v0.16b}, v1.16b")
+VEC2(t_tbl1m, "movi v3.16b, #0x1f\nand v3.16b, v1.16b, v3.16b\ntbl v2.16b, {v0.16b}, v3.16b")
+VEC2(t_tbl1h, "movi v3.16b, #0x1f\nand v3.16b, v1.16b, v3.16b\ntbl v2.8b, {v1.16b}, v3.8b")
+VEC2(t_tbl2, "movi v3.16b, #0x3f\nand v3.16b, v1.16b, v3.16b\ntbl v2.16b, {v0.16b, v1.16b}, v3.16b")
+VEC2(t_tbl3, "movi v3.16b, #0x3f\nand v4.16b, v1.16b, v3.16b\neor v3.16b, v0.16b, v1.16b\n"
+             "tbl v2.16b, {v1.16b, v2.16b, v3.16b}, v4.16b")
+VEC2(t_tbl4, "movi v4.16b, #0x7f\nand v4.16b, v1.16b, v4.16b\neor v3.16b, v0.16b, v1.16b\n"
+             "tbl v2.16b, {v0.16b, v1.16b, v2.16b, v3.16b}, v4.16b")
+VEC2(t_tbl4h, "movi v4.16b, #0x3f\nand v4.16b, v1.16b, v4.16b\neor v3.16b, v0.16b, v1.16b\n"
+              "tbl v2.8b, {v0.16b, v1.16b, v2.16b, v3.16b}, v4.8b")
+VEC2(t_tbx1, "movi v3.16b, #0x1f\nand v3.16b, v1.16b, v3.16b\ntbx v2.16b, {v0.16b}, v3.16b")
+VEC2(t_tbx2, "movi v3.16b, #0x3f\nand v3.16b, v1.16b, v3.16b\ntbx v2.8b, {v0.16b, v1.16b}, v3.8b")
+VEC2(t_tbx3, "movi v3.16b, #0x3f\nand v3.16b, v1.16b, v3.16b\nmov v4.16b, v0.16b\nmov v5.16b, v1.16b\n"
+             "tbx v2.16b, {v3.16b, v4.16b, v5.16b}, v3.16b")
+VEC2(t_tbx4, "movi v4.16b, #0x7f\nand v4.16b, v1.16b, v4.16b\neor v3.16b, v0.16b, v1.16b\n"
+             "tbx v2.16b, {v1.16b, v2.16b, v3.16b, v4.16b}, v4.16b")
+VEC2(t_tbxr, "tbx v2.16b, {v0.16b, v1.16b}, v1.16b")
+VEC2(t_ext0, "ext v2.16b, v0.16b, v1.16b, #0")
+VEC2(t_ext1, "ext v2.16b, v0.16b, v1.16b, #5")
+VEC2(t_ext2, "ext v2.16b, v1.16b, v0.16b, #15")
+VEC2(t_ext3, "ext v2.8b, v0.8b, v1.8b, #0")
+VEC2(t_ext4, "ext v2.8b, v1.8b, v0.8b, #3")
+VEC2(t_ext5, "ext v2.8b, v0.8b, v1.8b, #7")
+VEC2(t_ext6, "ext v2.16b, v2.16b, v2.16b, #8")
 VEC2(t_vadd2d, "add v2.2d, v0.2d, v1.2d")
 VEC2(t_vsub2d, "sub v2.2d, v0.2d, v1.2d")
 VEC2(t_vcmeq2d, "cmeq v2.2d, v0.2d, v1.2d")
@@ -324,7 +375,7 @@ static const uint32_t fv[] = {
     0x3f800000, 0xbf800000, 0x3f800001, 0x3fffffff, 0x1f800000, 0x5f800000, 0x20000000, 0x40490fdb,
 };
 #define NF (sizeof fv / sizeof *fv)
-static const uint64_t fpcrs[] = {0, 3u << 22, 1u << 24, 1u << 25, 2u << 22 | 3u << 24};
+static const uint64_t fpcrs[] = {0, 3u << 22, 1u << 24, 1u << 25, 2u << 22 | 3u << 24, 1u << 22};
 #define VECF(name, insn)                                                                \
     NOINL static uint64_t name(const uint32_t *in, uint64_t fpcr, uint64_t *fl)        \
     {                                                                                   \
@@ -349,7 +400,46 @@ VECF(t_fmule2, "fmul v2.2s, v1.2s, v0.s[1]")
 VECF(t_fmule3, "fmul v2.2s, v0.2s, v17.s[2]")
 VECF(t_fchain, "fmul v2.4s, v0.4s, v1.4s\nfadd v2.4s, v2.4s, v0.4s\nfsub v2.4s, v2.4s, v1.4s\nfmax v2.4s, v2.4s, v1.4s")
 VECF(t_fadd2d, "fadd v2.2d, v0.2d, v1.2d")
+/* round to integral: vector .4S/.2S/.2D and scalar S/D */
+#define FR(n, mn)                                                                       \
+    VECF(t_##n##4s, mn " v2.4s, v0.4s") VECF(t_##n##2s, mn " v2.2s, v1.2s")             \
+    VECF(t_##n##2d, mn " v2.2d, v0.2d") VECF(t_##n##s, mn " s2, s1") VECF(t_##n##d, mn " d2, d0")
+FR(frintn, "frintn") FR(frintm, "frintm") FR(frintp, "frintp") FR(frintz, "frintz") FR(frinta, "frinta")
+FR(frintx, "frintx") FR(frinti, "frinti")
+VECF(t_frchain, "frintm v2.4s, v0.4s\nfadd v2.4s, v2.4s, v1.4s\nfrintx v2.4s, v2.4s\nfmul v2.4s, v2.4s, v0.4s\nfrinta v2.4s, v2.4s")
 typedef uint64_t (*fnf)(const uint32_t *, uint64_t, uint64_t *);
+/* values to round: halves and quarters, the last fractional values below
+ * 2^23 and 2^52, specials; single, and double (two words each) */
+static const uint32_t rv[] = {
+    0x3f000000, 0xbf000000, 0x3fc00000, 0x40200000, 0xc0200000, 0x3effffff, 0x3f7fffff, 0x4b000000,
+    0x4affffff, 0xcafffffe, 0x3e800000, 0xbf400000, 0x00000001, 0x80000000, 0x7f800000, 0x7fc00000,
+    0x7f800001, 0x3f800000, 0x42f6e979, 0xc2f6e979, 0x00800000, 0x7f7fffff, 0x3f400000, 0xc0600000,
+};
+static const uint64_t rvd[] = {
+    0x3fe0000000000000ull, 0xbfe0000000000000ull, 0x3ff8000000000000ull, 0x4004000000000000ull,
+    0xc004000000000000ull, 0x3fdfffffffffffffull, 0x3fefffffffffffffull, 0x4330000000000000ull,
+    0x432fffffffffffffull, 0xc32ffffffffffffeull, 0x3fd0000000000000ull, 0xbfe8000000000000ull,
+    0x0000000000000001ull, 0x8000000000000000ull, 0x7ff0000000000000ull, 0x7ff8000000000000ull,
+    0x7ff0000000000001ull, 0x405edd2f1a9fbe77ull, 0xc05edd2f1a9fbe77ull, 0x0010000000000000ull,
+};
+#define NR (sizeof rv / sizeof *rv)
+#define NRD (sizeof rvd / sizeof *rvd)
+static void runr(const char *name, fnf f)
+{
+    uint64_t h = 14695981039346656037ull;
+    for (unsigned c = 0; c < sizeof fpcrs / sizeof *fpcrs; c++)
+        for (unsigned i = 0; i < NR; i++)
+            for (unsigned j = 0; j < NR; j++) {
+                uint64_t a = rvd[i % NRD], b = rvd[j % NRD];
+                uint32_t in[12] = {(uint32_t)a, (uint32_t)(a >> 32), (uint32_t)b, (uint32_t)(b >> 32),
+                                   rv[i], rv[j], rv[i] ^ 0x80000000u, rv[(i + j) % NR],
+                                   rv[(i + 5) % NR], 0x12345678, rv[j], 0x9abcdef0};
+                if ((i + j) & 1) { in[0] = rv[j]; in[1] = rv[i]; in[2] = rv[(j + 3) % NR]; in[3] = rv[i] ^ 0x80000000u; }
+                uint64_t fl = 0, r = f(in, fpcrs[c], &fl);
+                h = mix(mix(h, r), fl);
+            }
+    printf("%-10s %016llx\n", name, (unsigned long long)h);
+}
 static void runf(const char *name, fnf f)
 {
     uint64_t h = 14695981039346656037ull;
@@ -549,6 +639,13 @@ int main(void)
     RV(vumax); RV(vumin); RV(vsmax); RV(vsmin); RV(vmul);
     RV(vcmeqz); RV(vcmgtz); RV(vcmgez); RV(vcmlez); RV(vcmltz); RV(vneg); RV(vabs);
     R(vadd2d); R(vsub2d); R(vcmeq2d); R(vneg2d); R(vaddd);
+    RV(vmla); RV(vmls);
+    R(vcmgt2d); R(vcmge2d); R(vcmhi2d); R(vcmhs2d); R(vcmhs2d2); R(vcmtst2d);
+    R(vcmgtz2d); R(vcmgez2d); R(vcmeqz2d); R(vcmlez2d); R(vcmltz2d); R(vabs2d); R(vabs2d2);
+    R(vcmhi4s2); R(vcmhs2s); R(vabs2s); R(vabs8b2);
+    R(vmule0); R(vmule1); R(vmule2); R(vmule3); R(vmlae0); R(vmlae1); R(vmlse0); R(vmlse1); R(vmul16b2);
+    R(tbl1); R(tbl1m); R(tbl1h); R(tbl2); R(tbl3); R(tbl4); R(tbl4h); R(tbx1); R(tbx2); R(tbx3); R(tbx4); R(tbxr);
+    R(ext0); R(ext1); R(ext2); R(ext3); R(ext4); R(ext5); R(ext6);
     R(vand); R(vand8); R(vbic); R(vorr); R(vmov); R(vmov8); R(vorn); R(veor); R(vbsl); R(vbit); R(vbif); R(vbsl2);
     R(vnot); R(vnot8); R(vcnt); R(vcnt8); R(popcnt); R(uaddlv16);
     R(movi0); R(movi1); R(movi2); R(movi3); R(movi4); R(movi5); R(movi6); R(movi7); R(mvni0); R(mvni1); R(mvni2);
@@ -570,6 +667,9 @@ int main(void)
 #define RF4(n) RF(n##4s); RF(n##2s)
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);
     RF(fmule0); RF(fmule1); RF(fmule2); RF(fmule3); RF(fchain); RF(fadd2d);
+#define RR(n) runr(#n, t_##n)
+#define RFR(n) RR(n##4s); RR(n##2s); RR(n##2d); RR(n##s); RR(n##d)
+    RFR(frintn); RFR(frintm); RFR(frintp); RFR(frintz); RFR(frinta); RFR(frintx); RFR(frinti); RR(frchain);
     R(ld1a); R(ld1b); R(ld1c); R(ld1d); R(ld1e); R(ld1f); R(st1a); R(st1b); R(st1c); R(st1d); R(st1e);
     R(ld1r0); R(ld1r1); R(ld1r2); R(ld1r3); R(ld1r4); R(ld1r5);
     R(ld1l0); R(ld1l1); R(ld1l2); R(ld1l3); R(st1l0); R(st1l1); R(st1l2); R(st1l3); R(ld1sp);

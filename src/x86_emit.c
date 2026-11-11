@@ -436,3 +436,13 @@ void x_sse_rm(xbuf *b, int pfx, uint8_t op, int w, int reg, xmem m)
     int p = sse_pfx(b, pfx);
     if (p >= 0) enc_rm(b, p, w, 0, OP2(0x0F, op), reg, m);
 }
+void x_sse38_rr(xbuf *b, uint8_t op, int dst, int src)
+{
+    enc_rr(b, P_66, 0, 0, (const uint8_t[]){0x0F, 0x38, op}, 3, dst, src);
+}
+void x_sse3a_rri(xbuf *b, uint8_t op, int dst, int src, uint8_t imm)
+{
+    uint8_t *start = b->p;
+    enc_rr(b, P_66, 0, 0, (const uint8_t[]){0x0F, 0x3A, op}, 3, dst, src);
+    if (b->p != start) xb_u8(b, imm);
+}

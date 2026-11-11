@@ -1495,6 +1495,7 @@ static int simd_ext_tbl(hao_cpu *c, uint32_t i)
     if ((i & 0xBFE08400) == 0x2E000000) {  /* EXT */
         unsigned pos = BITS(i, 14, 11);
         int n = Q ? 16 : 8;
+        if (!Q && (pos & 8)) return -1;    /* reserved: the index is beyond the 64-bit pair */
         uint8_t cat[32];
         memcpy(cat, c->v[rn].b, (size_t)n);
         memcpy(cat + n, c->v[rm].b, (size_t)n);

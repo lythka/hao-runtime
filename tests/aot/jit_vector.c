@@ -21,6 +21,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <sys/mman.h>
 
@@ -162,11 +163,50 @@ static void state(hao_cpu *c, unsigned rn, unsigned rm)
     c->fpsr = rr(2) ? 0x0800009fu : 0;
 }
 
+/* a double around the integers: specials, halves and quarters, values near
+ * 2^52 where every double is integral, and random bits */
+static uint64_t dval(void)
+{
+    static const uint64_t ds[] = {
+        0, 0x8000000000000000ull, 1, 0x800fffffffffffffull, 0x0010000000000000ull, 0x8010000000000000ull,
+        0x7ff0000000000000ull, 0xfff0000000000000ull, 0x7ff8000000000000ull, 0x7ff0000000000001ull, 0xfff4000000000123ull,
+        0x3fe0000000000000ull, 0xbfe0000000000000ull, 0x3fdfffffffffffffull, 0x3fefffffffffffffull, 0x4330000000000000ull,
+        0x432fffffffffffffull, 0xc32fffffffffffffull, 0x7fefffffffffffffull, 0x3ff8000000000000ull, 0xc004000000000000ull,
+    };
+    double d;
+    uint64_t v;
+    switch (rr(4)) {
+    case 0: return ds[rr(sizeof ds / sizeof *ds)];
+    case 1: return rnd();
+    default:
+        d = (double)((int)rr(200) - 100) + (double)rr(8) * 0.125 + (rr(4) ? 0 : (double)(rnd() & 0xfffff) * 0x1p-20);
+        if (rr(4) == 0) d = ldexp(d, (int)rr(120) - 60);
+        memcpy(&v, &d, 8);
+        return v;
+    }
+}
+/* a single around the integers (the same, in single precision) */
+static uint32_t sval(void)
+{
+    uint32_t v;
+    float f;
+    if (rr(2)) return fpval();
+    f = (float)((int)rr(200) - 100) + (float)rr(8) * 0.125f + (rr(4) ? 0 : (float)(rnd() & 0xfff) * 0x1p-12f);
+    if (rr(4) == 0) f = ldexpf(f, (int)rr(60) - 30);
+    memcpy(&v, &f, 4);
+    return v;
+}
+
 static uint32_t enc_three_same(void)
 {
     static const unsigned keys[] = {0x02, 0x22, 0x43, 0x00, 0x06, 0x20, 0x26, 0x04, 0x44, 0x64, 0x47, 0x01, 0x42, 0x65};
     unsigned key = keys[rr(sizeof keys / sizeof *keys)], dbl = rr(8) == 0, Q = rr(2) || dbl;
     return 0x0e200400u | Q << 30 | (key >> 6) << 29 | (((key >> 5) & 1) << 1 | dbl) << 22 | (0x18 | (key & 7)) << 11;
+}
+/* FRINT* (vector), every key; reserved ones included */
+static uint32_t enc_frint(void)
+{
+    return 0x0e218800u | rr(2) << 30 | rr(2) << 29 | rr(4) << 22 | rr(2) << 12;
 }
 static uint32_t enc_indexed(void)
 {
@@ -181,10 +221,10 @@ int main(void)
     signal(SIGSEGV, on_fault);
     signal(SIGBUS, on_fault);
     for (unsigned k = 0; k < sizeof init_mem; k++) init_mem[k] = (uint8_t)rnd();
-    long per[8] = {0};
-    for (int round = 0; round < 60000; round++) {
+    long per[12] = {0};
+    for (int round = 0; round < 100000; round++) {
         hao_cpu in;
-        unsigned rd = reg(), rn = reg(), rm = reg(), kind = rr(8);
+        unsigned rd = reg(), rn = reg(), rm = reg(), kind = rr(12);
         uint32_t insn;
         switch (kind) {
         case 0: case 1: insn = enc_three_same() | rm << 16 | rn << 5 | rd; break;
@@ -200,6 +240,26 @@ int main(void)
             insn = (rr(6) ? 0x0f000400u | rr(2) << 30 : 0x5f000400u) | rr(2) << 29 | immhb << 16 | ops[rr(10)] << 11 | rn << 5 | rd;
             break;
         }
+        case 8: {   /* integer three-same: CMGT CMGE CMEQ CMTST CMHI CMHS, [SU]MAX/MIN, MUL MLA MLS (PMUL) */
+            static const unsigned ops[] = {0x06, 0x07, 0x0C, 0x0D, 0x11, 0x12, 0x13, 0x10};
+            insn = 0x0e200400u | rr(2) << 30 | rr(2) << 29 | rr(4) << 22 | rm << 16 | ops[rr(8)] << 11 | rn << 5 | rd;
+            break;
+        }
+        case 9:     /* two-reg misc: compares with zero, ABS, NEG; FRINT* (vector) */
+            if (rr(2)) insn = 0x0e200800u | rr(2) << 30 | rr(2) << 29 | rr(4) << 22 | (0x08 + rr(4)) << 12 | rn << 5 | rd;
+            else insn = enc_frint() | rn << 5 | rd;
+            break;
+        case 10:    /* TBL/TBX of 1-4 registers, EXT */
+            if (rr(3)) insn = 0x0e000000u | rr(2) << 30 | rm << 16 | rr(4) << 13 | rr(2) << 12 | rn << 5 | rd;
+            else insn = 0x2e000000u | rr(2) << 30 | rm << 16 | rr(16) << 11 | rn << 5 | rd;
+            break;
+        case 11:    /* MUL/MLA/MLS by element (and neighbours); scalar FRINT* */
+            if (rr(2)) {
+                static const unsigned ops[] = {0x0, 0x4, 0x8, 0x8, 0x0, 0x4, 0x2, 0xA};
+                insn = 0x0f000000u | rr(2) << 30 | rr(2) << 29 | (rr(4) ? 1 + rr(2) : rr(4)) << 22 | rr(2) << 21 | rm << 16 | ops[rr(8)] << 12 | rr(2) << 11 | rn << 5 | rd;
+            } else
+                insn = 0x1e244000u | (rr(4) ? rr(2) : 2 + rr(2)) << 22 | rr(8) << 15 | rn << 5 | rd;
+            break;
         default: {  /* structure loads and stores */
             unsigned post = rr(2), Q = rr(2), L = rr(2), size = rr(4), rmv = post ? (rr(3) ? 31 : reg() & 15) : 0;
             if (kind == 5 || kind == 6) {
@@ -215,7 +275,26 @@ int main(void)
         }
         }
         state(&in, rn, (insn >> 16) & 31);
-        if (kind >= 5) {
+        if (kind == 9 || kind == 11)                          /* values to round, in the lane size of bit 22 */
+            for (int k = 0; k < 32; k++)
+                if (k == (int)rn || rr(4)) {
+                    if ((insn >> 22) & 1) { in.v[k].d[0] = dval(); in.v[k].d[1] = dval(); }
+                    else for (int e = 0; e < 4; e++) in.v[k].s[e] = sval();
+                }
+        if (kind == 8 && rr(2))                               /* equal and sign-flipped lanes for the compares */
+            for (int e = 0; e < 16; e++) {
+                unsigned xm = (insn >> 16) & 31;
+                switch (rr(4)) {
+                case 0: in.v[xm].b[e] = in.v[rn].b[e]; break;
+                case 1: in.v[xm].b[e] = in.v[rn].b[e] ^ 0x80; break;
+                default: break;
+                }
+            }
+        if (kind == 10) {                                     /* table indices, mostly in or near range */
+            unsigned xm = (insn >> 16) & 31;
+            for (int e = 0; e < 16; e++) if (rr(4)) in.v[xm].b[e] = (uint8_t)(rr(4) ? rr(72) : 0x70 + rr(32) * 4);
+        }
+        if (kind >= 5 && kind <= 7) {
             uint64_t a = (uint64_t)(uintptr_t)mem + (rr(2) ? PG + 64 * rr(200) + rr(64) : 2 * PG - 8 * (1 + rr(10)));
             in.x[rn] = a;   /* rn = 31: SP */
             unsigned xm = (insn >> 16) & 31;
@@ -225,10 +304,17 @@ int main(void)
          * result as an operand */
         uint32_t insn2 = 0;
         if (kind <= 2 && rr(2)) insn2 = (rr(2) ? enc_three_same() | rr(32) << 16 : enc_indexed() | rr(16) << 16) | rd << 5 | reg();
+        /* FRINT* after or before single-precision vector FP: the constants
+         * one leaves for the next (tctx.vfp_consts) */
+        if (kind <= 2 && insn2 && rr(4) == 0) insn2 = enc_frint() | rd << 5 | reg();
+        if (kind == 9 && (insn & 0x0e218800u) == 0x0e218800u && rr(2))
+            insn2 = (rr(2) ? enc_three_same() | rr(32) << 16 : enc_frint()) | rd << 5 | reg();
         for (int live = 0; live < 2; live++) check(insn, insn2, &in, live);
         per[kind]++;
     }
-    printf("jit vector: %ld cases (%ld faulting, %ld of them stores straddling the page end; %ld undefined) [fp %ld, by element %ld, misc %ld, shift %ld, ld/st %ld], %ld mismatches\n",
-           cases, faults, straddles, undefs, 2 * (per[0] + per[1]), 2 * per[2], 2 * per[3], 2 * per[4], 2 * (per[5] + per[6] + per[7]), fails);
+    printf("jit vector: %ld cases (%ld faulting, %ld of them stores straddling the page end; %ld undefined) [fp %ld, by element %ld, misc %ld, shift %ld, ld/st %ld,"
+           " integer %ld, misc/frint %ld, tbl/ext %ld, by element/scalar frint %ld], %ld mismatches\n",
+           cases, faults, straddles, undefs, 2 * (per[0] + per[1]), 2 * per[2], 2 * per[3], 2 * per[4], 2 * (per[5] + per[6] + per[7]),
+           2 * per[8], 2 * per[9], 2 * per[10], 2 * per[11], fails);
     return fails ? 1 : 0;
 }

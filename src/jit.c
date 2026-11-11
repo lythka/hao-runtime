@@ -294,8 +294,9 @@ typedef struct {
     uint64_t base;          /* guest image base the code is relative to */
     uint8_t *base_slot;     /* where the runtime stores `base` (rip-relative) */
     bool in_eflags, dirty;
-    /* xmm5-7 hold t_vfp32's constants: set by a vector FP translation,
-     * kept for the next instruction only (vfp_prev while it is emitted) */
+    /* xmm5-7 hold t_vfp32's constants: set by a single-precision vector FP
+     * translation (t_vfp32, t_vfp_rint), kept for the next instruction
+     * only (vfp_prev while it is emitted) */
     bool vfp_consts, vfp_prev;
     bool pic;               /* AOT: every guest address must be base-relative */
     bool not_pic;           /* ... and one was not (the blob is not written) */
@@ -1676,6 +1677,9 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
 #undef PI
 }
 
+enum { RI_N, RI_M, RI_P, RI_Z, RI_A, RI_X, RI_I };
+static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsigned rn, uint32_t insn, uint64_t pc);
+
 static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned type = BITS(i, 23, 22), rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
@@ -1730,6 +1734,11 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
             else x_sse_rr(&t->b, 0xF2, 0x10, 0, 0, 1);            /* movsd xmm0, xmm1 */
             fp_store_checked(t, rd, op == 5, i, pc);
             return true;
+        case 8: case 9: case 10: case 11: case 12: case 14: case 15: {   /* FRINTN P M Z A X I */
+            static const int mode[8] = {RI_N, RI_P, RI_M, RI_Z, RI_A, -1, RI_X, RI_I};
+            t_vfp_rint(t, mode[op - 8], dbl, dbl ? 8 : 4, rd, rn, i, pc);
+            return true;
+        }
         default: return false;
         }
     }
@@ -1853,13 +1862,15 @@ static bool t_eor3_bcax(tctx *t, uint32_t i)
     return true;
 }
 
-/* ---- Advanced SIMD integer forms on SSE2.
- * V registers live in memory; an instruction loads its operands into
- * xmm0-xmm2 (unaligned moves: nothing here relies on hao_cpu's alignment),
- * computes, and stores all 16 bytes of Vd, the upper half zero for a 64-bit
- * vector or a scalar. SSE integer instructions leave EFLAGS alone. Only
- * allocated encodings are taken, and only those with an SSE2 form; the rest
- * (and every saturating form, which sets FPSR.QC) stay with the helper. */
+/* ---- Advanced SIMD integer forms on SSE2 and the x86-64-v2 additions
+ * (SSSE3 PSHUFB, PALIGNR, PABSB/W/D; SSE4.1 PMULLD, PMINSB/SD/UW/UD,
+ * PMAXSB/SD/UW/UD, PCMPEQQ; SSE4.2 PCMPGTQ). V registers live in memory; an
+ * instruction loads its operands into xmm0-xmm4 and xmm8-xmm9 (unaligned
+ * moves: nothing here relies on hao_cpu's alignment), computes, and stores
+ * all 16 bytes of Vd, the upper half zero for a 64-bit vector or a scalar.
+ * SSE integer instructions leave EFLAGS alone. Only allocated encodings are
+ * taken; the rest (and every saturating form, which sets FPSR.QC) stay with
+ * the helper. */
 #define P(op, dst, src) x_sse_rr(&t->b, 0x66, op, 0, dst, src)
 static void vld(tctx *t, int xmm, unsigned r) { x_movdqu_ld(&t->b, xmm, VR(r)); }
 static void vst(tctx *t, unsigned rd, int xmm, int Q)
@@ -1883,6 +1894,36 @@ static xmem velem(unsigned r, int es, int idx) { return xm(RBX, CPU_OFF_V(r) + i
 
 static const uint8_t padd[4] = {0xFC, 0xFD, 0xFE, 0xD4}, psub[4] = {0xF8, 0xF9, 0xFA, 0xFB};
 static const uint8_t pcmpeq[3] = {0x74, 0x75, 0x76}, pcmpgt[3] = {0x64, 0x65, 0x66};
+
+/* The x86-64-v2 forms (SSSE3, SSE4.1, SSE4.2), which hao requires of the
+ * CPU (src/main.c refuses to start without them); never VEX. */
+#define P38(op, dst, src) x_sse38_rr(&t->b, op, dst, src)
+/* lane compares in every size: pcmpeqq (SSE4.1), pcmpgtq (SSE4.2) */
+static void vcmpeq(tctx *t, unsigned size, int d, int s) { if (size == 3) P38(0x29, d, s); else P(pcmpeq[size], d, s); }
+static void vcmpgt(tctx *t, unsigned size, int d, int s) { if (size == 3) P38(0x37, d, s); else P(pcmpgt[size], d, s); }
+/* xmm d and s with the sign bit of each 32- or 64-bit lane flipped: the
+ * signed order of the results is the unsigned order of the inputs */
+static void vbias(tctx *t, unsigned size, int d, int s, int tmp)
+{
+    vconst(t, tmp, size == 3 ? 0x8000000000000000ull : 0x8000000080000000ull, true);
+    P(0xEF, d, tmp);
+    P(0xEF, s, tmp);
+}
+/* xmm0 = xmm0 * xmm1 in each lane, modulo the lane size (MUL); xmm2-xmm3
+ * scratch. Bytes: the even bytes are the low bytes of pmullw's words, the
+ * odd ones the high bytes of (a >> 8) * (b & 0xff00). */
+static void vmul(tctx *t, unsigned size)
+{
+    if (size == 2) { P38(0x40, 0, 1); return; }                  /* pmulld */
+    if (size == 1) { P(0xD5, 0, 1); return; }                   /* pmullw */
+    P(0x6F, 2, 0); P(0xD5, 2, 1);
+    vconst(t, 3, 0x00ff00ff00ff00ffull, true);
+    P(0xDB, 2, 3);                                               /* the even bytes' products */
+    x_sse_shift_ri(&t->b, 0x71, 2, 0, 8);                        /* psrlw 8: the odd bytes of a */
+    P(0xDF, 3, 1);                                               /* pandn: the odd bytes of b, in place */
+    P(0xD5, 0, 3);
+    P(0xEB, 0, 2);
+}
 
 static bool t_simd_three_same(tctx *t, uint32_t i)
 {
@@ -1910,36 +1951,42 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
         P(U ? psub[size] : padd[size], 0, 1);
         break;
     case 0x11:                                                   /* CMTST / CMEQ */
-        if (size == 3) return false;
         vld(t, 0, rn); vld(t, 1, rm);
-        if (U) P(pcmpeq[size], 0, 1);
-        else { P(0xDB, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); vnot(t, 0, 1); }
+        if (U) vcmpeq(t, size, 0, 1);
+        else { P(0xDB, 0, 1); vzero(t, 1); vcmpeq(t, size, 0, 1); vnot(t, 0, 1); }
         break;
-    case 0x06:                                                   /* CMGT / CMHI: n -sat m != 0 */
-        if (size == 3 || (U && size == 2)) return false;
+    case 0x06:                                                   /* CMGT / CMHI */
         vld(t, 0, rn); vld(t, 1, rm);
-        if (!U) P(pcmpgt[size], 0, 1);
-        else { P(size ? 0xD9 : 0xD8, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); vnot(t, 0, 1); }
+        if (!U) vcmpgt(t, size, 0, 1);
+        else if (size < 2) { P(size ? 0xD9 : 0xD8, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); vnot(t, 0, 1); }   /* n -sat m != 0 */
+        else { vbias(t, size, 0, 1, 2); vcmpgt(t, size, 0, 1); }
         break;
-    case 0x07:                                                   /* CMGE: !(m > n) / CMHS: m -sat n == 0 */
-        if (size == 3 || (U && size == 2)) return false;
+    case 0x07:                                                   /* CMGE: !(m > n) / CMHS */
         vld(t, 0, rm); vld(t, 1, rn);
-        if (!U) { P(pcmpgt[size], 0, 1); vnot(t, 0, 1); }
-        else { P(size ? 0xD9 : 0xD8, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); }
+        if (!U) { vcmpgt(t, size, 0, 1); vnot(t, 0, 1); }
+        else if (size < 2) { P(size ? 0xD9 : 0xD8, 0, 1); vzero(t, 1); P(pcmpeq[size], 0, 1); }                 /* m -sat n == 0 */
+        else { vbias(t, size, 0, 1, 2); vcmpgt(t, size, 0, 1); vnot(t, 0, 1); }
         break;
     case 0x0C: case 0x0D: {                                      /* SMAX/UMAX, SMIN/UMIN */
-        uint8_t o;
-        if (U && size == 0) o = op == 0x0C ? 0xDE : 0xDA;        /* pmaxub / pminub */
-        else if (!U && size == 1) o = op == 0x0C ? 0xEE : 0xEA;  /* pmaxsw / pminsw */
-        else return false;
+        /* [max/min][U][size]: pmaxsb pmaxsw pmaxsd / pmaxub pmaxuw pmaxud, and the
+         * minima; the SSE2 ones (pmaxsw, pmaxub, ...) are two-byte opcodes */
+        static const uint8_t o[2][2][3] = {{{0x3C, 0xEE, 0x3D}, {0xDE, 0x3E, 0x3F}}, {{0x38, 0xEA, 0x39}, {0xDA, 0x3A, 0x3B}}};
+        if (size == 3) return false;                             /* reserved */
+        uint8_t x = o[op & 1][U][size];
         vld(t, 0, rn); vld(t, 1, rm);
-        P(o, 0, 1);
+        if (size == (U ? 0u : 1u)) P(x, 0, 1); else P38(x, 0, 1);
         break;
     }
-    case 0x13:                                                   /* MUL, 16-bit lanes: pmullw */
-        if (U || size != 1) return false;
+    case 0x12: case 0x13:                                        /* MLA / MLS, MUL (PMUL: helper) */
+        if (size == 3 || (op == 0x13 && U)) return false;
         vld(t, 0, rn); vld(t, 1, rm);
-        P(0xD5, 0, 1);
+        vmul(t, size);
+        if (op == 0x12) {
+            vld(t, 1, rd);
+            P(U ? psub[size] : padd[size], 1, 0);
+            vst(t, rd, 1, Q);
+            return true;
+        }
         break;
     default: return false;
     }
@@ -1950,8 +1997,9 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
 static void vnarrow(tctx *t, int oes);
 static void vst_narrow(tctx *t, unsigned rd, int Q);
 static bool t_vfp_absneg(tctx *t, uint32_t i);
+static bool t_vfp_rint_vec(tctx *t, uint32_t i, uint64_t pc);
 
-static bool t_simd_two_misc(tctx *t, uint32_t i)
+static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 16, 12);
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
@@ -1981,24 +2029,26 @@ static bool t_simd_two_misc(tctx *t, uint32_t i)
         vst(t, rd, 0, Q);
         return true;
     }
-    if (size == 3 && (!Q || op != 0x0B)) return false;           /* 64-bit lanes: NEG only (no pcmpgtq) */
+    if (op == 0x18 || op == 0x19) return t_vfp_rint_vec(t, i, pc);   /* FRINT* */
+    if (size == 3 && (!Q || op < 0x08 || op > 0x0B)) return false;  /* 64-bit lanes: compares with zero, ABS, NEG */
     switch (op) {
     case 0x08:                                                   /* CMGT #0 / CMGE #0: !(0 > x) */
-        if (!U) { vld(t, 0, rn); vzero(t, 1); P(pcmpgt[size], 0, 1); }
-        else { vzero(t, 0); vld(t, 1, rn); P(pcmpgt[size], 0, 1); vnot(t, 0, 1); }
+        if (!U) { vld(t, 0, rn); vzero(t, 1); vcmpgt(t, size, 0, 1); }
+        else { vzero(t, 0); vld(t, 1, rn); vcmpgt(t, size, 0, 1); vnot(t, 0, 1); }
         break;
     case 0x09:                                                   /* CMEQ #0 / CMLE #0: !(x > 0) */
         vld(t, 0, rn); vzero(t, 1);
-        if (!U) P(pcmpeq[size], 0, 1);
-        else { P(pcmpgt[size], 0, 1); vnot(t, 0, 1); }
+        if (!U) vcmpeq(t, size, 0, 1);
+        else { vcmpgt(t, size, 0, 1); vnot(t, 0, 1); }
         break;
     case 0x0A:                                                   /* CMLT #0: 0 > x */
         if (U) return false;
-        vzero(t, 0); vld(t, 1, rn); P(pcmpgt[size], 0, 1);
+        vzero(t, 0); vld(t, 1, rn); vcmpgt(t, size, 0, 1);
         break;
-    case 0x0B:                                                   /* NEG (ABS: helper) */
-        if (!U) return false;
-        vzero(t, 0); vld(t, 1, rn); P(psub[size], 0, 1);
+    case 0x0B:                                                   /* NEG, ABS */
+        if (U) { vzero(t, 0); vld(t, 1, rn); P(psub[size], 0, 1); }
+        else if (size < 3) { vld(t, 0, rn); P38((uint8_t)(0x1C + size), 0, 0); }   /* pabsb / pabsw / pabsd */
+        else { vld(t, 0, rn); vzero(t, 1); vcmpgt(t, 3, 1, 0); P(0xEF, 0, 1); P(0xFB, 0, 1); }   /* (x ^ s) - s, s = 0 > x */
         break;
     default: return false;
     }
@@ -2271,6 +2321,22 @@ static void vfp_special(tctx *t, int s)
     P(0x6F, 2, s); P(0xDB, 2, 6); P(0x76, 2, 5);                 /* |s| == 0 */
     P(0xDF, 2, 3); P(0xEB, 4, 2);                                /* e == 0 && |s| != 0 */
 }
+/* the same for double lanes, with xmm12 = 0, xmm10 = 0x7fff...ffff and
+ * xmm11 = 0x7ff0...0000 in both lanes (vfp_constants64) */
+static void vfp_special64(tctx *t, int s)
+{
+    P(0x6F, 2, s); P(0xDB, 2, 11);
+    P(0x6F, 3, 2); P38(0x29, 3, 12);
+    P38(0x29, 2, 11); P(0xEB, 4, 2);
+    P(0x6F, 2, s); P(0xDB, 2, 10); P38(0x29, 2, 12);
+    P(0xDF, 2, 3); P(0xEB, 4, 2);
+}
+static void vfp_constants64(tctx *t)
+{
+    vzero(t, 12);
+    vones(t, 10); x_sse_shift_ri(&t->b, 0x73, 2, 10, 1);                                     /* 0x7fffffffffffffff */
+    vones(t, 11); x_sse_shift_ri(&t->b, 0x73, 2, 11, 53); x_sse_shift_ri(&t->b, 0x73, 6, 11, 52); /* 0x7ff0000000000000 */
+}
 
 enum { VFP_ADD, VFP_SUB, VFP_MUL, VFP_MAX, VFP_MIN, VFP_EQ, VFP_GE, VFP_GT };
 
@@ -2376,9 +2442,33 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
     return true;
 }
 
+/* MUL, MLA, MLS (by element), halfword and word lanes:
+ * 0 Q U 01111 size L M Rm opcode H 0 Rn Rd, opcode 1000 (U = 0) or 0x00 (U = 1) */
+static bool t_simd_indexed_int(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 12);
+    unsigned L = BIT(i, 21), M = BIT(i, 20), H = BIT(i, 11), rm = BITS(i, 19, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (!(U ? op == 0 || op == 4 : op == 8) || (size != 1 && size != 2)) return false;
+    int es = 1 << size, idx = (int)(size == 1 ? H << 2 | L << 1 | M : H << 1 | L);
+    if (size == 2) rm |= M << 4;
+    x_mov_ld(&t->b, es, RAX, velem(rm, es, idx));
+    vdup_rax(t, es, 1);
+    P(0x6F, 1, 0);
+    vld(t, 0, rn);
+    vmul(t, size);
+    if (op != 8) {
+        vld(t, 1, rd);
+        P(op == 4 ? psub[size] : padd[size], 1, 0);
+        vst(t, rd, 1, (int)Q);
+    } else
+        vst(t, rd, 0, (int)Q);
+    return true;
+}
+
 /* FMUL (by element), single precision: 0 Q 0 01111 10 L M Rm 1001 H 0 Rn Rd */
 static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
 {
+    if (t_simd_indexed_int(t, i)) return true;
     if (BIT(i, 29) || BITS(i, 23, 22) != 2 || BITS(i, 15, 12) != 9) return false;
     unsigned rm = BITS(i, 20, 16), idx = BIT(i, 11) << 1 | BIT(i, 21);
     t_vfp32(t, VFP_MUL, BITS(i, 4, 0), BITS(i, 9, 5), rm, (int)idx, (int)BIT(i, 30), i, pc);
@@ -2397,6 +2487,87 @@ static bool t_vfp_absneg(tctx *t, uint32_t i)
     else x_sse_shift_ri(&t->b, grp, 2, 1, 1);                    /* everything else */
     P(U ? 0xEF : 0xDB, 0, 1);
     vst(t, BITS(i, 4, 0), 0, (int)Q);
+    return true;
+}
+
+/*
+ * FRINTN, FRINTM, FRINTP, FRINTZ, FRINTA, FRINTX, FRINTI: vector .2S/.4S/.2D
+ * and scalar S/D. These are fp_rint's fast path (rint_fast, a64_fp.c): only
+ * operands whose lanes are all zero or normal are taken, found on the bits
+ * before any FP instruction runs; a subnormal (FZ flushes it and raises
+ * IDC), infinite or NaN lane (FPProcessNaN, DN) sends the instruction to the
+ * helper with nothing raised. For admitted lanes ROUNDPS/ROUNDPD is
+ * FPRoundInt exactly: the result is integral, never subnormal, keeps the
+ * operand's sign (a zero result included), and the immediate picks the mode
+ * (0-3: nearest-even, down, up, toward zero; 4: MXCSR.RC, the guest's FPCR
+ * RMode, for FRINTX and FRINTI) and whether PE (FPSR.IXC) is raised for an
+ * inexact result: only FRINTX raises it. A scalar or .2S operand is loaded
+ * with the lanes above it zero, which round to +0 and raise nothing, so the
+ * whole register is stored.
+ *
+ * FRINTA (ties away from zero) has no ROUND mode: r = trunc(x) (ROUND mode
+ * 3), d = x - r, and r + copysign(1, x) when |d| >= 1/2, else r + x's signed
+ * zero (so a zero r keeps its sign in every rounding mode). Every step is
+ * exact for an admitted x, so nothing is raised: d is 0, x itself (|x| < 1)
+ * or x's fraction (Sterbenz: r <= |x| <= 2r), a normal number or zero; the
+ * comparison is an integer one on |d|'s bits; |r| < 2^23 (2^52) when the
+ * sum is not with a zero.
+ */
+static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsigned rn, uint32_t insn, uint64_t pc)
+{
+    static const uint8_t imm[7] = {0x08, 0x09, 0x0A, 0x0B, 0, 0x04, 0x0C};
+    uint8_t rop = dbl ? 0x09 : 0x08, fpfx = dbl ? 0x66 : 0;       /* roundpd / roundps; addpd / addps prefix */
+    int abs = dbl ? 10 : 6;
+    if (width == 16) vld(t, 0, rn);
+    else if (width == 8) x_movq_ld(&t->b, 0, VR(rn));
+    else x_movd_ld(&t->b, 0, VR(rn));
+    if (dbl) vfp_constants64(t);
+    else if (!t->vfp_prev) vfp_constants(t);
+    vzero(t, 4);
+    if (dbl) vfp_special64(t, 0); else vfp_special(t, 0);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);                      /* pmovmskb ecx, xmm4 */
+    size_t decline = jrcxnz32(t);
+    if (mode != RI_A) x_sse3a_rri(&t->b, rop, 0, 0, imm[mode]);
+    else {
+        x_sse3a_rri(&t->b, rop, 1, 0, 0x0B);                     /* r = trunc(x), no PE */
+        P(0x6F, 2, 0);
+        x_sse_rr(&t->b, fpfx, 0x5C, 0, 2, 1);                    /* d = x - r */
+        P(0xDB, 2, abs);                                         /* |d| */
+        vconst(t, 3, dbl ? 0x3FDFFFFFFFFFFFFFull : 0x3EFFFFFF3EFFFFFFull, true);
+        vcmpgt(t, dbl ? 3 : 2, 2, 3);                            /* |d| >= 1/2 */
+        vconst(t, 3, dbl ? 0x3FF0000000000000ull : 0x3F8000003F800000ull, true);
+        P(0xDB, 2, 3);                                           /* 1.0 there */
+        P(0x6F, 3, abs); P(0xDF, 3, 0);                          /* the sign of x */
+        P(0xEB, 2, 3);
+        x_sse_rr(&t->b, fpfx, 0x58, 0, 1, 2);                    /* r + (+-1.0 or +-0) */
+        P(0x6F, 0, 1);
+    }
+    x_movdqu_st(&t->b, VR(rd), 0);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, decline, xb_len(&t->b));
+    helper_keep_flags(t, insn, pc);
+    if (!dbl) vfp_constants(t);                                  /* the call clobbered them */
+    x_patch32(&t->b, done, xb_len(&t->b));
+    t->vfp_consts = !dbl;
+}
+
+/* FRINT* (vector): 0 Q U 01110 o2 sz 10000 1100 o1 10 Rn Rd */
+static bool t_vfp_rint_vec(tctx *t, uint32_t i, uint64_t pc)
+{
+    unsigned Q = BIT(i, 30), dbl = BIT(i, 22), key = BIT(i, 29) << 6 | BIT(i, 23) << 5 | BITS(i, 16, 12);
+    int mode;
+    switch (key) {
+    case 0x18: mode = RI_N; break;
+    case 0x19: mode = RI_M; break;
+    case 0x38: mode = RI_P; break;
+    case 0x39: mode = RI_Z; break;
+    case 0x58: mode = RI_A; break;
+    case 0x59: mode = RI_X; break;
+    case 0x79: mode = RI_I; break;
+    default: return false;                                       /* unallocated */
+    }
+    if (dbl && !Q) return false;                                 /* .1D: reserved */
+    t_vfp_rint(t, mode, (int)dbl, Q ? 16 : 8, BITS(i, 4, 0), BITS(i, 9, 5), i, pc);
     return true;
 }
 
@@ -2476,16 +2647,70 @@ static bool t_ldst_simd(tctx *t, uint32_t i)
     return true;
 }
 
+/* TBL / TBX with one to four table registers (Vn ... Vn+len-1, modulo 32).
+ * PSHUFB takes index bits 0-3 and gives 0 where bit 7 is set: for table
+ * register k the indices are i - 16k (modulo 256), and a saturating add of
+ * 0x70 sets bit 7 exactly for those outside 0..15. The OR of the per-register
+ * results is TBL; TBX then keeps Vd's byte where i >= 16 * len. */
+static bool t_simd_tbl(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), rm = BITS(i, 20, 16), len = BITS(i, 14, 13) + 1, tbx = BIT(i, 12);
+    unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    vld(t, 1, rm);
+    vconst(t, 3, 0x7070707070707070ull, true);
+    if (len > 1) { vconst(t, 4, 0x1010101010101010ull, true); P(0x6F, 2, 1); }
+    for (unsigned k = 0; k < len; k++) {
+        int dst = k ? 9 : 0, sel = len > 1 ? 8 : 2;
+        if (k) P(0xF8, 2, 4);                                    /* psubb: the indices into register k */
+        P(0x6F, sel, len > 1 ? 2 : 1);
+        P(0xDC, sel, 3);                                         /* paddusb 0x70 */
+        vld(t, dst, (rn + k) & 31);
+        P38(0x00, dst, sel);                                     /* pshufb */
+        if (k) P(0xEB, 0, 9);
+    }
+    if (tbx) {
+        vconst(t, 3, 0x0101010101010101ull * (16 * len - 1), true);
+        P(0xD8, 1, 3);                                           /* psubusb: nonzero beyond the table */
+        vzero(t, 3);
+        P(0x74, 1, 3);                                           /* in range */
+        vld(t, 2, rd);
+        P(0xDF, 1, 2);                                           /* Vd where out of range */
+        P(0xEB, 0, 1);
+    }
+    vst(t, rd, 0, (int)Q);
+    return true;
+}
+
+/* EXT: bytes pos.. of Vm:Vn (PALIGNR); the 64-bit form rotates Vm<63:0>:Vn<63:0> */
+static bool t_simd_ext(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), rm = BITS(i, 20, 16), pos = BITS(i, 14, 11), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (!Q && (pos & 8)) return false;                           /* reserved */
+    if (Q) {
+        vld(t, 0, pos ? rm : rn);
+        if (pos) { vld(t, 1, rn); x_sse3a_rri(&t->b, 0x0F, 0, 1, (uint8_t)pos); }   /* palignr */
+    } else {
+        x_movq_ld(&t->b, 0, VR(rn));
+        x_movq_ld(&t->b, 1, VR(rm));
+        P(0x6C, 0, 1);                                           /* punpcklqdq */
+        if (pos) x_sse3a_rri(&t->b, 0x0F, 0, 0, (uint8_t)pos);
+    }
+    vst(t, rd, 0, (int)Q);
+    return true;
+}
+
 /* The groups in a64_exec_simd's order (none of the masks overlap an
  * earlier group of that decoder). */
 static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
 {
     if ((i & 0x9F200400) == 0x0E200400) return BITS(i, 15, 11) >= 0x18 ? t_vfp_three_same(t, i, pc) : t_simd_three_same(t, i);
-    if ((i & 0x9F3E0C00) == 0x0E200800) return t_simd_two_misc(t, i);
+    if ((i & 0x9F3E0C00) == 0x0E200800) return t_simd_two_misc(t, i, pc);
     if ((i & 0x9F3E0C00) == 0x0E300800) return t_simd_across(t, i);
     if ((i & 0x9FF80400) == 0x0F000400) return t_simd_modimm(t, i);
     if ((i & 0x9FE08400) == 0x0E000400) return t_simd_copy(t, i);
     if ((i & 0x9F800400) == 0x0F000400) return t_simd_shift(t, i, false);
+    if ((i & 0xBFE08400) == 0x2E000000) return t_simd_ext(t, i);
+    if ((i & 0xBFE08C00) == 0x0E000000) return t_simd_tbl(t, i);
     if ((i & 0x9F000400) == 0x0F000000) return t_vfp_indexed(t, i, pc);
     return false;
 }
@@ -2506,6 +2731,7 @@ static bool t_simd_scalar(tctx *t, uint32_t i)
     return false;
 }
 #undef P
+#undef P38
 
 /* returns: 0 = continue block, 1 = block ended */
 static int translate_insn(tctx *t, uint32_t i, uint64_t pc)

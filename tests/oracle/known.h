@@ -162,7 +162,6 @@ static const known_enc known_lenient[] = {
     {0x9F800400, 0x0F000400, "shift by immediate (vector): reserved immh/opcode combinations"},
     {0xDF800400, 0x5F000400, "shift by immediate (scalar): reserved immh/opcode combinations"},
     {0xBF208C00, 0x0E000800, "permute (UZP/TRN/ZIP): reserved size/Q combinations"},
-    {0xBFE08400, 0x2E000000, "EXT: imm4 >= 8 with Q = 0"},
     {0x9F000400, 0x0F000000, "by element (vector): reserved size/opcode combinations"},
     {0xDF000400, 0x5F000000, "by element (scalar): reserved size/opcode combinations"},
 };
