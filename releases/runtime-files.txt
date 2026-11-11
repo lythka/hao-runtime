@@ -680,3 +680,6 @@ tools/hao_ifunit.py
 tools/hao_macho.py
 tools/hao_release.py
 tools/stub_identity_gate.py
+tools/value-contracts/README.md
+tools/value-contracts/optional-data-26A428.json
+tools/value-contracts/optional-data-26B131.json
