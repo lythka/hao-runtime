@@ -157,10 +157,11 @@ Not entries of `tests/check.list`:
 | `tests/tools/{bundle,stubdeps,platform,identity,aotpayload}.sh` | run by `tests/tools/run.sh` |
 | `tests/fuzz/run.sh`, `tests/fuzz/fuzz_hao_fat.py` | `make fuzz-smoke` |
 | `tests/fuzz/make_seeds.sh`, `tests/guest/bridgeunit_gen.py`, `tests/aot/patch.py` | generators and helpers, not tests |
-| `tests/guest/bench.c`, `tests/guest/vbench.c` | timing programs for `hao --stats` and wall-time comparisons (`vbench`: single-precision vector arithmetic and LD1/ST1), not tests |
+| `tests/guest/bench.c`, `tests/guest/vbench.c`, `tests/guest/vbench2.c` | timing programs for `hao --stats` and wall-time comparisons (`vbench`: single-precision vector arithmetic and LD1/ST1; `vbench2`: TBL/TBX, EXT, MUL/MLA/MLS, FRINT*, 64-bit compares, min/max, ABS), not tests |
 
-`make unit` runs `tests/aot/jit_vector.c` (about 4 s): 120,000 cases of the
-translated vector floating-point, shift/narrow/widen and LD1/ST1/LD1R
+`make unit` runs `tests/aot/jit_vector.c` (about 7 s): 200,000 cases of the
+translated vector floating-point, FRINT* (vector and scalar), integer
+compare/min/max/multiply, TBL/TBX/EXT, shift/narrow/widen and LD1/ST1/LD1R
 encodings (with neighbouring encodings that stay with the helper), each
 through the translator and the interpreter from one random state under one
 of the 16 FPCR RMode/DN/FZ settings, alone and with NZCV live across it.

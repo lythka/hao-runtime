@@ -222,6 +222,22 @@ int main(int argc, char **argv)
             for (unsigned k = 0; k < 3; k++) {
                 begin(); x_sse_rri(&B, 0, 0xC2, a, c, (uint8_t)k); end("%s %s, %s", cmpn[k], xmmn(a), xmmn(c));
             }
+            /* SSSE3 / SSE4.1 / SSE4.2 (66 0F 38 xx, 66 0F 3A xx ib) */
+            static const struct { uint8_t op; const char *mn; } s38[] = {
+                {0x00, "pshufb"}, {0x1C, "pabsb"}, {0x1D, "pabsw"}, {0x1E, "pabsd"}, {0x29, "pcmpeqq"}, {0x37, "pcmpgtq"},
+                {0x38, "pminsb"}, {0x39, "pminsd"}, {0x3A, "pminuw"}, {0x3B, "pminud"}, {0x3C, "pmaxsb"}, {0x3D, "pmaxsd"},
+                {0x3E, "pmaxuw"}, {0x3F, "pmaxud"}, {0x40, "pmulld"},
+            };
+            for (unsigned k = 0; k < sizeof s38 / sizeof *s38; k++) {
+                begin(); x_sse38_rr(&B, s38[k].op, a, c); end("%s %s, %s", s38[k].mn, xmmn(a), xmmn(c));
+            }
+            static const struct { uint8_t op, imm; const char *mn; } s3a[] = {
+                {0x0F, 0, "palignr"}, {0x0F, 5, "palignr"}, {0x0F, 15, "palignr"}, {0x08, 0x04, "roundps"}, {0x08, 0x0B, "roundps"},
+                {0x09, 0x08, "roundpd"}, {0x09, 0x0C, "roundpd"}, {0x0A, 0x09, "roundss"}, {0x0B, 0x0A, "roundsd"},
+            };
+            for (unsigned k = 0; k < sizeof s3a / sizeof *s3a; k++) {
+                begin(); x_sse3a_rri(&B, s3a[k].op, a, c, s3a[k].imm); end("%s %s, %s, %u", s3a[k].mn, xmmn(a), xmmn(c), s3a[k].imm);
+            }
         }
     }
     int32_t pimms[] = {0, 1, -1, 0x202, 0x7fffffff, (int32_t)0x80000000};
@@ -347,6 +363,8 @@ int main(int argc, char **argv)
         MUSTFAIL(x_sse_shift_ri(&b, 0x70, 2, 0, 1));
         MUSTFAIL(x_sse_shift_ri(&b, 0x71, 3, 0, 1));
         MUSTFAIL(x_sse_rm(&b, 0xF0, 0x10, 0, 0, xm(RCX, 0)));
+        MUSTFAIL(x_sse38_rr(&b, 0x00, 16, 0));
+        MUSTFAIL(x_sse3a_rri(&b, 0x0F, 0, -1, 3));
         MUSTFAIL(x_mov_rr(&b, 1, 16, RAX));
         MUSTFAIL(x_mov_ri(&b, -3, 1));
         MUSTFAIL(x_mov_ld(&b, 8, RAX, xmi(RCX, RSP, 1, 0)));

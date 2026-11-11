@@ -1,5 +1,93 @@
 # Runtime issues and measured scope
 
+## Table lookups, EXT, integer multiplies and round-to-integral in translated code
+
+Translated code ran TBL/TBX, EXT, the integer vector multiplies (MUL, MLA,
+MLS, vector and by element) apart from `MUL .8H/.4H`, every FRINT* (vector
+and scalar), the 64-bit lane compares (CMGT, CMGE, CMHI, CMHS, CMTST and the
+compares with zero on `.2D`), CMHI/CMHS on 32-bit lanes, SMIN/SMAX/UMIN/UMAX
+other than signed halfwords and unsigned bytes, and ABS through the
+interpreter helper. None of them has an SSE2 form; all have one in SSSE3,
+SSE4.1 or SSE4.2, which hao now requires of the CPU (x86-64-v2, checked at
+startup by `src/main.c`; no VEX encodings are used).
+
+`src/jit.c` now emits them inline (encoders `x_sse38_rr`, `x_sse3a_rri` in
+`src/x86_emit.c`):
+- TBL/TBX with one to four table registers, `.8B`/`.16B`: one PSHUFB per
+  table register on the indices minus 16k, a saturating add of 0x70 setting
+  bit 7 (zero result) for indices outside that register; the results are
+  ORed. TBX keeps Vd's byte where the index is at least 16 x len.
+- EXT: PALIGNR on Vm:Vn; the 64-bit form rotates the two low halves joined.
+  EXT with Q = 0 and imm4 >= 8 is reserved: the interpreter returned
+  uninitialized bytes of its staging buffer there and now reports UNDEF as
+  hardware does (the oracle's leniency entry for it is removed).
+- MUL/MLA/MLS on bytes (two PMULLW on the even and odd bytes), halfwords
+  (PMULLW) and words (PMULLD); MUL/MLA/MLS by element on halfwords and words.
+- CMEQ/CMTST/CMGT/CMGE (PCMPEQQ/PCMPGTQ) and CMHI/CMHS (the same after
+  flipping the sign bits) on `.2D`, CMHI/CMHS on `.4S`/`.2S`, the compares
+  with zero on `.2D`; SMIN/SMAX/UMIN/UMAX in every lane size (PMINSB, PMINSD,
+  PMINUW, PMINUD and the maxima); ABS (PABSB/W/D; `.2D` as (x ^ s) - s).
+- FRINTN/M/P/Z/X/I and FRINTA, vector `.2S`/`.4S`/`.2D` and scalar S/D: the
+  fast path of `fp_rint`. Operands with any lane that is subnormal, infinite
+  or NaN go to the helper before any FP instruction runs, with nothing
+  raised (FZ/IDC, FPProcessNaN and DN stay the interpreter's). For zero and
+  normal lanes ROUNDPS/ROUNDPD is FPRoundInt exactly: the fixed modes for
+  N/M/P/Z, MXCSR.RC (the guest's FPCR.RMode) for X and I, PE (IXC) only for
+  FRINTX. FRINTA (ties away) is trunc(x) plus copysign(1, x) when
+  |x - trunc(x)| >= 1/2, else plus x's signed zero; each step is exact for a
+  normal x, so it raises nothing. No MXCSR save/restore is needed: a
+  declined operand reaches no FP instruction.
+
+Measured on the Apple silicon development host, where hao's x86_64 code
+runs under Rosetta (not on Intel hardware), so these are ratios, not Intel
+timings. `tests/guest/vbench2.c` (2000 repetitions, best of five, host
+under load from other jobs):
+
+| Kernel | Before, JIT | After, JIT | Before, AOT | After, AOT |
+|---|---:|---:|---:|---:|
+| TBL/TBX/EXT (`shuffle`) | 0.095 s | 0.006 s | 0.099 s | 0.005 s |
+| MUL/MLA/MLS (`imul`) | 0.394 s | 0.020 s | 0.411 s | 0.020 s |
+| FRINT* and `.2D` FP (`round`) | 2.010 s | 0.782 s | 2.074 s | 0.778 s |
+| compares, min/max, ABS (`cmpmm`) | 0.700 s | 0.020 s | 0.730 s | 0.018 s |
+| total | 3.22 s | 0.83 s | 3.31 s | 0.82 s |
+
+Its static helper instructions went from 178 to 46 of 985 and its dynamic
+helper calls (400 repetitions) from 20.1 M to 2.87 M, all of the remainder
+double-precision vector FADD/FSUB. `tests/guest/fpscalar -b NAME 300000`
+(ns per instruction under the JIT, best of three): `frintn v.4s` 31.7 to
+3.6, `frintx s` 17.4 to 4.1, `frinti s` 16.1 to 3.7, `frintm d` 16.7 to
+3.8, `frinta s` 18.7 to 8.1, `frinta v.2d` 23.9 to 7.3. `tests/guest/vbench.c`
+is unchanged (0.39-0.40 s, JIT and AOT).
+
+Validation: `tests/aot/jit_vector.c` (in `make unit`) now runs 200,000 cases
+(120,000 before), adding the integer three-same compares/min/max/multiplies,
+the compares with zero and ABS, TBL/TBX (indices mostly in or near range)
+and EXT including the reserved encodings, the by-element multiplies with
+their neighbours, and FRINT* vector and scalar (all keys, reserved ones
+included) over values around the integers in single and double, alone,
+before and after single-precision vector FP (the constants one leaves for
+the next), under all 16 RMode/DN/FZ settings: translator and interpreter
+agree on registers, NZCV, the full FPSR and memory. `tests/guest/jitinsns.sh`
+compares 89 more lines (477) with native arm64 under JIT, `--interp`, helpers
+only and AOT, FRINT* over halves, quarters and specials under six FPCR
+settings among them. `tests/guest/fpscalar.sh` (every FRINT* over corner
+values under each rounding mode with FZ and DN, against native arm64) passes
+under JIT, `--interp`, helpers only and AOT. The oracle's simd and block
+modes, one million records each, checked by the runtime before and after on
+the same native records: no mismatches, and the same FPSR IEEE-flag
+differences record for record (36 simd, 24,488 block; the known scalar
+FZ/IDC gap); 365 more reserved EXT encodings now report UNDEF.
+
+Remaining limitations:
+- Double-precision vector arithmetic (FADD/FSUB/FMUL `.2D`, FMLA/FMLS) is
+  still helper-bound; it is most of what is left in `vbench2`'s rounding
+  kernel.
+- FRINT32*/FRINT64*, half-precision FRINT*, PMUL, the pairwise integer
+  min/max and the scalar (`D`-register) integer compares, ABS and NEG stay
+  with the helper.
+- A FRINT* operand with a subnormal, infinite or NaN lane pays the inline
+  check and then the helper.
+
 ## Vector floating point and structure loads/stores in translated code
 
 Translated code ran every Advanced SIMD floating-point instruction and every
@@ -163,10 +251,11 @@ FPSR (IOC, DZC, OFC, UFC, IXC, IDC, QC) and NZCV equal native arm64 under JIT,
 `--interp`, helper-only JIT and AOT.
 
 Remaining limitations:
-- `FRINT*`, the non-truncating `FCVT*` modes, fixed-point conversions,
-  `FCVTZU` and `UCVTF` with large lanes, the double packed conversions, the
-  other compares with zero and packed max/min still go through the helper;
-  its dispatch is then most of their cost.
+- The non-truncating `FCVT*` modes, fixed-point conversions, `FCVTZU` and
+  `UCVTF` with large lanes, the double packed conversions, the other
+  compares with zero and packed max/min still go through the helper; its
+  dispatch is then most of their cost. (`FRINT*` is now inline: see "Table
+  lookups, EXT, integer multiplies and round-to-integral" above.)
 - Inline SSE arithmetic that predates this change (FADD, FSUB, FMUL, FDIV,
   FSQRT, FCVT single<->double, FCMP) differs from A64 in FPSR under FZ: a
   flushed denormal operand does not raise IDC, and a result flushed to zero

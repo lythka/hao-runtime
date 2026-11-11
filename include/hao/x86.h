@@ -178,6 +178,12 @@ void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm);
  * (doublewords) or 0x73 (quadwords) and digit 2 (psrl), 4 (psra; not for
  * quadwords) or 6 (psll). */
 void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int xmm, uint8_t imm);
+/* The 66 0F 38 xx (SSSE3/SSE4.1/SSE4.2: pshufb, pabs*, pmulld, pmin/pmax*,
+ * pcmpeqq, pcmpgtq) and 66 0F 3A xx ib (palignr, round*) forms, register to
+ * register; dst is the ModRM reg field. All of them are in the x86-64-v2
+ * profile hao requires (src/main.c); none is VEX-encoded. */
+void x_sse38_rr(xbuf *b, uint8_t op, int dst, int src);
+void x_sse3a_rri(xbuf *b, uint8_t op, int dst, int src, uint8_t imm);
 
 /* Inverse condition. */
 static inline int xcc_not(int cc) { return cc ^ 1; }
