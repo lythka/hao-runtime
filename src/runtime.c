@@ -404,6 +404,75 @@ static uint64_t trace_word(uint64_t a)
     return w;
 }
 
+/* ------------------------------------------------ native-target cache
+ *
+ * A guest branch to an address outside guest code is classified by
+ * run_loop (trap, guest code, a native entry of a guest function, a
+ * shared-cache redirect) and then by native_step (its bridge plan, bound on
+ * the first call of a bare address). For an ordinary native function the
+ * answer depends on the address only: the native target (the address, or
+ * where a shared-cache stub or island leads), the x1 a redirected
+ * objc_msgSend stub sets, and the plan. Each thread remembers it in a
+ * direct-mapped table in its hao_thread, so a repeated call costs one probe.
+ *
+ * Validity. An entry carries the generation (hao_ncache_gen) its
+ * classification started in and is used only while the generation is
+ * unchanged. Everything that can change the answer bumps it once the change
+ * is visible: image registration and release (macho.c: guest code ranges,
+ * the shared cache's loaded images) and every plan table insert or
+ * replacement (bridge.c tab_put: first-call binds, ObjC probes that found a
+ * type, typed upgrades, async marks). A classification that raced a bump
+ * is stored under the older generation, which no later probe accepts. What
+ * is remembered is only what the slow path would compute again: a trap, a
+ * guest function's entry, an address the shared-cache redirect looked at
+ * without a result, an address in hao's code cache or a Swift island, and a
+ * plan whose lookup still has side effects (no plan yet, an ObjC probe plan
+ * with probes left) are never stored; the shared-cache redirect table never
+ * forgets an entry. The per-call checks after the plan (ObjC selector
+ * recheck, interposer redirect, REFUSED, counting, Swift value and witness
+ * hooks, argument scan) run on every call, as before.
+ *
+ * Concurrency. Only the owning thread reads or writes its table, so there is
+ * no sharing; but a guest signal handler may run on top of a probe or a
+ * store on the same thread and use the table itself. A store clears the
+ * key, writes the fields, sets the key and checks the fields again (clearing
+ * the key if a handler rewrote the entry in between); a probe reads the
+ * key, the fields and the key again. Either sees a whole entry or none.
+ * Nothing here allocates or locks. */
+
+static inline unsigned ncache_slot(uint64_t pc)
+{
+    return (unsigned)(((pc >> 2) * 0x9E3779B97F4A7C15ull) >> 56) & (HAO_NCACHE_SLOTS - 1);
+}
+
+static inline bool ncache_get(hao_thread *t, uint64_t pc, uint64_t *target, uint64_t *x1, const hao_plan **plan)
+{
+    __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
+    if (e->pc != pc) return false;
+    uint64_t gen = e->gen;
+    *target = e->target;
+    *x1 = e->x1;
+    *plan = e->plan;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    return __atomic_load_n(&e->pc, __ATOMIC_RELAXED) == pc && gen == __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE);
+}
+
+static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target, uint64_t x1, const hao_plan *plan)
+{
+    if (!pc || gen != __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE)) return;
+    __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
+    __atomic_store_n(&e->pc, 0, __ATOMIC_RELAXED);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    e->gen = gen;
+    e->target = target;
+    e->x1 = x1;
+    e->plan = plan;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    __atomic_store_n(&e->pc, pc, __ATOMIC_RELAXED);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    if (e->gen != gen || e->target != target || e->x1 != x1 || e->plan != plan) __atomic_store_n(&e->pc, 0, __ATOMIC_RELAXED);
+}
+
 /* One native call or trap of segment `arg`. Runs inside a NATIVE guard
  * (hao_eh_guard), so an exception unwinding out of it meets the guest's
  * catch handlers and cleanups (unwind.c). */
@@ -413,8 +482,13 @@ static void native_step(void *arg)
     hao_thread *t = seg->t;
     hao_cpu *c = &t->cpu;
     uint64_t pc = c->pc;
-    if (hao_is_trap(pc)) { run_trap(t, pc); return; }
-    const hao_plan *p = hao_bridge_plan_for_call(t, pc);
+    const hao_plan *p;
+    if (seg->nc_hit && pc == seg->nc_target) p = seg->nc_plan;   /* run_loop's cache probe: not a trap, the settled plan */
+    else {
+        if (hao_is_trap(pc)) { run_trap(t, pc); return; }
+        p = hao_bridge_plan_for_call(t, pc);
+        if (seg->nc_key && hao_bridge_plan_settled(p)) ncache_put(t, seg->nc_gen, seg->nc_key, pc, seg->nc_x1, p);
+    }
     hao_plan objc_call;   /* a method IMP called with another selector than its plan's: this call's type */
     if (p && p->src == HAO_BRS_OBJCIMP && c->x[1] != p->sel) p = hao_bridge_objc_recheck(c, p, &objc_call);
     if (p && p->redirect) { run_trap(t, p->redirect); return; }   /* an interposed function by its bare address */
@@ -452,7 +526,7 @@ static void native_step(void *arg)
         fprintf(stderr, "hao: <- %s = %#llx [isa %#llx]\n", sn, (unsigned long long)r0, (unsigned long long)w0);
     } else
     native_call(c, pc, p);
-    hao_objc_enum_result(c, objc_enum_result);
+    if (objc_enum_result) hao_objc_enum_result(c, objc_enum_result);
     c->pc = c->x[30];
 }
 
@@ -462,26 +536,52 @@ static void run_loop(void *arg)
     hao_seg *seg = arg;
     hao_thread *t = seg->t;
     hao_cpu *c = &t->cpu;
+    /* a chain of shared-cache redirects being classified: the address the guest branched to, the
+     * last nonzero x1 a redirect set, the cache generation the chain started in */
+    uint64_t chain_from = 0, chain_x1 = 0, chain_gen = 0;
     for (;;) {
         uint64_t pc = c->pc;
         if (pc == HAO_RETURN_MAGIC) break;
-        if (hao_is_trap(pc) || !hao_image_for_code(pc)) {
+        uint64_t target, x1;
+        const hao_plan *plan;
+        bool native = true;
+        seg->nc_hit = false;
+        seg->nc_key = 0;
+        if (ncache_get(t, pc, &target, &x1, &plan)) {   /* what the classification below found last time */
+            if (x1) c->x[1] = x1;
+            c->pc = target;
+            seg->nc_hit = true;
+            seg->nc_plan = plan;
+            seg->nc_target = target;
+        } else if (hao_is_trap(pc) || !hao_image_for_code(pc)) {
             if (!hao_is_trap(pc)) {
+                if (!chain_from) chain_gen = __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE);   /* before any lookup */
                 uint64_t g = hao_guest_of_entry(pc);
                 if (g) {                              /* guest calling a guest function via its thunk */
                     hao_jit_alias(pc, g);
                     c->pc = g;
+                    chain_from = 0;
                     continue;
                 }
                 /* a shared-cache guest image branching into another cache
                  * library, or into an objc_msgSend stub (which sets x1) */
-                uint64_t x1;
                 if (hao_dsc_redirect(pc, &g, &x1)) {
-                    if (x1) c->x[1] = x1;
+                    if (x1) c->x[1] = chain_x1 = x1;
+                    else if (!chain_from) chain_x1 = 0;
+                    if (!chain_from) chain_from = pc;
                     c->pc = g;
                     continue;
                 }
+                /* remembered unless the redirect could still find a target later, or pc is hao's own code */
+                if (!hao_dsc_covers(pc) && !hao_in_code_cache(pc) && !hao_swiftmeta_is_island(pc)) {
+                    seg->nc_key = chain_from ? chain_from : pc;
+                    seg->nc_x1 = chain_from ? chain_x1 : 0;
+                    seg->nc_gen = chain_gen;
+                }
             }
+        } else native = false;
+        chain_from = 0;
+        if (native) {
             if (hao_eh_guard(native_step, seg, HAO_GUARD_NATIVE)) hao_eh_landed(t);
             if (t->eh_resume) hao_eh_resume_native(t);
             if (t->seg != seg) {

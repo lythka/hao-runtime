@@ -105,6 +105,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/msgfnptr | PASS | 4 | |
 | guest/narrowret | PASS | 4 | |
 | guest/nativesig | PASS | 25 | |
+| guest/nccache | PASS | 3 | |
 | guest/nojit | PASS | 5 | |
 | guest/objcimp | PASS | 4 | |
 | guest/objcva | PASS | 3 | |

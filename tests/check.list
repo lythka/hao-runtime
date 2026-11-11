@@ -35,6 +35,7 @@ guest/libval	300	par	tests/guest/libval.sh
 guest/msgfnptr	300	par	tests/guest/msgfnptr.sh
 guest/narrowret	300	par	tests/guest/narrowret.sh
 guest/nativesig	300	par	tests/guest/nativesig.sh
+guest/nccache	300	par	tests/guest/nccache.sh
 guest/nojit	300	par	tests/guest/nojit.sh
 guest/objcimp	300	par	tests/guest/objcimp.sh
 guest/objcva	300	par	tests/guest/objcva.sh

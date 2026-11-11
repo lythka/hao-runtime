@@ -479,6 +479,9 @@ tests/guest/native-bundle/run.py
 tests/guest/nativesig.c
 tests/guest/nativesig.sh
 tests/guest/nativesighelper.c
+tests/guest/nccache.m
+tests/guest/nccache.sh
+tests/guest/nccachehelper.m
 tests/guest/nojit.sh
 tests/guest/objc-class-order/Base.m
 tests/guest/objc-class-order/Early.swift

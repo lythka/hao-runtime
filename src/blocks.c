@@ -328,16 +328,19 @@ static uint64_t first_word(const uint64_t *b, bool stack)
     return w;
 }
 
-static void prepare_arg(hao_thread *t, uint64_t a)
+/* image: a may lie in a guest image (hao_guest_range_maybe; false only when it cannot) */
+static void prepare_arg_in(hao_thread *t, uint64_t a, bool image)
 {
     if (!a || (a & 7)) return;
     bool stack = on_guest_stack(t, a, 48);
-    if (!stack && !in_guest_image(a, 32) && !heap_guest_block(t, a)) return;
+    if (!stack && !(image && in_guest_image(a, 32)) && !heap_guest_block(t, a)) return;
     uint64_t *b = (uint64_t *)(uintptr_t)a;
     if (is_block_isa(first_word(b, stack))) { prepare_block(b); return; }
     if (stack && b[0] <= 1 && b[1] == a && ((uint32_t)b[2] & BLOCK_BYREF_HAS_COPY_DISPOSE) && (uint32_t)(b[2] >> 32) >= 48)
         prepare_byref(b);
 }
+
+static void prepare_arg(hao_thread *t, uint64_t a) { prepare_arg_in(t, a, true); }
 
 /* Stack argument slots scanned for blocks at each native call. Only the
  * blocks and byrefs they point to are prepared; the slots themselves are
@@ -360,8 +363,11 @@ void hao_thunk_native_args_mask(hao_thread *t, unsigned mask)
         int k = __builtin_ctz(m);
         uint64_t a = c->x[k];
         if (!a) continue;
-        if (hao_is_guest_function(a)) { c->x[k] = hao_thunk_for(a); continue; }
-        if (on) prepare_arg(t, a);
+        /* most values (integers, heap and native pointers) lie in no guest image: one range search
+         * answers both image lookups for them */
+        bool image = hao_guest_range_maybe(a);
+        if (image && hao_is_guest_function(a)) { c->x[k] = hao_thunk_for(a); continue; }
+        if (on) prepare_arg_in(t, a, image);
     }
     if (!on || !(mask >> 8) || !on_guest_stack(t, c->x[31], 8 * STACK_ARG_SLOTS)) return;
     const uint64_t *sp = (const uint64_t *)(uintptr_t)c->x[31];
