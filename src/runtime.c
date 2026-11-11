@@ -11,6 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
 #include "hao/bridge.h"
@@ -366,7 +367,7 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
     /* async function values for a native Swift function's async parameters (swiftmeta.c) */
     if (p && (p->flags & HAO_PLAN_ASYNCARG)) hao_swiftmeta_async_args(c);
     if (kind == HAO_IF_KIND_STACKPACK) {
-        /* Swift packed stack arguments (tools/gen_stackpack.py): Apple arm64 put the arguments
+        /* Swift packed stack arguments (interface-unit record kind K): Apple arm64 put the arguments
          * past x7 at their natural size, SysV wants one 8-byte slot each. hao_native_call copies
          * guest stack words to slots 2 onward, so build those words below the guest's frame (the
          * arguments zero-extended, the rest 0) and let it copy them from there. Native code
@@ -933,7 +934,7 @@ uint64_t hao_callback(hao_cb_frame *f)
  * log instead, subsystem "com.hao", category "diag": one public record per
  * line, a line longer than UNI_PIECE bytes cut into pieces, each but the last
  * ending in "\x1f" (log show --predicate 'subsystem == "com.hao"';
- * tools/bridge_worklist.py --unified). Lines the file took are not repeated
+ * the bridge worklist tool, not part of this repository, reads them). Lines the file took are not repeated
  * there. Not while PID 1 waits for the Data volume (diag_retry), and not past
  * the file's cap. os_log is not async-signal-safe (its first use allocates; a
  * full buffer or a preference refresh takes libtrace's locks), so no writer
@@ -959,6 +960,25 @@ static char diag_buf[16384];      /* hao_diag_file's line buffer */
 
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[%s:%d]: ", getprogname(), (int)getpid()); }
 
+/* HAO_LOG's line: prefix and message formatted together and written with one
+ * fputs, so that it reaches an unbuffered stderr, the console or the log in
+ * one piece; a longer line is written as prefix, then message. */
+void hao_log_line(const char *fmt, ...)
+{
+    FILE *f = HAO_DIAG;
+    char buf[1024];
+    int p = snprintf(buf, sizeof buf, "hao[%s:%d]: ", getprogname(), (int)getpid());
+    va_list ap;
+    va_start(ap, fmt);
+    int n = p > 0 && (size_t)p < sizeof buf ? vsnprintf(buf + p, sizeof buf - (size_t)p, fmt, ap) : -1;
+    va_end(ap);
+    if (n >= 0 && (size_t)p + (size_t)n < sizeof buf) { fputs(buf, f); return; }
+    hao_diag_prefix(f);
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+}
+
 void hao_oom(const char *what)
 {
     hao_diag_prefix(HAO_DIAG);
@@ -966,11 +986,20 @@ void hao_oom(const char *what)
     abort();
 }
 
-void hao_diag_guest_addr(FILE *f, uint64_t a)
+const char *hao_diag_guest_where(uint64_t a, char *buf, size_t n)
 {
     hao_image *im = hao_image_for_code(a);
-    if (im) fprintf(f, " (%s+%#llx, file vmaddr %#llx)", strrchr(im->path, '/') ? strrchr(im->path, '/') + 1 : im->path,
-                    (unsigned long long)(a - im->base), (unsigned long long)(a - im->slide));
+    if (!n) return buf;
+    buf[0] = 0;
+    if (im) snprintf(buf, n, " (%s+%#llx, file vmaddr %#llx)", strrchr(im->path, '/') ? strrchr(im->path, '/') + 1 : im->path,
+                     (unsigned long long)(a - im->base), (unsigned long long)(a - im->slide));
+    return buf;
+}
+
+void hao_diag_guest_addr(FILE *f, uint64_t a)
+{
+    char where[1100];
+    fputs(hao_diag_guest_where(a, where, sizeof where), f);
 }
 
 static bool diag_write_all(int fd, const char *b, size_t n)
@@ -1657,7 +1686,7 @@ static void fault_diag(int sig, uint64_t addr, ucontext_t *uc, int crit)
     } else
         dl_add(&l, "  [rsp]: %#llx is outside this thread's stacks\n", (unsigned long long)rsp);
     /* where rip is in its native image (a line of its own: the first line's
-     * format is tools/bridge_worklist.py's): a call to an import that the
+     * format is the bridge worklist tool's, not part of this repository): a call to an import that the
      * native library defines as data (a placeholder exported under a
      * function's name) executes that data, as it would natively */
     char seg[17], sect[17];
@@ -1950,7 +1979,7 @@ static void rep_add(char *rep, size_t cap, size_t *rn, dline *l)
     l->n = 0;
 }
 
-/* The report, one write: the first line is tools/bridge_worklist.py's */
+/* The report, one write: the first line is the bridge worklist tool's (not in this repository) */
 static void sigreturn_report(int sig, int err, ucontext_t *uc, uint64_t tok, uint64_t callee)
 {
     static char rep[4096];   /* the process dies after this; one report at a time */
@@ -2321,7 +2350,6 @@ static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, 
 
 static void *dep_handle(hao_image *img, int ord);
 static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr);
-static bool hao_runtime_interpose(const char *name, uint64_t *addr);
 
 /* An interposer answers the import with a trap (counted as a TYPED bind).
  * native: the import binds to a native definition. An ABI repair of a native
@@ -2330,7 +2358,7 @@ static bool hao_runtime_interpose(const char *name, uint64_t *addr);
 static bool interposed(const char *name, uint64_t *addr, bool native)
 {
     if (!native && hao_interpose_abi_repair(name)) return false;
-    if (!hao_runtime_interpose(name, addr) && !hao_interpose_lookup(name, addr)) return false;
+    if (!hao_interpose_lookup(name, addr)) return false;
     hao_bridge_bind_trap(name, HAO_BRS_TRAP);
     return true;
 }
@@ -2662,7 +2690,7 @@ static uint64_t unresolved_trap(const char *name)
     return hao_trap_address(copy, trap_unresolved, (uint64_t)(uintptr_t)copy);
 }
 
-/* Imports whose x86_64 function has another name (tools/gen_variants.py):
+/* Imports whose x86_64 function has another name (src/variants_gen.inc):
  * suffixes that are empty on arm64 (sys/cdefs.h __DARWIN_ONLY_64_BIT_INO_T,
  * __DARWIN_ONLY_VERS_1050: arm64 stat is x86_64 stat$INODE64, select is
  * select$1050) and arm64-only ones (Security's $LEGACYMAC). Every other
@@ -2753,8 +2781,6 @@ static bool guest_lookup(hao_image *im, const char *name, uint64_t *addr, int de
         if (im->dep_reexport[k] && dep_lookup(im, k + 1, name, addr, depth + 1)) return true;
     return false;
 }
-
-static bool hao_runtime_interpose(const char *name, uint64_t *addr);
 
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found)
 {
@@ -3005,8 +3031,18 @@ static void trap_dyld_lazy_load(hao_thread *t, uint64_t arg)
     abort();
 }
 
-static bool hao_runtime_interpose(const char *name, uint64_t *addr)
+/* The runtime's own traps, first in hao_interpose_lookup's order. */
+static const struct { const char *name; hao_trap_fn trap; } runtime_traps[] = {
+    {"__dyld_lazy_load", trap_dyld_lazy_load},
+};
+static hao_name_index runtime_ix = HAO_NAME_INDEX(runtime_traps, NULL);
+
+bool hao_runtime_interpose(const char *name, uint64_t *addr)
 {
-    if (!strcmp(name, "__dyld_lazy_load")) { *addr = hao_trap_address(name, trap_dyld_lazy_load, 0); return true; }
-    return false;
+    long k = hao_name_find(&runtime_ix, name);
+    if (k < 0) return false;
+    *addr = hao_trap_address(runtime_traps[k].name, runtime_traps[k].trap, 0);
+    return true;
 }
+
+void hao_runtime_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&runtime_ix, cb, ctx); }

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* A function or ObjC selector whose format argument the SDK declares (tools/gen_fmtattr.py ->
+/* A function or ObjC selector whose format argument the SDK declares (generated outside this repository:
  * src/fmtattr_gen.inc). kind: 'p' printf, 's' scanf, 'w'/'W' wide printf/scanf, 'C' CFString/NSString,
  * 'o' os_log (never rewritten). fmt: 0-based argument index of the format (after self and _cmd for a
  * selector); first: 0-based index of the first variadic argument, -1 for a va_list consumer. */

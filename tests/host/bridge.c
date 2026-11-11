@@ -9,13 +9,24 @@
  *             a published entry must never read back missing or wrong.
  *   upgrade   an UNKNOWN entry point becomes TYPED when a source types it
  *             later (a native block's signature); a typed plan is kept.
- *   tables    the interposer tables searched by bisection are sorted, and
- *             every name index (interpose.c) finds what a linear scan does.
+ *   tables    the interposer tables searched by bisection are sorted, every
+ *             name index (interpose.c) finds what a linear scan does, and
+ *             every name hao_interpose_names lists is in an index that the
+ *             answering interposer searches.
+ *   stamp     the generated tables' source build (hao/gen_stamp.h) and this
+ *             system's are read; a different build is reported, not failed.
+ *   mangled   C++ this-returning constructors and destructors and Swift
+ *             fixed-ABI entry points are recognised from fixed mangled names.
+ *   demangle  the Swift and C++ demanglers spell the fixed symbols the way the
+ *             rules that still read demangled text expect (libswiftCore is
+ *             loaded for it).
  *
  *   test_bridge [N]     prints one line per check; exit 0 only if all pass.
  */
 #include "hao/runtime.h"
 #include "hao/bridge.h"
+#include "hao/gen_stamp.h"
+#include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,7 +99,40 @@ int main(int argc, char **argv)
     if (!up) fail = 1;
     char why[256];
     int bad = hao_interpose_selfcheck(why, sizeof why);
-    printf("tables     %s  bisected tables sorted, name indexes agree with a scan%s%s\n", bad ? "FAIL" : "PASS", bad ? ": " : "", why);
+    printf("tables     %s  bisected tables sorted, name indexes agree with a scan and hold every listed name%s%s\n", bad ? "FAIL" : "PASS", bad ? ": " : "", why);
+    char build[32];
+    bool same = hao_gen_stamp_check(build, sizeof build);
+    printf("stamp      %s  tables from macOS %s (%s), format %d; this system %s%s\n", build[0] ? "PASS" : "FAIL",
+           HAO_GEN_OS_VERSION, HAO_GEN_OS_BUILD, HAO_GEN_FORMAT, build[0] ? build : "unknown", same ? " (same)" : "");
+    if (!build[0]) fail = 1;
+
+    static const struct { const char *sym; bool yes; } cxx[] = {
+        {"__ZN3hao1SC1Ev", true}, {"__ZN3hao1SC2ERKS0_", true}, {"__ZN3hao1SD1Ev", true}, {"__ZN3hao1SD2Ev", true},
+        {"__ZN3hao1SCI24BaseEi", true},                                         /* inheriting constructor */
+        {"__ZN7xgboost4data13SimpleDMatrixC1INS0_10CSCAdapterEEEPT_fi", true},  /* constructor template */
+        {"__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC1B8ne200100IDnEEPKc", true},   /* ABI tag */
+        {"__ZN3hao1SD0Ev", false}, {"__ZN3hao1SC3Ev", false}, {"__ZN3hao1S3getEv", false},
+        {"__ZN3hao4C1E_1fEv", false},                                           /* hao::C1E_::f() */
+        {"__ZThn8_N3hao1SD1Ev", false},
+    };
+    static const struct { const char *sym; bool yes; } swift[] = {
+        {"_$s3hao1SVMa", true}, {"_$s3hao1SVwxx", true}, {"_$s3hao1SVwcp", true},
+        {"_$s3hao5readySbyYaF", false}, {"_$s3hao1SV1aSivg", false},
+    };
+    dlopen("/usr/lib/swift/libswiftCore.dylib", RTLD_LAZY);   /* swiftcc.c finds the demangler once it is loaded */
+    int mis = 0;
+    char first[200] = "";
+    for (size_t k = 0; k < sizeof cxx / sizeof *cxx; k++)
+        if (hao_cxx_this_return(cxx[k].sym) != cxx[k].yes && !mis++) snprintf(first, sizeof first, ": %s", cxx[k].sym);
+    for (size_t k = 0; k < sizeof swift / sizeof *swift; k++)
+        if (hao_swift_fixed_abi(swift[k].sym) != swift[k].yes && !mis++) snprintf(first, sizeof first, ": %s", swift[k].sym);
+    printf("mangled    %s  C++ this-return and Swift fixed-ABI names from the mangling%s\n", mis ? "FAIL" : "PASS", first);
+    if (mis) fail = 1;
+    char sw[512], cx[512];
+    int s = hao_swift_demangle_selfcheck(sw, sizeof sw), x = hao_cxx_demangle_selfcheck(cx, sizeof cx);
+    printf("demangle   %s  Swift %s%s, C++ %s%s\n", s == 0 && x == 0 ? "PASS" : "FAIL", s < 0 ? "no demangler" : s ? "differs: " : "as expected",
+           s > 0 ? sw : "", x < 0 ? "no demangler" : x ? "differs: " : "as expected", x > 0 ? cx : "");
+    if (s || x) fail = 1;
     if (bad) fail = 1;
     return fail;
 }

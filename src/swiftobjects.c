@@ -270,22 +270,23 @@ static void trap_alloc(hao_thread *t, uint64_t unused)
     if (!t->sig_nest) note_object(t->cpu.x[0], metadata, size);
 }
 
-void hao_swift_objects_interpose_names(hao_name_fn cb, void *ctx)
-{
-    cb("_$s11Observation04withA8Tracking_8onChangexxyXE_yyYbcyXKtlF", ctx);
-    cb("_swift_allocObject", ctx);
-}
+/* withObservationTracking(_:onChange:) and swift_allocObject */
+static const char *const objects_traps[] = {"_$s11Observation04withA8Tracking_8onChangexxyXE_yyYbcyXKtlF", "_swift_allocObject"};
+static hao_name_index objects_ix = HAO_NAME_INDEX(objects_traps, NULL);
+
+void hao_swift_objects_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&objects_ix, cb, ctx); }
 
 bool hao_swift_objects_interpose(const char *name, uint64_t *address)
 {
     if (hao_opt.no_swift_thunks) return false;
-    if (!strcmp(name, "_$s11Observation04withA8Tracking_8onChangexxyXE_yyYbcyXKtlF")) {
+    long k = hao_name_find(&objects_ix, name);
+    if (k < 0) return false;
+    if (k == 0) {
         native_observe = dlsym(RTLD_DEFAULT, name + 1);
         if (!native_observe) return false;
         *address = hao_trap_address(name, trap_observe, 0);
         return true;
     }
-    if (strcmp(name, "_swift_allocObject")) return false;
     if (!native_alloc) {
         native_alloc = dlsym(RTLD_DEFAULT, "swift_allocObject");
         metadata_kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");

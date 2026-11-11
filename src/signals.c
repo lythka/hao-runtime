@@ -993,21 +993,20 @@ static void trap_signal(hao_thread *t, uint64_t a)
     c->x[0] = (uint64_t)(uintptr_t)oa.sa_handler;
 }
 
-static const char *const sig_names[] = {"_sigaction", "___sigaction", "_signal", "_bsd_signal", "_sigset"};
+static const struct { const char *name; hao_trap_fn trap; } sig_traps[] = {
+    {"_sigaction", trap_sigaction}, {"___sigaction", trap_sigaction},
+    {"_signal", trap_signal}, {"_bsd_signal", trap_signal}, {"_sigset", trap_signal},
+};
+static hao_name_index sig_ix = HAO_NAME_INDEX(sig_traps, NULL);
 
-void hao_signal_interpose_names(hao_name_fn cb, void *ctx)
-{
-    for (size_t k = 0; k < sizeof sig_names / sizeof *sig_names; k++) cb(sig_names[k], ctx);
-}
+void hao_signal_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&sig_ix, cb, ctx); }
 
 bool hao_signal_interpose(const char *name, uint64_t *addr)
 {
-    if (!strcmp(name, "_sigaction") || !strcmp(name, "___sigaction")) { *addr = hao_trap_address(name, trap_sigaction, 0); return true; }
-    if (!strcmp(name, "_signal") || !strcmp(name, "_bsd_signal") || !strcmp(name, "_sigset")) {
-        *addr = hao_trap_address(name, trap_signal, 0);
-        return true;
-    }
-    return false;
+    long k = hao_name_find(&sig_ix, name);
+    if (k < 0) return false;
+    *addr = hao_trap_address(name, sig_traps[k].trap, 0);
+    return true;
 }
 
 /* A raw `svc` sigaction (syscall.c): the kernel's struct __sigaction also

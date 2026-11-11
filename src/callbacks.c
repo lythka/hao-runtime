@@ -275,7 +275,7 @@ static void patch_struct(hao_thread *t, const cb_arg *ca)
             if (!slots) return;
         }
     }
-    if (!guest_owned(t, a, size)) { if (hao_verbose > 1) fprintf(stderr, "hao: %s at %#llx (%u bytes) is not guest-owned\n", l->name, (unsigned long long)a, size); return; }
+    if (!guest_owned(t, a, size)) { HAO_LOG(2, "%s at %#llx (%u bytes) is not guest-owned\n", l->name, (unsigned long long)a, size); return; }
     uint64_t *s = (uint64_t *)(uintptr_t)a;
     if (l->ver >= 0) {
         int64_t v = l->ver4 ? (int64_t)*(const uint32_t *)((const uint8_t *)s + l->ver) : *(const int64_t *)((const uint8_t *)s + l->ver);
@@ -284,7 +284,7 @@ static void patch_struct(hao_thread *t, const cb_arg *ca)
     for (uint32_t m = slots; m; m &= m - 1) {
         int k = __builtin_ctz(m);
         uint64_t g = __atomic_load_n(&s[k], __ATOMIC_RELAXED);
-        if (hao_verbose > 1) fprintf(stderr, "hao: %s+%d = %#llx%s\n", l->name, 8 * k, (unsigned long long)g, hao_is_guest_function(g) ? " (guest)" : "");
+        HAO_LOG(2, "%s+%d = %#llx%s\n", l->name, 8 * k, (unsigned long long)g, hao_is_guest_function(g) ? " (guest)" : "");
         if (!hao_is_guest_function(g)) continue;
         uint64_t e = hao_thunk_for(g);
         if (e != g && __atomic_compare_exchange_n(&s[k], &g, e, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
@@ -352,37 +352,36 @@ static bool enabled(void) { return !hao_opt.no_struct_thunks; }
 
 const char *hao_sigdb_enc(const char *name);   /* interpose.c */
 
+/* the Swift class-metadata allocators, by variant (trap_swift_class_metadata) */
+static const char *const swift_class_allocs[] = {"_swift_allocateGenericClassMetadata",
+                                                 "_swift_allocateGenericClassMetadataWithLayoutString"};
+static hao_name_index swift_class_ix = HAO_NAME_INDEX(swift_class_allocs, NULL), apis_ix = HAO_NAME_INDEX(apis, NULL);
+
 void hao_callbacks_interpose_names(hao_name_fn cb, void *ctx)
 {
-    cb("_swift_allocateGenericClassMetadata", ctx);
-    cb("_swift_allocateGenericClassMetadataWithLayoutString", ctx);
-    for (size_t k = 0; k < NAPIS; k++) cb(apis[k].name, ctx);
+    hao_name_each(&swift_class_ix, cb, ctx);
+    hao_name_each(&apis_ix, cb, ctx);
 }
 
 bool hao_callbacks_interpose(const char *name, uint64_t *addr)
 {
-    if (name[0] != '_') return false;
-    if (!strcmp(name, "_swift_allocateGenericClassMetadata") ||
-        !strcmp(name, "_swift_allocateGenericClassMetadataWithLayoutString")) {
+    long variant = hao_name_find(&swift_class_ix, name);
+    if (variant >= 0) {
         if (!enabled()) return false;
-        unsigned variant = strcmp(name, "_swift_allocateGenericClassMetadata") != 0;
         if (!swift_alloc_class_fn[variant]) swift_alloc_class_fn[variant] = dlsym(RTLD_DEFAULT, name + 1);
         if (!swift_alloc_class_fn[variant]) return false;
-        *addr = hao_trap_address(name, trap_swift_class_metadata, variant);
+        *addr = hao_trap_address(name, trap_swift_class_metadata, (uint64_t)variant);
         return true;
     }
-    for (size_t k = 0; k < NAPIS; k++) {
-        if (strcmp(name, apis[k].name)) continue;
-        if (!enabled()) return false;
-        /* the importing library is loaded by now (hao_resolve_import); a
-         * symbol this host lacks binds the ordinary way */
-        if (!native_fn[k]) native_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
-        if (!native_fn[k]) return false;
-        if (apis[k].sig && !(sig_enc[k] = hao_sigdb_enc(name))) return false;
-        *addr = hao_trap_address(apis[k].name, trap_cbstruct, k);
-        return true;
-    }
-    return false;
+    long k = hao_name_find(&apis_ix, name);
+    if (k < 0 || !enabled()) return false;
+    /* the importing library is loaded by now (hao_resolve_import); a
+     * symbol this host lacks binds the ordinary way */
+    if (!native_fn[k]) native_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
+    if (!native_fn[k]) return false;
+    if (apis[k].sig && !(sig_enc[k] = hao_sigdb_enc(name))) return false;
+    *addr = hao_trap_address(apis[k].name, trap_cbstruct, (uint64_t)k);
+    return true;
 }
 
 void hao_callbacks_stats(void)

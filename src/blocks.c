@@ -119,8 +119,7 @@ static uint64_t entry_for_invoke(uint64_t guest, const char *sig)
          * shares signature thunks itself) */
         static int full;
         if (!__atomic_exchange_n(&full, 1, __ATOMIC_RELAXED)) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "block invoke table full: invoke entries are no longer cached\n");
+            HAO_LOG(0, "block invoke table full: invoke entries are no longer cached\n");
         }
         e = sig ? hao_guest_entry_for_sig(guest, sig) : hao_thunk_for(guest);
     }

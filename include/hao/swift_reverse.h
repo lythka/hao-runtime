@@ -1,4 +1,5 @@
-/* Compiler-lowered Swift reverse signatures emitted by gen_swift.py.
+/* Compiler-lowered Swift reverse signatures emitted by the Swift signature generator
+ * (not part of this repository).
  * This is deliberately separate from abi.c's C/ObjC signatures. */
 #ifndef HAO_SWIFT_REVERSE_H
 #define HAO_SWIFT_REVERSE_H

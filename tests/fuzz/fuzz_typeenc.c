@@ -20,6 +20,8 @@ uint64_t hao_thunk_for(uint64_t g) { (void)g; abort(); }
 uint64_t hao_sig_thunk(uint64_t g, void *s) { (void)g; (void)s; abort(); }
 uint64_t hao_sig_thunk_target(uint64_t a) { (void)a; return 0; }
 void hao_diag_prefix(FILE *f) { (void)f; }
+void hao_log_line(const char *fmt, ...) { (void)fmt; }
+void hao_oom(const char *what) { (void)what; abort(); }
 FILE *hao_diag_file;
 void hao_crit_enter(void) {}
 void hao_crit_leave(void) {}

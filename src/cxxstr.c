@@ -1,6 +1,7 @@
 /*
  * hao — std::string parameters of native C++ functions outside libc++
- * (plan kind 'Z', hao/bridge.h; the table from tools/gen_cxxstr.py).
+ * (plan kind 'Z', hao/bridge.h; the table is src/cxxstr_gen.inc, whose generator
+ * is not part of this repository).
  *
  * Apple arm64 libc++ uses the alternate string layout, x86_64 libc++ the
  * standard one (libc++ <string>, _LIBCPP_ABI_ALTERNATE_STRING_LAYOUT):
@@ -26,6 +27,7 @@
  * left as it was.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/bridge.h"
 #include <dlfcn.h>
 #include <stdio.h>
@@ -60,6 +62,48 @@ int hao_cxxstr_lookup(const char *name, const char **enc, const char **why)
 
 typedef char *(*demangle_fn)(const char *, char *, size_t *, int *);
 
+static demangle_fn cxx_demangler(void)
+{
+    static demangle_fn dem;
+    if (!dem) dem = (demangle_fn)dlsym(RTLD_DEFAULT, "__cxa_demangle");
+    return dem;
+}
+
+/* The demangled signature names one of libc++'s string, function or string-stream templates. This
+ * reads native libc++abi's spelling of the name (the qualification std::__1 can be a substitution in
+ * the mangled form, which is not resolved here); hao_cxx_demangle_selfcheck pins that spelling. */
+static bool divergent_text(const char *d)
+{
+    return strstr(d, "std::__1::basic_string<") || strstr(d, "std::__1::function<") || strstr(d, "stringstream<") ||
+           strstr(d, "std::__1::basic_stringbuf<");
+}
+
+/* Fixed names and whether divergent_text holds for the demangler's spelling of each. */
+static const struct { const char *sym; bool divergent; } spellings[] = {
+    {"__ZN3hao1fERKNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE", true},
+    {"__ZN3hao1fENSt3__18functionIFvvEEE", true},
+    {"__ZN3hao1fERNSt3__118basic_stringstreamIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE", true},
+    {"__ZN3hao1fERNSt3__115basic_stringbufIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE", true},
+    {"__ZN3hao1fEPKc", false},
+};
+
+int hao_cxx_demangle_selfcheck(char *why, size_t n)
+{
+    demangle_fn dem = cxx_demangler();
+    if (!dem) return -1;
+    int bad = 0;
+    why[0] = 0;
+    for (size_t k = 0; k < sizeof spellings / sizeof *spellings; k++) {
+        int st = 0;
+        char *d = dem(spellings[k].sym + 1, NULL, NULL, &st);
+        if (!d || st || divergent_text(d) != spellings[k].divergent)
+            if (!bad++) snprintf(why, n, "__cxa_demangle(%s) = \"%s\": std::string parameters %s", spellings[k].sym + 1,
+                                 d && !st ? d : "(fails)", spellings[k].divergent ? "not recognised" : "recognised wrongly");
+        free(d);
+    }
+    return bad;
+}
+
 const char *hao_cxxstr_divergent(const char *name, const char *lib)
 {
     if (strncmp(name, "__Z", 3)) return NULL;
@@ -76,17 +120,15 @@ const char *hao_cxxstr_divergent(const char *name, const char *lib)
     if (!strstr(name, "12basic_stringI") && !strstr(name, "8functionI") && !strstr(name, "stringstreamI") &&
         !strstr(name, "15basic_stringbufI"))
         return NULL;
-    static demangle_fn dem;
-    if (!dem) dem = (demangle_fn)dlsym(RTLD_DEFAULT, "__cxa_demangle");
+    demangle_fn dem = cxx_demangler();
     if (!dem) return NULL;
     int st = 0;
     char *d = dem(name + 1, NULL, NULL, &st);
     if (!d || st) { free(d); return NULL; }
     const char *r = NULL;
-    if (strstr(d, "std::__1::basic_string<") || strstr(d, "std::__1::function<") || strstr(d, "stringstream<") ||
-        strstr(d, "std::__1::basic_stringbuf<"))
+    if (divergent_text(d))
         r = "a std::string, std::function or string stream (layout differs between arm64 and x86_64) in a native C++ "
-            "signature tools/gen_cxxstr.py does not type";
+            "signature cxxstr_gen.inc does not type";
     free(d);
     return r;
 }
@@ -115,8 +157,7 @@ static void resolve(void)
     n_new = (new_fn)dlsym(RTLD_DEFAULT, "_Znwm");
     del_fn d = (del_fn)dlsym(RTLD_DEFAULT, "_ZdlPv");
     if (!n_init || !n_dtor || !n_new || !d) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "cxxstr: native libc++ string members not found; cannot convert std::string arguments\n");
+        HAO_LOG(0, "cxxstr: native libc++ string members not found; cannot convert std::string arguments\n");
         abort();
     }
     __atomic_store_n(&n_del, d, __ATOMIC_RELEASE);

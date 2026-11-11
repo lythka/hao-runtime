@@ -653,7 +653,8 @@ static chain_t *page_chain(const dmap *m, uint64_t page)
     if (start == 0xffff) return c;
     uint32_t cap = 64;
     c->e = hao_alloc_check(malloc(cap * sizeof *c->e), "shared cache tables");
-    for (uint64_t off = start; off + 8 <= psize && c->n < 4096 && base + off + 8 <= m->addr + m->size;) {
+    /* every step moves forward at least 8 bytes, so the page bounds the chain (psize / 8 entries) */
+    for (uint64_t off = start; off + 8 <= psize && base + off + 8 <= m->addr + m->size;) {
         uint64_t raw = *(const uint64_t *)at(base + off);
         if (c->n == cap) { cap *= 2; c->e = hao_alloc_check(realloc(c->e, cap * sizeof *c->e), "shared cache tables"); }
         c->e[c->n].loc = base + off;
