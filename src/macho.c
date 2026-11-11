@@ -937,8 +937,9 @@ static uint8_t *blob_copy(const uint8_t *p, uint32_t size)
 int hao_slice_test_path;
 
 /* Can nobody but root change the file open on fd? Root owns it, neither its
- * group nor others may write it, it has no ACL (any entry counts: none is
- * read), and it is on a local volume, where those bits are the kernel's to
+ * group nor others may write it, it has no ACL (any entry counts, and so
+ * does an ACL that cannot be read: the kernel says ENOENT when there is
+ * none), and it is on a local volume, where those bits are the kernel's to
  * enforce. This is about the open file, so the directories above its name
  * do not matter: they decide which file a path reaches, and fd already is
  * one. A sealed system volume's files all qualify. (The owner and mode
@@ -950,9 +951,11 @@ static bool file_fixed(int fd, const struct stat *st)
     if (st->st_uid != 0 || (st->st_mode & (S_IWGRP | S_IWOTH))) return false;
     struct statfs fs;
     if (fstatfs(fd, &fs) != 0 || !(fs.f_flags & MNT_LOCAL)) return false;
+    errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+    int e = errno;
     if (a) acl_free(a);
-    return a == NULL;
+    return a == NULL && e == ENOENT;
 }
 
 static hao_slice *slice_pending;       /* hao_slice_hand */
