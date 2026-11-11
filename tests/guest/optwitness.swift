@@ -4,8 +4,12 @@
 // destroys and tests it through the type's witnesses, which under hao are libswiftCore's x86_64
 // Optional witnesses (inhabitant 1 is the value 2). A class's ivar destroyer reaches them for a lazy
 // `(any P)?` property that was never read: its storage `(any P)??` holds the outer nil.
+// A nil made that way inside a resilient native struct (OSSignposter? in a guest struct's first field)
+// keeps the native encoding: no guest code can read it inline, and native witnesses read it back.
 // Out of scope (docs/ISSUES.md): native generic code reading such a value itself (an Array element
 // read through the native Array subscript, a dynamic cast out of `Any`).
+import os
+
 protocol P { func f() -> Int }
 protocol Q: AnyObject { func g() -> Int }
 final class C: Q { let n: Int; init(_ n: Int) { self.n = n }; func g() -> Int { n } }
@@ -42,6 +46,25 @@ func run<T>(_ name: String, _ values: [T??], _ inner: @escaping (T) -> String) {
     print(name, "generic some(nil)", describe(someOf(T?.none), inner))
 }
 
+// A guest struct whose extra inhabitants come from a resilient native struct's Optional (its first field).
+struct Interval { var signposter: OSSignposter?; var name: StaticString?; var state: OSSignpostIntervalState? }
+
+func intervals() {
+    let sp = OSSignposter(subsystem: "hao.test", category: "optwitness")
+    let st = sp.beginInterval("iv")
+    let shown = { (v: Interval?) -> String in
+        guard let i = v else { return "nil" }
+        return "some(\(i.signposter != nil) \(i.name.map { "\($0)" } ?? "nil") \(i.state != nil))"
+    }
+    let values: [Interval?] = [nil, Interval(signposter: sp, name: "iv", state: st), Interval(signposter: nil, name: nil, state: nil)]
+    for (k, v) in values.enumerated() {
+        print("Interval", k, "copy", shown(copied(v)), "some", isSome(v), "drop", dropped(v))
+        print("Interval", k, "assign", shown(assigned(values[(k + 1) % values.count], v)))
+    }
+    print("Interval generic nil", shown(copied(noneOf(Interval.self))), isSome(noneOf(Interval.self)))
+    sp.endInterval("iv", st)
+}
+
 final class Holder {
     lazy var store: (any P)? = nil
     lazy var other: (any P)? = S()
@@ -64,6 +87,7 @@ final class Holder {
             if k == 2 { print("read", h.other?.f() ?? -1) }
             print("holder kept", copied(h) === h)
         }
+        intervals()
         print("done")
     }
 }

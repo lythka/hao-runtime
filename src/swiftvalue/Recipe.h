@@ -20,3 +20,7 @@ int collect_empty_patches_detail(const void *type, const void *value, empty_patc
  * existential values (weak storage, guest witness tables) do not apply. */
 int discover_witness_plan(const void *type, empty_plan *out);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
+/* The same, where each struct on an extra-inhabitant path (other than Array and String) must be one
+ * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */
+int collect_inline_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
+                           int (*known_layout)(const void *));

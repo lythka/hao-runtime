@@ -38,6 +38,8 @@ typedef struct {
     const void *array, *optional, *string;
     const void *unresolved;
     int existentials;   /* admit existential and Swift class payloads (guest calls of native witnesses only) */
+    int (*known_layout)(const void *type);   /* if set: a struct (other than Array and String) whose layout
+                                                it rejects ends the XI path (collect_inline_patches) */
 } reflection;
 
 static const witnesses *vwt(const void *type)
@@ -149,6 +151,7 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
         out->consumed++;
         return 1;
     }
+    if (r->known_layout && !r->known_layout(type)) return 0;
     intptr_t count = r->count(type);
     if (count < 1 || count > 64) return 0;
     const void *best = NULL;
@@ -309,7 +312,8 @@ static int collect(reflection *r, const void *type, const unsigned char *value,
 }
 
 static int collect_patches(const void *type, const void *value, empty_patch *out,
-                           unsigned capacity, const void **unresolved, int existentials)
+                           unsigned capacity, const void **unresolved, int existentials,
+                           int (*known_layout)(const void *))
 {
     reflection r = {
         dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
@@ -317,6 +321,7 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
         dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
+        known_layout,
     };
     unsigned used = 0;
     if (unresolved) *unresolved = type;
@@ -332,12 +337,18 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
 int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
                                  unsigned capacity, const void **unresolved)
 {
-    return collect_patches(type,value,out,capacity,unresolved,0);
+    return collect_patches(type,value,out,capacity,unresolved,0,NULL);
 }
 
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)
 {
-    return collect_patches(type,value,out,capacity,NULL,1);
+    return collect_patches(type,value,out,capacity,NULL,1,NULL);
+}
+
+int collect_inline_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
+                           int (*known_layout)(const void *))
+{
+    return collect_patches(type,value,out,capacity,NULL,1,known_layout);
 }
 
 int collect_empty_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)

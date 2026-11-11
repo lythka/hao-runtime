@@ -480,12 +480,27 @@ static void witness_restore(void *value, const witness_patches *w)
 {
     for (int i = 0; i < w->count; ++i) memcpy((char *)value + w->p[i].offset,&w->p[i].bits,8);
 }
+/* A struct whose layout guest code was compiled against: one a guest image
+ * defines (its nominal descriptor lies in one). A native module's struct may
+ * be resilient (libswiftos OSSignposter): guest code reads it only through its
+ * native witnesses, and so does native code holding the enclosing value. */
+static int guest_layout(const void *type)
+{
+    const void *const *m = type;
+    if ((uintptr_t)m[0] != 0x200) return 1;           /* tuples, Optionals: by their elements */
+    return hao_image_for_addr((uint64_t)(uintptr_t)m[1]) != NULL;
+}
+
 /* A nil the witness made: the guest's encoding, extra inhabitant
- * consumed - 1 as the value consumed - 1 (arm64). */
+ * consumed - 1 as the value consumed - 1 (arm64), where guest code can read
+ * it inline. Inside a struct of a native module (resilient for all hao knows)
+ * the native encoding stays: its readers are native witnesses, also those
+ * reached from native code that holds an enclosing guest struct, which no
+ * conversion sees. */
 static void witness_to_guest(const void *type, void *value)
 {
     witness_patches w;
-    witness_walk(type,value,&w);
+    w.count = value ? collect_inline_patches(type,value,w.p,64,guest_layout) : -1;
     for (int i = 0; i < w.count; ++i) { uint64_t bits = w.p[i].consumed - 1; memcpy((char *)value + w.p[i].offset,&bits,8); }
 }
 
