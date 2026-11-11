@@ -325,6 +325,12 @@ static bool ranges_maybe(const range_snap *s, uint64_t a)
     return lo && a < s->r[lo - 1][1];
 }
 
+bool hao_guest_range_maybe(uint64_t a)
+{
+    const range_snap *ranges = __atomic_load_n(&ranges_snap, __ATOMIC_ACQUIRE);
+    return ranges_envelope_maybe(ranges, a) && ranges_maybe(ranges, a);
+}
+
 /* Any address inside a guest image's mapped range (header, data, code). */
 hao_image *hao_image_for_addr(uint64_t a)
 {
@@ -747,6 +753,7 @@ hao_image *hao_map_image_only(const char *path, char *err, size_t errlen)
 }
 
 static uint32_t load_seq;
+uint64_t hao_ncache_gen = 1;   /* hao/macho.h */
 
 /*
  * hao_images is read without a lock by every thread (hao_image_for_code
@@ -771,6 +778,7 @@ void hao_image_register(hao_image *img)
     ranges_add(img);   /* before the image is listed (ranges_snap) */
     img->next = hao_images;
     __atomic_store_n(&hao_images, img, __ATOMIC_RELEASE);
+    hao_ncache_invalidate();   /* its code is guest code now, not a native target */
 }
 
 /* Take img off the list and drop every reference other images hold to it
@@ -793,6 +801,7 @@ static void release_image(hao_image *img, bool keep_range)
     }
     hao_image *hint = img;
     __atomic_compare_exchange_n(&last_code_img, &hint, NULL, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    hao_ncache_invalidate();
     hao_code_release(img, keep_range);
     if (img->base && img->vmsize) {
         if (keep_range) mprotect((void *)(uintptr_t)img->base, img->vmsize, PROT_NONE);

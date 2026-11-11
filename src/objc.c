@@ -1660,10 +1660,12 @@ static struct enum_method {
 #undef ALIGN
 };
 static pthread_once_t enum_once = PTHREAD_ONCE_INIT;
+static bool enum_ready;   /* enum_init has run: its selectors are visible (release/acquire) */
 static void enum_init(void)
 {
     for (unsigned i = 0; i < sizeof enum_methods / sizeof *enum_methods; i++)
         enum_methods[i].sel = sel_registerName(enum_methods[i].name);
+    __atomic_store_n(&enum_ready, true, __ATOMIC_RELEASE);
 }
 static uint64_t enum_convert(uint64_t value, unsigned kind)
 {
@@ -1679,10 +1681,14 @@ unsigned hao_objc_enum_args(hao_cpu *c, uint64_t target, bool callback)
 {
     /* Every untyped callback visits this table, including callbacks made by
      * a guest signal handler. Defer that handler until pthread_once has
-     * published completion: reentering the same once from enum_init aborts. */
-    hao_crit_enter();
-    pthread_once(&enum_once, enum_init);
-    hao_crit_leave();
+     * published completion: reentering the same once from enum_init aborts.
+     * Once it has, every call skips the section (a guest message send or
+     * untyped callback each). */
+    if (!__atomic_load_n(&enum_ready, __ATOMIC_ACQUIRE)) {
+        hao_crit_enter();
+        pthread_once(&enum_once, enum_init);
+        hao_crit_leave();
+    }
     SEL sel = (SEL)(uintptr_t)c->x[1];
     bool candidate = false;
     for (unsigned i = 0; i < sizeof enum_methods / sizeof *enum_methods; i++)

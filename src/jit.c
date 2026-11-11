@@ -111,7 +111,8 @@ static inline uint32_t thash(uint64_t pc, uint32_t mask)
     return (uint32_t)(x ^ (x >> 10) ^ (x >> 20)) & mask;
 }
 
-static void *lookup(uint64_t pc)
+/* The current table's entry for pc, or NULL */
+static const tentry *lookup_entry(uint64_t pc)
 {
     const jtab *t = __atomic_load_n(&table, __ATOMIC_ACQUIRE);
     if (!t) return NULL;
@@ -119,10 +120,16 @@ static void *lookup(uint64_t pc)
     for (uint32_t k = 0; k <= t->mask; k++) {
         const tentry *e = &t->e[(h + k) & t->mask];
         uint64_t p = __atomic_load_n(&e->pc, __ATOMIC_ACQUIRE);
-        if (p == pc) return __atomic_load_n(&e->code, __ATOMIC_ACQUIRE);
+        if (p == pc) return e;
         if (!p) return NULL;
     }
     return NULL;
+}
+
+static void *lookup(uint64_t pc)
+{
+    const tentry *e = lookup_entry(pc);
+    return e ? __atomic_load_n(&e->code, __ATOMIC_ACQUIRE) : NULL;
 }
 
 static jtab *jtab_new(unsigned bits)
@@ -3360,7 +3367,21 @@ int hao_jit_run_block(hao_thread *th)
 {
     hao_cpu *c = &th->cpu;
     void *code = c->host_scratch[SCRATCH_NEXT_PC] == c->pc && c->host_scratch[SCRATCH_NEXT_CODE]
-                     ? (void *)(uintptr_t)c->host_scratch[SCRATCH_NEXT_CODE] : lookup(c->pc);
+                     ? (void *)(uintptr_t)c->host_scratch[SCRATCH_NEXT_CODE] : NULL;
+    if (!code) {
+        /* The thread's jump cache first (exit_indirect): the dispatcher's own entries are mostly
+         * the return from a native call, whose site no guest RET fills. A bound cache (rt_bind
+         * fills every slot; slot 0 nonzero) gets the entry the table gave, one store, as the
+         * probe stub does; a stale slot only costs the table probe. */
+        uint64_t *slot = &th->jit_jc[(c->pc >> 2) & (HAO_JIT_JC_SLOTS - 1)];
+        const tentry *e = (const tentry *)(uintptr_t)__atomic_load_n(slot, __ATOMIC_RELAXED);
+        if (e && __atomic_load_n(&e->pc, __ATOMIC_ACQUIRE) == c->pc) code = __atomic_load_n(&e->code, __ATOMIC_ACQUIRE);
+        else if ((e = lookup_entry(c->pc))) {
+            code = __atomic_load_n(&e->code, __ATOMIC_ACQUIRE);
+            if (__atomic_load_n(&th->jit_jc[0], __ATOMIC_RELAXED) && c->rt_jc == (uint64_t)(uintptr_t)th->jit_jc)
+                __atomic_store_n(slot, (uint64_t)(uintptr_t)e, __ATOMIC_RELAXED);
+        }
+    }
     if (!code) {
         /* Once the cache is full, a miss is interpreted without the lock:
          * JIT exits leave NZCV materialised in hao_cpu, as a64_exec expects. */

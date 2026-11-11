@@ -310,5 +310,72 @@ signal-handler paths are reentrant or change the concurrent fallback in
 failures. Reports from November 2026 include JIT emission
 (`x_mov_ld`/`exit_indirect`) and bridge binding (`type_at`) stacks.
 `test_fork` does not install hao's guest signal handlers, and those stacks
-do not show the recursive enum initialization above. No shared cause has
-been established; the fork failure remains open.
+do not show the recursive enum initialization above. One more SIGSEGV
+came from bridge binding (`labels_at` under `type_at`, a `w_bridge`
+thread) in a `make test` run on 11 November; six reruns right after passed.
+No shared cause has been established; the fork failure remains open.
+
+## Repeated per-call work on guest -> native calls
+
+Every guest branch to a native address went through the same
+classification again: `run_loop` asked whether the address was a trap,
+guest code (`hao_image_for_code`: the last-image hint, then the range
+snapshot), a native entry of a guest function (three thunk tables) or a
+shared-cache stub or island (`hao_dsc_redirect`, which takes `dsc_lock` for
+an address in the cache), and `native_step` looked the plan up again
+(`hao_bridge_plan_for_call`). None of that depends on the call, only on the
+address and on state that changes rarely. After the native function
+returned, `hao_jit_run_block` probed the whole translation table for the
+return address, which no guest `ret` puts in the thread's jump cache.
+
+Now each thread keeps a direct-mapped table in its `hao_thread`
+(`src/runtime.c`, native-target cache; 256 entries, 10 KB of the thread's
+state mapping): branch address -> native target, the `x1` a redirected
+`objc_msgSend` stub sets, and the plan. An entry is
+used only while the process-wide generation `hao_ncache_gen` (`hao/macho.h`)
+is the one its classification started in; image registration and release
+and every plan-table insert or replacement (`tab_put`) increment it after the
+change is visible. Traps, guest entries, cache addresses the redirect could
+not resolve, hao's own code and plans whose lookup still has side effects
+(an ObjC probe plan with probes left, no plan) are never stored. Everything
+after the plan still runs per call (selector recheck, interposer redirect,
+REFUSED, counting with `HAO_BRIDGE_STATS`/`HAO_BRIDGE_CHECK`, Swift value
+and witness hooks, the argument scan), so routes, diagnostics and counters
+are unchanged. Also: the dispatcher reads and fills the thread's jump cache
+for the block it enters; the argument scan answers "in no guest image" for
+a register value with one range search instead of two lookups;
+`hao_native_call` copies the usual 16 stack words with vector moves; the
+ObjC enum-argument check skips its `pthread_once` critical section once
+initialised.
+
+Measured on the development host, where hao itself runs under Rosetta
+(ns per call, minimum of 7 interleaved runs of 10^6 calls each, before ->
+after, JIT / AOT): EXACT unit-typed function 36.9 -> 26.2 / 36.6 -> 24.0;
+TYPED narrow result 39.7 -> 26.8 / 39.1 -> 26.1; untyped (`strlen`)
+65.0 -> 49.8 / 60.0 -> 49.2; `memcmp` 92.3 -> 73.1 / 90.1 -> 74.3;
+`CFStringGetLength` 79.9 -> 69.9 / 79.5 -> 68.2; a function pointer from
+`dlsym` 72.2 -> 62.0 / 71.1 -> 57.9; `objc_msgSend` to a native method
+394 -> 378 / 405 -> 372 (native arm64: 1-3 ns). In `sample` profiles of
+the `strlen` loop, `hao_image_for_code` fell from 8.9% to 1.9% of samples,
+and `hao_bridge_plan_for_call` (2.2%), `hao_dsc_redirect` (0.8%), the
+thunk-table lookups (2.3%) and `hao_is_guest_function` (6.4% with the
+lookups it made) no longer appear. `tests/guest/nccache.sh` checks that a plan typed after five
+threads cached the untyped one reaches all of them (it fails, 1000 of 1000
+wrong results per thread, with the generation increment left out of
+`tab_put`).
+
+Remaining limitations:
+- What is left per call is the JIT exit and re-entry, the exception guard,
+  `hao_native_call`, and for every untyped or masked slot the argument scan,
+  which reads memory the arguments point to and cannot be remembered by
+  target. A native call stays about 20-25 times its native cost under
+  Rosetta.
+- `objc_msgSend` to a native method calls `class_getInstanceMethod` for the
+  encoding on every message (about two thirds of its 380 ns here); its
+  result is not cached, since a method list can change without a hook hao
+  sees.
+- With `HAO_BRIDGE_STATS` or `HAO_BRIDGE_CHECK` each call still increments its
+  plan's shared counter atomically, which threads calling one function
+  contend on.
+- Not measured on Intel hardware or with the target's interface units; the
+  share each change has there is not established.

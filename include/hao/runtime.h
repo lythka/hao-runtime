@@ -34,6 +34,13 @@ typedef struct hao_seg {
     struct hao_swift_value_scope *swift_values_at_entry;
     jmp_buf jb;                /* re-entry point: a guest longjmp from an inner segment
                                 * (hao_longjmp_segment), a signal handler that moved pc (signals.c) */
+    /* run_loop -> native_step, for the native call about to run (runtime.c, native-target cache):
+     * nc_hit: the cache gave the plan (nc_plan) for native target nc_target; else nc_key, when
+     * nonzero, is the address the guest branched to (before shared-cache redirects, which set x1 to
+     * nc_x1 when nonzero) and nc_gen the cache generation its classification started in */
+    const struct hao_plan *nc_plan;
+    uint64_t nc_target, nc_key, nc_x1, nc_gen;
+    bool nc_hit;
 } hao_seg;
 
 /* An exception whose guest handler the search phase found (unwind.c). */
@@ -49,6 +56,7 @@ typedef struct hao_eh_rec {
 #define HAO_EH_RECS 8
 
 #define HAO_JIT_JC_SLOTS 2048   /* a power of two */
+#define HAO_NCACHE_SLOTS 256    /* a power of two */
 typedef struct hao_thread {
     hao_cpu cpu;               /* must be first (16-byte aligned) */
     uint8_t *stack;
@@ -87,6 +95,9 @@ typedef struct hao_thread {
      * target, and one miss record (two words) per slot behind them (zero
      * until the thread first runs translated code) */
     uint64_t jit_jc[3 * HAO_JIT_JC_SLOTS];
+    /* runtime.c: the thread's native-target cache (guest branch target -> native target, x1, plan),
+     * an entry valid while hao_ncache_gen equals its gen; read and written only by this thread */
+    struct { uint64_t pc, gen, target, x1; const struct hao_plan *plan; } ncache[HAO_NCACHE_SLOTS];
 } hao_thread;
 
 /* Where guest execution stands, for a signal that interrupts it. The
@@ -212,6 +223,8 @@ int hao_dsc_share_type_names(hao_image *img, hao_dsc_binder bind, const char *na
  * where execution continues, and *x1 is nonzero when the target is an
  * objc_msgSend stub, which sets x1 to that native selector first. */
 bool hao_dsc_redirect(uint64_t pc, uint64_t *native, uint64_t *x1);
+/* pc lies where hao_dsc_redirect looks: a guest cache image is loaded and pc is in the cache */
+bool hao_dsc_covers(uint64_t pc);
 /* Pre-optimised ObjC metadata of cache images (objc.c): the runtime address
  * of the selector buffer that direct relative method lists are offsets
  * from (0 without one); a pointer-sized field anywhere in the cache, decoded

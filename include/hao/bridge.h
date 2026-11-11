@@ -172,6 +172,17 @@ static inline const hao_plan *hao_bridge_lookup(uint64_t a)
     }
 }
 
+/* Calls of an untyped bare address (HAO_PLAN_PROBE) that look again for its ObjC type: a
+ * method's first call may come with a nil receiver, say. */
+#define HAO_PLAN_OBJC_PROBES 8
+
+/* hao_bridge_plan_for_call(t, p->native) returns p itself, with no side effect, for as long as
+ * the table holds p (it may be remembered per call target: runtime.c's native-target cache) */
+static inline bool hao_bridge_plan_settled(const struct hao_plan *p)
+{
+    return p && (!(p->flags & HAO_PLAN_PROBE) || __atomic_load_n(&p->probes, __ATOMIC_RELAXED) >= HAO_PLAN_OBJC_PROBES);
+}
+
 /* Counting is on with hao_bridge_stats or HAO_BRIDGE_CHECK (hao_bridge_init). */
 extern bool hao_bridge_counting;
 

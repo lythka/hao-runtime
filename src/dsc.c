@@ -2224,12 +2224,18 @@ static bool decode_objc_stub(uint64_t t, uint64_t *sel, uint64_t *target)
 
 /* A guest branch to a cache address outside every guest image: a stub
  * island, an objc_msgSend stub or a direct BL into a native-backed library. */
+bool hao_dsc_covers(uint64_t pc)
+{
+    if (__atomic_load_n(&D.nloaded, __ATOMIC_ACQUIRE) == 0) return false;
+    uint64_t t = pc - (uint64_t)D.slide;
+    return t >= D.start && t - D.start < D.size;
+}
+
 bool hao_dsc_redirect(uint64_t pc, uint64_t *native, uint64_t *x1)
 {
     *x1 = 0;
-    if (__atomic_load_n(&D.nloaded, __ATOMIC_ACQUIRE) == 0) return false;
+    if (!hao_dsc_covers(pc)) return false;
     uint64_t t = pc - (uint64_t)D.slide;
-    if (t < D.start || t - D.start >= D.size) return false;
     hao_crit_enter();
     pthread_mutex_lock(&dsc_lock);
     bool ok = false;

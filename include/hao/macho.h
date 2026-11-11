@@ -217,6 +217,13 @@ hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, 
 bool hao_is_arm_only_bundle(const char *path);
 hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                               char *err, size_t errlen);
+/* The generation of the native-target caches (runtime.c run_loop): what a guest branch to a
+ * non-guest address resolves to (shared-cache redirect, x1, bridge plan) is remembered per thread
+ * until the next call of hao_ncache_invalidate, which whatever can change that answer makes after
+ * the change is visible: an image registered or released (here), a plan inserted or replaced
+ * (bridge.c tab_put). */
+extern uint64_t hao_ncache_gen;   /* src/macho.c */
+static inline void hao_ncache_invalidate(void) { __atomic_add_fetch(&hao_ncache_gen, 1, __ATOMIC_SEQ_CST); }
 /* Add an image built elsewhere (dsc.c) to hao_images, in load order. */
 void hao_image_register(hao_image *img);
 /* Map only (no fixups, no binding): for offline translation. */
@@ -322,6 +329,9 @@ bool hao_is_guest_function(uint64_t a);
  * any thread, also in a signal handler, while another thread loads. */
 hao_image *hao_image_for_code(uint64_t addr);
 hao_image *hao_image_for_addr(uint64_t addr);
+/* false: addr lies in no range a guest image was ever registered with, so both lookups above
+ * return NULL for it (one search of the immutable range snapshot; any thread, signal handlers) */
+bool hao_guest_range_maybe(uint64_t addr);
 /* The end of the mapped range of `im` that holds `a` (a segment of a
  * shared-cache image, else the whole image), or 0 if `a` is outside it. */
 uint64_t hao_image_extent(const hao_image *im, uint64_t a);

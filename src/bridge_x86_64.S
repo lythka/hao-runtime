@@ -62,7 +62,26 @@ _hao_native_call:
     movq  CPU_X(7)(%rbx), %rax
     movq  %rax, 8(%rsp)
     movq  CPU_X(31)(%rbx), %r11 /* guest sp */
-    xorl  %ecx, %ecx
+    cmpq  $16, %r10             /* the usual count: 128 bytes in eight vector moves (xmm0-7 are loaded below) */
+    jne   5f
+    movups   0(%r11), %xmm0
+    movups  16(%r11), %xmm1
+    movups  32(%r11), %xmm2
+    movups  48(%r11), %xmm3
+    movups  64(%r11), %xmm4
+    movups  80(%r11), %xmm5
+    movups  96(%r11), %xmm6
+    movups 112(%r11), %xmm7
+    movaps %xmm0,  16(%rsp)
+    movaps %xmm1,  32(%rsp)
+    movaps %xmm2,  48(%rsp)
+    movaps %xmm3,  64(%rsp)
+    movaps %xmm4,  80(%rsp)
+    movaps %xmm5,  96(%rsp)
+    movaps %xmm6, 112(%rsp)
+    movaps %xmm7, 128(%rsp)
+    jmp   2f
+5:  xorl  %ecx, %ecx
 1:  cmpq  %r10, %rcx
     jae   2f
     movq  (%r11,%rcx,8), %rax

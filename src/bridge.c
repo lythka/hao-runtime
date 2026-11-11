@@ -130,7 +130,9 @@ static bool better(const hao_plan *p, const hao_plan *old)
            (p->cls == old->cls && (p->flags & ~old->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG)));
 }
 
-/* under bridge_lock: insert or upgrade; returns the plan now in the table */
+/* under bridge_lock: insert or upgrade; returns the plan now in the table. Every change ends
+ * the native-target caches' generation (hao/runtime.h hao_ncache_invalidate): a thread that
+ * remembered the address's previous plan (or its absence) looks it up again. */
 static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
 {
     hao_plan_table *t = hao_plan_tab;
@@ -140,6 +142,7 @@ static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
         const hao_plan *old = s->plan;
         if (!better(p, old)) return old;
         __atomic_store_n(&s->plan, p, __ATOMIC_RELEASE);
+        hao_ncache_invalidate();
         return p;
     }
     if (t->used >= t->limit) {
@@ -161,6 +164,7 @@ static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
     s->plan = p;
     __atomic_store_n(&s->key, a, __ATOMIC_RELEASE);
     t->used++;
+    hao_ncache_invalidate();
     return p;
 }
 
@@ -1748,9 +1752,7 @@ static const hao_plan *bind_bare(hao_thread *t, uint64_t pc)
     return publish(&tmp, name);
 }
 
-/* Calls of an untyped bare address that look again for its ObjC type: a
- * method's first call may come with a nil receiver, say. */
-#define OBJC_PROBES 8
+#define OBJC_PROBES HAO_PLAN_OBJC_PROBES   /* hao/bridge.h; hao_bridge_plan_settled */
 
 const hao_plan *hao_bridge_plan_for_call(hao_thread *t, uint64_t pc)
 {
