@@ -65,8 +65,8 @@ limitations and how compatibility is tested.
   target (macOS 27 by default).
 - Tests: Apple silicon for the native ARM reference runs, Rosetta for the
   x86_64 runtime, Python 3.14 and `timeout` in `PATH`.
-- Target: an Intel Mac running a macOS release that matches the runtime's
-  contract inputs. Apple binaries and system images are not part of this
+- Target: an Intel Mac with AVX (Sandy Bridge, 2011, or later) running a
+  macOS release that matches the runtime's contract inputs. Apple binaries and system images are not part of this
   repository.
 
 ## Build and run

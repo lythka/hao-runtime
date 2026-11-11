@@ -21,7 +21,9 @@ rejects a binding whose identity is not a cdhash. AOT v5 caches and recipes are
 not accepted: regenerate them with the selected runtime. Native library UUIDs,
 the native-cache identity, OS build, kernel input hash, ARM64e guest and x86_64
 host are explicit. The initial CPU profile requires SSE2, CMPXCHG16B and
-AVX-capable hardware. The target JSON passed to the tool is a declaration by
+AVX-capable hardware; the runtime and translated code use at most x86-64-v2
+(SSSE3, SSE4.1, SSE4.2, POPCNT), and `hao` refuses to start on a CPU without
+the profile (AVX is not required under Rosetta, where the tests run). The target JSON passed to the tool is a declaration by
 the builder, not a hardware probe.
 
 This is a development interface, not an authenticated updater: hashes are not
