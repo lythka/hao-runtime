@@ -5,7 +5,7 @@
 # container lookup, LaunchServices, TCC, SecCode*) read the same identity on
 # x86_64 as natively; hao-install.py embeds such a stub only into a bundle
 # whose files match. Static checks only: nothing built here is launched.
-#   OUT=dir [B=build] [EMBED=tools/hao-embed] [HAO_FS=/private/tmp/ipsw27-fs] tests/tools/bundle.sh
+#   OUT=dir [B=build] [EMBED=tools/hao-embed] [HAO_FS=/path/to/mounted/macOS-27-System] tests/tools/bundle.sh
 # With the 27.0 System mounted at HAO_FS, the same checks run on its
 # MenuBarAgent.app (copied; app sandbox, secinit SIGILL without the bundle binding). Exit 1 if any case failed.
 set -u
@@ -14,7 +14,7 @@ repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-tools-bundle)}
 B=${B:-$repo/build}
 EMBED=${EMBED:-$repo/tools/hao-embed}
-HAO_FS=${HAO_FS:-/private/tmp/ipsw27-fs}
+HAO_FS=${HAO_FS:-}
 fails=0
 # the x86_64 shared cache payload stubs (--stubs) are linked against: this host's
 X86=${X86_CACHE:-}
@@ -152,7 +152,7 @@ done
 
 # --- the 27.0 MenuBarAgent.app (arm64-only, app sandbox, secinit SIGILL without the bundle binding)
 M=$HAO_FS/System/Library/CoreServices/MenuBarAgent.app
-if [ -f "$M/Contents/MacOS/MenuBarAgent" ]; then
+if [ -n "$HAO_FS" ] && [ -f "$M/Contents/MacOS/MenuBarAgent" ]; then
     mkdir -p "$OUT/mba"; cp -R "$M" "$OUT/mba/"; A=$OUT/mba/MenuBarAgent.app
     "$EMBED" --stub "$B/hao-stub" -o "$OUT/mba/MenuBarAgent" "$M/Contents/MacOS/MenuBarAgent" >"$OUT/mba.log" 2>&1
     cp "$OUT/mba/MenuBarAgent" "$A/Contents/MacOS/MenuBarAgent"
@@ -161,6 +161,6 @@ if [ -f "$M/Contents/MacOS/MenuBarAgent" ]; then
     if same_slices "$M/Contents/MacOS/MenuBarAgent" "$A/Contents/MacOS/MenuBarAgent" && [ "$(others "$M" MenuBarAgent)" = "$(others "$A" MenuBarAgent)" ]; then
         pass "MenuBarAgent: arm64e slices ($(lipo -archs "$M/Contents/MacOS/MenuBarAgent")) and every other bundle file byte-identical"
     else bad "MenuBarAgent: arm64e slice or bundle files changed"; fi
-else echo "SKIP MenuBarAgent (no 27.0 System at $HAO_FS)"; fi
+else echo "SKIP MenuBarAgent (HAO_FS: no macOS 27 System at '$HAO_FS')"; fi
 echo "bundle: $fails failed"
 exit $((fails != 0))

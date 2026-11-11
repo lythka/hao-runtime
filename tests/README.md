@@ -29,15 +29,35 @@ Without `OUT`, every script now works in a new `mktemp -d -t hao-NAME`
 directory instead of a fixed `$TMPDIR/hao-NAME`; callers that pass `OUT` are
 unchanged.
 
+## What you need
+
+Everything in `make test` and `make check` is self-contained apart from the
+host: an Apple silicon Mac with Rosetta (the arm64 references run natively,
+hao's x86_64 code under Rosetta), Xcode's clang and swiftc with arm64e,
+Python 3.14 and `timeout` in `PATH`. No test needs root or the network, and
+none launches a GUI application, app extension or XPC service.
+
+Some cases use inputs that are not in this repository. Without them those
+cases print a `SKIP` line that `tests/expected-skips.txt` accepts, so the run
+still passes:
+
+| Input | Used by | What to supply |
+|---|---|---|
+| `HAO_FS` | `guest/cli` (Apple-signed `ls`, trusted cdhash list), `tools` (MenuBarAgent bundle), `corpus27_df` | the path of a mounted macOS 27 System volume (read-only is enough) |
+| `KC` | `tools` stamp cases | a BootKernelExtensions.kc of the target kernel |
+| `PROFILE` | `host/sigpolicy` profile cases | a sandbox profile to check |
+
+The remaining expected skips are maintainer tooling that is not distributed:
+the offline scanners and oracle inputs (`tests/host/swiftslots.c`,
+`SCANNER_ROOT`, `ORACLE265`/`IPSW27`, `OSS265`, `OBSERVE`/`DIFF`) and the
+corpus runner `tools/run27.sh`. Their cases always skip in this tree; the
+runtime paths they would add evidence for are covered by the other tests.
+
 ## Inventory
 
-Measured at b5dfc26 plus this change on an Apple silicon development host
-(macOS 27.2, 16 cores; x86_64 code runs under Rosetta, the arm64 references
-natively), with the 27.0 System mounted at `/private/tmp/ipsw27-fs`. Times
-are wall-clock seconds; `test-guest` times are under `J=8` parallel load.
-No script needs root or the network, and none launches a GUI application,
-app extension or XPC service. Every guest-running script needs Xcode's
-clang/swiftc with arm64e, native arm64 execution and Rosetta.
+Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
+`HAO_FS` set. Times are wall-clock seconds; `test-guest` times are under
+`J=8` parallel load.
 
 `make test` (173 s in all; each target alone):
 
@@ -56,92 +76,83 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 
 `make test-guest` (159 s in all, before guest/cuvalist: 63 PASS, 1 XFAIL, 8 expected SKIP):
 
-| Entry | At b5dfc26 | Now | Time | Needs / skip reason |
-|---|---|---|---|---|
-| guest/aggspi6 | PASS | PASS | 3 | |
-| guest/atoken | PASS | PASS | 1 | |
-| guest/bitfields | PASS | PASS | 2 | |
-| guest/blocks2 | PASS | PASS | 2 | |
-| guest/bridgefix | PASS | PASS | 2 | |
-| guest/bridgeunit | PASS | PASS | 3 | |
-| guest/callback-routes | PASS | PASS | 2 | |
-| guest/callbacks | PASS | PASS | 10 | |
-| guest/cfnull | PASS | PASS | 1 | |
-| guest/chkstk | PASS | PASS | 1 | |
-| guest/cli | PASS | PASS | 3 | 27.0 System at `HAO_FS` (two cases; otherwise an unexpected SKIP); `sandbox-exec` |
-| guest/crypto | PASS | PASS | 1 | |
-| guest/cuvalist | (new) | PASS | 2 | private CoreUtils on the host (`VSNPrintF`, `NSErrorV`, ...) |
-| guest/cxxabi | PASS | PASS | 10 | |
-| guest/datacall | PASS | PASS | 1 | |
-| guest/dsc | PASS | PASS | 3 | the host's arm64e shared cache |
-| guest/dscswift | PASS | PASS | 10 | the host's arm64e shared cache |
-| guest/dylibs | PASS | PASS | 4 | |
-| guest/eh | PASS | PASS | 19 | |
-| guest/fenv | PASS | PASS | 1 | |
-| guest/footprint | PASS | PASS | 59 | `footprint(1)` |
-| guest/fork | PASS | PASS | 45 | |
-| guest/fullcache | PASS | PASS | 6 | |
-| guest/gss | PASS | PASS | 1 | |
-| guest/heapprobe | PASS | PASS | 1 | |
-| guest/hfasret | PASS | PASS | 2 | |
-| guest/identity | PASS | PASS | 5 | |
-| guest/indirect-x8 | PASS | PASS | 1 | |
-| guest/keypath | PASS | PASS | 2 | |
-| guest/libval | PASS | PASS | 16 | |
-| guest/msgfnptr | PASS | PASS | 4 | |
-| guest/narrowret | PASS | PASS | 4 | |
-| guest/nativesig | PASS | PASS | 25 | |
-| guest/nojit | PASS | PASS | 5 | |
-| guest/objcimp | PASS | PASS | 4 | |
-| guest/objcva | PASS | PASS | 3 | |
-| guest/optwitness | FAIL | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals; see below |
-| guest/oslog | FAIL | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below |
-| guest/signals | PASS | PASS | 36 | |
-| guest/sret-forward | PASS | PASS | 3 | |
-| guest/stackargs | PASS | PASS | 2 | |
-| guest/stackguard | PASS | PASS | 1 | |
-| guest/swift-object-callbacks | PASS | PASS | 5 | |
-| guest/swiftlate | PASS | PASS | 4 | |
-| guest/swiftls | PASS | PASS | 5 | |
-| guest/swiftmeta | PASS | PASS | 8 | |
-| guest/swiftpop | FAIL | SKIP (expected) | 4 | scan stage: `tests/host/swiftslots.c` is not in this tree; the runtime modes pass |
-| guest/swiftthunks | PASS | PASS | 6 | |
-| guest/threads | PASS | PASS | 2 | |
-| guest/uresume | PASS | PASS | 26 | |
-| guest/varsniff | PASS | PASS | 2 | |
-| guest/xinhab | FAIL | XFAIL | 2 | see known failures |
-| guest/xpac | PASS | PASS | 1 | |
-| guest/run-async | PASS | SKIP (expected) | 9 | 15 async cases pass; the modelmanagerdump cases need `ORACLE265` (and `IPSW27`) |
-| guest/keypath-identity | PASS | PASS | 2 | |
-| guest/late-method-signatures | PASS | PASS | 10 | |
-| guest/native-bundle | PASS | PASS | 5 | loads a plug-in `.bundle` into a command-line guest |
-| guest/objc-class-order | PASS | PASS | 6 | |
-| guest/sret-spill | FAIL | SKIP (expected) | 1 | `tools/codesig.py` under `SCANNER_ROOT` (not in this tree) |
-| guest/objcvascope | PASS | PASS | 2 | |
-| host/runtime | PASS | PASS | 2 | |
-| host/chain | PASS | PASS | 6 | |
-| host/commpage | PASS | PASS | 1 | |
-| host/sigpolicy | PASS | SKIP (expected) | 1 | the profile cases need `PROFILE`; the hao cases x86_64 hardware |
-| host/near-map | PASS | PASS | 1 | |
-| host/dscselhoist | PASS | PASS | 1 | |
-| host/swiftvalue | PASS | PASS | 1 | |
-| objc | PASS | PASS | 5 | |
-| tools | PASS | SKIP (expected) | 25 | runs bundle, stubdeps, platform, identity and aotpayload; stamp cases need `KC` (a kernel collection); MenuBarAgent case needs `HAO_FS` |
-| tools/release | PASS | PASS | 1 | python3.14 |
-| translate | PASS | PASS | 3 | |
-| oss265 | FAIL | SKIP (expected) | 1 | `OSS265`: the 26.5 Libc sources, not in this tree |
-| fidelity | FAIL (exit 2) | SKIP (expected) | 1 | `OBSERVE`/`DIFF` (`tools/fidelity/`), not in this tree |
-| fuzz-smoke | PASS (`make fuzz-smoke`) | PASS | 100 | 20 s per target, random seed |
-| corpus27_df | FAIL | SKIP (expected), run alone | 1 | `tools/run27.sh`, not in this tree; 27.0 System; writes to the Data volume |
-
-"At b5dfc26" is the script as it was, run with a private `OUT`; scripts
-that then exited 0 with a `SKIP` line or skipped a case without one counted
-as PASS. Changes to the scripts themselves: `SKIP` lines where a case or the
-whole script was left out silently or failed for a missing input
-(`cli.sh` x3, `libval.sh`, `run-async.sh`, `sigpolicy.sh`, `swiftpop.sh`,
-`sret-spill/run.py`, `oss265/run.sh`, `fidelity/run.sh`, `corpus27/corpus27_df.sh`),
-timeouts on `oss265/run.sh`'s guest runs, and an absolute `B` accepted by
-`fuzz/run.sh`.
+| Entry | Expected | Time | Needs / skip reason |
+|---|---|---|---|
+| guest/aggspi6 | PASS | 3 | |
+| guest/atoken | PASS | 1 | |
+| guest/bitfields | PASS | 2 | |
+| guest/blocks2 | PASS | 2 | |
+| guest/bridgefix | PASS | 2 | |
+| guest/bridgeunit | PASS | 3 | |
+| guest/callback-routes | PASS | 2 | |
+| guest/callbacks | PASS | 10 | |
+| guest/cfnull | PASS | 1 | |
+| guest/chkstk | PASS | 1 | |
+| guest/cli | PASS | 3 | two cases need `HAO_FS` (expected SKIP without it); `sandbox-exec` |
+| guest/crypto | PASS | 1 | |
+| guest/cuvalist | PASS | 2 | private CoreUtils on the host (`VSNPrintF`, `NSErrorV`, ...) |
+| guest/cxxabi | PASS | 10 | |
+| guest/datacall | PASS | 1 | |
+| guest/dsc | PASS | 3 | the host's arm64e shared cache |
+| guest/dscswift | PASS | 10 | the host's arm64e shared cache |
+| guest/dylibs | PASS | 4 | |
+| guest/eh | PASS | 19 | |
+| guest/fenv | PASS | 1 | |
+| guest/footprint | PASS | 59 | `footprint(1)` |
+| guest/fork | PASS | 45 | |
+| guest/fullcache | PASS | 6 | |
+| guest/gss | PASS | 1 | |
+| guest/heapprobe | PASS | 1 | |
+| guest/hfasret | PASS | 2 | |
+| guest/identity | PASS | 5 | |
+| guest/indirect-x8 | PASS | 1 | |
+| guest/keypath | PASS | 2 | |
+| guest/libval | PASS | 16 | |
+| guest/msgfnptr | PASS | 4 | |
+| guest/narrowret | PASS | 4 | |
+| guest/nativesig | PASS | 25 | |
+| guest/nojit | PASS | 5 | |
+| guest/objcimp | PASS | 4 | |
+| guest/objcva | PASS | 3 | |
+| guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals; see below |
+| guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below |
+| guest/signals | PASS | 36 | |
+| guest/sret-forward | PASS | 3 | |
+| guest/stackargs | PASS | 2 | |
+| guest/stackguard | PASS | 1 | |
+| guest/swift-object-callbacks | PASS | 5 | |
+| guest/swiftlate | PASS | 4 | |
+| guest/swiftls | PASS | 5 | |
+| guest/swiftmeta | PASS | 8 | |
+| guest/swiftpop | SKIP (expected) | 4 | scan stage: `tests/host/swiftslots.c` is not in this tree; the runtime modes pass |
+| guest/swiftthunks | PASS | 6 | |
+| guest/threads | PASS | 2 | |
+| guest/uresume | PASS | 26 | |
+| guest/varsniff | PASS | 2 | |
+| guest/xinhab | XFAIL | 2 | see known failures |
+| guest/xpac | PASS | 1 | |
+| guest/run-async | SKIP (expected) | 9 | 15 async cases pass; the modelmanagerdump cases need `ORACLE265` (and `IPSW27`) |
+| guest/keypath-identity | PASS | 2 | |
+| guest/late-method-signatures | PASS | 10 | |
+| guest/native-bundle | PASS | 5 | loads a plug-in `.bundle` into a command-line guest |
+| guest/objc-class-order | PASS | 6 | |
+| guest/sret-spill | SKIP (expected) | 1 | `tools/codesig.py` under `SCANNER_ROOT` (not in this tree) |
+| guest/objcvascope | PASS | 2 | |
+| host/runtime | PASS | 2 | |
+| host/chain | PASS | 6 | |
+| host/commpage | PASS | 1 | |
+| host/sigpolicy | SKIP (expected) | 1 | the profile cases need `PROFILE`; the hao cases x86_64 hardware |
+| host/near-map | PASS | 1 | |
+| host/dscselhoist | PASS | 1 | |
+| host/swiftvalue | PASS | 1 | |
+| objc | PASS | 5 | |
+| tools | SKIP (expected) | 25 | runs bundle, stubdeps, platform, identity and aotpayload; stamp cases need `KC` (a kernel collection); MenuBarAgent case needs `HAO_FS` |
+| tools/release | PASS | 1 | python3.14 |
+| translate | PASS | 3 | |
+| oss265 | SKIP (expected) | 1 | `OSS265`: the 26.5 Libc sources, not in this tree |
+| fidelity | SKIP (expected) | 1 | `OBSERVE`/`DIFF` (`tools/fidelity/`), not in this tree |
+| fuzz-smoke | PASS | 100 | 20 s per target, random seed |
+| corpus27_df | SKIP (expected), run alone | 1 | `tools/run27.sh`, not in this tree; 27.0 System; writes to the Data volume |
 
 Not entries of `tests/check.list`:
 

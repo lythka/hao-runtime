@@ -299,8 +299,10 @@ $(B)/swiftmeta.o: src/near_map.h
 
 $(B)/swiftvalue/%.o: CFLAGS += -DHAO_SWIFT_VALUE_RUNTIME
 
-# Optional local test extensions.
--include discovery.mk
+# Optional local extensions: a makefile fragment named by HAO_EXTRA_MK (unset by default).
+ifdef HAO_EXTRA_MK
+include $(HAO_EXTRA_MK)
+endif
 
 # Own native ARM/x86/JIT/interpreter/AOT comparisons of legacy dyld pointer streams.
 .PHONY: legacy-dyld-test

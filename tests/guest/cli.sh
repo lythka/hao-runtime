@@ -11,7 +11,7 @@ OUT=${OUT:-$(mktemp -d -t hao-cli)}
 HAO=${HAO:-$repo/build/hao}
 B=${B:-$repo/build}
 T=${T:-60}
-FS=${HAO_FS:-/private/tmp/ipsw27-fs}
+FS=${HAO_FS:-}   # a mounted macOS 27 System (optional; its cases skip without it)
 mkdir -p "$OUT"
 fails=0
 pass() { echo "PASS $*"; }
@@ -94,9 +94,9 @@ p = sys.argv[1]; d = bytearray(open(p, "rb").read())
 i = d.find(b"hello from arm64e"); d[i] ^= 0x20; open(p, "wb").write(d)
 PY
 run "bundle with a tampered executable refused" 126 "does not match its hash" "$HAO" "$OUT/ToolText/Contents/MacOS/tool"
-if [ -f "$FS/bin/ls" ]; then
+if [ -n "$FS" ] && [ -f "$FS/bin/ls" ]; then
     run "Apple-signed 27.0 ls runs" 0 "Apple signature" "$HAO" -v "$FS/bin/ls" -d /
-else echo "SKIP Apple-signed guest ($FS not mounted)"; fi
+else echo "SKIP Apple-signed guest (HAO_FS: no macOS 27 System at '$FS')"; fi
 # flip one byte of FILE's arm64 slice (the one hao runs) at its __TEXT,__text + 64
 flip_text() {
     python3 -I - "$1" <<'PY'
@@ -192,7 +192,7 @@ if [ "$(arch -x86_64 sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ] && lip
     fi
 else echo "SKIP host arm64e ls with trustd unreachable (no Rosetta or no arm64e /bin/ls)"; fi
 AT=$FS/usr/bin/dserr
-if [ -f "$AT" ]; then
+if [ -n "$FS" ] && [ -f "$AT" ]; then
     echo "$AT" >"$OUT/trust.in"
     "$repo/tools/hao-trust-list" "$FS" "$OUT/trust.in" >"$OUT/trusted-cdhashes" 2>/dev/null
     chmod 644 "$OUT/trusted-cdhashes"
@@ -207,7 +207,7 @@ if [ -f "$AT" ]; then
     run "world-writable HAO_TRUST_LIST not used" 126 "HAO_TRUST_LIST=.*not used" \
         "${NT[@]}" env HAO_TRUST_LIST="$OUT/trusted-cdhashes" "$HAO" "$AT" -14136
     chmod 644 "$OUT/trusted-cdhashes"
-else echo "SKIP trusted cdhash list ($FS not mounted)"; fi
+else echo "SKIP trusted cdhash list (HAO_FS: no macOS 27 System at '$FS')"; fi
 if [ -u /usr/bin/login ] && [ -r /usr/bin/login ] && [ "$(stat -f %u /usr/bin/login)" != "$(id -u)" ]; then
     run "set-user-ID guest owned by another user refused (host login)" 126 "set-user-ID program" "$HAO" /usr/bin/login -h
 else echo "SKIP set-user-ID guest (no readable /usr/bin/login owned by another user)"; fi

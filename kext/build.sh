@@ -21,5 +21,7 @@ clang -arch x86_64 -mmacosx-version-min="$MIN" -std=gnu11 -O2 -Wall -Wextra -Wer
   -Xlinker -kext -Xlinker -export_dynamic \
   -o "$OUT/Contents/MacOS/HaoExec" HaoExec/HaoExec.c -lkmod -lcc_kext
 cp HaoExec/Info.plist "$OUT/Contents/Info.plist"
-codesign -s - -f "$OUT" >/dev/null 2>&1 || true
+# Ad-hoc signature for the unstamped bundle. stamp_identity.py rewrites the binary for the target kernel
+# afterwards, so the image that loads HaoExec decides how it is loaded; a failure here is still an error.
+codesign -s - -f "$OUT" || { echo "kext/build.sh: codesign failed for $OUT" >&2; exit 1; }
 echo "built $OUT (unstamped: run stamp_identity.py with the target BootKC)"
