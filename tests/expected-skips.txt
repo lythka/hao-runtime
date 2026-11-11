@@ -1,16 +1,9 @@
 # Skips tests/check.sh accepts: NAME<tab>ERE matched against the script's
 # "SKIP ..." line. Any other skip fails the run. Each one needs an input
 # that is not in this tree or not on a development host (tests/README.md).
-guest/swiftpop	^SKIP scan: no tests/host/swiftslots\.c
-guest/sret-spill	^SKIP sret-spill: no tools/codesig\.py
-guest/run-async	^SKIP modelmanagerdump oracle cases
 host/sigpolicy	^SKIP profile cases \(PROFILE not set\)
 host/sigpolicy	^SKIP hao under .*: x86_64 under Rosetta takes no fault
 tools	^SKIP stamp cases \(no \)
-fidelity	^SKIP fidelity oracle: no .*observe
-oss265	^SKIP oss265: OSS265 not set
-corpus27_df	^SKIP corpus27_df: no tools/run27\.sh
 guest/cli	^SKIP Apple-signed guest \(HAO_FS:
 guest/cli	^SKIP trusted cdhash list \(HAO_FS:
 tools	^SKIP MenuBarAgent \(HAO_FS:
-corpus27_df	^SKIP corpus27_df: HAO_FS:

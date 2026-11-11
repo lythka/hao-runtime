@@ -29,10 +29,9 @@
  * that does not return). It tracks register values that are sp-relative
  * (frame pointer, copies of sp) to recognise incoming-argument loads, and
  * stores to the incoming area (a tail call that reuses it) so that the
- * callee's reads of those slots are not counted. tools/swiftslots27.sh
- * checks it offline against the compiler's role records: every resume
- * partial (__swift_as_ret, __swift_as_cont) of the 27.0 arm64-only
- * programs must come out at 0 slots.
+ * callee's reads of those slots are not counted. Every resume partial
+ * (__swift_as_ret, __swift_as_cont) must come out at 0 slots; checked
+ * against the compiler's role records outside this tree.
  *
  * The result is a lower bound: an argument the code never reads (a generic
  * witness's trailing Self metadata and witness table, an unused parameter

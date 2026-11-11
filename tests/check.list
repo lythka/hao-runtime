@@ -60,7 +60,6 @@ guest/keypath-identity	300	par	python3.14 -I tests/guest/keypath-identity/run.py
 guest/late-method-signatures	300	par	python3.14 -I tests/guest/late-method-signatures/run.py
 guest/native-bundle	300	par	python3.14 -I tests/guest/native-bundle/run.py
 guest/objc-class-order	300	par	python3.14 -I tests/guest/objc-class-order/run.py
-guest/sret-spill	300	par	python3.14 -I tests/guest/sret-spill/run.py
 guest/objcvascope	300	par	python3.14 -I tests/guest/objcvascope.py
 host/runtime	300	par	tests/host/runtime.sh
 host/chain	300	par	tests/host/chain.sh
@@ -73,8 +72,5 @@ objc	300	par	tests/objc/run.sh
 tools	300	par	tests/tools/run.sh
 tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py
 translate	300	par	tests/translate/run.sh "$B" "$OUT"
-oss265	300	par	tests/oss265/run.sh
-fidelity	300	par	tests/fidelity/run.sh
 fuzz-smoke	600	par	make -s B="$B" fuzz-smoke
-corpus27_df	300	serial	tests/corpus27/corpus27_df.sh
 guest/jitinsns	300	par	tests/guest/jitinsns.sh

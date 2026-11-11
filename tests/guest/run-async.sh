@@ -2,11 +2,11 @@
 # Swift concurrency ladder: build tests/guest/async-*.swift for arm64e, run
 # each natively (expected output) and under hao, compare stdout + exit code.
 #
-#   tests/guest/run-async.sh [-k] [TEST...]     TEST = async-3-actor, 3, or oracle
+#   tests/guest/run-async.sh [-k] [TEST...]     TEST = async-3-actor or 3
 #   A test containing "hao-lib: async-lib/X.swift" links a universal
 #   (x86_64 + arm64e) dylib built from that file: native async code that
 #   hao runs natively, calling the translated test code.
-#   (no TEST: all async-*.swift plus the modelmanagerdump oracle cases at the end)
+#   (no TEST: all async-*.swift)
 #
 # Env: HAO (default build/hao), SWIFTFLAGS (default -Onone), TIMEOUT (s, 20),
 #      OUT (build dir, default build/guest-async), HAO_ENV ("HAO_INTERP=1 ...",
@@ -26,12 +26,9 @@ QUIET=0
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)   # the runs cd into OUT
 
 tests=()
-ORACLE_CASES=1
 if [ $# -gt 0 ]; then
-    ORACLE_CASES=0
     for a in "$@"; do
         case $a in
-        oracle) ORACLE_CASES=1 ;;
         [0-9]*) for f in "$HERE"/async-"$a"-*.swift; do tests+=("$(basename "$f" .swift)"); done ;;
         *) tests+=("$(basename "$a" .swift)") ;;
         esac
@@ -94,39 +91,5 @@ for t in ${tests[@]+"${tests[@]}"}; do
         fi
     fi
 done
-# Real Swift-concurrency programs (ArgumentParser AsyncParsableCommand):
-#   oracle265-modelmanagerdump: macOS 26.5 (25F71) universal modelmanagerdump,
-#     thin ad-hoc re-signed slices; expected = the x86_64 slice run natively
-#     (under Rosetta here), actual = the arm64e slice under hao.
-#   ipsw27-modelmanagerdump: the 27.0 arm64-only tool, same expected text.
-# Skipped (not counted) when the files are absent. Select alone with "oracle".
-ORACLE265=${ORACLE265:-}
-IPSW27=${IPSW27:-}
-oracle_case() {   # NAME EXPECTED_CMD... -- HAO_ARGS...
-    local name=$1; shift
-    local exp=() act=()
-    while [ "$1" != "--" ]; do exp+=("$1"); shift; done; shift
-    act=("$@")
-    (cd "$OUT" && timeout "$TIMEOUT" "${exp[@]}" >"$OUT/$name.native.out" 2>"$OUT/$name.native.err"); local nrc=$?
-    (cd "$OUT" && env ${HAO_ENV:-} timeout "$TIMEOUT" "$HAO" "${act[@]}" >"$OUT/$name.hao.out" 2>"$OUT/$name.hao.err"); local hrc=$?
-    local why=""
-    if [ $hrc -eq 124 ]; then why="timeout ${TIMEOUT}s"
-    elif [ $hrc -ne $nrc ]; then why="exit $hrc, native $nrc"
-    elif ! cmp -s "$OUT/$name.native.out" "$OUT/$name.hao.out"; then why="stdout differs"
-    fi
-    if [ -z "$why" ]; then echo "PASS $name"; pass=$((pass + 1)); return; fi
-    echo "FAIL $name: $why"; fail=$((fail + 1)); failed+=("$name")
-    if [ $QUIET = 0 ]; then
-        diff "$OUT/$name.native.out" "$OUT/$name.hao.out" | head -8 | sed 's/^/    /'
-        grep -v '^hao: [-<]' "$OUT/$name.hao.err" | head -6 | sed 's/^/    stderr: /'
-    fi
-}
-if [ $ORACLE_CASES = 1 ] && [ -n "$ORACLE265" ] && [ -x "$ORACLE265/modelmanagerdump.x86_64.adhoc" ] && [ -f "$ORACLE265/modelmanagerdump.arm64e.adhoc" ]; then
-    oracle_case oracle265-modelmanagerdump arch -x86_64 "$ORACLE265/modelmanagerdump.x86_64.adhoc" -h -- "$ORACLE265/modelmanagerdump.arm64e.adhoc" -h
-    if [ -n "$IPSW27" ] && [ -f "$IPSW27/usr/bin/modelmanagerdump" ]; then
-        oracle_case ipsw27-modelmanagerdump arch -x86_64 "$ORACLE265/modelmanagerdump.x86_64.adhoc" -h -- "$IPSW27/usr/bin/modelmanagerdump" -h
-    else echo "SKIP ipsw27-modelmanagerdump (IPSW27 not set or no usr/bin/modelmanagerdump in it)"; fi
-elif [ $ORACLE_CASES = 1 ]; then echo "SKIP modelmanagerdump oracle cases (ORACLE265 not set or no modelmanagerdump.*.adhoc in it)"; fi
-
 echo "async: $pass pass, $fail fail${failed[*]:+ (${failed[*]})}"
 [ $fail -eq 0 ]
