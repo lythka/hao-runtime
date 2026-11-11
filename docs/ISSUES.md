@@ -65,15 +65,15 @@ Remaining limitations:
 
 ## `Optional<AnyObject>` in a published Swift value
 
-On the 26B131 image Notification Center crash-looped 20 times in one session,
-each time with `Swift value boundary refused: result publication has
-unresolved active representation (... type=Swift.Optional<Swift.AnyObject>)`.
-A SwiftUI view value returned by guest code (`View.body`, an associated
-result) holds an enum whose empty cases sit in a pointer's extra inhabitants.
-hao therefore walks the whole value, and it reached
-`NSNotificationCenter.Publisher.object`, which is `Optional<AnyObject>`.
-`common_leaf_value` admitted an `Optional` of a Swift class, of an imported
-ObjC class, or nil of a one-witness class existential, but not `AnyObject`.
+A guest SwiftUI view value that held an `NSNotificationCenter.Publisher`
+was refused at publication, which ended the process: `Swift value boundary
+refused: result publication has unresolved active representation (...
+type=Swift.Optional<Swift.AnyObject>)`. A view value returned by guest code
+(`View.body`, an associated result) that holds an enum whose empty cases sit
+in a pointer's extra inhabitants is walked whole, and the walk reached the
+publisher's `object`, which is `Optional<AnyObject>`. `common_leaf_value`
+admitted an `Optional` of a Swift class, of an imported ObjC class, or nil of
+a one-witness class existential, but not `AnyObject`.
 
 Native Swift programs on arm64 and x86_64 give the same `AnyObject`:
 existential kind 0x303, flags 0, no protocols, the `$sBOWV`
@@ -89,18 +89,16 @@ and 2 on x86_64.
 field (walked, with extra inhabitants to patch) next to an
 `Optional<AnyObject>` holding nil, an NSObject, a Swift object or a tagged
 NSNumber. Before the change every case was refused at
-`Optional<AnyObject>`, the Notification Center refusal. After it they are
+`Optional<AnyObject>`, the publication refusal above. After it they are
 walked with the patches of an `Optional<NSObject>` control.
 
-The widget extensions on the same image refused two more first `Optional`s
-in values crossing the boundary:
+Two more first `Optional`s were refused in values crossing the boundary:
 
-- `Optional<StocksWidget.ValueChangeTrend>` (StocksWidget). This is an enum
-  with no payload, so the Optional is one byte: a case is 0..n-1 and nil is n,
-  measured identical on both architectures. The byte rule needed 9 bytes or
-  more. Now the first Optional of a payload-free enum of up to 255 cases is
-  admitted when its byte is at most n.
-- `Optional<Foundation.URL>` (NewsTag, NewsToday2). URL is a struct whose only
+- The Optional of an enum with no payload. It is one byte: a case is 0..n-1
+  and nil is n, measured identical on both architectures. The byte rule
+  needed 9 bytes or more. Now the first Optional of a payload-free enum of up
+  to 255 cases is admitted when its byte is at most n.
+- `Optional<Foundation.URL>`. URL is a struct whose only
   field is `any _URLProtocol`, a class-bound existential with one witness
   table: 16 bytes, measured identical on both architectures, nil is a zero
   object word. Only nil of a bare such existential had been admitted, and
@@ -119,13 +117,13 @@ there.
 
 ## `%a` slots of variadics whose format family is assumed
 
-On a 26B131 image, sharingd crashed with SIGSEGV in CoreUtils'
-`PrintFCoreVAList` whenever the Bluetooth LE private address rotated. It
-logs `LogPrintF(cat, func, 30, "BLE address changed: %.6a\n", bytes)`.
-`LogPrintF` has no SDK format attribute, so `src/varsniff.c` typed its slots
-by assuming the last fixed argument is a printf format. printf's `%a` takes
-a double, so the pointer went to xmm0. CoreUtils reads `%a` as a pointer to
-an address and took r8, which held 0.
+A guest call of CoreUtils' `LogPrintF` with a `%.6a` conversion (an
+Ethernet address: `LogPrintF(cat, func, level, "%.6a\n", bytes)`) crashed
+with SIGSEGV in CoreUtils' `PrintFCoreVAList`. `LogPrintF` has no SDK format
+attribute, so `src/varsniff.c` typed its slots by assuming the last fixed
+argument is a printf format. printf's `%a` takes a double, so the pointer
+went to xmm0. CoreUtils reads `%a` as a pointer to an address and took r8,
+which held 0.
 
 Native arm64 CoreUtils on the development host (27.2, 26B123), read through
 `VSNPrintF` with marker slots, gives these rules. `%a` takes one pointer with
