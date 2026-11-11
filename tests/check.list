@@ -66,6 +66,7 @@ host/commpage	300	par	tests/host/commpage.sh
 host/sigpolicy	300	par	tests/host/sigpolicy.sh
 host/near-map	300	par	tests/host/near-map.sh
 host/dscselhoist	300	par	tests/host/dscselhoist.sh
+host/swiftvalue	300	par	tests/host/swiftvalue.sh
 objc	300	par	tests/objc/run.sh
 tools	300	par	tests/tools/run.sh
 tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py

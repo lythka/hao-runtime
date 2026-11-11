@@ -1,5 +1,39 @@
 # Runtime issues and measured scope
 
+## `Optional<AnyObject>` in a published Swift value
+
+On the 26B131 image Notification Center crash-looped 20 times in one session,
+each time with `Swift value boundary refused: result publication has
+unresolved active representation (... type=Swift.Optional<Swift.AnyObject>)`.
+A SwiftUI view value returned by guest code (`View.body`, an associated
+result) holds an enum whose empty cases sit in a pointer's extra inhabitants.
+hao therefore walks the whole value, and it reached
+`NSNotificationCenter.Publisher.object`, which is `Optional<AnyObject>`.
+`common_leaf_value` admitted an `Optional` of a Swift class, of an imported
+ObjC class, or nil of a one-witness class existential, but not `AnyObject`.
+
+Native Swift programs on arm64 and x86_64 give the same `AnyObject`:
+existential kind 0x303, flags 0, no protocols, the `$sBOWV`
+(Builtin.UnknownObject) witnesses (size 8, flags 0x10007, xi 0x7fffffff).
+Its first `Optional` has size 8, flags 0x210007 and nil 0 on both. hao now
+admits exactly that first `Optional`, with the value rule of imported ObjC
+references: nil, or a word the witnesses' own tag function calls a live
+value, tagged pointers included. `Optional<Optional<AnyObject>>` stays
+refused, because its second nil is an extra inhabitant that is 1 on arm64
+and 2 on x86_64.
+
+`tests/host/swiftvalue.sh` walks native x86_64 values with an `NSObject??`
+field (walked, with extra inhabitants to patch) next to an
+`Optional<AnyObject>` holding nil, an NSObject, a Swift object or a tagged
+NSNumber. Before the change every case was refused at
+`Optional<AnyObject>`, the Notification Center refusal. After it they are
+walked with the patches of an `Optional<NSObject>` control.
+
+Not covered yet: the widget extensions on the same image refuse
+`Optional<StocksWidget.ValueChangeTrend>` and `Optional<Foundation.URL>`,
+and WeatherWidget and WeatherIntents crash in native value-witness calls.
+Each needs its own measured layout.
+
 ## `%a` slots of variadics whose format family is assumed
 
 On a 26B131 image, sharingd crashed with SIGSEGV in CoreUtils'

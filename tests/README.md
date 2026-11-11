@@ -122,6 +122,7 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 | host/sigpolicy | PASS | SKIP (expected) | 1 | the profile cases need `PROFILE`; the hao cases x86_64 hardware |
 | host/near-map | PASS | PASS | 1 | |
 | host/dscselhoist | PASS | PASS | 1 | |
+| host/swiftvalue | PASS | PASS | 1 | |
 | objc | PASS | PASS | 5 | |
 | tools | PASS | SKIP (expected) | 25 | runs bundle, stubdeps, platform, identity and aotpayload; stamp cases need `KC` (a kernel collection); MenuBarAgent case needs `HAO_FS` |
 | tools/release | PASS | PASS | 1 | python3.14 |

@@ -97,6 +97,31 @@ int common_objc_reference_type(const void *m)
     return 1;
 }
 
+/* AnyObject: the class-bound existential with no protocol and no witness
+ * table (ExistentialTypeMetadata flags 0, zero protocols), one object word
+ * with the Builtin.UnknownObject witnesses. Measured identical on arm64 and
+ * x86_64 (size 8, flags 0x10007, xi 0x7fffffff; its first Optional: size 8,
+ * flags 0x210007, nil 0). A live value is any object of the shared native
+ * domain (Swift or ObjC, tagged pointers included), as for an imported ObjC
+ * class: the same value rule applies. */
+static int anyobject_type(const void *m)
+{
+    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    if (!m || !kind || kind(m) != 0x303 || u32((const char *)m + 8) || u32((const char *)m + 12)) return 0;
+    const witnesses *v = vwt(m);
+    return v == dlsym(RTLD_DEFAULT,"$sBOWV") && v->size == 8 && v->stride == 8 &&
+           v->flags == 0x10007 && v->extra == 0x7fffffff && v->fn[6];
+}
+
+static int unknown_object_value(const void *m, const void *value)
+{
+    const witnesses *v = vwt(m);
+    uint64_t bits = u64(value);
+    if (!bits) return true;
+    if (bits <= 2) return false;
+    return ((single_tag_fn *)v->fn[6])(value,1,m) == 0;
+}
+
 int common_objc_reference_value(const void *m, const void *value)
 {
     if (!common_objc_reference_type(m)) return 0;
@@ -618,6 +643,8 @@ int common_leaf_value(const void *type, const void *value)
         }
         if (v->size == 8 && v->stride == 8 && v->flags == 0x210007 &&
             v->extra == 0x7ffffffe && common_objc_reference_value(m[2],value)) return 1;
+        if (v->size == 8 && v->stride == 8 && v->flags == 0x210007 &&
+            v->extra == 0x7ffffffe && anyobject_type(m[2]) && unknown_object_value(m[2],value)) return 1;
         return common_byte_optional_case(type,value) == 1;
     }
     if (k != 0x201) return 0;
