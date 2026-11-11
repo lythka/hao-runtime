@@ -469,7 +469,7 @@ static uint64_t dsc_class(uint64_t c)
     uint64_t ro = hao_dsc_load_ptr(c + offsetof(class_t, data)) & ~7ull;
     const char *name = ro ? (const char *)(uintptr_t)hao_dsc_load_ptr(ro + offsetof(class_ro_t, name)) : NULL;
     Class k = name && hao_dsc_foreign((uint64_t)(uintptr_t)name) ? objc_getClass(name) : Nil;
-    if (hao_verbose) fprintf(stderr, "hao: objc: cache class %#llx (%s) -> %p\n", (unsigned long long)c, name ? name : "?", (void *)k);
+    HAO_LOG(1, "objc: cache class %#llx (%s) -> %p\n", (unsigned long long)c, name ? name : "?", (void *)k);
     return (uint64_t)(uintptr_t)k;
 }
 
@@ -553,7 +553,7 @@ static void ignore_class(class_t *cls, class_ro_t *ro, const char *why)
 {
     if (set_add(&ignored_classes, (uint64_t)(uintptr_t)cls)) nignored++;
     if (cls->isa && set_add(&ignored_classes, cls->isa)) nignored++;   /* its metaclass */
-    if (hao_verbose) fprintf(stderr, "hao: objc class %s ignored: %s\n", ro && ro->name ? (const char *)(uintptr_t)ro->name : "?", why);
+    HAO_LOG(1, "objc class %s ignored: %s\n", ro && ro->name ? (const char *)(uintptr_t)ro->name : "?", why);
 }
 
 /* each class's own +load, read from its class_ro_t before registration: a
@@ -647,9 +647,9 @@ static void register_class(class_t *cls, class_ro_t *ro, const struct objc_image
     bool realized = !ro || (*(const uint32_t *)(uintptr_t)(cls->data & 0x00007ffffffffff8ull) & RO_REALIZED) != 0;
     Class c;
     if (realized) {
-        if (hao_verbose > 1) fprintf(stderr, "hao: objc class %s was realized by guest code first\n", class_getName((Class)cls));
+        HAO_LOG(2, "objc class %s was realized by guest code first\n", class_getName((Class)cls));
         if (!(c = objc_readClassPair((Class)cls, info))) {
-            fprintf(stderr, "hao: objc_readClassPair failed for %s\n", class_getName((Class)cls));
+            HAO_LOG(0, "objc_readClassPair failed for %s\n", class_getName((Class)cls));
             ignore_class(cls, ro, "objc_readClassPair failed");
             return;
         }
@@ -671,17 +671,17 @@ static void register_class(class_t *cls, class_ro_t *ro, const struct objc_image
         uint64_t args[2] = {(uint64_t)(uintptr_t)cls, 0};
         c = (Class)(uintptr_t)hao_call_guest(hao_current(), ro->swiftMetadataInitializer, args, 2);
         if (c != (Class)cls || !(c = objc_readClassPair(c, info))) {
-            fprintf(stderr, "hao: swift metadata initializer failed for %s\n", (const char *)(uintptr_t)ro->name);
+            HAO_LOG(0, "swift metadata initializer failed for %s\n", (const char *)(uintptr_t)ro->name);
             ignore_class(cls, ro, "swift metadata initializer failed");
             return;
         }
     } else if (!(c = objc_readClassPair((Class)cls, info))) {
-        fprintf(stderr, "hao: objc_readClassPair failed for %s\n", (const char *)(uintptr_t)ro->name);
+        HAO_LOG(0, "objc_readClassPair failed for %s\n", (const char *)(uintptr_t)ro->name);
         ignore_class(cls, ro, "objc_readClassPair failed");
         return;
     }
     bind_guest_imps(c);
-    if (hao_verbose > 1) fprintf(stderr, "hao: objc class %s registered\n", class_getName(c));
+    HAO_LOG(2, "objc class %s registered\n", class_getName(c));
 }
 
 /* class and super references to ignored classes read nil, as the runtime's
@@ -790,8 +790,7 @@ static void defer_category(const category_t *cat, bool class_props)
     pthread_mutex_unlock(&pend_lock);
     hao_crit_leave();
     __atomic_fetch_add(&st_deferred, 1, __ATOMIC_RELAXED);
-    if (hao_verbose)
-        fprintf(stderr, "hao: objc category %s on %s deferred until the Swift runtime realizes the class\n",
+    HAO_LOG(1, "objc category %s on %s deferred until the Swift runtime realizes the class\n",
                 cat->name ? (const char *)(uintptr_t)cat->name : "?", class_getName((Class)(uintptr_t)cat->cls));
 }
 
@@ -823,7 +822,7 @@ static void class_realized(uint64_t c, bool force)
     __atomic_fetch_add(&st_late_classes, 1, __ATOMIC_RELAXED);
     bind_guest_imps((Class)(uintptr_t)c);   /* class_copyMethodList realizes it (no +initialize) */
     if (!data_realized(c)) {
-        fprintf(stderr, "hao: objc class %s not realized after its Swift metadata completed: %zu categories not attached\n",
+        HAO_LOG(0, "objc class %s not realized after its Swift metadata completed: %zu categories not attached\n",
                 class_getName((Class)(uintptr_t)c), n);
         free(mine);
         return;
@@ -832,7 +831,7 @@ static void class_realized(uint64_t c, bool force)
     free(mine);
     __atomic_fetch_add(&st_attached_late, n, __ATOMIC_RELAXED);
     if (hao_verbose > 1 || (hao_verbose && n))
-        fprintf(stderr, "hao: objc class %s realized by the Swift runtime: %zu deferred categories attached\n",
+        HAO_LOG(0, "objc class %s realized by the Swift runtime: %zu deferred categories attached\n",
                 class_getName((Class)(uintptr_t)c), n);
 }
 
@@ -859,16 +858,15 @@ static void trap_swift_class_init(hao_thread *t, uint64_t k)
     if (k == 4) class_realized(c->x[1] == 0 ? c->x[0] : 0, true);
     else class_realized(cls, false);
 }
+static hao_name_index swift_cls_ix = HAO_NAME_INDEX(swift_cls_names, NULL);
 static bool objc_swift_interpose(const char *name, uint64_t *addr)
 {
-    for (unsigned k = 0; k < NSWIFT_CLS; k++) {
-        if (strcmp(name, swift_cls_names[k])) continue;
-        if (!swift_cls_fn[k]) swift_cls_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
-        if (!swift_cls_fn[k]) return false;
-        *addr = hao_trap_address(name, trap_swift_class_init, k);
-        return true;
-    }
-    return false;
+    long k = hao_name_find(&swift_cls_ix, name);
+    if (k < 0) return false;
+    if (!swift_cls_fn[k]) swift_cls_fn[k] = dlsym(RTLD_DEFAULT, name + 1);
+    if (!swift_cls_fn[k]) return false;
+    *addr = hao_trap_address(name, trap_swift_class_init, (uint64_t)k);
+    return true;
 }
 
 void hao_objc_late_stats(uint64_t *deferred, uint64_t *attached, uint64_t *classes)
@@ -962,7 +960,7 @@ void hao_objc_read_image(hao_image *img)
         remap_ignored_refs(img, "__objc_classrefs");
         remap_ignored_refs(img, "__objc_superrefs");
     }
-    if (hao_verbose > 1) fprintf(stderr, "hao: objc: classes done\n");
+    HAO_LOG(2, "objc: classes done\n");
     /* 4. categories */
     a = hao_image_section(img, NULL, "__objc_catlist", &n);
     for (uint64_t k = 0; k < n / 8; k++) {
@@ -977,14 +975,14 @@ void hao_objc_read_image(hao_image *img)
         bool class_props = (info->flags & (1u << 6)) != 0;   /* HasCategoryClassProperties: category_t has classProperties */
         if (guest_class_unknown(cat->cls)) {
             if (is_stub_class(cat->cls))
-                fprintf(stderr, "hao: objc category %s on a Swift class stub (%s) is not attached\n",
+                HAO_LOG(0, "objc category %s on a Swift class stub (%s) is not attached\n",
                         cat->name ? (const char *)(uintptr_t)cat->name : "?", img->path);
             else defer_category(cat, class_props);
             continue;
         }
         attach_category(cat, cls, class_props);
     }
-    if (hao_verbose > 1) fprintf(stderr, "hao: objc: categories done\n");
+    HAO_LOG(2, "objc: categories done\n");
 }
 
 /* +load: classes, then categories */
@@ -1029,13 +1027,31 @@ typedef struct { id receiver; Class super_class; } objc_super_t;
  * setPositiveFormat: a plain string. For the VA_FORMAT_LAST entries the
  * format is the last argument; it is expanded here and the method gets
  * @"%@" and the string.
+ *
+ * Every other variadic method, the format methods of NSString,
+ * NSMutableString and NSAssertionHandler among them, goes through
+ * msgsend_varsniff below: the native IMP's va_start prologue gives its fixed
+ * arguments and the SDK's NS_FORMAT_FUNCTION types the slots from the format
+ * (tests/guest/objcva.sh, section nsformat).
  */
-enum { VA_ARRAY = 1, VA_DICT, VA_FORMAT_CLASS, VA_FORMAT_ARGS, VA_FORMAT_LAST };
+enum { VA_ARRAY = 1, VA_DICT, VA_FORMAT_ARGS, VA_FORMAT_LAST };
+#define VA_LIST_MAX ((size_t)1 << 24)   /* objects of a nil-terminated list read at most (128 MB of guest stack) */
 /* The SDK's declaring class and method kind are part of each contract.
  * A selector is shared globally: CalendarFoundation's fixed-argument NSDate
  * instance method localizedStringWithFormat: is not NSString's class API.
  * Subclasses retain the declared API (including Foundation class clusters);
- * unrelated classes and the other method kind must use ordinary dispatch. */
+ * unrelated classes and the other method kind must use ordinary dispatch.
+ *
+ * Why these stay named: the collection methods take a nil-terminated object
+ * list of any length, which these recipes walk to the nil, while
+ * msgsend_varsniff passes a method without an SDK format only its first 16
+ * stack slots (varsniff.c VS_MIN); NSAlert's informativeTextWithFormat: is
+ * AppKit's and is not exercised on a development host (no GUI), so its
+ * recipe is kept until a target-system test shows varsniff's equal.
+ * (enum_methods below and callbacks.c's tables are hand-written too; both
+ * encode SDK declarations, the methods typed NSTextAlignment or
+ * NSImageResizingMode and the structs of callback pointers an API takes,
+ * so a scan of the SDK headers could generate them as fmtattr_gen.inc is.) */
 static const struct { const char *sel; int kind; const char *vsel; const char *owner; bool class_method; } va_sels[] = {
     {"arrayWithObjects:", VA_ARRAY, "arrayWithObjects:count:", "NSArray", true},
     {"initWithObjects:", VA_ARRAY, "initWithObjects:count:", "NSArray", false},
@@ -1045,12 +1061,6 @@ static const struct { const char *sel; int kind; const char *vsel; const char *o
     {"orderedSetWithObjects:", VA_ARRAY, "orderedSetWithObjects:count:", "NSOrderedSet", true},
     {"dictionaryWithObjectsAndKeys:", VA_DICT, "dictionaryWithObjects:forKeys:count:", "NSDictionary", true},
     {"initWithObjectsAndKeys:", VA_DICT, "initWithObjects:forKeys:count:", "NSDictionary", false},
-    {"stringWithFormat:", VA_FORMAT_CLASS, NULL, "NSString", true},
-    {"localizedStringWithFormat:", VA_FORMAT_CLASS, "currentLocale", "NSString", true},
-    {"handleFailureInMethod:object:file:lineNumber:description:", VA_FORMAT_LAST, NULL, "NSAssertionHandler", false},
-    {"handleFailureInFunction:file:lineNumber:description:", VA_FORMAT_LAST, NULL, "NSAssertionHandler", false},
-    {"appendFormat:", VA_FORMAT_LAST, NULL, "NSMutableString", false},
-    {"stringByAppendingFormat:", VA_FORMAT_LAST, NULL, "NSString", false},
     {"alertWithMessageText:defaultButton:alternateButton:otherButton:informativeTextWithFormat:", VA_FORMAT_LAST, NULL, "NSAlert", true},
 };
 static SEL va_sel_cache[sizeof va_sels / sizeof *va_sels];
@@ -1180,7 +1190,13 @@ static bool msgsend_variadic(hao_cpu *c, id recv, Class cls, SEL sel, IMP imp)
             if (kind == VA_ARRAY ? !e : (!(n & 1) && !e)) break;
             if (n == cap) { cap *= 2; v = hao_alloc_check(realloc(v, cap * sizeof *v), "ObjC variadic collection"); }
             v[n++] = e;
-            if (n > (1u << 24)) break;
+            if (n == VA_LIST_MAX) {   /* no nil: the guest's list is unterminated; it is cut here, and said once */
+                static int said;
+                if (!__atomic_exchange_n(&said, 1, __ATOMIC_RELAXED))
+                    HAO_LOG(0, "objc: %c[%s %s]: no nil among the first %zu variadic objects; the list is cut there\n",
+                            class_isMetaClass(cls) ? '+' : '-', class_getName(cls), name, n);
+                break;
+            }
         }
         SEL vs = sel_registerName(vsel);
         IMP vi = class_getMethodImplementation(cls, vs);
@@ -1199,17 +1215,6 @@ static bool msgsend_variadic(hao_cpu *c, id recv, Class cls, SEL sel, IMP imp)
         return true;
     }
     /* every format the native method gets has the guest's long double conversions made double (vafmt.c) */
-    case VA_FORMAT_CLASS: {   /* +stringWithFormat: and +localizedStringWithFormat: */
-        id loc = vsel ? msg0((id)objc_getClass("NSLocale"), vsel) : nil;
-        id obj = msg0(recv, "alloc");
-        hao_fmtfix fx;
-        id fmt = (id)(uintptr_t)hao_fmt_fix('C', a[0], &fx);
-        obj = ((id (*)(id, SEL, id, id, void *))objc_msgSend)(obj, sel_registerName("initWithFormat:locale:arguments:"),
-                                                               fmt, loc, va);
-        hao_fmt_done(&fx);
-        c->x[0] = (uint64_t)(uintptr_t)msg0(obj, "autorelease");
-        return true;
-    }
     case VA_FORMAT_ARGS: {
         SEL vs = sel_registerName(vsel);
         unsigned fm = format_keywords(name);
@@ -1260,24 +1265,22 @@ uint64_t hao_objcva_imps, hao_objcva_calls, hao_objcva_untyped, hao_objcva_decli
 static void objcva_note(hao_thread *t, Class cls, SEL sel, uint64_t imp, const char *what)
 {
     Dl_info d;
-    FILE *f = HAO_DIAG;
     hao_crit_enter();          /* dyld's lock: no guest signal handler meanwhile */
     bool named = dladdr((void *)(uintptr_t)imp, &d) && d.dli_fname;
     hao_crit_leave();
     const char *b = named ? strrchr(d.dli_fname, '/') : NULL;
-    hao_diag_prefix(f);
-    fprintf(f, "bridge: objc variadic %c[%s %s] (%s+%#llx): %s, lr=%#llx", class_isMetaClass(cls) ? '+' : '-',
+    char where[1100];
+    HAO_LOG(0, "bridge: objc variadic %c[%s %s] (%s+%#llx): %s, lr=%#llx%s\n", class_isMetaClass(cls) ? '+' : '-',
             class_getName(cls), sel_getName(sel), named ? (b ? b + 1 : d.dli_fname) : "?",
             (unsigned long long)(named ? imp - (uint64_t)(uintptr_t)d.dli_fbase : imp), what,
-            (unsigned long long)t->cpu.x[30]);
-    hao_diag_guest_addr(f, t->cpu.x[30]);
-    fprintf(f, "\n");
+            (unsigned long long)t->cpu.x[30], hao_diag_guest_where(t->cpu.x[30], where, sizeof where));
 }
 
 /* The bridge's plan for a native IMP whose prologue says variadic with g fixed GPR and f fixed FP
  * arguments, for a method of encoding enc and selector sel: false (declined) when the encoding disagrees;
  * else the fixed GPR count, and the format's index and SDK family (fmt = last fixed, kind 0, when the
- * SDK declares none for sel). objcva_scan (tools/) runs it over whole libraries. */
+ * SDK declares none for sel). An offline scanner, not part of this
+ * repository, runs it over whole libraries. */
 bool hao_objcva_plan(int g, int f, const char *enc, const char *sel, int *ngp, int *fmt, char *fk)
 {
     int eg = -1, ef = -1;
@@ -1414,7 +1417,7 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
         cls = kind == 1 ? class_getSuperclass(su->super_class) : su->super_class;
     }
     IMP imp = class_getMethodImplementation(cls, sel);
-    if (hao_verbose > 2) fprintf(stderr, "hao: msgSend [%s %s]\n", class_getName(cls), sel_getName(sel));
+    HAO_LOG(3, "msgSend [%s %s]\n", class_getName(cls), sel_getName(sel));
     c->x[0] = (uint64_t)(uintptr_t)recv;
     uint64_t g = hao_guest_of_entry((uint64_t)(uintptr_t)imp);
     if (g) { c->pc = g; return; }               /* guest method: stay in translated code */
@@ -1550,31 +1553,35 @@ static const struct { const char *name; uint64_t kind; } imp_traps[] = {
     {"_method_getImplementation", IMP_OF_METHOD},
 };
 
+static hao_name_index imp_traps_ix = HAO_NAME_INDEX(imp_traps, NULL);
+
 bool hao_objc_interpose_imp(const char *name, uint64_t *addr)
 {
-#define t imp_traps
-    for (size_t k = 0; k < sizeof t / sizeof *t; k++)
-        if (!strcmp(name, t[k].name)) { *addr = hao_trap_address(name, trap_set_imp, t[k].kind); return true; }
+    long k = hao_name_find(&imp_traps_ix, name);
+    if (k >= 0) { *addr = hao_trap_address(name, trap_set_imp, imp_traps[k].kind); return true; }
     return objc_swift_interpose(name, addr);
-#undef t
 }
 
 /* objc_retain_xN / objc_release_xN: src/regvar.c */
 
+/* trap_msgsend's kinds: 0 objc_msgSend, 1 objc_msgSendSuper2, 2 objc_msgSendSuper */
+static const char *const msgsend_names[] = {"_objc_msgSend", "_objc_msgSendSuper2", "_objc_msgSendSuper"};
+static hao_name_index msgsend_ix = HAO_NAME_INDEX(msgsend_names, NULL);
+
 void hao_objc_interpose_names(hao_name_fn cb, void *ctx)
 {
-    if (!hao_opt.no_msgsend) { cb("_objc_msgSend", ctx); cb("_objc_msgSendSuper2", ctx); cb("_objc_msgSendSuper", ctx); }
-    for (size_t k = 0; k < sizeof imp_traps / sizeof *imp_traps; k++) cb(imp_traps[k].name, ctx);
-    for (unsigned k = 0; k < NSWIFT_CLS; k++) cb(swift_cls_names[k], ctx);
+    if (!hao_opt.no_msgsend) hao_name_each(&msgsend_ix, cb, ctx);   /* interpose.c asks hao_objc_interpose only then */
+    hao_name_each(&imp_traps_ix, cb, ctx);
+    hao_name_each(&swift_cls_ix, cb, ctx);
 }
 
 bool hao_objc_interpose(const char *name, uint64_t *addr)
 {
-    if (!strncmp(name, "_objc_msgSend", 13) && !sel_setarg) msgsend_init();
-    if (!strcmp(name, "_objc_msgSend")) { *addr = hao_trap_address(name, trap_msgsend, 0); return true; }
-    if (!strcmp(name, "_objc_msgSendSuper2")) { *addr = hao_trap_address(name, trap_msgsend, 1); return true; }
-    if (!strcmp(name, "_objc_msgSendSuper")) { *addr = hao_trap_address(name, trap_msgsend, 2); return true; }
-    return false;
+    long k = hao_name_find(&msgsend_ix, name);
+    if (k < 0) return false;
+    if (!sel_setarg) msgsend_init();
+    *addr = hao_trap_address(name, trap_msgsend, (uint64_t)k);
+    return true;
 }
 
 /* ----------------------------------------------- bare native IMPs

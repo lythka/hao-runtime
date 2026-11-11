@@ -10,8 +10,8 @@
  * gss_test_oid_set_member, which then memcmps through the upper half of the elements pointer (SIGSEGV), and
  * guest code reading a native OID set (gss_indicate_mechs) or GSS_C_NT_* reads garbage.
  *
- * tools/gen_gss.py types every function and variable of those headers (src/gss_gen.inc). The guest only ever
- * sees arm64-layout objects:
+ * src/gss_gen.inc types every function and variable of those headers (its generator is not part of this
+ * repository). The guest only ever sees arm64-layout objects:
  *   - a native OID or OID set reaching the guest (output parameter, result, exported variable) is given a
  *     shadow in arm64 layout, one per native object, refreshed each time it crosses again; a shadow crossing
  *     back is replaced by its native object, so identity (pointer comparisons, release) is kept;
@@ -24,6 +24,7 @@
  *     calls back before it returns).
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/bridge.h"
 #include <dlfcn.h>
 #include <pthread.h>
@@ -215,7 +216,7 @@ static void trap_gss(hao_thread *t, uint64_t idx)
     iter_ctx ictx[2];
     int ni = 0;
     const uint64_t *sp = (const uint64_t *)(uintptr_t)c->x[31];
-    for (int k = 0; k < n; k++) a[k] = k < 8 ? c->x[k] : sp[k - 8];   /* stack parameters are 8 bytes (gen_gss.py) */
+    for (int k = 0; k < n; k++) a[k] = k < 8 ? c->x[k] : sp[k - 8];   /* stack parameters are 8 bytes (gss_gen.inc) */
     void *fn = native_fn[idx];
     L();
     for (int k = 0; k < n; k++) {
@@ -323,17 +324,16 @@ static void trap_gss(hao_thread *t, uint64_t idx)
 /* ---- import binding */
 static int name_cmp(const void *key, const void *ent) { return strcmp(key, *(const char *const *)ent); }
 
-void hao_gss_interpose_names(hao_name_fn cb, void *ctx)
-{
-    for (size_t k = 0; k < sizeof funcs / sizeof *funcs; k++) cb(funcs[k].name, ctx);
-}
+static hao_name_index funcs_ix = HAO_NAME_INDEX(funcs, NULL);
+
+void hao_gss_interpose_names(hao_name_fn cb, void *ctx) { hao_name_each(&funcs_ix, cb, ctx); }
 
 bool hao_gss_interpose(const char *name, uint64_t *addr)
 {
     if (strncasecmp(name, "_gss", 4) && strncmp(name, "___gss", 6) && strncmp(name, "_krb5_gss", 9)) return false;
-    const void *f = bsearch(name, funcs, sizeof funcs / sizeof *funcs, sizeof *funcs, name_cmp);
-    if (f) {
-        size_t k = (size_t)((const char *)f - (const char *)funcs) / sizeof *funcs;
+    long fk = hao_name_find(&funcs_ix, name);
+    if (fk >= 0) {
+        size_t k = (size_t)fk;
         void *nf = dlsym(RTLD_DEFAULT, name + 1);
         if (!nf) return false;
         native_fn[k] = nf;
@@ -355,11 +355,12 @@ bool hao_gss_interpose(const char *name, uint64_t *addr)
         break;
     }
     case 'A': {
+        /* every element up to the empty OID that ends the array, as native code reads it */
         const noid *ne = nv;
-        int cnt = 0;
-        while (cnt < 64 && ne[cnt].length) cnt++;
-        goid *ga = hao_alloc_check(calloc((size_t)cnt + 1, sizeof *ga), "GSS-API OID variables");
-        for (int k = 0; k < cnt; k++) {
+        size_t cnt = 0;
+        while (ne[cnt].length) cnt++;
+        goid *ga = hao_alloc_check(calloc(cnt + 1, sizeof *ga), "GSS-API OID variables");
+        for (size_t k = 0; k < cnt; k++) {
             ga[k] = (goid){ne[k].length, 0, ne[k].elements};
             *pm_slot(&oid_g2n, (uint64_t)(uintptr_t)&ga[k], true) = (uint64_t)(uintptr_t)&ne[k];
         }
@@ -368,6 +369,6 @@ bool hao_gss_interpose(const char *name, uint64_t *addr)
     }
     }
     U();
-    if (hao_verbose > 1) fprintf(stderr, "hao: GSS data %s (%c) bound to an arm64-layout copy\n", name, kind);
+    HAO_LOG(2, "GSS data %s (%c) bound to an arm64-layout copy\n", name, kind);
     return true;
 }

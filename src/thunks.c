@@ -1,12 +1,12 @@
 /*
  * hao — generated thunk pairs (hao/bridge.h).
  *
- * tools/gen_bridge.py writes one source per native function whose
- * signature the register bridge cannot carry, compiles it twice and links
- * the halves into one fat thunk library: the arm64e slice holds the guest
- * halves (_hao_gh_KEY: the function's own prototype lowered by clang for
- * AAPCS64), the x86_64 slice the native halves (_hao_nh_KEY: the same
- * prototype lowered for SysV). Interface-unit records name their pair by
+ * The thunk generator (not part of this repository) writes one source per
+ * native function whose signature the register bridge cannot carry,
+ * compiles it twice and links the halves into one fat thunk library:
+ * the arm64e slice holds the guest halves (_hao_gh_KEY: the function's
+ * own prototype lowered by clang for AAPCS64), the x86_64 slice the native
+ * halves (_hao_nh_KEY: the same prototype lowered for SysV). Interface-unit records name their pair by
  * KEY (HAO_IFR_THUNK); the key is a hash of the pair's source, so a record
  * and a library from different builds never meet on the wrong code: a key
  * the libraries do not have leaves the plan without a pair (its abi.c encoding
@@ -56,33 +56,30 @@ void hao_thunks_init(void)
         struct stat st;
         int fd = hao_aot_open_trusted(&dir, names[k], &st, why, sizeof why);
         if (fd < 0) {
-            if (hao_verbose || hao_bridge_counting) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "thunk library %s/%s rejected: %s\n", dir.path, names[k], why); }
+            if (hao_verbose || hao_bridge_counting) { HAO_LOG(0, "thunk library %s/%s rejected: %s\n", dir.path, names[k], why); }
             continue;
         }
         close(fd);
         char path[2048];
         if ((size_t)snprintf(path, sizeof path, "%s/%s", dir.path, names[k]) >= sizeof path) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "thunk library %s/%s: path too long, not loaded\n", dir.path, names[k]);
+            HAO_LOG(0, "thunk library %s/%s: path too long, not loaded\n", dir.path, names[k]);
             continue;
         }
         void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
         if (!h) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "thunk library %s: native half not loaded: %s\n", path, dlerror());
+            HAO_LOG(0, "thunk library %s: native half not loaded: %s\n", path, dlerror());
             continue;
         }
         char err[512];
         hao_image *im = hao_load_guest_library(path, err, sizeof err);
         if (!im) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "thunk library %s: guest half not loaded: %s\n", path, err);
+            HAO_LOG(0, "thunk library %s: guest half not loaded: %s\n", path, err);
             continue;
         }
         tlibs[ntlibs].handle = h;
         tlibs[ntlibs].img = im;
         ntlibs++;
-        if (hao_verbose) fprintf(stderr, "hao: thunk library %s (guest half at %#llx)\n", path, (unsigned long long)im->base);
+        HAO_LOG(1, "thunk library %s (guest half at %#llx)\n", path, (unsigned long long)im->base);
     }
     for (size_t k = 0; k < n; k++) free(names[k]);
     free(names);

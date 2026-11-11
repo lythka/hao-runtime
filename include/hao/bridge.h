@@ -58,7 +58,7 @@
  * HAO_PLAN_MASKED has an authoritative mask; every other plan gets the full
  * scan, as before typed plans existed.
  *
- * Generated thunk pairs (W2, tools/gen_bridge.py, src/thunks.c): a TYPED plan
+ * Generated thunk pairs (src/thunks.c; the generator is not part of this repository): a TYPED plan
  * with thunk_guest set is called through its pair instead of the register
  * bridge. hao_run continues at thunk_guest (an arm64e function with the
  * callee's own prototype, lowered by clang for AAPCS64) with the guest's
@@ -103,7 +103,7 @@ enum {
                             * hao_swift_fixed_abi): EXACT, no argument is guest code */
     HAO_BRS_OBJCIMP,       /* a native ObjC method's IMP called bare: its method's encoding, found from the
                             * call's receiver and selector (objc.c hao_objc_imp_types) */
-    HAO_BRS_CXXSTR,        /* cxxstr_gen.inc (tools/gen_cxxstr.py): std::string parameters converted (kind 'Z') */
+    HAO_BRS_CXXSTR,        /* cxxstr_gen.inc: std::string parameters converted (kind 'Z') */
     HAO_BRS_N
 };
 
@@ -233,12 +233,42 @@ extern uint64_t hao_objcva_imps, hao_objcva_calls, hao_objcva_untyped, hao_objcv
 void hao_bridge_fork_child(void);
 void hao_bridge_stats_atexit(void);
 /* Every name an interposer answers with a trap (interpose.c and the modules it
- * asks: signals, callbacks, swiftobjects, gss, libm, swiftmeta, objc), and
- * every name of the compiled-in tables (hao_tables_plan): cb(name, ctx) for
- * each; names are static strings. */
+ * asks: runtime, signals, callbacks, swiftobjects, gss, libm, swiftmeta,
+ * objc, regvar), and every name of the compiled-in tables (hao_tables_plan):
+ * cb(name, ctx) for each; names are static strings. */
 typedef void (*hao_name_fn)(const char *name, void *ctx);
 void hao_interpose_names(hao_name_fn cb, void *ctx);
 void hao_tables_names(hao_name_fn cb, void *ctx);
+/* A name-sorted index over a static table whose entries begin with their
+ * name (const char *), built at its first use (interpose.c). hao_name_find
+ * answers a name with the table's first entry of that name, as a linear scan
+ * would, or -1; hao_name_each lists the same names in table order, so an
+ * interposer whose lookup and names both go through one index cannot
+ * answer a name it does not list. keep (may be NULL) leaves entries out of
+ * both. Every index that has been used is checked by
+ * hao_interpose_selfcheck. */
+typedef struct hao_name_index {
+    const void *base;
+    size_t stride, n;
+    bool (*keep)(const void *e);
+    uint32_t *idx;                 /* NULL until built */
+    size_t len;
+    struct hao_name_index *next;   /* the built indexes */
+} hao_name_index;
+#define HAO_NAME_INDEX(t, keep) {(t), sizeof *(t), sizeof (t) / sizeof *(t), (keep), NULL, 0, NULL}
+long hao_name_find(hao_name_index *ix, const char *name);
+void hao_name_each(hao_name_index *ix, hao_name_fn cb, void *ctx);
+const char *hao_name_at(const hao_name_index *ix, size_t k);   /* entry k's name */
+/* The call plans that still read a demangler's spelling (swiftcc.c: Swift
+ * async narrow results and async parameters; cxxstr.c: std::string-family
+ * parameters) checked against fixed symbols: 0 as expected, n > 0 mismatches
+ * (the first in why), -1 when that demangler is not loaded. hao -v reports a
+ * mismatch; tests/host/bridge.c requires none. */
+int hao_swift_demangle_selfcheck(char *why, size_t n);
+int hao_cxx_demangle_selfcheck(char *why, size_t n);
+/* The runtime's own interposer (runtime.c: __dyld_lazy_load). */
+bool hao_runtime_interpose(const char *name, uint64_t *addr);
+void hao_runtime_interpose_names(hao_name_fn cb, void *ctx);
 void hao_signal_interpose_names(hao_name_fn cb, void *ctx);
 void hao_callbacks_interpose_names(hao_name_fn cb, void *ctx);
 void hao_swift_objects_interpose_names(hao_name_fn cb, void *ctx);
@@ -267,7 +297,7 @@ void hao_thunk_native_args_mask(struct hao_thread *t, unsigned mask);
 unsigned hao_args_code_slots(struct hao_thread *t);
 
 /* cxxstr.c: native C++ functions outside libc++ that take a std::string
- * (tools/gen_cxxstr.py). A kind 'Z' plan's enc is 'P' (the arm64 function
+ * (src/cxxstr_gen.inc). A kind 'Z' plan's enc is 'P' (the arm64 function
  * returns this: a constructor or destructor) or '.', then one role per
  * integer argument register x0..x5: '-' none, 'r' const std::string&,
  * 'v' std::string by value (by address on both ABIs), 'w' std::string&
@@ -367,7 +397,7 @@ typedef struct {
  * it must describe (NULL: any). 0 = valid, v filled in; -1 = rejected with
  * the reason in why. Never reads outside buf[0..size). */
 int hao_ifunit_check(const void *buf, uint64_t size, const uint8_t *uuid, hao_if_view *v, char *why, size_t n);
-/* Record kind 'K' (tools/gen_stackpack.py): a Swift function whose Apple arm64 stack arguments
+/* Record kind 'K' (generated outside this repository): a Swift function whose Apple arm64 stack arguments
  * are packed at natural size. enc "OFF.W,OFF.W,..." names, for SysV slots 2, 3, ... (x6 and x7
  * take slots 0 and 1), the arm64 byte offset and width of the argument each carries. Returns the
  * number of slots (offsets and widths filled in), or -1 for an invalid layout. */

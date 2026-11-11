@@ -67,7 +67,6 @@ int main(int argc, char **argv)
     setenv("HAO_GUEST_ROOT", root ? root : "/var/empty/hao-objcreg-no-guest-dylibs", 1);
     hao_no_guest_code = true;
     hao_install_fault_handler();
-    hao_interpose_init();
     hao_jit_init();
     char err[512];
     hao_image *img = hao_load_image(argv[a], hao_resolve_import, err, sizeof err);

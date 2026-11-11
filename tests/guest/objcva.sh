@@ -15,7 +15,7 @@ repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-objcva)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
-SECTIONS=${SECTIONS:-dumper dumpsub msgsuper dumpimp validated attributed cifilter mlerror msverror pql}
+SECTIONS=${SECTIONS:-dumper dumpsub msgsuper dumpimp validated attributed cifilter mlerror msverror pql nsformat}
 MODES=${MODES:-jit interp aot}
 LS=/System/Library/PrivateFrameworks/LoggingSupport.framework/Versions/A/LoggingSupport
 mkdir -p "$OUT"

@@ -33,6 +33,11 @@
  *   pql        -[PQLConnection execute:] / fetchObjectOfClass:sql: (libprequelite,
  *              revisiond's): SQL formats whose %lld/%@ become bound parameters,
  *              a BOOL result (char on x86_64)
+ *   nsformat   NSString's +stringWithFormat:, +localizedStringWithFormat: and
+ *              -stringByAppendingFormat:, NSMutableString's -appendFormat: and
+ *              NSAssertionHandler's handleFailureIn...description:, which
+ *              src/objc.c once named in va_sels: object, integer, double and
+ *              %L arguments, a format made at run time, 22 and 70 arguments
  */
 #import <Foundation/Foundation.h>
 #import <CoreImage/CoreImage.h>
@@ -203,6 +208,37 @@ static int section(const char *s)
         for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@(dir) error:NULL])
             unlink([NSString stringWithFormat:@"%s/%@", dir, f].fileSystemRepresentation);
         rmdir(dir);
+    } else if (!strcmp(s, "nsformat")) {
+        /* a format made at run time is typed per call from the SDK's NS_FORMAT_FUNCTION */
+        NSString *dyn = [NSString stringWithUTF8String:"%d|%@|%.3f|%lld|%s|%c|%u|%g"];
+        printf("class: %s\n", [NSString stringWithFormat:@"%d|%@|%.3f|%lld|%s|%c|%u|%g", -7, @"obj", 2.5, 1LL << 40, "cstr",
+                               'q', 4000000000u, 1e-3].UTF8String);
+        printf("classdyn: %s\n", [NSString stringWithFormat:dyn, -7, @"obj", 2.5, 1LL << 40, "cstr", 'q', 4000000000u, 1e-3].UTF8String);
+        printf("many: %s\n", [NSString stringWithFormat:@"%d %d %d %d %d %d %d %d %d %d %f %f %f %f %f %f %f %f %f %f %@ %ld",
+                               1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, @"end",
+                               123456789012L].UTF8String);
+        /* 70 arguments: more than the 64 slots varsniff passed before */
+        printf("huge: %s\n", [NSString stringWithFormat:@"%d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f",
+                               0, 1.5, 2, 3.5, 4, 5.5, 6, 7.5, 8, 9.5, 10, 11.5, 12, 13.5, 14, 15.5, 16, 17.5, 18, 19.5, 20, 21.5, 22, 23.5, 24, 25.5, 26, 27.5, 28, 29.5, 30, 31.5, 32, 33.5, 34, 35.5, 36, 37.5, 38, 39.5, 40, 41.5, 42, 43.5, 44, 45.5, 46, 47.5, 48, 49.5, 50, 51.5, 52, 53.5, 54, 55.5, 56, 57.5, 58, 59.5, 60, 61.5, 62, 63.5, 64, 65.5, 66, 67.5, 68, 69.5].UTF8String);
+        NSMutableString *h = [NSMutableString string];
+        [h appendFormat:@"%d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f %d %.1f",
+                        0, 1.5, 2, 3.5, 4, 5.5, 6, 7.5, 8, 9.5, 10, 11.5, 12, 13.5, 14, 15.5, 16, 17.5, 18, 19.5, 20, 21.5, 22, 23.5, 24, 25.5, 26, 27.5, 28, 29.5, 30, 31.5, 32, 33.5, 34, 35.5, 36, 37.5, 38, 39.5, 40, 41.5, 42, 43.5, 44, 45.5, 46, 47.5, 48, 49.5, 50, 51.5, 52, 53.5, 54, 55.5, 56, 57.5, 58, 59.5, 60, 61.5, 62, 63.5, 64, 65.5, 66, 67.5, 68, 69.5];
+        printf("hugeappend: %s\n", h.UTF8String);
+        printf("ldouble: %s\n", [NSString stringWithFormat:@"%Lf %La", (long double)1.25, (long double)0.5].UTF8String);
+        printf("localized: %s\n", [NSString localizedStringWithFormat:@"%d|%@|%.2f|%ld", 42, @"o", 3.25, 99L].UTF8String);
+        NSMutableString *m = [NSMutableString stringWithString:@"m:"];
+        [m appendFormat:@"%d,%@,%.1f,%s", 5, @"x", 0.5, "y"];
+        [m appendFormat:dyn, -7, @"obj", 2.5, 1LL << 40, "cstr", 'q', 4000000000u, 1e-3];
+        printf("append: %s\n", m.UTF8String);
+        printf("appending: %s\n", [@"base" stringByAppendingFormat:@"+%d+%@+%.3f", 9, @"z", 1.125].UTF8String);
+        @try {
+            [[NSAssertionHandler currentHandler] handleFailureInMethod:@selector(description) object:@"recv" file:@"f.m"
+                                                            lineNumber:12 description:@"method %d %@ %.2f", 3, @"why", 0.75];
+        } @catch (NSException *e) { printf("assertm: %s\n", e.reason.UTF8String); }
+        @try {
+            [[NSAssertionHandler currentHandler] handleFailureInFunction:@"fn" file:@"g.m" lineNumber:34
+                                                             description:@"function %s %ld %.1f", "c", 77L, 2.5];
+        } @catch (NSException *e) { printf("assertf: %s\n", e.reason.UTF8String); }
     } else {
         fprintf(stderr, "objcva: unknown section %s\n", s);
         return 2;

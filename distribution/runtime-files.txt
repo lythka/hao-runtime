@@ -18,6 +18,7 @@ include/hao/async_contract.h
 include/hao/bridge.h
 include/hao/code.h
 include/hao/cpu.h
+include/hao/gen_stamp.h
 include/hao/gmap.h
 include/hao/identity.h
 include/hao/macho.h

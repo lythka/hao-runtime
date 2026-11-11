@@ -571,7 +571,7 @@ static uint16_t arm64_code_slots(const hsig *s);
 static hsig *parse_sig(const char *enc)
 {
     hsig *s = calloc(1, sizeof *s + MAXARGS * sizeof(htype));
-    if (!s) { fprintf(stderr, "hao: signature cache: out of memory\n"); abort(); }
+    if (!s) hao_oom("signature cache");
     hinfo h[2];
     long total, off, prev_off = -1;
     bool offsets = true;
@@ -601,7 +601,7 @@ static hsig *parse_sig(const char *enc)
     if (offsets && s->nargs && total >= prev_off) fit_encoded_size(&s->args[s->nargs - 1], &h[(s->nargs - 1) & 1], total - prev_off);
     s->ambiguous = s->ret.amb_ret;
     if (s->ret.size_max > MAXSIZE) s->unmarshalable = true;
-    if (s->unmarshalable && hao_verbose) fprintf(stderr, "hao: %s: malformed or too large; not marshalled\n", enc);
+    if (s->unmarshalable) HAO_LOG(1, "%s: malformed or too large; not marshalled\n", enc);
     for (int k = 0; k < s->nargs; k++) {
         s->ambiguous |= s->args[k].amb_arg;
         if (s->args[k].size_max > MAXSIZE) s->unmarshalable = true;
@@ -611,8 +611,8 @@ static hsig *parse_sig(const char *enc)
     s->fnret = s->ret.kind == 'i' && s->ret.code && !s->ret.block;
     hsig *fit = realloc(s, sizeof *s + (size_t)s->nargs * sizeof(htype));   /* kept for the process: no slack */
     if (fit) s = fit;
-    if (s->ambiguous && !s->unmarshalable && hao_verbose)
-        fprintf(stderr, "hao: %s: the layout is not fully determined by the encoding (bitfield types, packing); "
+    if (s->ambiguous && !s->unmarshalable)
+        HAO_LOG(1, "%s: the layout is not fully determined by the encoding (bitfield types, packing); "
                 "assuming unsigned int bitfields, natural alignment\n", enc);
     return s;
 }
@@ -653,7 +653,7 @@ hsig *hao_sig(const char *enc)
     if (!n) {
         n = malloc(sizeof *n);
         char *copy = strdup(enc);
-        if (!n || !copy) { fprintf(stderr, "hao: signature cache: out of memory\n"); abort(); }
+        if (!n || !copy) hao_oom("signature cache");
         n->enc = copy;
         n->sig = parse_sig(enc);
         n->next = __atomic_load_n(&sigcache[h], __ATOMIC_RELAXED);
@@ -849,7 +849,7 @@ uint64_t hao_abi_refused;
 static void sig_refused(const char *enc, const char *why)
 {
     __atomic_fetch_add(&hao_abi_refused, 1, __ATOMIC_RELAXED);
-    if (hao_verbose) fprintf(stderr, "hao: signature %s not marshalled: %s\n", enc, why);
+    HAO_LOG(1, "signature %s not marshalled: %s\n", enc, why);
 }
 
 /* Guest functions and blocks among the code slots of an argument (htype.code) bound for native code
@@ -1180,7 +1180,7 @@ void hao_callback_with_sig(hao_cb_frame *f, void *sigp)
     for (int k = 0; k < s->nargs; k++) {
         const htype *a = &s->args[k];
         if (!a->ld) continue;
-        if (ldo + a->size_max > LDBUF) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "long double aggregates too large for a callback\n"); abort(); }
+        if (ldo + a->size_max > LDBUF) { HAO_LOG(0, "long double aggregates too large for a callback\n"); abort(); }
         memset(ldbuf + ldo, 0, (size_t)a->size_max);
         ld_to_guest(a, vals[k], ldbuf + ldo);
         vals[k] = ldbuf + ldo;
@@ -1191,7 +1191,7 @@ void hao_callback_with_sig(hao_cb_frame *f, void *sigp)
     const htype *r = &s->ret;
     uint8_t *gret = ret;
     if (r->ld && arm64_indirect_ret(r)) {
-        if (ldo + r->size_max > LDBUF) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "long double result too large for a callback\n"); abort(); }
+        if (ldo + r->size_max > LDBUF) { HAO_LOG(0, "long double result too large for a callback\n"); abort(); }
         gret = ldbuf + ldo;
         memset(gret, 0, (size_t)r->size_max);
     }
@@ -1260,12 +1260,11 @@ static uint64_t guest_entry_for_sig(uint64_t guest, const char *enc, bool known_
          * old generic behavior instead of installing a target-wide hint. */
         if (precise_void) return hao_thunk_for(guest);
         bool noted = note_guest_sig(guest, s);
-        if (hao_verbose > 1)
-            fprintf(stderr, "hao: no sig thunk for guest %#llx sig %s (%s)\n", (unsigned long long)guest, enc,
+        HAO_LOG(2, "no sig thunk for guest %#llx sig %s (%s)\n", (unsigned long long)guest, enc,
                     noted ? "signature noted for the callback path" : "signature table full");
         return hao_thunk_for(guest);
     }
-    if (hao_verbose > 1) fprintf(stderr, "hao: sig thunk %#llx for guest %#llx sig %s\n", (unsigned long long)code, (unsigned long long)guest, enc);
+    HAO_LOG(2, "sig thunk %#llx for guest %#llx sig %s\n", (unsigned long long)code, (unsigned long long)guest, enc);
     return code;
 }
 

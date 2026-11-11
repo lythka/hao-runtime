@@ -30,6 +30,8 @@ uint64_t hao_thunk_for(uint64_t g) { abort(); }
 uint64_t hao_sig_thunk(uint64_t g, void *s) { abort(); }
 uint64_t hao_sig_thunk_target(uint64_t a) { return 0; }
 void hao_diag_prefix(FILE *f) { (void)f; }
+void hao_log_line(const char *fmt, ...) { va_list ap; va_start(ap, fmt); vfprintf(stderr, fmt, ap); va_end(ap); }
+void hao_oom(const char *what) { fprintf(stderr, "%s: out of memory\n", what); abort(); }
 FILE *hao_diag_file;
 void hao_crit_enter(void) {}
 void hao_crit_leave(void) {}

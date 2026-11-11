@@ -13,11 +13,12 @@
  * the guest's.
  *
  * Which argument is a format, and of which family, comes from the SDK's
- * format attributes (tools/gen_fmtattr.py -> fmtattr_gen.inc). The format
+ * format attributes (src/fmtattr_gen.inc, generated outside this repository). The format
  * typing here (hao_fmt_types) also types the slots of variadics that have
  * no va_list variant, so their floating arguments go to XMM registers.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/macho.h"
 #include "hao/vafmt.h"
 #include <dlfcn.h>
