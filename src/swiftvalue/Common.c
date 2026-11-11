@@ -122,6 +122,21 @@ static int unknown_object_value(const void *m, const void *value)
     return ((single_tag_fn *)v->fn[6])(value,1,m) == 0;
 }
 
+/* The case count of a one-byte enum with no payload case (its own leaf rule
+ * in common_leaf_value), else 0. */
+static unsigned payload_free_enum_cases(const void *m)
+{
+    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    if (!m || !kind || kind(m) != 0x201) return 0;
+    const char *desc = ((const void *const *)m)[1];
+    if (!desc || (u32(desc) & 31) != 18 || (u32(desc + 20) & 0xffffff)) return 0;
+    unsigned cases = u32(desc + 24);
+    const witnesses *v = vwt(m);
+    if (!cases || cases > 256 || v->size != 1 || v->stride != 1 || (v->flags & 0x100ff) ||
+        v->extra != 256 - cases) return 0;
+    return cases;
+}
+
 int common_objc_reference_value(const void *m, const void *value)
 {
     if (!common_objc_reference_type(m)) return 0;
@@ -140,19 +155,59 @@ int common_objc_reference_value(const void *m, const void *value)
  * object pointer. Admit only nil and never inspect the inactive witness word.
  * Error, extended/composed/superclass existentials and nested Optionals need
  * independent contracts. */
-static bool class_existential_nil(const void *m, const void *value)
+static bool one_witness_class_existential(const void *m)
 {
     kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    if (!kind || kind(m) != 0x303) return false;
+    if (!m || !kind || kind(m) != 0x303) return false;
     const witnesses *v = vwt(m);
     if (v->size != 16 || v->stride != 16 || v->flags != 0x10007 ||
         v->extra != 0x7fffffff || u32((const char *)m + 8) != 1 ||
-        u32((const char *)m + 12) != 1) return false;
+        u32((const char *)m + 12) != 1 || !v->fn[6]) return false;
     const char *protocol = ((const char *const *)m)[2];
     if (!protocol || ((uintptr_t)protocol & 1)) return false; /* Swift, not ObjC */
     uint32_t flags = u32(protocol);
-    if ((flags & 31) != 3 || (flags & (1u << 16))) return false;
-    return u64(value) == 0;
+    return (flags & 31) == 3 && !(flags & (1u << 16));
+}
+
+/* A struct whose only field, at offset 0 and of the struct's size, is such an
+ * existential (Foundation.URL: `_url: any _URLProtocol`, measured identical in
+ * native arm64 and x86_64 programs: struct size 16, xi 0x7fffffff; its
+ * Optional flags 0x2210007, nil = a zero object word). A struct is never weak
+ * storage, so its nonzero object word is a strong reference. */
+static const void *existential_wrapper(const void *m)
+{
+    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    count_fn *count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    if (!m || !kind || !count || !offset || !field || kind(m) != 0x200 || count(m) != 1 || offset(m,0) != 0) return NULL;
+    field_info info = {0};
+    const void *child = field(m,0,&info);
+    if (info.free_name) info.free_name(info.name);
+    if (!child || !info.strong || !one_witness_class_existential(child)) return NULL;
+    const witnesses *v = vwt(m);
+    return v->size == 16 && v->stride == 16 && (v->flags & ~0x2000000u) == 0x10007 && v->extra == 0x7fffffff ? child : NULL;
+}
+
+/* The first Optional of either consumes XI0, a null object word, on both
+ * Darwin64 targets; nil never inspects the inactive witness word. A live
+ * value is admitted only in the struct wrapper (a bare existential field may
+ * be weak), only in the runtime, and only when its witness table is native
+ * (in no guest image): a guest conformance's table is arm64 code. Error,
+ * extended/composed/superclass existentials and nested Optionals need
+ * independent contracts. */
+static bool class_existential_value(const void *m, const void *value)
+{
+    const void *wrapped = existential_wrapper(m);
+    if (!wrapped && !one_witness_class_existential(m)) return false;
+    if (!u64(value)) return true;
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    uint64_t table = u64((const char *)value + 8);
+    if (!wrapped || !table || hao_image_for_addr(table)) return false;
+    return ((single_tag_fn *)vwt(wrapped)->fn[6])(value,1,wrapped) == 0;
+#else
+    return false;
+#endif
 }
 
 static bool no_generic_context(const char *desc)
@@ -630,8 +685,8 @@ int common_leaf_value(const void *type, const void *value)
     if (k == 0x201 && guest_c_integer_enum(type)) return 1;
     if (k == 0x202 && m[1] == dlsym(RTLD_DEFAULT,"$sSqMn")) {
         const witnesses *payload = vwt(m[2]);
-        if (v->size == 16 && v->stride == 16 && v->flags == 0x210007 &&
-            v->extra == 0x7ffffffe && class_existential_nil(m[2],value)) return 1;
+        if (v->size == 16 && v->stride == 16 && (v->flags & ~0x2000000u) == 0x210007 &&
+            v->extra == 0x7ffffffe && class_existential_value(m[2],value)) return 1;
         if (scalar_shape(m[2],0) && v->size == payload->size + 1 &&
             v->stride == payload->size * 2 && !v->extra && !(v->flags & 0x10000) &&
             (v->flags & 255) == (payload->flags & 255))
@@ -645,6 +700,13 @@ int common_leaf_value(const void *type, const void *value)
             v->extra == 0x7ffffffe && common_objc_reference_value(m[2],value)) return 1;
         if (v->size == 8 && v->stride == 8 && v->flags == 0x210007 &&
             v->extra == 0x7ffffffe && anyobject_type(m[2]) && unknown_object_value(m[2],value)) return 1;
+        /* First Optional of a no-payload enum of n <= 255 cases: one byte, a
+         * case is 0..n-1 and nil is n, measured identical in native arm64 and
+         * x86_64 programs (no pointer extra inhabitants are involved). */
+        unsigned cases = payload_free_enum_cases(m[2]);
+        if (cases && cases < 256 && v->size == 1 && v->stride == 1 && !(v->flags & 0x100ff) &&
+            v->extra == payload->extra - 1)
+            return ((const unsigned char *)value)[0] <= cases;
         return common_byte_optional_case(type,value) == 1;
     }
     if (k != 0x201) return 0;
