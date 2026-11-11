@@ -1149,6 +1149,10 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     int nseg = sl->nsegs;
     /* library validation (libval.c): on the bytes the image is then built from */
     if (!map_only && hao_libval_image(img, sl, why, sizeof why) != 0) ERR("%s: %s", path, why);
+    if (sl->sig.cd) {
+        img->cdhash_type = sl->sig.hash_type;
+        memcpy(img->cdhash, sl->sig.cdhash, sizeof img->cdhash);
+    }
 #define FOR_EACH_CMD(p) for (const uint8_t *p = cmds; p; p = NULL) \
         for (uint32_t _k = 0; _k < sl->ncmds; _k++, p += ((const struct load_command *)p)->cmdsize)
 

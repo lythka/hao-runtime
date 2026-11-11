@@ -92,6 +92,9 @@ struct hao_image {
     uint8_t uuid[16];
     bool has_uuid;
     char libval_route[96];      /* libval.c: how its code signature was decided ("" not checked) */
+    /* the CodeDirectory its pages were verified with (libval.c hao_slice_verify), on the bytes it was built
+     * from: its hash type (0: the image was not verified) and cdhash */
+    uint8_t cdhash_type, cdhash[20];
     uint64_t func_starts_off;   /* LC_FUNCTION_STARTS (file offset in slice) */
     uint32_t func_starts_size;
     uint64_t *fstarts;          /* sorted absolute function start addresses */
