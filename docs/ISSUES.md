@@ -69,6 +69,114 @@ Remaining limitations:
 - Each translated single-precision arithmetic instruction is about 250-350
   bytes of x86 code: `vbench`'s translations grew from 13 to 33 KB.
 
+## Scalar FP conversions, max/min and round-to-integral cost
+
+The translator emitted SSE code for scalar FADD/FSUB/FMUL/FDIV/FSQRT, FCVT
+between single and double, FCMP, FCSEL and SCVTF. Every other scalar or
+packed floating-point instruction ran through the interpreter helper, and
+there the software model did all of the work: FP-to-integer conversions and
+round-to-integral unpacked the operand to a 128-bit significand and rounded
+it; integer-to-FP conversions went through the general `round_pack_mode`
+even when the integer was exactly representable; max/min unpacked both
+operands twice and repacked the winner; a compare with zero unpacked both
+sides; and `nans()`, which every add, subtract, multiply, divide, max/min and
+fused operation calls before anything else, classified each operand up to
+four times (two ordered searches, signalling then quiet, each through the
+format table) although almost no operation has a NaN operand.
+
+What changed, in two layers.
+
+Translated code (`src/jit.c`, single and double only; JIT and AOT emit the
+same bytes). Each form is taken inline only for results the SSE instruction
+can vouch for; anything else re-executes the instruction in the helper with
+the operands untouched, and a declined attempt leaves in MXCSR only flags the
+helper raises again:
+- `FCVTZS`/`FCVTZU Wd|Xd, Sn|Dn`: `CVTTSS2SI`/`CVTTSD2SI`. Signed: a result
+  equal to the minimum integer (the x86 integer indefinite) goes to the
+  helper, which saturates and raises IOC where x86 raised IE. Unsigned: the
+  operand's bits are admitted first (`0 <= x < 2^32` or `2^63`, one unsigned
+  compare that also rejects negatives, infinities and NaNs), because a
+  negative fraction or a double above 32 bits would raise PE where A64 raises
+  only IOC. A zero result from a denormal operand goes to the helper (IDC
+  instead of IXC under FZ).
+- `UCVTF Sd|Dd, Wn|Xn`: `CVTSI2SS`/`CVTSI2SD` of the zero-extended value; an
+  `Xn` with bit 63 set goes to the helper.
+- `FMOV Sd|Dd, #imm`: a constant store.
+- `FMAX`/`FMIN`/`FMAXNM`/`FMINNM`: `MAXSS`/`MINSS` for unequal ordered
+  operands, AND (max) or OR (min) of the operands when they compare equal
+  (the zero-sign rule). A denormal operand (tested on the bits) or a NaN
+  (`UCOMIS` unordered) goes to the helper.
+- Packed single (`.4S`, `.2S`): `SCVTF` is `CVTDQ2PS`; `UCVTF` the same when
+  no lane has bit 31 set; `FCVTZS` is `CVTTPS2DQ` unless a lane is denormal
+  or answers the integer indefinite; `FCMGT #0.0` is the signed integer
+  compare of the bits with zero unless a lane is a NaN or denormal.
+
+Interpreter and helper (`src/a64_fp.c`, single and double; half precision
+keeps the reference path):
+- `nans()` first asks, with one integer compare per operand, whether any
+  operand is a NaN.
+- `fp_to_int` (every FCVT*S/U rounding mode and the fixed-point forms) and
+  `fp_rint` (every FRINT*) work on the bits of a normal operand with 64-bit
+  shifts; zero, denormal, infinite, NaN and out-of-range operands keep the
+  reference path, which owns IOC, IDC and saturation.
+- `fp_from_int` uses the host conversion for an integer that fits `int64`
+  with no fraction bits: one rounding in the MXCSR mode, PE for IXC.
+- `fp_max`/`fp_min` and the NM forms return the selected operand for zeros,
+  normals and infinities; `cmp3` compares sign-magnitude keys unless FZ could
+  flush an operand.
+- `fp_raise` writes MXCSR only when a flag is new.
+- `FJCVTZS` judged its range before truncating: `-2^31 - 0.5` reported IOC,
+  where A64 reports IXC (the truncated value is in range). It now tests the
+  truncated integer.
+
+Measured with `tests/guest/fpscalar -b NAME 300000` (a loop of eight copies
+of the instruction, ns per instruction, best of three). The development host
+is Apple silicon and runs hao under Rosetta, so these are ratios, not
+Intel timings; `STMXCSR`/`LDMXCSR` in particular are much slower there than on
+an Intel CPU.
+
+| Instruction | Before, JIT | After, JIT | Before, AOT | After, AOT |
+|---|---:|---:|---:|---:|
+| `fcvtzs w, s` | 29.7 | 0.73 | 30.9 | 0.63 |
+| `fcvtzu x, d` | 28.9 | 0.79 | 30.4 | 0.63 |
+| `ucvtf s, w` | 25.3 | 0.32 | 26.3 | 0.23 |
+| `fmov s, #1.0` | 13.7 | 0.38 | 13.8 | 0.29 |
+| `fmaxnm s, s, s` | 32.6 | 3.49 | 34.8 | 3.45 |
+| `scvtf v.4s` | 89.9 | 3.15 | 92.9 | 3.12 |
+| `ucvtf v.4s` | 92.4 | 2.54 | 94.2 | 2.67 |
+| `fcvtzs v.4s` | 31.2 | 3.80 | 32.3 | 3.42 |
+| `fcmgt v.4s, #0.0` | 43.4 | 3.02 | 46.3 | 2.77 |
+| `frintn v.4s` (helper) | 68.5 | 27.6 | 72.3 | 28.4 |
+| `frintx s` (helper) | 26.2 | 15.4 | 28.8 | 15.6 |
+| `ucvtf s, s` (helper) | 43.0 | 19.0 | 44.6 | 20.1 |
+| `fcvtns w, s` (helper) | 31.1 | 23.0 | 31.8 | 23.3 |
+| `fmaxnm v.2d` (helper) | 62.0 | 26.4 | 61.8 | 25.3 |
+| `fmadd s` (helper) | 44.3 | 36.9 | 43.3 | 37.9 |
+| `fdiv v.4s` (helper) | 88.3 | 85.1 | 84.2 | 81.1 |
+
+`tests/guest/fpscalar.sh` runs 147 instruction forms (the ones above, every
+FCVT* rounding mode, fixed point, every FRINT*, compares, max/min, pairwise
+and NaN-selection cases, half-precision controls) over corner values, all
+pairs of them for two-operand forms, and random values, under each rounding
+mode with FZ and DN off and on and FPSR clear or full beforehand. Results,
+FPSR (IOC, DZC, OFC, UFC, IXC, IDC, QC) and NZCV equal native arm64 under JIT,
+`--interp`, helper-only JIT and AOT.
+
+Remaining limitations:
+- `FRINT*`, the non-truncating `FCVT*` modes, fixed-point conversions,
+  `FCVTZU` and `UCVTF` with large lanes, the double packed conversions, the
+  other compares with zero and packed max/min still go through the helper;
+  its dispatch is then most of their cost.
+- Inline SSE arithmetic that predates this change (FADD, FSUB, FMUL, FDIV,
+  FSQRT, FCVT single<->double, FCMP) differs from A64 in FPSR under FZ: a
+  flushed denormal operand does not raise IDC, and a result flushed to zero
+  raises IXC together with UFC where A64 raises UFC alone. Values agree. The
+  interpreter (`--interp`) is exact. `tests/guest/fpscalar.c` runs those
+  instructions with FZ clear.
+- FPCR.AH, FIZ and NEP are not modelled; the test leaves them clear.
+- The packed tests for denormal lanes also send a lane equal to the minimum
+  normal number to the helper (exact, slower).
+
 ## Guest calls of private-library functions that take a `va_list`
 
 A guest `va_list` is a pointer to 8-byte stack slots; an x86_64 `va_list` is

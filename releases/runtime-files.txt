@@ -418,6 +418,8 @@ tests/guest/fork.c
 tests/guest/fork.sh
 tests/guest/fork_dyld.c
 tests/guest/forkgen.h
+tests/guest/fpscalar.c
+tests/guest/fpscalar.sh
 tests/guest/fullcache.c
 tests/guest/fullcache.sh
 tests/guest/generic-objc-destruct.swift

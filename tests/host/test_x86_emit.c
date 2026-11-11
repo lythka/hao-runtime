@@ -70,7 +70,7 @@ static void fill(int n)
 
 /* SSE forms jit.c emits (and the generic table they come from). kind: 0 xmm,xmm;
  * 1 xmm,r (gpr in r/m); 2 r,xmm (gpr in ModRM.reg... i.e. movd/movq r/m, xmm);
- * 3 r32,xmm with the gpr in ModRM.reg (pmovmskb). */
+ * 3 r,xmm with the gpr in ModRM.reg (cvttss2si, movmskps, pmovmskb). */
 static const char *xmmn(int k) { static char b[4][8]; static int i; i = (i + 1) & 3; snprintf(b[i], 8, "xmm%d", k); return b[i]; }
 static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } sse[] = {
     {0xF2, 0x59, 0, 0, "mulsd"}, {0xF2, 0x5E, 0, 0, "divsd"}, {0xF2, 0x58, 0, 0, "addsd"}, {0xF2, 0x5C, 0, 0, "subsd"},
@@ -92,7 +92,11 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     /* vector floating point, widening, narrowing */
     {0, 0x58, 0, 0, "addps"}, {0, 0x5C, 0, 0, "subps"}, {0, 0x59, 0, 0, "mulps"}, {0, 0x5F, 0, 0, "maxps"},
     {0, 0x5D, 0, 0, "minps"}, {0x66, 0x61, 0, 0, "punpcklwd"}, {0x66, 0x67, 0, 0, "packuswb"}, {0x66, 0x6B, 0, 0, "packssdw"},
-    {0x66, 0xD7, 0, 3, "pmovmskb"},
+    /* scalar max/min, FP<->integer conversions, packed single conversions */
+    {0xF3, 0x5F, 0, 0, "maxss"}, {0xF2, 0x5F, 0, 0, "maxsd"}, {0xF3, 0x5D, 0, 0, "minss"}, {0xF2, 0x5D, 0, 0, "minsd"},
+    {0, 0x54, 0, 0, "andps"}, {0, 0x56, 0, 0, "orps"}, {0, 0x5B, 0, 0, "cvtdq2ps"}, {0xF3, 0x5B, 0, 0, "cvttps2dq"},
+    {0xF3, 0x2C, 0, 3, "cvttss2si"}, {0xF3, 0x2C, 1, 3, "cvttss2si"}, {0xF2, 0x2C, 0, 3, "cvttsd2si"}, {0xF2, 0x2C, 1, 3, "cvttsd2si"},
+    {0, 0x50, 0, 3, "movmskps"}, {0x66, 0xD7, 0, 3, "pmovmskb"},
 };
 
 static xmem mems[256];
