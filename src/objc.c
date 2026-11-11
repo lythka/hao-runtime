@@ -1035,6 +1035,7 @@ typedef struct { id receiver; Class super_class; } objc_super_t;
  * (tests/guest/objcva.sh, section nsformat).
  */
 enum { VA_ARRAY = 1, VA_DICT, VA_FORMAT_ARGS, VA_FORMAT_LAST };
+#define VA_LIST_MAX ((size_t)1 << 24)   /* objects of a nil-terminated list read at most (128 MB of guest stack) */
 /* The SDK's declaring class and method kind are part of each contract.
  * A selector is shared globally: CalendarFoundation's fixed-argument NSDate
  * instance method localizedStringWithFormat: is not NSString's class API.
@@ -1189,7 +1190,13 @@ static bool msgsend_variadic(hao_cpu *c, id recv, Class cls, SEL sel, IMP imp)
             if (kind == VA_ARRAY ? !e : (!(n & 1) && !e)) break;
             if (n == cap) { cap *= 2; v = hao_alloc_check(realloc(v, cap * sizeof *v), "ObjC variadic collection"); }
             v[n++] = e;
-            if (n > (1u << 24)) break;
+            if (n == VA_LIST_MAX) {   /* no nil: the guest's list is unterminated; it is cut here, and said once */
+                static int said;
+                if (!__atomic_exchange_n(&said, 1, __ATOMIC_RELAXED))
+                    HAO_LOG(0, "objc: %c[%s %s]: no nil among the first %zu variadic objects; the list is cut there\n",
+                            class_isMetaClass(cls) ? '+' : '-', class_getName(cls), name, n);
+                break;
+            }
         }
         SEL vs = sel_registerName(vsel);
         IMP vi = class_getMethodImplementation(cls, vs);
