@@ -440,8 +440,12 @@ static uint64_t trace_word(uint64_t a)
  * done: a handler that interrupts a store misses on every probe and skips
  * its own stores, so no entry is ever written by two stores at once; a
  * probe that a handler's completed store interrupted sees the count change
- * and misses. Either way the slow path runs instead. Nothing here allocates
- * or locks. The fork child invalidates every table (fork_child): a plan
+ * and misses. Either way the slow path runs instead. A handler that leaves
+ * by a nonlocal jump (a guest siglongjmp, or a pc it moved) re-enters some
+ * segment's hao_run and abandons every frame above it there: a store running
+ * at that segment's depth or deeper never finishes, so the re-entry clears
+ * its busy mark (a jump into a handler above the store leaves the store, and
+ * its mark, alone). Nothing here allocates or locks. The fork child invalidates every table (fork_child): a plan
  * published just before the fork may not have bumped the generation yet. */
 
 static inline unsigned ncache_slot(uint64_t pc)
@@ -468,6 +472,8 @@ static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target
 {
     if (!pc || gen != __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE)) return;
     if (__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED)) return;   /* a handler on top of an unfinished store */
+    t->ncache_busy_depth = t->depth;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
     __atomic_store_n(&t->ncache_busy, 1, __ATOMIC_RELAXED);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
@@ -648,7 +654,11 @@ void hao_run(hao_thread *t, const hao_cpu *outer)
     /* Re-entry point for a guest longjmp from an inner segment
      * (hao_longjmp_segment) and for a guest signal handler that moved pc
      * while this segment ran guest code (signals.c); cpu.pc is set. */
-    if (_setjmp(seg.jb)) t->swift_values = seg.swift_values_at_entry;
+    if (_setjmp(seg.jb)) {
+        t->swift_values = seg.swift_values_at_entry;
+        /* frames above this hao_run are gone, among them an interrupted cache store at this depth or deeper */
+        if (t->ncache_busy && t->ncache_busy_depth >= seg.depth) __atomic_store_n(&t->ncache_busy, 0, __ATOMIC_RELAXED);
+    }
     hao_eh_guard(run_loop, &seg, HAO_GUARD_ENTRY);
     t->seg = seg.prev;
     t->depth = seg.depth - 1;

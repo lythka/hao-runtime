@@ -101,6 +101,7 @@ typedef struct hao_thread {
     /* ncache_busy: a store is in progress on this thread (a signal handler on top of it neither probes nor
      * stores); ncache_wseq: completed stores, so a probe a handler's store interrupted sees the change */
     uint32_t ncache_busy, ncache_wseq;
+    int ncache_busy_depth;     /* the segment depth (depth) the busy store runs at */
 } hao_thread;
 
 /* Where guest execution stands, for a signal that interrupts it. The
