@@ -14,3 +14,9 @@ int collect_empty_patches(const void *type, const void *value, empty_patch *out,
 /* On refusal, reports the deepest unresolved field's metadata. */
 int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
                                  unsigned capacity, const void **unresolved);
+/* The same, also through existential payloads (their metadata or object word),
+ * for a value a guest hands to a native value witness and keeps: it is never
+ * published to native code by this, so the publication contracts for
+ * existential values (weak storage, guest witness tables) do not apply. */
+int discover_witness_plan(const void *type, empty_plan *out);
+int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);

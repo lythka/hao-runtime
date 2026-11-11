@@ -3,6 +3,7 @@
  *   hao [-v] [--interp] PROGRAM [ARGS...]
  */
 #include "hao/runtime.h"
+#include "hao/swiftvalue.h"
 #include "hao/identity.h"
 #include "hao/native_bundle.h"
 #include "hao/bridge.h"
@@ -87,6 +88,7 @@ void hao_guest_image_init(hao_image *img)
     extern void hao_swift_register_image(hao_image *);
     hao_swiftmeta_image(img);   /* relative pointers to guest functions -> island thunks, before the runtime reads them */
     hao_swift_register_image(img);
+    hao_swift_witness_setup();   /* the Optional witnesses guest calls are recognized by (swiftvalue.c) */
     hao_objc_register_image(img);
     hao_blocks_register_image(img);
     hao_fnslots_image(img);

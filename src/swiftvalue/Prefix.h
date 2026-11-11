@@ -6,6 +6,8 @@
 #define initialize_empty hao_sv_initialize_empty
 #define collect_empty_patches hao_sv_collect_empty_patches
 #define collect_empty_patches_detail hao_sv_collect_empty_patches_detail
+#define discover_witness_plan hao_sv_discover_witness_plan
+#define collect_witness_patches hao_sv_collect_witness_patches
 #define discover_enum_case hao_sv_discover_enum_case
 #define common_leaf_value hao_sv_common_leaf_value
 #define common_byte_optional_case hao_sv_common_byte_optional_case

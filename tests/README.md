@@ -93,6 +93,7 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 | guest/nojit | PASS | PASS | 5 | |
 | guest/objcimp | PASS | PASS | 4 | |
 | guest/objcva | PASS | PASS | 3 | |
+| guest/optwitness | FAIL | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals; see below |
 | guest/oslog | FAIL | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below |
 | guest/signals | PASS | PASS | 36 | |
 | guest/sret-forward | PASS | PASS | 3 | |

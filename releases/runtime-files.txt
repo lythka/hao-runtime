@@ -512,6 +512,8 @@ tests/guest/objcvascopehelper.m
 tests/guest/observation-closures.swift
 tests/guest/openfds.c
 tests/guest/optsnap.c
+tests/guest/optwitness.sh
+tests/guest/optwitness.swift
 tests/guest/oslog.c
 tests/guest/oslog.sh
 tests/guest/osloghelper.c
