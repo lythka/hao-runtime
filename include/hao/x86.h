@@ -4,7 +4,7 @@
  * tools/check_x86.sh cross-checks every encoder declared here, in every form
  * jit.c emits (register, base+index, RIP-relative and absolute addressing,
  * SSE prefix/REX combinations, short and long branches), against the system
- * assembler: tests/test_x86_emit.c generates the instructions, the script
+ * assembler: tests/host/test_x86_emit.c generates the instructions, the script
  * compares the disassembly and the encoded lengths.
  *
  * Errors never produce a different instruction. A full buffer sets

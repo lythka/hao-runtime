@@ -100,6 +100,8 @@ selected runtime and package the complete compatibility input with it.
 
 ## Allowlist
 
-`distribution/runtime-files.txt` lists every file this repository may contain.
+`releases/runtime-files.txt` lists every file this repository may contain.
 `python3.14 tools/check_distribution.py` rejects any other tracked path;
-`--history` checks every commit reachable from the selected ref.
+`--history` checks every commit reachable from the selected ref against the
+allowlist that commit carried (`distribution/runtime-files.txt` before the
+file moved to `releases/`).
