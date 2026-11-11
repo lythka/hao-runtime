@@ -11,8 +11,12 @@
  *                  IXC/UFC/OFC as the architecture sets them
  * Single/double add, sub, mul, div and sqrt take the host SSE result when it
  * is a normal number (the host rounds in the same mode, as the JIT's SSE
- * code does); everything else (NaNs, infinities, zeros, denormals, FMA,
- * half precision, conversions, round-to-integral) is computed exactly here.
+ * code does). Single/double conversions to and from integers, round to
+ * integral, max/min and comparisons of ordinary operands (normal numbers and
+ * zeros; where it says so, infinities) are done on the bits, or by the host
+ * integer conversion, when no exception other than inexact can arise. The
+ * rest (NaNs, denormals, saturating conversions, FMA, half precision, FCVT
+ * between formats) is computed exactly here.
  * Half precision ignores FZ (FZ16 is not modelled) and AHP.
  */
 #include "a64_fp.h"
@@ -40,7 +44,11 @@ void fp_raise(fpctx *x, unsigned f)
 {
     if (f & FPX_IDC) x->c->fpsr |= FPX_IDC;
     f &= 0x1f;
-    if (f) mxcsr_set(mxcsr_get() | (f & 1) | ((f & 0x1e) << 1));
+    if (!f) return;
+    /* The flags are cumulative: writing MXCSR only when one is new keeps the
+     * common already-inexact case to a read. */
+    uint32_t m = mxcsr_get(), want = m | (f & 1) | ((f & 0x1e) << 1);
+    if (want != m) mxcsr_set(want);
 }
 
 /* ------------------------------------------------------------ formats */
@@ -57,12 +65,30 @@ static fmt F(int es)
 static inline uint64_t signbit_of(int es) { return 1ull << (es * 8 - 1); }
 static inline uint64_t emask_of(int es) { return es == 8 ? ~0ull : (1ull << (es * 8)) - 1; }
 
-bool fp_isnan(uint64_t v, int es)
+/* Integer classification of a raw value; bits above the format are ignored. */
+static inline uint64_t mag_of(uint64_t v, int es)       /* the value without its sign */
 {
-    fmt f = F(es);
-    uint64_t e = (v >> f.mbits) & ((1ull << f.ebits) - 1), m = v & ((1ull << f.mbits) - 1);
-    return e == (1ull << f.ebits) - 1 && m;
+    return es == 4 ? v & 0x7fffffffu : es == 8 ? v & 0x7fffffffffffffffull : v & 0x7fffu;
 }
+static inline uint64_t inf_mag(int es) { return es == 4 ? 0x7f800000u : es == 8 ? 0x7ff0000000000000ull : 0x7c00u; }
+static inline uint64_t min_normal_mag(int es) { return es == 4 ? 0x00800000u : es == 8 ? 0x0010000000000000ull : 0x0400u; }
+static inline bool isnan_es(uint64_t v, int es) { return mag_of(v, es) > inf_mag(es); }
+/* Zero, normal or infinite: neither a NaN nor a denormal, so FPUnpack takes
+ * the value as it is whatever FZ says and raises nothing. */
+static inline bool ordinary(uint64_t v, int es)
+{
+    uint64_t m = mag_of(v, es);
+    return m <= inf_mag(es) && (m >= min_normal_mag(es) || !m);
+}
+/* Sign-magnitude as a two's complement key: for non-NaN values the keys order
+ * as the values do, and both zeros have key 0. */
+static inline int64_t order_key(uint64_t v, int es)
+{
+    int64_t m = (int64_t)mag_of(v, es);
+    return (v >> (es * 8 - 1)) & 1 ? -m : m;
+}
+
+bool fp_isnan(uint64_t v, int es) { return isnan_es(v, es); }
 static bool is_snan(uint64_t v, int es) { return fp_isnan(v, es) && !((v >> (F(es).mbits - 1)) & 1); }
 static uint64_t quiet(uint64_t v, int es) { return v | 1ull << (F(es).mbits - 1); }
 uint64_t fp_default_nan(int es) { fmt f = F(es); return ((1ull << f.ebits) - 1) << f.mbits | 1ull << (f.mbits - 1); }
@@ -109,6 +135,12 @@ static void nan_input_flags(fpctx *x, int es, int n, const uint64_t *ops)
 }
 static bool nans(fpctx *x, int es, int n, const uint64_t *ops, uint64_t *r)
 {
+    /* Every arithmetic operation asks, and almost none has a NaN operand:
+     * settle that with one comparison per operand before the two ordered
+     * searches (signalling first, then quiet) classify each one again. */
+    bool any = false;
+    for (int k = 0; k < n; k++) any |= isnan_es(ops[k], es);
+    if (!any) return false;
     for (int k = 0; k < n; k++) if (is_snan(ops[k], es)) { nan_input_flags(x, es, n, ops); *r = nan_result(x, es, ops[k]); return true; }
     for (int k = 0; k < n; k++) if (fp_isnan(ops[k], es)) { nan_input_flags(x, es, n, ops); *r = nan_result(x, es, ops[k]); return true; }
     return false;
@@ -579,6 +611,15 @@ static int cmp3(fpctx *x, int es, uint64_t a, uint64_t b);
 /* FPMax/FPMin (and the NM forms, which replace a single quiet NaN) */
 static uint64_t maxmin(fpctx *x, int es, uint64_t a, uint64_t b, bool max, bool nm)
 {
+    /* Zeros, normals and infinities: FPMax/FPMin (and the NM forms, which
+     * differ only for NaNs) return one operand unchanged and raise nothing.
+     * Equal keys are identical values or zeros of either sign, where max
+     * takes +0 (AND) and min -0 (OR). */
+    if (es != 2 && ordinary(a, es) && ordinary(b, es)) {
+        int64_t ka = order_key(a, es), kb = order_key(b, es);
+        if (ka == kb) return (max ? a & b : a | b) & emask_of(es);
+        return ((ka > kb) == max ? a : b) & emask_of(es);
+    }
     if (nm) {
         bool qa = fp_isnan(a, es) && !is_snan(a, es), qb = fp_isnan(b, es) && !is_snan(b, es);
         if (qa && !qb) a = inf_of(es, max);
@@ -690,6 +731,12 @@ uint64_t fp_rsqrte(fpctx *x, int es, uint64_t a)
 
 static int cmp3(fpctx *x, int es, uint64_t a, uint64_t b)  /* -1, 0, 1; NaNs excluded by caller */
 {
+    /* Without NaNs the integer keys order as the values do. A denormal needs
+     * the unpacking path only when FZ flushes it (and raises IDC). */
+    if (es != 2 && (!x->fz || (ordinary(a, es) && ordinary(b, es)))) {
+        int64_t ka = order_key(a, es), kb = order_key(b, es);
+        return ka > kb ? 1 : ka < kb ? -1 : 0;
+    }
     fpu u = unpack(x, es, a), v = unpack(x, es, b);
     if (u.cls == C_ZERO && v.cls == C_ZERO) return 0;
     double du = u.cls == C_INF ? 2 : u.cls == C_ZERO ? 0 : 1, dv = v.cls == C_INF ? 2 : v.cls == C_ZERO ? 0 : 1;
@@ -787,8 +834,97 @@ static u128 round_int(int sign, int e, uint64_t m, int mode, bool *inexact)
     }
     return (u128)q + up;
 }
+/* FPRoundInt of a zero or normal single or double on its bits: clear the
+ * fraction below the units place and step the magnitude by one unit when the
+ * mode rounds away from zero. The carry of that step runs into the exponent
+ * field, which is the encoding of the next power of two. Only FRINTX (exact)
+ * reports an inexact result. Denormals, infinities and NaNs decline. */
+static bool rint_fast(fpctx *x, int es, uint64_t a, int mode, bool exact, uint64_t *r)
+{
+    if (es == 2) return false;
+    fmt f = F(es);
+    a &= emask_of(es);
+    uint64_t mag = mag_of(a, es);
+    if (!mag) { *r = a; return true; }
+    if (mag < min_normal_mag(es) || mag >= inf_mag(es)) return false;
+    int e = (int)(mag >> f.mbits) - f.bias;
+    if (e >= (int)f.mbits) { *r = a; return true; }           /* already integral */
+    bool sign = a != mag, up;
+    if (e < 0) {                                               /* 0 < |a| < 1: +-0 or +-1 */
+        switch (mode) {
+        case FPR_N: up = e == -1 && (mag & ((1ull << f.mbits) - 1)); break;   /* above one half */
+        case FPR_A: up = e == -1; break;
+        case FPR_P: up = !sign; break;
+        case FPR_M: up = sign; break;
+        default: up = false; break;
+        }
+        if (exact) fp_raise(x, FPX_IXC);
+        *r = (a ^ mag) | (up ? (uint64_t)f.bias << f.mbits : 0);
+        return true;
+    }
+    int fb = (int)f.mbits - e;                                 /* fraction bits, 1..mbits */
+    uint64_t unit = 1ull << fb, rb = mag & (unit - 1), half = unit >> 1;
+    if (!rb) { *r = a; return true; }
+    bool odd = (((mag & ((1ull << f.mbits) - 1)) | 1ull << f.mbits) >> fb) & 1;
+    switch (mode) {
+    case FPR_N: up = rb > half || (rb == half && odd); break;
+    case FPR_A: up = rb >= half; break;
+    case FPR_P: up = !sign; break;
+    case FPR_M: up = sign; break;
+    default: up = false; break;
+    }
+    if (exact) fp_raise(x, FPX_IXC);
+    *r = (a ^ mag) | ((mag - rb) + (up ? unit : 0));
+    return true;
+}
+
+/* FPToFixed of a normal single or double whose rounded magnitude fits one
+ * word and the destination: round_int's rounding on 64 bits. Every other
+ * input (zero, denormal, infinity, NaN, out of range) takes the reference
+ * path, which also owns IOC, IDC and saturation. */
+static bool to_int_fast(fpctx *x, int es, uint64_t a, int mode, bool uns, int bits, int fbits, uint64_t *r)
+{
+    if (es == 2) return false;
+    fmt f = F(es);
+    uint64_t mag = mag_of(a, es);
+    if (mag < min_normal_mag(es) || mag >= inf_mag(es)) return false;
+    bool sign = (a >> (es * 8 - 1)) & 1, inexact = false;
+    uint64_t m = (mag & ((1ull << f.mbits) - 1)) | 1ull << f.mbits, n;
+    int e = (int)(mag >> f.mbits) - f.bias - (int)f.mbits + fbits;
+    if (e >= 0) {
+        if (e > 63 - (int)f.mbits) return false;               /* m << e would leave the word */
+        n = m << e;
+    } else {
+        bool up;
+        inexact = true;
+        if (e <= -64) {                                        /* far below one half: only directed modes step */
+            n = 0;
+            up = mode == FPR_P ? !sign : mode == FPR_M ? sign : false;
+        } else {
+            uint64_t rb = m & ((1ull << -e) - 1), half = 1ull << (-e - 1);
+            n = m >> -e;
+            inexact = rb != 0;
+            switch (mode) {
+            case FPR_N: up = rb > half || (rb == half && (n & 1)); break;
+            case FPR_A: up = rb >= half; break;
+            case FPR_P: up = rb && !sign; break;
+            case FPR_M: up = rb && sign; break;
+            default: up = false; break;
+            }
+        }
+        n += up;
+    }
+    uint64_t minmag = 1ull << (bits - 1), maxv = uns ? (minmag - 1) * 2 + 1 : minmag - 1;
+    if (!sign ? n > maxv : uns ? n != 0 : n > minmag) return false;
+    if (inexact) fp_raise(x, FPX_IXC);
+    *r = sign ? 0 - n : n;
+    return true;
+}
+
 uint64_t fp_rint(fpctx *x, int es, uint64_t a, int mode, bool exact)
 {
+    uint64_t fast;
+    if (rint_fast(x, es, a, mode, exact, &fast)) return fast;
     if (fp_isnan(a, es)) return nan_result(x, es, a);
     fpu u = unpack(x, es, a);
     if (u.cls == C_ZERO) return zero_of(es, u.sign);
@@ -802,6 +938,8 @@ uint64_t fp_rint(fpctx *x, int es, uint64_t a, int mode, bool exact)
 }
 uint64_t fp_to_int(fpctx *x, int es, uint64_t a, int mode, bool uns, int bits, int fbits)
 {
+    uint64_t fast;
+    if (to_int_fast(x, es, a, mode, uns, bits, fbits, &fast)) return fast;
     if (fp_isnan(a, es)) { fp_raise(x, FPX_IOC); return 0; }
     fpu u = unpack(x, es, a);
     u128 maxv = uns ? ((u128)1 << bits) - 1 : ((u128)1 << (bits - 1)) - 1, minmag = uns ? 0 : (u128)1 << (bits - 1);
@@ -826,6 +964,20 @@ uint64_t fp_from_int(fpctx *x, int es, uint64_t v, bool sgn, int bits, int fbits
     if (sgn && bits < 64 && ((v >> (bits - 1)) & 1)) v |= ~0ull << bits;
     if (sgn && (int64_t)v < 0) { sign = 1; v = 0 - v; }
     if (!v) return 0;
+    /* An integer that fits int64: the host conversion rounds once in the
+     * live MXCSR mode and raises PE exactly when FPRound raises IXC. The
+     * result is a normal number, so FZ and the other flags do not arise. */
+    if (es != 2 && !fbits && v <= (uint64_t)INT64_MAX) {
+        int64_t s = sign ? -(int64_t)v : (int64_t)v;
+        if (es == 4) {
+            __m128 z = _mm_setzero_ps();
+            __asm__ volatile("cvtsi2ssq %1, %0" : "+x"(z) : "r"(s));
+            return (uint32_t)_mm_cvtsi128_si32(_mm_castps_si128(z));
+        }
+        __m128d z = _mm_setzero_pd();
+        __asm__ volatile("cvtsi2sdq %1, %0" : "+x"(z) : "r"(s));
+        return (uint64_t)_mm_cvtsi128_si64(_mm_castpd_si128(z));
+    }
     return round_pack(x, es, sign, -fbits, v, false);
 }
 uint32_t fp_jcvt(fpctx *x, uint64_t a, bool *exact)
@@ -842,7 +994,9 @@ uint32_t fp_jcvt(fpctx *x, uint64_t a, bool *exact)
     else if (u.e >= 0) n = u.m << u.e;
     else if (-u.e >= 64) { n = 0; frac = true; }
     else { n = u.m >> -u.e; frac = (u.m & ((1ull << -u.e) - 1)) != 0; }
-    bool big = msb128(u.m) + u.e >= 31 && !(u.sign && msb128(u.m) + u.e == 31 && (u.m << (63 - msb128(u.m))) == 1ull << 63 && !frac);
+    /* FPToFixedJS judges the range on the integer truncated toward zero, so
+     * -2^31 - 0.5 is in range (and inexact). */
+    bool big = msb128(u.m) + u.e >= 64 || (u.sign ? n > 0x80000000ull : n > 0x7fffffffull);
     uint32_t r = (uint32_t)(u.sign ? 0 - n : n);
     if (big) fp_raise(x, FPX_IOC);
     else if (frac) fp_raise(x, FPX_IXC);

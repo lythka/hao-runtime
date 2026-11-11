@@ -94,6 +94,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/fenv | PASS | 1 | |
 | guest/footprint | PASS | 59 | `footprint(1)` |
 | guest/fork | PASS | 45 | |
+| guest/fpscalar | PASS | 55 | |
 | guest/fullcache | PASS | 6 | |
 | guest/gss | PASS | 1 | |
 | guest/heapprobe | PASS | 1 | |
