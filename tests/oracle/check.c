@@ -6,7 +6,11 @@
  * Compared bit-exactly: x0-x30 (except the platform register x18), SP, NZCV,
  * FPCR, FPSR.QC, v0-v31 (NaN payloads included) and the scratch memory
  * (hash of the whole filled region). FPSR's IEEE cumulative flags are
- * counted separately (informational). Outcomes:
+ * counted separately (informational), except in fma records, where a flag
+ * difference is a mismatch. For fma records the checker also reports how many
+ * have only normal operands and results at or above 2^-125 (what the
+ * round-to-odd path of fp_muladd admits), and for how many of those
+ * (float)((double)a * b + c) differs from native. Outcomes:
  *   native ran:     hao must run and match; a hao UNDEF passes only for
  *                   encodings listed as unimplemented in known.h, a hao
  *                   fault never passes
@@ -58,6 +62,51 @@ static const char *known_match(const known_enc *t, size_t n, const oracle_rec *r
     return NULL;
 }
 
+/* fma records: the operands of the lanes the instruction computes, with the
+ * FMLS/FMSUB/FNMADD/FNMSUB negations applied. Returns the lane count. */
+static int fma_operands(const oracle_rec *r, uint32_t a[4], uint32_t b[4], uint32_t c[4])
+{
+    uint32_t i = r->code[0], vn[4], vm[4], vd[4], va[4];
+    memcpy(vn, &r->in.v[i >> 5 & 31], 16);
+    memcpy(vm, &r->in.v[i >> 16 & 31], 16);
+    memcpy(vd, &r->in.v[i & 31], 16);
+    memcpy(va, &r->in.v[i >> 10 & 31], 16);
+    int lanes;
+    if ((i & 0xFFC00000) == 0x1F000000) {
+        unsigned o1 = i >> 21 & 1, o0 = i >> 15 & 1;
+        a[0] = vn[0] ^ (o0 != o1 ? 0x80000000u : 0); b[0] = vm[0]; c[0] = va[0] ^ (o1 ? 0x80000000u : 0);
+        return 1;
+    }
+    if ((i & 0xBF60FC00) == 0x0E20CC00) {
+        lanes = i >> 30 & 1 ? 4 : 2;
+        for (int l = 0; l < lanes; l++) { a[l] = vn[l] ^ (i & 0x00800000 ? 0x80000000u : 0); b[l] = vm[l]; c[l] = vd[l]; }
+        return lanes;
+    }
+    if ((i & 0x8FC0B400) != 0x0F801000) return 0;
+    lanes = i >> 28 & 1 ? 1 : i >> 30 & 1 ? 4 : 2;
+    for (int l = 0; l < lanes; l++) {
+        a[l] = vn[l] ^ (i & 0x4000 ? 0x80000000u : 0); b[l] = vm[(i >> 11 & 1) << 1 | (i >> 21 & 1)]; c[l] = vd[l];
+    }
+    return lanes;
+}
+static bool f32_normal(uint32_t v) { uint32_t e = v >> 23 & 0xff; return e && e != 0xff; }
+/* a * b + c through binary64 with two ordinary roundings: the sum to nearest
+ * and the conversion in the guest's rounding mode. */
+static uint32_t fma_widened(uint32_t a, uint32_t b, uint32_t c, unsigned rmode)
+{
+    volatile float fa, fb, fc, fr;
+    memcpy((void *)&fa, &a, 4); memcpy((void *)&fb, &b, 4); memcpy((void *)&fc, &c, 4);
+    volatile double sum = (double)fa * (double)fb;
+    sum = sum + (double)fc;
+    uint32_t m = 0x1f80 | (rmode == 1 || rmode == 2 ? 3 - rmode : rmode) << 13;
+    __asm__ volatile("ldmxcsr %0" : : "m"(m));
+    fr = (float)sum;
+    restore_host_fp();
+    uint32_t r;
+    memcpy(&r, (void *)&fr, 4);
+    return r;
+}
+
 typedef struct {
     long ran, match, mismatch, undef_known, undef_bad, fault, ill, ill_undef, lenient_known, lenient_bad;
     long nfault, nfault_hao_fault, nfault_missed, flagdiff;
@@ -90,12 +139,26 @@ int main(int argc, char **argv)
     FILE *badf = fopen(badpath, "w");
     counts cnt[2];
     memset(cnt, 0, sizeof cnt);
-    long total = 0, shown = 0;
+    long total = 0, shown = 0, fma_admitted = 0, fma_widened_wrong = 0;
     int mode = -1;
     oracle_rec r;
     while (fread(&r, sizeof r, 1, f) == 1) {
         total++;
         mode = (int)r.mode;
+        if (mode == OM_FMA && r.status == 0) {
+            uint32_t a[4], b[4], c[4], want[4];
+            int lanes = fma_operands(&r, a, b, c), wrong = -1;
+            bool admitted = lanes > 0;
+            memcpy(want, &r.out.v[r.code[0] & 31], 16);
+            for (int l = 0; l < lanes; l++)
+                if (!f32_normal(a[l]) || !f32_normal(b[l]) || !f32_normal(c[l]) || (want[l] >> 23 & 0xff) < 2) admitted = false;
+            for (int l = 0; l < lanes && admitted && wrong < 0; l++)
+                if (fma_widened(a[l], b[l], c[l], r.in.fpcr >> 22 & 3) != want[l]) wrong = l;
+            fma_admitted += admitted;
+            if (wrong >= 0 && fma_widened_wrong++ < 4)
+                printf("two roundings differ: %08x * %08x + %08x RMode %u: native %08x, widened %08x\n", a[wrong], b[wrong], c[wrong],
+                       r.in.fpcr >> 22 & 3, want[wrong], fma_widened(a[wrong], b[wrong], c[wrong], r.in.fpcr >> 22 & 3));
+        }
         for (int pass = 0; pass < 2; pass++) {
             counts *C = &cnt[pass];
             static hao_cpu cpu;
@@ -158,6 +221,8 @@ int main(int argc, char **argv)
                     if (!why[0] && fpcr != r.out.fpcr) snprintf(why, sizeof why, "fpcr got %x want %x", fpcr, r.out.fpcr);
                     if (!why[0] && ((fpsr ^ r.out.fpsr) & (1u << 27)))
                         snprintf(why, sizeof why, "fpsr.QC got %x want %x", fpsr, r.out.fpsr);
+                    if (!why[0] && mode == OM_FMA && ((fpsr ^ r.out.fpsr) & 0x9f))
+                        snprintf(why, sizeof why, "fpsr got %x want %x (in %x)", fpsr, r.out.fpsr, r.in.fpsr);
                     if (why[0]) C->mismatch++;
                     else {
                         C->match++;
@@ -177,6 +242,9 @@ int main(int argc, char **argv)
         }
     }
     if (badf) fclose(badf);
+    if (mode == OM_FMA)
+        printf("fma: %ld of %ld records have normal operands and results >= 2^-125 in every lane;"
+               " binary64 with two roundings is wrong for %ld of them\n", fma_admitted, total, fma_widened_wrong);
     long fails = 0;
     for (int pass = 0; pass < 2; pass++) {
         counts *C = &cnt[pass];

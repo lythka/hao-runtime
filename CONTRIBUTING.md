@@ -22,8 +22,9 @@ oracle-asan` and `make test-guest`. `make test` alone is the quick gate. It runs
   loader and interface-unit parser (under ASan/UBSan), growable maps and option
   parsing.
 - `oracle`: randomized data-processing, SIMD, memory and block sequences run
-  natively on ARM and through hao, compared state by state, plus 16-byte
-  atomicity checks.
+  natively on ARM and through hao, compared state by state, single-precision
+  fused multiply-add on adversarial operands (FPSR flags included), plus
+  16-byte atomicity checks.
 - `aot`: AOT cache trust rules, format checks and the cache policy unit test.
 - `bridgetest`, `async-contract-test`, `legacy-dyld-test`,
   `indexed-mulhigh-test`: the native bridge table, async provider packaging,

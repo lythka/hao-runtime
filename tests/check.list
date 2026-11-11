@@ -22,6 +22,7 @@ guest/dscswift	300	par	tests/guest/dscswift.sh
 guest/dylibs	300	par	tests/guest/dylibs.sh
 guest/eh	300	par	tests/guest/eh.sh
 guest/fenv	300	par	tests/guest/fenv.sh
+guest/fma32	300	par	tests/guest/fma32.sh
 guest/footprint	600	par	tests/guest/footprint.sh
 guest/fork	600	par	tests/guest/fork.sh
 guest/fullcache	300	par	tests/guest/fullcache.sh

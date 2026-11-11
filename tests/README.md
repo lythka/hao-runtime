@@ -92,6 +92,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/dylibs | PASS | 4 | |
 | guest/eh | PASS | 19 | |
 | guest/fenv | PASS | 1 | |
+| guest/fma32 | PASS | 2 | |
 | guest/footprint | PASS | 59 | `footprint(1)` |
 | guest/fork | PASS | 45 | |
 | guest/fpscalar | PASS | 55 | |

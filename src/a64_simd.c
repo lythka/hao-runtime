@@ -722,6 +722,11 @@ static int simd_three_same(hao_cpu *c, uint32_t i, int scalar)
             }
         }
         fpctx x = fp_ctx(c);
+        if (!scalar && !dbl && (key == 0x01 || key == 0x21) &&
+            fp_vec32_muladd(&x, &d, &a, &b, n, key == 0x21, &r)) {
+            vfinish(c, rd, &r, Q);
+            return 0;
+        }
         for (int e = 0; e < n; e++) {
             uint64_t xa, ya, acc = eget(&d, es, e), v = 0;
             if (pairwise) {
@@ -1408,6 +1413,13 @@ static int simd_indexed(hao_cpu *c, uint32_t i, int scalar)
             hao_vreg broadcast;
             for (int e = 0; e < 8; e++) broadcast.h[e] = (uint16_t)y;
             if (fp_vec16_muladd(&x, &d, &a, &broadcast, n, op == 5, &r)) {
+                vfinish(c, rd, &r, Q);
+                return 0;
+            }
+        }
+        if (!scalar && es == 4 && (op == 1 || op == 5)) {
+            hao_vreg broadcast = {.s = {(uint32_t)y, (uint32_t)y, (uint32_t)y, (uint32_t)y}};
+            if (fp_vec32_muladd(&x, &d, &a, &broadcast, n, op == 5, &r)) {
                 vfinish(c, rd, &r, Q);
                 return 0;
             }
