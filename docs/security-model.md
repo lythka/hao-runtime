@@ -85,6 +85,16 @@ loader maps or reads is hashed. This is necessary because hao maps guest
 mappings. The Info.plist, resource-directory and application slots name files
 outside the Mach-O; exec does not check them, and neither does hao.
 
+A slice has one signature and hao has one reader for it
+(`hao_codesig_parse` in `src/libval.c`). A slice with a second
+`LC_CODE_SIGNATURE` is not loaded, and a signature with two CodeDirectories
+of one hash type is invalid. Integrity, the checks of this section, the
+signer and the library-validation policy are all decided on the one
+CodeDirectory that reader chose, in the bytes the image is built from.
+`tools/hao_codesig.py` reads signatures for the packaging tools by the same
+rules; `tests/tools/test_codesig.py` requires the same verdict, cdhash and
+policy from both for 8168 inputs: the fuzz corpus and fixed changes to it.
+
 ### Who signed it
 
 The first route that answers decides:
@@ -96,7 +106,8 @@ The first route that answers decides:
    passes `codesign --verify --strict -R='anchor apple'` on the build host. hao
    reads the list only if root owns it and every directory above it, and
    nobody else can write them. `HAO_TRUST_LIST=/abs/file` adds a list in an
-   open-tier process, for tests.
+   open-tier process, for tests. A process reads the lists once, when it
+   first needs them, and keeps what it read.
 3. **Kernel**: `fcntl(F_ADDFILESIGS_INFO)` registers the slice's signature
    (AMFI validates the CMS with CoreTrust) and returns the cdhash the kernel
    chose, which must be hao's; `F_GETSIGSINFO` says whether it is a platform
@@ -116,14 +127,38 @@ The list exists because an x86_64 kernel accepts only CodeDirectories with
 cannot answer for Apple arm64 code on Intel. It also means the check needs no
 daemon, which matters for programs that launchd starts before `trustd`.
 
-### Check and load the same file
+### Check and load the same bytes
 
 The launcher runs in two stages. The first only re-executes hao with the
 guest's arguments and the ObjC tagged-pointer switch. The second, which is
-the guest's process, opens the file, applies the checks above to that
-descriptor and maps the image from the same descriptor. Security.framework,
-where it is asked, opens the path itself; its answer counts only for the
-cdhash hao computed on the descriptor.
+the guest's process, opens the file, takes the slice it will run once,
+applies the checks above to those bytes and builds the image from them.
+Security.framework, where it is asked, opens the path itself; its answer
+counts only for the cdhash hao computed on the bytes it took.
+
+Natively the kernel validates each page of a signed image as it pages it
+in. Nothing does that for pages hao maps as data, so hao must not read a
+guest file twice: whoever may write the file could change it between the
+check and the load. How the slice is taken depends on who can change the
+file:
+
+| File | How its slice is taken |
+|---|---|
+| Someone other than root may change it: not owned by root, or writable by its group or by others, or with an ACL, or on a volume that is not local | Read once into memory. The mach header, load commands, signature, hashed pages, linkedit data and segments all come from that copy; rewriting the file during or after the load changes nothing in the process |
+| Only root can change it (the system's own files; every file of a sealed system volume) | Mapped. Its pages are shared with every process that maps the file, as natively |
+
+A copied image shares no memory with its file or with other processes. It
+costs its slice's size in anonymous memory, per process, for as long as it
+is loaded: 7.2 MB more peak footprint for an 8.4 MB library and 66 MB for a
+67 MB one, measured. The programs that loaded them ran in 0.04 s and 0.21 s,
+against 0.04 s and 0.20 s with the files mapped. Guest libraries are taken
+the same way as the main executable.
+
+The loader also bounds what a guest file may claim: 4 MiB of load commands,
+256 MiB for an exports trie, chained fixups, a legacy dyld stream or
+function starts, 4 MiB for a lazy-load record. The first segment must be
+readable and hold the mach header and every load command, and a fat header
+must name the cpusubtype its slice's own header has.
 
 What the first stage passes in the environment is a hint and carries no
 trust: `HAO_EXEC` is the path, `HAO_EXEC_FLAGS` the command line's switches.
@@ -136,9 +171,12 @@ the same effect is: `-v` as `HAO_VERBOSE` and `--interp` as `HAO_INTERP`,
 ## Library validation
 
 hao's processes carry `disable-library-validation` because `libhao` is ad
-hoc signed. To give the guest the policy its own signature asks for, when the
-main executable's ARM slice is a platform, hardened-runtime or library-flag
-binary without its own `disable-library-validation`, hao:
+hoc signed. The policy is read from the main executable's ARM slice, from
+the CodeDirectory whose signature and page hashes hao has just verified on
+the bytes it loads; a main executable whose signature does not verify is not
+run, in the embedded form too. When that slice is a platform,
+hardened-runtime or library-flag binary without its own
+`disable-library-validation`, hao:
 
 - sets `CS_REQUIRE_LV` on the process once `libhao` is mapped, so the kernel
   refuses non-platform native libraries of another Team ID;
@@ -149,6 +187,9 @@ binary without its own `disable-library-validation`, hao:
 - checks each guest library's signature and page hashes as for the main
   executable. A bad page of an executable segment ends the process with
   SIGKILL and a CODESIGNING "Invalid Page" reason, as the kernel does natively.
+
+A signed image's pages are hashed once in its process, whichever of these
+routes then decides about it.
 
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
@@ -303,8 +344,20 @@ running: it asks the kernel for the device and inode of the vnode behind its
 own Mach-O header (`proc_pidinfo`, or the `executable_file=` pair the kernel
 passes at exec where a sandbox denies that), opens the executable's path,
 and refuses with status 126 unless the descriptor is that file. The slice is
-mapped from that descriptor. A link in the path that was repointed after the
+taken from that descriptor. A link in the path that was repointed after the
 exec therefore cannot put another file's ARM code into the process.
+
+The stub's signature does not cover the ARM slice, so the stub names the
+slice it was made for. `tools/hao-embed` writes the hash type and cdhash of
+the ARM slice's CodeDirectory into the stub's `__TEXT,__hao_slice`, which the
+stub's own signature does cover, and refuses to embed a program whose ARM
+slice is unsigned or does not verify. Before it loads the slice, hao verifies
+it (structure, CodeDirectory, every page hash) and requires its cdhash to be
+the one the stub names; otherwise it exits with status 126. A copy of an
+embedded program with another ARM slice in it, even one with a valid
+signature of its own, does not run under the program's identity and
+entitlements. `tools/stub_identity_gate.py` checks the record of every stub
+of a payload. The check hashes the program's ARM slice once per launch.
 
 A stub whose program uses ObjC re-executes itself once to turn off libobjc's
 tagged-pointer obfuscation, unless its parent's exec already did. It
@@ -321,10 +374,13 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 
 ## Known limitations
 
-- hao checks and maps a guest through one descriptor, but the two are not
-  atomic: a file rewritten in place by someone who may write it, between the
-  check and the mapping or before hao reads a page it has not translated yet,
-  is not caught.
+- A guest file that only root can change is mapped, not copied. If root
+  rewrites such a file in place while hao loads it, hao does not notice;
+  natively the kernel would kill the process at the changed page.
+- Whether only root can change a file is judged from its owner, mode and ACL
+  and from its volume being local. A local volume whose storage someone else
+  can write (a disk image or removable disk mounted with ownership enabled)
+  can hold root-owned files that change all the same; hao maps them.
 - HaoExec hands hao a path, not the file the kernel examined, and hao opens
   it again. Routing grants nothing, so a path that names another file by then
   only runs that file under the same checks.
@@ -340,10 +396,12 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   check. If one of them asks for the main executable's path or sections, it
   is answered from the file `HAO_EXEC` names, unchecked. A file that fails
   the check never runs.
-- An embedded stub's signature does not cover the ARM slice. On a sealed
-  system volume this does not matter; for embedded programs on writable
-  volumes, hao does not yet check the ARM slice. It does check that the
-  slice comes from the stub's own file.
+- A stub made before `tools/hao-embed` wrote the `__hao_slice` record does
+  not name its ARM slice. hao verifies such a program's ARM slice by the
+  slice's own signature only, so a copy with another validly signed slice
+  still runs under the stub's identity and entitlements. Embed such
+  programs again; `hao-install.py` does not replace a stub that is already
+  in a file.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests
@@ -353,14 +411,13 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - A process that may not fork (a sandbox that denies `process-fork`) cannot
   ask Security.framework about a main executable: a guest whose signer only
   that route can give is refused there.
-- The stub's own-file check and the fork that asks Security.framework were
-  tested under Rosetta on an Apple-silicon host. Neither has been run on an
-  Intel kernel yet.
-  volumes, hao does not yet check the ARM slice.
+- The stub's own-file check, its check of the ARM slice it names, the fork
+  that asks Security.framework and the loading of a guest file from a copy
+  were tested under Rosetta on an Apple-silicon host. None has been run on
+  an Intel kernel yet.
 - The AOT loader takes a signed image's cdhash from the signature the image
-  maps and does not hash the image's pages again. Where hao has not checked
-  those pages (the previous item), an image whose code differs from what its
-  own signature covers runs the cache translated from the signed code.
+  maps and does not hash the image's pages again; it relies on the loader's
+  own check of that image.
 - An AOT cache in a user's own directory is trusted as far as that user: any
   process of the user can write one that the user's other open-tier programs
   load.

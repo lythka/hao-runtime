@@ -80,8 +80,11 @@ bool hao_code_alias_wanted(void);
 /* On-disk images: reserve img->vmsize for the alias (before the segments are mapped). */
 bool hao_code_alias_reserve(hao_image *img);
 /* Map one executable segment (runtime address addr, filesize bytes of fd at off, vmsize in all) into
- * the alias, zero-filled past filesize as the loader does at the guest address. */
-bool hao_code_alias_segment(hao_image *img, uint64_t addr, uint64_t filesize, uint64_t vmsize, int fd, off_t off);
+ * the alias, zero-filled past filesize as the loader does at the guest address. bytes (NULL: map the
+ * file): the segment's filesize bytes in memory, copied instead, where the loader built the image from
+ * a copy of the file (hao_slice). */
+bool hao_code_alias_segment(hao_image *img, uint64_t addr, uint64_t filesize, uint64_t vmsize, int fd, off_t off,
+                            const void *bytes);
 /* Publish the alias: before the image is listed. delta: the image's code_delta. */
 void hao_code_alias_publish(hao_image *img, int64_t delta);
 /* HAO_CODE_ALIAS: make every full page of img's instruction sections at the guest address PROT_NONE. */

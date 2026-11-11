@@ -104,16 +104,20 @@ bool hao_code_alias_reserve(hao_image *img)
     return true;
 }
 
-bool hao_code_alias_segment(hao_image *img, uint64_t addr, uint64_t filesize, uint64_t vmsize, int fd, off_t off)
+bool hao_code_alias_segment(hao_image *img, uint64_t addr, uint64_t filesize, uint64_t vmsize, int fd, off_t off,
+                            const void *bytes)
 {
     if (!img->code_alias) return true;
     uint64_t at = img->code_alias + (addr - img->base);
     uint64_t fpage = (filesize + PG - 1) & ~(PG - 1);
     if (filesize) {
-        void *m = mmap((void *)(uintptr_t)at, filesize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, fd, off);
+        /* the loader's own source: the file, or the copy it checked (a file somebody else may write) */
+        void *m = mmap((void *)(uintptr_t)at, bytes ? fpage : filesize, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_FIXED | (bytes ? MAP_ANON : 0), bytes ? -1 : fd, bytes ? 0 : off);
         if (m == MAP_FAILED) return false;
+        if (bytes) memcpy(m, bytes, filesize);
         uint64_t end = fpage < vmsize ? fpage : vmsize;
-        if (end > filesize) memset((void *)(uintptr_t)(at + filesize), 0, end - filesize);   /* as hao_load_image */
+        if (!bytes && end > filesize) memset((void *)(uintptr_t)(at + filesize), 0, end - filesize);   /* as hao_load_image */
         mprotect((void *)(uintptr_t)at, fpage, PROT_READ);
     }
     if (vmsize > fpage &&

@@ -109,8 +109,14 @@ def check_image(mo, what):
 
 def check_codesig(mo):
     i = hao_codesig.info(mo)   # documented: None for a non-Mach-O, malformed reads as unsigned; never raises
-    assert i is None or set(i) == {"signed", "flags", "platform", "team", "entitlements"}
+    assert i is None or set(i) == {"signed", "flags", "platform", "team", "entitlements", "dlv"}
     hao_codesig.library_validated(i), hao_codesig.dyld_env_blocked(i)
+    # the strict reader (src/libval.c's rules): a verdict, or ValueError for load commands hao would not load
+    c = refuses(ValueError, hao_codesig.check, mo)
+    assert c is None or c["verdict"] in ("unsigned", "invalid") or (c["verdict"] == "valid" and len(c["cdhash"]) == 20)
+    assert c is None or i is None or c["verdict"] != "valid" or i["signed"], "check accepts a signature info calls unsigned"
+    s = refuses(ValueError, hao_codesig.parse, mo)      # any bytes as a signature blob
+    assert s is None or (len(s["cdhash"]) == 20 and s["cd"][:4] == b"\xfa\xde\x0c\x02")
     for cd, hash_type, hash_size, nspecial, hash_off in refuses(ValueError, hao_codesig.code_directories, mo) or []:
         assert 0 <= cd and cd + hash_off <= len(mo) and hash_size * nspecial <= hash_off, "CodeDirectory outside the file"
     for slot in (hao_codesig.CSSLOT_INFOSLOT, hao_codesig.CSSLOT_RESOURCEDIR):

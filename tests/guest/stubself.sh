@@ -2,7 +2,9 @@
 # An embedded program's stub and its own file (src/main.c hao_self_main): the ARM
 # slice is loaded only from the file the kernel is running, the re-exec that sets
 # the ObjC tagged-pointer switch never runs another file, and a process whose
-# credentials changed at exec does not re-exec at all.
+# credentials changed at exec does not re-exec at all. And the ARM slice of that
+# file is the one the stub was made for (src/libval.c hao_libval_bound): a copy of
+# the file with another slice in it does not run under the stub's identity.
 #   OUT=dir [B=build] [T=60] tests/guest/stubself.sh
 # The executable's path is made to name another program between the kernel's exec
 # and the stub's main by a library inserted with DYLD_INSERT_LIBRARIES
@@ -53,6 +55,45 @@ run ao arch -x86_64 emb/Ao
 ln -s emb/A link0
 run l0 arch -x86_64 ./link0
 [ $rc = 7 ] && has l0 "^stubself A$" && pass "through a symbolic link: runs" || bad "through a symbolic link: rc $rc: $(head -c 300 l0.out)"
+
+# --- the ARM slice is the one the stub was made for. tools/hao-embed wrote that slice's
+# cdhash into the stub (__TEXT,__hao_slice), which the stub's own signature covers; the
+# copies below keep A's stub slice byte for byte, so the kernel runs them as A.
+python3 -I - "$repo/tools" emb/A B emb/A-other emb/A-flipped emb/A-resigned "$OUT" <<'PY' || exit 2
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import hao_fat
+a, b = open(sys.argv[2], "rb").read(), open(sys.argv[3], "rb").read()
+arm = [bytes(p) for c, s, p in hao_fat.slices(a) if c == hao_fat.CPU_ARM64][0]
+other = [bytes(p) for c, s, p in hao_fat.slices(b) if c == hao_fat.CPU_ARM64][0]
+# another validly signed program's ARM slice
+open(sys.argv[4], "wb").write(hao_fat.replace_slice(a, hao_fat.CPU_ARM64, other))
+# A's own slice with one byte changed
+flipped = bytearray(arm)
+flipped[flipped.index(b"stubself")] ^= 0x20
+open(sys.argv[5], "wb").write(hao_fat.replace_slice(a, hao_fat.CPU_ARM64, bytes(flipped)))
+# the changed slice signed again: valid by itself, but not what the stub names
+thin = sys.argv[7] + "/resigned.arm"
+open(thin, "wb").write(flipped)
+subprocess.run(["codesign", "-s", "-", "-f", thin], check=True, capture_output=True)
+open(sys.argv[6], "wb").write(hao_fat.replace_slice(a, hao_fat.CPU_ARM64, open(thin, "rb").read()))
+PY
+chmod +x emb/A-other emb/A-flipped emb/A-resigned
+for c in other flipped resigned; do
+    lipo emb/A -thin x86_64 -output stub.A && lipo "emb/A-$c" -thin x86_64 -output "stub.$c" && cmp -s stub.A "stub.$c" ||
+        bad "A-$c: the copy's stub slice is not A's"
+done
+run so arch -x86_64 emb/A-other
+[ $rc = 126 ] && has so "is not the code its x86_64 slice was made for" && ! has so "^stubself" &&
+    pass "another program's ARM slice under A's stub: refused (rc 126), its code not run" ||
+    bad "another program's ARM slice under A's stub: rc $rc: $(head -c 300 so.out)"
+run sf arch -x86_64 emb/A-flipped
+[ $rc = 126 ] && has sf "does not match its hash" && ! has sf "^stubself" &&
+    pass "A's ARM slice with one byte changed: refused (rc 126)" || bad "changed ARM slice: rc $rc: $(head -c 300 sf.out)"
+run sr arch -x86_64 emb/A-resigned
+[ $rc = 126 ] && has sr "is not the code its x86_64 slice was made for" && ! has sr "^stubself" &&
+    pass "the changed slice signed again: refused (rc 126), a valid signature of its own is not enough" ||
+    bad "re-signed ARM slice: rc $rc: $(head -c 300 sr.out)"
 
 # --- the path names another program by the time the stub opens it
 ln -s "$OUT/emb/A" link1

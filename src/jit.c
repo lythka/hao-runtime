@@ -3044,10 +3044,16 @@ int hao_aot_generate_file(const char *path, bool verbose)
         goto out;
     }
     if (s.size) {
-        hao_imgsig g;
-        if (hao_guest_sig_image(tfd, path, im->slice_off, im->slice_size, im->cpusubtype, s.off, s.size, NULL, 0, false, NULL, &g,
-                                why, sizeof why) != 0) {
-            fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why);
+        /* the private copy's slice, checked on its bytes: structure and every page hash (libval.c) */
+        struct { uint8_t hash_type, cdhash[20]; } g;
+        why[0] = 0;
+        hao_slice *sl = hao_slice_open(tfd, why, sizeof why);
+        bool good = sl && hao_slice_verify(sl, NULL, why, sizeof why) == 0 && sl->sig.cd;
+        if (good) { g.hash_type = sl->sig.hash_type; memcpy(g.cdhash, sl->sig.cdhash, sizeof g.cdhash); }
+        else if (sl && !why[0]) snprintf(why, sizeof why, "its code signature could not be verified");
+        hao_slice_close(sl);
+        if (!good) {
+            fprintf(stderr, "hao-aot: %s: code signature invalid (%s): no cache written\n", path, why);
             goto out;
         }
         /* every byte below the signature is page-hashed; the signature's own bytes are not all sealed */

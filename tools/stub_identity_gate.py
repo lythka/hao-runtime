@@ -354,6 +354,19 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     add("sections", not (missing or wrong or prot), ";".join("%s,%s" % k for k in sorted(carried)) or "-",
         "missing " + ";".join(missing) + " differ " + ";".join(wrong) + " prot " + ";".join(prot)
         if missing or wrong or prot else "same", "carried sections: bytes and segment protections")
+    # the stub names the arm slice it was made for (src/libval.c hao_libval_bound loads no other under it)
+    st = ssg.get(embed.SLICE_SECTION[0])
+    have = bytes(stub[st[3][embed.SLICE_SECTION[1]][0]:][:st[3][embed.SLICE_SECTION[1]][1]]) \
+        if st and embed.SLICE_SECTION[1] in st[3] else None
+    try:
+        want = embed.slice_record(arm)
+    except RuntimeError as e:
+        want = None
+        note = str(e)
+    else:
+        note = "the arm slice's hash type and cdhash, in the stub's signed __TEXT"
+    show = lambda r: "%d:%s" % (r[9], r[12:].hex()) if r and len(r) == 32 else "-"
+    add("slice.record", want is not None and have == want, show(want), show(have), note)
     # dylibs
     stub_deps = embed.dylib_commands(stub)
     own_names = ("@rpath/libhao.dylib", "@rpath/libhao_identity.dylib")

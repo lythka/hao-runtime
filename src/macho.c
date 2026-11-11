@@ -20,7 +20,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/acl.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -38,6 +40,16 @@ static bool map_only;
 #define MAX_SEGS 255                    /* dyld's limit */
 #define MAX_VMSIZE (1ull << 40)
 #define MAX_FSTARTS (1u << 24)
+/* Sizes a guest file may claim. A Mach-O's linkedit offsets are 32 bits and its signature (at most xnu's
+ * 40 MiB) ends it, so no slice whose linkedit data hao can read is longer than MAX_SLICE. The others bound
+ * what one image makes hao walk or keep (the exports trie and each lazy-load record are copied and stay
+ * with the image). They are far above what linkers write: over the 10143 arm64 slices of a macOS 27.2
+ * system and its applications, the largest load-command area is 33 KiB, exports trie 4.0 MiB, chained
+ * fixups 4.9 MiB, legacy stream 0.7 MiB, function starts 0.8 MiB and slice 240 MiB. */
+#define MAX_SLICE ((1ull << 32) + (40ull << 20))
+#define MAX_CMDS (4u << 20)             /* sizeofcmds */
+#define MAX_BLOB (256u << 20)           /* exports trie, chained fixups, a legacy dyld stream, function starts */
+#define MAX_LAZY_BLOB (4u << 20)        /* one LC_LAZY_LOAD_DYLIB_INFO record; an image has at most HAO_MAX_LAZY */
 
 static uint32_t be32(uint32_t v) { return __builtin_bswap32(v); }
 static uint64_t be64(uint64_t v) { return __builtin_bswap64(v); }
@@ -815,7 +827,7 @@ int hao_macho_check_cmds(const uint8_t *cmds, uint32_t sizeofcmds, uint32_t ncmd
     if (ncmds > sizeofcmds / sizeof(struct load_command)) CMDERR("%u load commands cannot fit in %u bytes", ncmds, sizeofcmds);
     const uint8_t *p = cmds;
     uint32_t left = sizeofcmds;
-    int nseg = 0;
+    int nseg = 0, nsig = 0;
     for (uint32_t k = 0; k < ncmds; k++) {
         if (left < sizeof(struct load_command)) CMDERR("load command %u past sizeofcmds", k);
         struct load_command lc;
@@ -844,6 +856,11 @@ int hao_macho_check_cmds(const uint8_t *cmds, uint32_t sizeofcmds, uint32_t ncmd
             break;
         case LC_UUID: need = sizeof(struct uuid_command); break;
         case LC_MAIN: need = sizeof(struct entry_point_command); break;
+        case LC_CODE_SIGNATURE:
+            /* one signature: every reader (hao_slice_open for libval.c and guest_sig.c, tools/hao_codesig.py)
+             * must mean the same one, and a second could put one in front of the check and another behind it */
+            if (++nsig > 1) CMDERR("more than one LC_CODE_SIGNATURE");
+            need = sizeof(struct linkedit_data_command); break;
         case LC_FUNCTION_STARTS: case LC_DYLD_CHAINED_FIXUPS: case LC_DYLD_EXPORTS_TRIE: case LC_LAZY_LOAD_DYLIB_INFO:
             need = sizeof(struct linkedit_data_command); break;
         case LC_DYLD_INFO: case LC_DYLD_INFO_ONLY: need = sizeof(struct dyld_info_command); break;
@@ -905,6 +922,122 @@ static void *reserve_fixed(uint64_t addr, uint64_t size)
     if (mach_vm_allocate(mach_task_self(), &a, size, VM_FLAGS_FIXED) != KERN_SUCCESS || a != addr) return MAP_FAILED;
     if (mprotect((void *)(uintptr_t)a, size, PROT_NONE) != 0) { mach_vm_deallocate(mach_task_self(), a, size); return MAP_FAILED; }
     return (void *)(uintptr_t)a;
+}
+
+/* A linkedit blob the image keeps after its slice is closed. */
+static uint8_t *blob_copy(const uint8_t *p, uint32_t size)
+{
+    uint8_t *b = malloc(size ? size : 1);
+    if (b) memcpy(b, p, size);
+    return b;
+}
+
+/* ------------------------------------------------------------- slices */
+
+int hao_slice_test_path;
+
+/* Can nobody but root change the file open on fd? Root owns it, neither its
+ * group nor others may write it, it has no ACL (any entry counts, and so
+ * does an ACL that cannot be read: the kernel says ENOENT when there is
+ * none), and it is on a local volume, where those bits are the kernel's to
+ * enforce. This is about the open file, so the directories above its name
+ * do not matter: they decide which file a path reaches, and fd already is
+ * one. A sealed system volume's files all qualify. (The owner and mode
+ * rule is aot_policy.c's hao_aot_stat_ok for a system file; the loader's
+ * unit tests link this file without it.) */
+static bool file_fixed(int fd, const struct stat *st)
+{
+    if (hao_slice_test_path) return hao_slice_test_path == 1;
+    if (st->st_uid != 0 || (st->st_mode & (S_IWGRP | S_IWOTH))) return false;
+    struct statfs fs;
+    if (fstatfs(fd, &fs) != 0 || !(fs.f_flags & MNT_LOCAL)) return false;
+    errno = 0;
+    acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+    int e = errno;
+    if (a) acl_free(a);
+    return a == NULL && e == ENOENT;
+}
+
+static hao_slice *slice_pending;       /* hao_slice_hand */
+
+void hao_slice_hand(hao_slice *sl)
+{
+    if (slice_pending && slice_pending != sl) hao_slice_close(slice_pending);
+    slice_pending = sl;
+}
+
+void hao_slice_close(hao_slice *sl)
+{
+    if (!sl) return;
+    if (slice_pending == sl) slice_pending = NULL;
+    if (sl->bytes) munmap((void *)(uintptr_t)sl->bytes, (size_t)((sl->size + PAGE - 1) & ~(PAGE - 1)));
+    free(sl);
+}
+
+hao_slice *hao_slice_open(int fd, char *why, size_t n)
+{
+#define SERR(...) do { snprintf(why, n, __VA_ARGS__); goto fail; } while (0)
+    hao_slice *sl = calloc(1, sizeof *sl);
+    struct stat st;
+    if (!sl) { snprintf(why, n, "out of memory"); return NULL; }
+    sl->fd = fd;
+    if (fstat(fd, &st) != 0) SERR("fstat: %s", strerror(errno));
+    if (!S_ISREG(st.st_mode)) SERR("not a regular file");
+    sl->dev = (uint64_t)st.st_dev;
+    sl->ino = (uint64_t)st.st_ino;
+    uint32_t fat_sub = 0;
+    if (!hao_macho_choose_slice(fd, (uint64_t)st.st_size, &sl->off, &sl->size, &fat_sub, why, n)) goto fail;
+    if (sl->off & (PAGE - 1)) SERR("arm64 slice offset %#llx is not page aligned", (unsigned long long)sl->off);
+    struct mach_header_64 mh;
+    if (sl->size < sizeof mh) SERR("bad mach header");
+    if (sl->size > MAX_SLICE) SERR("arm64 slice of %#llx bytes", (unsigned long long)sl->size);
+    size_t len = (size_t)((sl->size + PAGE - 1) & ~(PAGE - 1));
+    if (file_fixed(fd, &st)) {
+        void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, (off_t)sl->off);
+        if (m == MAP_FAILED) SERR("map the slice: %s", strerror(errno));
+        sl->bytes = m;
+    } else {
+        /* read once; what is read is what is checked and what runs */
+        uint8_t *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED) SERR("no memory for a copy of the slice (%#llx bytes)", (unsigned long long)sl->size);
+        sl->bytes = m;
+        sl->copied = true;
+        for (uint64_t got = 0; got < sl->size;) {
+            uint64_t want = sl->size - got;
+            ssize_t r = pread(fd, m + got, want > (1u << 30) ? (1u << 30) : (size_t)want, (off_t)(sl->off + got));
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0) SERR("short read of the slice at %#llx", (unsigned long long)got);
+            got += (uint64_t)r;
+        }
+        mprotect(m, len, PROT_READ);
+    }
+    memcpy(&mh, sl->bytes, sizeof mh);
+    if (mh.magic != MH_MAGIC_64) SERR("bad mach header");
+    if (mh.cputype != CPU_TYPE_ARM64) SERR("arm64 slice holds cputype %#x", mh.cputype);
+    /* the fat header is outside every signature: what it says of the slice must be what the slice says */
+    if ((fat_sub ^ (uint32_t)mh.cpusubtype) & ~CPU_SUBTYPE_MASK)
+        SERR("fat header names cpusubtype %#x for a slice whose header says %#x", fat_sub, (uint32_t)mh.cpusubtype);
+    sl->cpusubtype = (uint32_t)mh.cpusubtype;
+    sl->filetype = mh.filetype;
+    sl->flags = mh.flags;
+    if (!in_range(sizeof mh, mh.sizeofcmds, sl->size)) SERR("load commands (%u bytes) overrun the slice", mh.sizeofcmds);
+    if (mh.sizeofcmds > MAX_CMDS) SERR("%u bytes of load commands", mh.sizeofcmds);
+    sl->cmds = sl->bytes + sizeof mh;
+    sl->ncmds = mh.ncmds;
+    sl->sizeofcmds = mh.sizeofcmds;
+    if (hao_macho_check_cmds(sl->cmds, sl->sizeofcmds, sl->ncmds, &sl->nsegs, why, n) != 0) goto fail;
+    const uint8_t *p = sl->cmds;
+    for (uint32_t k = 0; k < sl->ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct linkedit_data_command *ld = (const void *)p;
+        if (ld->cmd != LC_CODE_SIGNATURE) continue;       /* at most one, of full size (hao_macho_check_cmds) */
+        sl->sig_off = ld->dataoff;
+        sl->sig_size = ld->datasize;
+    }
+    return sl;
+fail:
+    hao_slice_close(sl);
+    return NULL;
+#undef SERR
 }
 
 static bool arm_only_bundle_fd(int fd)
@@ -975,12 +1108,12 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
                              bool bundle_only, char *err, size_t errlen)
 {
     hao_image *img = calloc(1, sizeof *img);
-    uint8_t *cmds = NULL, *chained = NULL, *legacy[4] = {0};
+    hao_slice *sl = NULL;
+    const uint8_t *chained = NULL, *legacy[4] = {0};
     uint32_t legacy_size[4] = {0};
     bool legacy_seen = false;
     seginfo *segs = NULL;
     bool linked = false, visible = false;
-    struct stat st;
     if (!img) {
         if (fd >= 0) close(fd);
         snprintf(err, errlen, "%s: out of memory", path);
@@ -989,40 +1122,42 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     snprintf(img->path, sizeof img->path, "%s", path);
     img->fd = fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
     if (img->fd < 0) ERR("open %s: %s", path, strerror(errno));
-    if (fstat(img->fd, &st) != 0) ERR("%s: fstat: %s", path, strerror(errno));
-    if (!S_ISREG(st.st_mode)) ERR("%s: not a regular file", path);
     if (bundle_only && !arm_only_bundle_fd(img->fd)) ERR("%s: native fallback requires an ARM-only MH_BUNDLE", path);
-    img->dev = (uint64_t)st.st_dev;
-    img->ino = (uint64_t)st.st_ino;
     char why[320];
-    if (!hao_macho_choose_slice(img->fd, (uint64_t)st.st_size, &img->slice_off, &img->slice_size, &img->cpusubtype, why, sizeof why))
-        ERR("%s: %s", path, why);
-    if (img->slice_off & (PAGE - 1)) ERR("%s: arm64 slice offset %#llx is not page aligned", path, (unsigned long long)img->slice_off);
-    const uint64_t slice = img->slice_size;
+    /* The slice, taken once (hao/macho.h): the one the caller checked on this descriptor and left for
+     * this load (hao_slice_hand), else opened here. From here on nothing is read from the file. */
+    struct stat st;
+    if (fd >= 0 && slice_pending && slice_pending->fd == fd && fstat(fd, &st) == 0 &&
+        slice_pending->dev == (uint64_t)st.st_dev && slice_pending->ino == (uint64_t)st.st_ino) {
+        sl = slice_pending;
+        slice_pending = NULL;
+    } else if (!(sl = hao_slice_open(img->fd, why, sizeof why))) ERR("%s: %s", path, why);
+    img->dev = sl->dev;
+    img->ino = sl->ino;
+    img->slice_off = sl->off;
+    img->slice_size = sl->size;
+    img->cpusubtype = sl->cpusubtype;
+    const uint64_t slice = sl->size;
+    const uint8_t *const cmds = sl->cmds;
 
-    struct mach_header_64 mh;
-    if (slice < sizeof mh || pread(img->fd, &mh, sizeof mh, (off_t)img->slice_off) != sizeof mh || mh.magic != MH_MAGIC_64)
-        ERR("%s: bad mach header", path);
-    if (mh.cputype != CPU_TYPE_ARM64) ERR("%s: arm64 slice holds cputype %#x", path, mh.cputype);
-    if (mh.filetype != MH_EXECUTE && mh.filetype != MH_DYLIB && mh.filetype != MH_BUNDLE &&
-        !(map_only && mh.filetype == MH_DYLINKER))
-        ERR("%s: filetype %u not loadable", path, mh.filetype);
-    img->is_dylib = mh.filetype != MH_EXECUTE;
-    img->is_pie = (mh.flags & MH_PIE) || img->is_dylib;
-    if (!in_range(sizeof mh, mh.sizeofcmds, slice)) ERR("%s: load commands (%u bytes) overrun the slice", path, mh.sizeofcmds);
-    cmds = malloc(mh.sizeofcmds ? mh.sizeofcmds : 1);
-    if (!cmds) ERR("%s: out of memory", path);
-    if (pread(img->fd, cmds, mh.sizeofcmds, (off_t)(img->slice_off + sizeof mh)) != (ssize_t)mh.sizeofcmds)
-        ERR("%s: short load commands", path);
+    if (bundle_only && sl->filetype != MH_BUNDLE) ERR("%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (sl->filetype != MH_EXECUTE && sl->filetype != MH_DYLIB && sl->filetype != MH_BUNDLE &&
+        !(map_only && sl->filetype == MH_DYLINKER))
+        ERR("%s: filetype %u not loadable", path, sl->filetype);
+    img->is_dylib = sl->filetype != MH_EXECUTE;
+    img->is_pie = (sl->flags & MH_PIE) || img->is_dylib;
 
-    /* pass 0: validate every command's size and in-command offsets; after
-     * this the other passes may index commands without further checks. */
-    int nseg = 0;
-    if (hao_macho_check_cmds(cmds, mh.sizeofcmds, mh.ncmds, &nseg, why, sizeof why) != 0) ERR("%s: %s", path, why);
-    /* library validation (libval.c): checked on this descriptor, before anything is mapped */
-    if (!map_only && hao_libval_image(img, cmds, mh.ncmds, why, sizeof why) != 0) ERR("%s: %s", path, why);
+    /* pass 0 (hao_slice_open): every command's size and in-command offsets are valid; the passes below
+     * index commands without further checks. */
+    int nseg = sl->nsegs;
+    /* library validation (libval.c): on the bytes the image is then built from */
+    if (!map_only && hao_libval_image(img, sl, why, sizeof why) != 0) ERR("%s: %s", path, why);
+    if (sl->sig.cd) {
+        img->cdhash_type = sl->sig.hash_type;
+        memcpy(img->cdhash, sl->sig.cdhash, sizeof img->cdhash);
+    }
 #define FOR_EACH_CMD(p) for (const uint8_t *p = cmds; p; p = NULL) \
-        for (uint32_t _k = 0; _k < mh.ncmds; _k++, p += ((const struct load_command *)p)->cmdsize)
+        for (uint32_t _k = 0; _k < sl->ncmds; _k++, p += ((const struct load_command *)p)->cmdsize)
 
     /* pass 1: segment table, extent, sanity of every segment */
     segs = calloc(nseg ? (size_t)nseg : 1, sizeof *segs);
@@ -1054,7 +1189,6 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
                 ERR("%s: segment %.16s: file range [%#llx, +%#llx) outside the slice (%#llx bytes)", path, sg->segname,
                     (unsigned long long)sg->fileoff, (unsigned long long)sg->filesize, (unsigned long long)slice);
             if (sg->fileoff & (PAGE - 1)) ERR("%s: segment %.16s: fileoff %#llx not page aligned", path, sg->segname, (unsigned long long)sg->fileoff);
-            if (sg->fileoff == 0) hdr_seg = si - 1;
         }
         for (int j = 0; j < si - 1; j++) {
             const seginfo *o = &segs[j];
@@ -1074,8 +1208,16 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         if (sg->vmaddr + sg->vmsize > hi) hi = sg->vmaddr + sg->vmsize;
     }
     if (lo == UINT64_MAX) ERR("%s: no segments", path);
-    if (hdr_seg < 0 || segs[hdr_seg].vmaddr != lo)
+    /* The image starts with its mach header and load commands, readable: native code and hao read them
+     * at img->base (dyld's own rule for the first segment; src/jit.c hashes that range for an AOT cache). */
+    for (int k = 0; k < si; k++)
+        if (!segs[k].pagezero && segs[k].vmsize && segs[k].vmaddr == lo) hdr_seg = k;
+    if (hdr_seg < 0 || segs[hdr_seg].fileoff != 0 || !segs[hdr_seg].filesize)
         ERR("%s: the mach header is not mapped at the start of the image", path);
+    if (segs[hdr_seg].filesize < sizeof(struct mach_header_64) + (uint64_t)sl->sizeofcmds)
+        ERR("%s: the first segment (%#llx bytes of the file) does not hold the %u bytes of load commands", path,
+            (unsigned long long)segs[hdr_seg].filesize, sl->sizeofcmds);
+    if (!(segs[hdr_seg].initprot & VM_PROT_READ)) ERR("%s: the segment that holds the mach header is not readable", path);
     if (hi - lo > MAX_VMSIZE) ERR("%s: image spans %#llx bytes", path, (unsigned long long)(hi - lo));
     img->pref_base = lo;
     img->vmsize = hi - lo;
@@ -1119,26 +1261,40 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
             si++;
             if (is_pagezero(sg) || !sg->vmsize) continue;
             uint64_t addr = sg->vmaddr + img->slide;
-            if (sg->filesize) {
-                void *m = mmap((void *)(uintptr_t)addr, sg->filesize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED,
-                               img->fd, (off_t)(img->slice_off + sg->fileoff));
-                if (m == MAP_FAILED) ERR("%s: map %.16s: %s", path, sg->segname, strerror(errno));
-            }
             uint64_t fpage = (sg->filesize + PAGE - 1) & ~(PAGE - 1);
-            if (sg->vmsize > fpage) {
-                void *m = mmap((void *)(uintptr_t)(addr + fpage), sg->vmsize - fpage, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
-                if (m == MAP_FAILED) ERR("%s: zero-fill %.16s: %s", path, sg->segname, strerror(errno));
-            }
-            if (sg->filesize & (PAGE - 1)) {
-                /* zero the tail of the last file page beyond filesize */
-                uint64_t tail = addr + sg->filesize, end = addr + fpage;
-                if (end > addr + sg->vmsize) end = addr + sg->vmsize;
-                if (end > tail) memset((void *)(uintptr_t)tail, 0, end - tail);
+            if (sl->copied) {
+                /* The checked copy's bytes, in memory of the image's own. Whole pages are taken from the
+                 * copy without copying them (the kernel shares them until one side writes; the slice is
+                 * closed when the load ends), so the image does not cost its size twice while it loads. */
+                void *m = mmap((void *)(uintptr_t)addr, sg->vmsize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
+                if (m == MAP_FAILED) ERR("%s: map %.16s: %s", path, sg->segname, strerror(errno));
+                uint64_t whole = sg->filesize & ~(PAGE - 1);
+                if (whole && mach_vm_copy(mach_task_self(), (mach_vm_address_t)(uintptr_t)(sl->bytes + sg->fileoff), whole,
+                                          (mach_vm_address_t)addr) != KERN_SUCCESS)
+                    whole = 0;
+                memcpy((uint8_t *)m + whole, sl->bytes + sg->fileoff + whole, sg->filesize - whole);
+            } else {
+                if (sg->filesize) {
+                    void *m = mmap((void *)(uintptr_t)addr, sg->filesize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED,
+                                   img->fd, (off_t)(img->slice_off + sg->fileoff));
+                    if (m == MAP_FAILED) ERR("%s: map %.16s: %s", path, sg->segname, strerror(errno));
+                }
+                if (sg->vmsize > fpage) {
+                    void *m = mmap((void *)(uintptr_t)(addr + fpage), sg->vmsize - fpage, PROT_READ | PROT_WRITE,
+                                   MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
+                    if (m == MAP_FAILED) ERR("%s: zero-fill %.16s: %s", path, sg->segname, strerror(errno));
+                }
+                if (sg->filesize & (PAGE - 1)) {
+                    /* zero the tail of the last file page beyond filesize */
+                    uint64_t tail = addr + sg->filesize, end = addr + fpage;
+                    if (end > addr + sg->vmsize) end = addr + sg->vmsize;
+                    if (end > tail) memset((void *)(uintptr_t)tail, 0, end - tail);
+                }
             }
             if (sg->initprot & VM_PROT_EXECUTE) {
                 if (img->ncode >= HAO_MAX_RANGES) ERR("%s: more than %d code segments", path, HAO_MAX_RANGES);
-                if (!hao_code_alias_segment(img, addr, sg->filesize, sg->vmsize, img->fd, (off_t)(img->slice_off + sg->fileoff)))
+                if (!hao_code_alias_segment(img, addr, sg->filesize, sg->vmsize, img->fd, (off_t)(img->slice_off + sg->fileoff),
+                                            sl->copied ? sl->bytes + sg->fileoff : NULL))
                     ERR("%s: map %.16s into the code alias: %s", path, sg->segname, strerror(errno));
                 img->code_lo[img->ncode] = addr;
                 img->code_hi[img->ncode] = addr + sg->vmsize;
@@ -1198,13 +1354,11 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
             const struct linkedit_data_command *ld = (const void *)p;
             if (ld->datasize < 24) break;
             if (!in_range(ld->dataoff, ld->datasize, slice)) ERR("%s: lazy-load info outside the slice", path);
+            if (ld->datasize > MAX_LAZY_BLOB) ERR("%s: lazy-load info of %u bytes", path, ld->datasize);
             if (img->nlazy >= HAO_MAX_LAZY) ERR("%s: more than %d lazy-load dylibs", path, HAO_MAX_LAZY);
             uint8_t *buf = malloc((size_t)ld->datasize + 1);
             if (!buf) ERR("%s: out of memory", path);
-            if (pread(img->fd, buf, ld->datasize, (off_t)(img->slice_off + ld->dataoff)) != (ssize_t)ld->datasize) {
-                free(buf);
-                ERR("%s: short linkedit read", path);
-            }
+            memcpy(buf, sl->bytes + ld->dataoff, ld->datasize);
             buf[ld->datasize] = 0;
             img->lazy_info[img->nlazy] = buf;
             img->lazy_info_size[img->nlazy] = ld->datasize;
@@ -1220,6 +1374,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         case LC_FUNCTION_STARTS: {
             const struct linkedit_data_command *ld = (const void *)p;
             if (!in_range(ld->dataoff, ld->datasize, slice)) ERR("%s: function starts outside the slice", path);
+            if (ld->datasize > MAX_BLOB) ERR("%s: function starts of %u bytes", path, ld->datasize);
             img->func_starts_off = ld->dataoff;
             img->func_starts_size = ld->datasize;
             break;
@@ -1239,14 +1394,15 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
                     ld->dataoff, ld->datasize);
             if (lc->cmd == LC_DYLD_CHAINED_FIXUPS ? chained_lc != NULL : img->exports_trie != NULL)
                 ERR("%s: duplicate %s", path, lc->cmd == LC_DYLD_CHAINED_FIXUPS ? "LC_DYLD_CHAINED_FIXUPS" : "exports trie");
-            uint8_t *buf = malloc(ld->datasize ? ld->datasize : 1);
-            if (!buf) ERR("%s: out of memory", path);
-            if (pread(img->fd, buf, ld->datasize, (off_t)(img->slice_off + ld->dataoff)) != (ssize_t)ld->datasize) {
-                free(buf);
-                ERR("%s: short linkedit read", path);
-            }
-            if (lc->cmd == LC_DYLD_CHAINED_FIXUPS) { chained_lc = chained = buf; chained_size = ld->datasize; }
-            else { img->exports_trie = buf; img->exports_trie_size = ld->datasize; }
+            if (ld->datasize > MAX_BLOB)
+                ERR("%s: %s of %u bytes", path, lc->cmd == LC_DYLD_CHAINED_FIXUPS ? "chained fixups" : "exports trie", ld->datasize);
+            if (lc->cmd == LC_DYLD_CHAINED_FIXUPS) {
+                /* read in place: the slice outlives the fixups */
+                chained_lc = chained = sl->bytes + ld->dataoff;
+                chained_size = ld->datasize;
+            } else if (!(img->exports_trie = blob_copy(sl->bytes + ld->dataoff, ld->datasize))) {
+                ERR("%s: out of memory", path);
+            } else img->exports_trie_size = ld->datasize;
             break;
         }
         case LC_DYLD_INFO: case LC_DYLD_INFO_ONLY: {
@@ -1257,22 +1413,17 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
             uint32_t sizes[4] = {di->rebase_size, di->bind_size, di->lazy_bind_size, di->weak_bind_size};
             for (int k = 0; k < 4; k++) {
                 if (!in_range(offsets[k], sizes[k], slice)) ERR("%s: legacy dyld stream outside the slice", path);
+                if (sizes[k] > MAX_BLOB) ERR("%s: legacy dyld stream of %u bytes", path, sizes[k]);
                 if (!sizes[k]) continue;
-                legacy[k] = malloc(sizes[k]); legacy_size[k] = sizes[k];
-                if (!legacy[k]) ERR("%s: out of memory", path);
-                if (pread(img->fd, legacy[k], sizes[k], (off_t)(img->slice_off + offsets[k])) != (ssize_t)sizes[k])
-                    ERR("%s: short legacy dyld read", path);
+                legacy[k] = sl->bytes + offsets[k];   /* read in place */
+                legacy_size[k] = sizes[k];
             }
             if (!in_range(di->export_off, di->export_size, slice)) ERR("%s: export trie outside the slice", path);
+            if (di->export_size > MAX_BLOB) ERR("%s: exports trie of %u bytes", path, di->export_size);
             if (di->export_size) {
                 if (img->exports_trie) ERR("%s: duplicate exports trie", path);
-                uint8_t *buf = malloc(di->export_size);
-                if (!buf) ERR("%s: out of memory", path);
-                if (pread(img->fd, buf, di->export_size, (off_t)(img->slice_off + di->export_off)) != (ssize_t)di->export_size) {
-                    free(buf);
-                    ERR("%s: short export trie read", path);
-                }
-                img->exports_trie = buf; img->exports_trie_size = di->export_size;
+                if (!(img->exports_trie = blob_copy(sl->bytes + di->export_off, di->export_size))) ERR("%s: out of memory", path);
+                img->exports_trie_size = di->export_size;
             }
             break;
         }
@@ -1296,12 +1447,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
 
     /* function starts: exact entry points, for callback thunking */
     if (img->func_starts_size) {
-        uint8_t *fs = malloc(img->func_starts_size);
-        if (!fs) ERR("%s: out of memory", path);
-        if (pread(img->fd, fs, img->func_starts_size, (off_t)(img->slice_off + img->func_starts_off)) != (ssize_t)img->func_starts_size) {
-            free(fs);
-            ERR("%s: short function starts read", path);
-        }
+        const uint8_t *fs = sl->bytes + img->func_starts_off;
         size_t cap = 256;
         img->fstarts = malloc(cap * 8);
         const uint8_t *q = fs, *e = fs + img->func_starts_size;
@@ -1321,7 +1467,6 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
             }
             img->fstarts[img->nfstarts++] = a;
         }
-        free(fs);
         if (bad || !img->fstarts) ERR("%s: malformed LC_FUNCTION_STARTS", path);
     }
     if (img->entry && !img->nfstarts) {
@@ -1368,10 +1513,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     }
     hao_code_poison(img);   /* HAO_CODE_ALIAS */
 #undef FOR_EACH_CMD
-    free(chained);
-    for (int k = 0; k < 4; k++) free(legacy[k]);
     free(segs);
-    free(cmds);
+    hao_slice_close(sl);
     /* everything is mapped or copied: the file is not needed again, and an
      * open descriptor would leak into every child the guest spawns */
     close(img->fd);
@@ -1379,10 +1522,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     return img;
 
 fail:
-    free(chained);
-    for (int k = 0; k < 4; k++) free(legacy[k]);
     free(segs);
-    free(cmds);
+    hao_slice_close(sl);
     if (!linked) img->next = NULL;
     release_image(img, visible);
     return NULL;

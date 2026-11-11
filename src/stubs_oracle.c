@@ -22,14 +22,9 @@ int hao_crit_depth(void) { return 1; }
 /* jit.o's AOT writer and loader (never reached from the oracle) */
 hao_image *hao_map_image_only(const char *path, char *err, size_t errlen) { (void)path; (void)err; (void)errlen; return 0; }
 void hao_unload_image(hao_image *img) { (void)img; }
-int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype, uint32_t sig_off,
-                        uint32_t sig_size, const hao_range *exec, int nexec, bool signer, const char *team, hao_imgsig *out,
-                        char *why, size_t n)
-{
-    (void)fd; (void)path; (void)slice_off; (void)slice_size; (void)subtype; (void)sig_off; (void)sig_size; (void)exec;
-    (void)nexec; (void)signer; (void)team; (void)out; (void)why; (void)n;
-    return -1;
-}
+hao_slice *hao_slice_open(int fd, char *why, size_t n) { (void)fd; (void)why; (void)n; return 0; }
+void hao_slice_close(hao_slice *sl) { (void)sl; }
+int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n) { (void)sl; (void)bad_exec; (void)why; (void)n; return -1; }
 bool hao_guest_sig_cdhash(const uint8_t *blob, size_t len, uint8_t cdhash[20], uint8_t *hash_type, char *why, size_t n)
 {
     (void)blob; (void)len; (void)cdhash; (void)hash_type; (void)why; (void)n;

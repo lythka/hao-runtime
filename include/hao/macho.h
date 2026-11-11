@@ -23,7 +23,9 @@ typedef struct hao_image hao_image;
 
 /* Resolve an import. ordinal: 1..n = dependency index+1, 0 = self,
  * -1 = main executable, -2 = flat, -3 = weak lookup.
- * Return the address to store; set *found=false if unresolved. */
+ * Return the address to store; set *found=false if unresolved. name is
+ * valid for the call only (it lies in the image's fixups, which the loader
+ * gives back when the load ends): a resolver that keeps it copies it. */
 typedef uint64_t (*hao_resolver)(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 
 struct hao_image {
@@ -90,6 +92,9 @@ struct hao_image {
     uint8_t uuid[16];
     bool has_uuid;
     char libval_route[96];      /* libval.c: how its code signature was decided ("" not checked) */
+    /* the CodeDirectory its pages were verified with (libval.c hao_slice_verify), on the bytes it was built
+     * from: its hash type (0: the image was not verified) and cdhash */
+    uint8_t cdhash_type, cdhash[20];
     uint64_t func_starts_off;   /* LC_FUNCTION_STARTS (file offset in slice) */
     uint32_t func_starts_size;
     uint64_t *fstarts;          /* sorted absolute function start addresses */
@@ -116,6 +121,79 @@ extern bool hao_island_reserve;
 /* the bytes of island room for an image with nfstarts_bound function starts at most */
 uint64_t hao_island_room(uint64_t nfstarts_bound);
 
+/*
+ * The slice of a guest file that an image is built from, as bytes that do
+ * not change while hao uses them. hao checks a guest's code signature itself
+ * (libval.c, guest_sig.c) and builds the image afterwards. If the two read
+ * the file separately, whoever may write the file can change it in between:
+ * the kernel validates a native image page by page as it pages it in, and
+ * nothing does that for pages hao maps as data. So the slice is taken once,
+ * and the mach header, the load commands, the signature, every hashed page,
+ * the linkedit blobs and the segments all come from bytes:
+ *  - copied: a file that somebody other than root may change. The slice was
+ *    read once into anonymous memory, and the image's segments are made of
+ *    that memory (whole pages are handed over, not copied again). The image
+ *    then shares no page with the file or with another process: it costs
+ *    the slice's size for as long as it is loaded, in memory that can be
+ *    compressed but not dropped (measured: 7.2 MB more peak footprint for an
+ *    8.4 MB library, 66 MB for a 67 MB one; load time unchanged);
+ *  - not copied: a file only root can change (root owns it, no group or
+ *    other write bit, no ACL, on a local volume: the system's own files).
+ *    bytes is the file, mapped, and the segments are mapped from the file
+ *    as before, shared with every process that maps it.
+ * fd stays the file for what the kernel is asked about it (F_ADDFILESIGS_INFO,
+ * F_CHECK_LV, F_GETSIGSINFO); the slice does not own it.
+ */
+/* An embedded code signature as hao_codesig_parse (libval.c) read it: the
+ * one reader, for the CLI's policy, integrity and library validation alike.
+ * Pointers lie in the signature that was parsed (for a slice: in its bytes). */
+typedef struct {
+    const uint8_t *cd;          /* the CodeDirectory of highest hash rank (NULL: nothing parsed) */
+    uint32_t cd_len;
+    uint32_t flags;             /* its flags (adhoc 0x2, library 0x2000, runtime 0x10000) */
+    uint8_t platform;           /* platform identifier (0: not a platform binary) */
+    uint8_t hash_type, hash_size, page_shift;
+    uint32_t hash_off, n_code_slots;
+    uint64_t code_limit;
+    uint8_t cdhash[20];
+    const char *ident, *team;   /* NUL-terminated in cd; team NULL: no Team ID */
+    const uint8_t *ents;        /* XML entitlements blob, header included, sealed by cd (NULL: none) */
+    uint32_t ents_len;
+    const uint8_t *der_ents;    /* DER entitlements blob, likewise */
+    uint32_t der_ents_len;
+    bool dlv;                   /* com.apple.security.cs.disable-library-validation */
+} hao_codesig;
+
+typedef struct hao_slice {
+    int fd;
+    uint64_t dev, ino;          /* the file (st_dev, st_ino) */
+    uint64_t off, size;         /* the slice in the file */
+    const uint8_t *bytes;       /* the slice, [0, size) */
+    bool copied;
+    uint32_t cpusubtype;        /* the mach header's */
+    uint32_t filetype, flags;   /* the mach header's */
+    const uint8_t *cmds;        /* the load commands, in bytes, validated (hao_macho_check_cmds) */
+    uint32_t ncmds, sizeofcmds;
+    int nsegs;                  /* LC_SEGMENT_64 commands */
+    uint32_t sig_off, sig_size; /* its one LC_CODE_SIGNATURE (sig_size 0: not signed); not yet checked to lie in the slice */
+    hao_codesig sig;            /* the signature, once hao_slice_verify accepted it (sig.cd NULL: not verified) */
+} hao_slice;
+/* Page-hash passes hao_slice_verify has made in this process (tests: one for each signed image). */
+extern unsigned hao_slice_verify_passes;
+/* The slice the loader runs (arm64e, else arm64) of the regular file open on
+ * fd; NULL with why filled if there is none or its header or load commands
+ * are malformed. */
+hao_slice *hao_slice_open(int fd, char *why, size_t n);
+void hao_slice_close(hao_slice *sl);
+/* Leave sl for the loader: the next hao_load_image_fd_cb of sl->fd builds the
+ * image from it instead of opening the slice again, and closes it. For a
+ * caller that has checked these bytes and must load what it checked
+ * (hao_guest_sig_enforce). */
+void hao_slice_hand(hao_slice *sl);
+/* The loader's unit tests: 1 maps every file, 2 copies every file (0: by
+ * what the file's owner, mode, ACL and volume say). */
+extern int hao_slice_test_path;
+
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply
  * fixups. The file is untrusted: every offset, size and count is validated
  * against the slice, its linkedit blobs and the reserved region. Returns
@@ -129,8 +207,9 @@ hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_
                              size_t errlen);
 /* The same from fd, an open descriptor of the file, instead of opening path
  * (which then only names the image): for a caller that has checked that
- * descriptor and must load what it checked. The image owns fd from here on;
- * it is closed whether the load succeeds or fails. */
+ * descriptor and must load what it checked (the slice it left with
+ * hao_slice_hand, if any). The image owns fd from here on; it is closed
+ * whether the load succeeds or fails. */
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                                 char *err, size_t errlen);
 /* Native bundle fallback: recheck ARM-only MH_BUNDLE on the descriptor used
@@ -148,8 +227,9 @@ hao_image *hao_map_image_only(const char *path, char *err, size_t errlen);
  * another thread may hold it from a lookup that raced the release. */
 void hao_unload_image(hao_image *img);
 /* Validate a load-command area (cmdsize, per-command sizes, nsects, string
- * offsets); 0 if every command is well formed, else -1 with why filled.
- * *nsegs gets the LC_SEGMENT_64 count. Used for files and cache images. */
+ * offsets, at most one LC_CODE_SIGNATURE); 0 if every command is well
+ * formed, else -1 with why filled. *nsegs gets the LC_SEGMENT_64 count.
+ * Used for files and cache images. */
 int hao_macho_check_cmds(const uint8_t *cmds, uint32_t sizeofcmds, uint32_t ncmds, int *nsegs, char *why, size_t n);
 /* The file's arm64 dylib slice has no ObjC or Swift metadata (a C++
  * library that may run as guest code next to its native slice); false with
@@ -159,56 +239,68 @@ bool hao_macho_guest_cxx_eligible(const char *path, char *why, size_t whylen);
  * subtype first), else arm64. Thin files give off 0 and size fsize. */
 bool hao_macho_choose_slice(int fd, uint64_t fsize, uint64_t *off, uint64_t *size, uint32_t *sub, char *why, size_t whylen);
 
-/* Library validation as the guest gets it natively (src/libval.c). */
-typedef struct {
-    bool sig;            /* a CodeDirectory was found */
-    uint32_t flags;      /* CodeDirectory flags (runtime 0x10000, library 0x2000) */
-    uint8_t platform;    /* platform identifier (0: not a platform binary) */
-    bool team;           /* has a Team ID */
-    bool dlv;            /* com.apple.security.cs.disable-library-validation */
-    char team_id[32];    /* the Team ID ("" none, or longer than 31 bytes: compared as none) */
-} hao_codesig;
-/* A guest image's signature as hao checks it in user space (guest_sig.c
- * hao_guest_sig_image, through hao_libval_set_verifier). */
-typedef struct { uint64_t off, end; } hao_range;   /* slice offsets [off, end) */
-typedef struct {
-    uint8_t cdhash[20], hash_type, page_shift;
-    bool adhoc;          /* CS_ADHOC: nobody signed it */
-    bool apple;          /* signer asked: a trusted cdhash list or `anchor apple` (Security) */
-    bool team_ok;        /* signer asked with a team: its certificate is that Team ID's */
-    bool bad_exec;       /* invalid: a page of an executable segment does not match its hash */
-    char team[64];       /* the CodeDirectory's Team ID ("" none) */
-    const char *by;      /* who vouched (signer asked) */
-} hao_imgsig;
-typedef int (*hao_imgsig_fn)(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype,
-                             uint32_t sig_off, uint32_t sig_size, const hao_range *exec, int nexec, bool signer,
-                             const char *team, hao_imgsig *out, char *why, size_t n);
-int hao_guest_sig_image(int fd, const char *path, uint64_t slice_off, uint64_t slice_size, uint32_t subtype,
-                        uint32_t sig_off, uint32_t sig_size, const hao_range *exec, int nexec, bool signer,
-                        const char *team, hao_imgsig *out, char *why, size_t n);
+/* The code signature of a slice and library validation as the guest gets it
+ * natively (src/libval.c). */
+/* Parse an embedded signature (SuperBlob) as xnu validates one; false with
+ * why filled if it is malformed or has no CodeDirectory. */
+bool hao_codesig_parse(const uint8_t *blob, size_t len, hao_codesig *cs, char *why, size_t n);
 /* The cdhash and hash type of an embedded signature held in memory, after
- * the structure checks hao_guest_sig_image makes (no page is hashed): the
- * AOT loader's code identity of a signed image (jit.c). */
+ * hao_codesig_parse's structure checks (no page is hashed): the AOT loader's
+ * code identity of a signed image (jit.c). */
 bool hao_guest_sig_cdhash(const uint8_t *blob, size_t len, uint8_t cdhash[20], uint8_t *hash_type, char *why, size_t n);
-/* The runtime hands libval.c hao's signature checker (guest_sig.c), and
- * whether to check signers in user space even where the kernel could
- * (HAO_LIBVAL_USER, tests). Without a checker (the loader's unit tests and
- * fuzzers) only the kernel is asked. report writes a diagnostic line (the
- * diagnostics log) before an invalid page ends the process. */
-void hao_libval_set_verifier(hao_imgsig_fn fn, bool force_user, void (*report)(const char *line));
-/* Parse an embedded signature (SuperBlob); false if it has no CodeDirectory. */
-bool hao_codesig_parse(const uint8_t *blob, size_t len, hao_codesig *cs);
 /* Would the program load only platform or same-team libraries natively? */
 bool hao_codesig_library_validated(const hao_codesig *cs);
+/* Check the slice's signature on its bytes: structure, every page hash, and
+ * that nothing in the slice but the signature lies outside the hashed range.
+ * 0: valid, and sl->sig is the signature; -1: not (why; *bad_exec, if not
+ * NULL, when a page of an executable segment does not match its hash). A
+ * slice is hashed once: a second call for a verified slice returns 0. */
+int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n);
+/* Who signed a guest library whose signature hao verified (sl->sig), where
+ * the kernel cannot say (guest_sig.c hao_guest_sig_image, through
+ * hao_libval_set_verifier): nobody (ad hoc), Apple (a trusted cdhash list
+ * or `anchor apple`), or with team a certificate of that Team ID. */
+typedef struct {
+    bool apple;          /* a trusted cdhash list or `anchor apple` (Security) */
+    bool team_ok;        /* asked with a team: the certificate is that Team ID's */
+    const char *by;      /* who vouched */
+} hao_imgsig;
+typedef int (*hao_imgsig_fn)(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n);
+int hao_guest_sig_image(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n);
+/* The runtime hands libval.c the signer check (guest_sig.c), and whether to
+ * establish signers in user space even where the kernel could
+ * (HAO_LIBVAL_USER, tests). Without one (the loader's unit tests and
+ * fuzzers) a library that needs it is refused. report writes a diagnostic
+ * line (the diagnostics log) before an invalid page ends the process. */
+void hao_libval_set_verifier(hao_imgsig_fn fn, bool force_user, void (*report)(const char *line));
+/* An embedded program's stub names the ARM slice it was made for in its
+ * __TEXT,__hao_slice section (tools/hao-embed writes it; the stub's own
+ * signature, which the kernel validates, covers it): the hash type and
+ * cdhash of that slice's CodeDirectory. */
+#define HAO_SLICE_SECTION "__hao_slice"
+typedef struct {
+    char magic[8];              /* HAO_SLICE_MAGIC */
+    uint8_t version;            /* 1 */
+    uint8_t hash_type;          /* the CodeDirectory's hash type (cs_blobs.h) */
+    uint8_t zero[2];
+    uint8_t cdhash[20];
+} hao_slice_record;
+#define HAO_SLICE_MAGIC "haoslice"
+/* Is sl the slice the record names? The slice's signature is verified
+ * (hao_slice_verify: structure, page hashes) and its CodeDirectory must be
+ * the recorded one. 0: yes; -1: no, or the record is not one hao reads
+ * (why). The loader's gate asks this for the main executable when the
+ * process's own main executable has the section. */
+int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n);
 enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
 /* The next image loaded is the main executable: its signature sets the
  * policy (enabled = false: off, HAO_NO_LIBVAL=1 in an ordinary process;
  * no boot argument turns it off). */
 void hao_libval_expect_main(bool enabled);
 /* The loader's gate, after an image's load commands validate and before it
- * is mapped; img->fd and the slice fields are set. 0 = may load, else -1
- * with why filled. */
-int hao_libval_image(hao_image *img, const uint8_t *cmds, uint32_t ncmds, char *why, size_t n);
+ * is mapped: sl is the slice the image is then built from. img->fd and the
+ * slice fields are set. 0 = may load, else -1 with why filled. */
+int hao_libval_image(hao_image *img, hao_slice *sl, char *why, size_t n);
 int hao_libval_mode(void);
 const char *hao_libval_reason(void);
 
