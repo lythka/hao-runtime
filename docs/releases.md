@@ -98,6 +98,12 @@ no-ops, reject conflicting rows, and keep existing thunk libraries. Do not
 replace base units with delta files. Rebuild runtime-bound AOT caches for the
 selected runtime and package the complete compatibility input with it.
 
+A unit is used only for a loaded library with its UUID. `hao-image-payload
+--units` therefore fails if a unit names no image of the image's
+`dyld_shared_cache_x86_64` (`tools/hao_ifunit.py match UNITDIR CACHE`, which
+also checks an installed `/usr/lib/hao/if` copy against a cache). Units
+generated for another build, or for `dyld_shared_cache_x86_64h`, are refused.
+
 ## Allowlist
 
 `releases/runtime-files.txt` lists every file this repository may contain.
