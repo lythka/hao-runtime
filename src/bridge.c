@@ -598,6 +598,11 @@ static void init_once(void)
             fprintf(HAO_DIAG, "generated tables describe macOS %s (%s), table format %d; this system is %s\n",
                     HAO_GEN_OS_VERSION, HAO_GEN_OS_BUILD, HAO_GEN_FORMAT, build[0] ? build : "an unknown build");
         }
+        char why[512];
+        if (hao_cxx_demangle_selfcheck(why, sizeof why) > 0) {
+            hao_diag_prefix(HAO_DIAG);
+            fprintf(HAO_DIAG, "demangler spelling changed: %s\n", why);
+        }
     }
     identity_original = (const void *(*)(const void *))dlsym(RTLD_DEFAULT, "hao_identity_original");
     hao_bridge_counting = hao_opt.bridge_stats || hao_opt.bridge_check;
@@ -996,6 +1001,245 @@ static int table_type(const char *gname, char *kind, const char **enc)
     return 0;
 }
 
+/* ------------------------------------------- Itanium C++ mangled names
+ *
+ * Just enough of the Itanium C++ ABI's mangling grammar (5.1) to read the
+ * components of a function's nested name from the mangled form itself:
+ * types, template arguments, substitutions and the special names are
+ * skipped by their syntax. Each step returns the position after what it
+ * read, or NULL for what it does not read (an expression, a local name, a
+ * function-parameter reference, ...), and then nothing is concluded from
+ * the mangled form. Substitutions are skipped, not resolved: a component
+ * that is one says only that it is one. */
+typedef struct {
+    char kind;          /* 'n' source name, 'c' constructor, 'd' destructor, 'o' operator, 's' substitution, 't' other */
+    char code;          /* constructor/destructor: '0'..'5' (C1, CI1, D2, ...) */
+    const char *id;     /* 'n': the identifier, len bytes (not NUL-terminated) */
+    size_t len;
+} cx_comp;
+
+static const char *cx_type(const char *p, int d);
+
+static bool cx_digit(char c) { return c >= '0' && c <= '9'; }
+
+static const char *cx_source_name(const char *p, const char **id, size_t *len)
+{
+    if (!cx_digit(*p)) return NULL;
+    size_t n = 0;
+    while (cx_digit(*p)) {
+        n = n * 10 + (size_t)(*p++ - '0');
+        if (n > 4096) return NULL;
+    }
+    for (size_t k = 0; k < n; k++) if (!p[k]) return NULL;
+    if (id) { *id = p; *len = n; }
+    return p + n;
+}
+
+/* [<seq-id>] _ (base 36: digits and capitals), as in S_, S1_, T_, T0_ */
+static const char *cx_seq(const char *p)
+{
+    while (cx_digit(*p) || (*p >= 'A' && *p <= 'Z')) p++;
+    return *p == '_' ? p + 1 : NULL;
+}
+
+static const char *cx_template_args(const char *p, int d);
+
+/* L <type> <value> E; L _Z <encoding> E is not read */
+static const char *cx_expr_primary(const char *p, int d)
+{
+    p++;
+    if (*p == '_' || *p == 'Z') return NULL;
+    if (!(p = cx_type(p, d))) return NULL;
+    while (*p && *p != 'E') {
+        if (!cx_digit(*p) && !(*p >= 'a' && *p <= 'f') && *p != 'n' && *p != 'p' && *p != '.') return NULL;
+        p++;
+    }
+    return *p == 'E' ? p + 1 : NULL;
+}
+
+static const char *cx_template_arg(const char *p, int d)
+{
+    if (p[0] == 'T' && p[1] == 'y') return cx_template_arg(p + 2, d);   /* a type parameter's declaration */
+    if (p[0] == 'T' && p[1] == 'n') {                                   /* a non-type parameter's: its type */
+        if (!(p = cx_type(p + 2, d))) return NULL;
+        return cx_template_arg(p, d);
+    }
+    switch (*p) {
+    case 'L': return cx_expr_primary(p, d);
+    case 'J':
+        for (p++; *p != 'E';)
+            if (!*p || !(p = cx_template_arg(p, d))) return NULL;
+        return p + 1;
+    case 'X': return NULL;       /* an expression */
+    default: return cx_type(p, d);
+    }
+}
+
+/* I <template-arg>+ E */
+static const char *cx_template_args(const char *p, int d)
+{
+    if (++d > 64) return NULL;
+    for (p++; *p != 'E';)
+        if (!*p || !(p = cx_template_arg(p, d))) return NULL;
+    return p + 1;
+}
+
+/* <unqualified-name> [<abi-tags>] */
+static const char *cx_unqualified(const char *p, int d, cx_comp *out)
+{
+    cx_comp c = {.kind = 't'};
+    if (p[0] == 'L' && cx_digit(p[1])) p++;                 /* internal linkage */
+    if (cx_digit(*p)) {
+        c.kind = 'n';
+        p = cx_source_name(p, &c.id, &c.len);
+    } else if (p[0] == 'C' && p[1] == 'I' && (p[2] == '1' || p[2] == '2')) {   /* inheriting constructor: CI1 <base> */
+        c.kind = 'c', c.code = p[2];
+        p = cx_type(p + 3, d);
+    } else if (p[0] == 'C' && p[1] >= '1' && p[1] <= '5') {
+        c.kind = 'c', c.code = p[1];
+        p += 2;
+    } else if (p[0] == 'D' && p[1] >= '0' && p[1] <= '5') {
+        c.kind = 'd', c.code = p[1];
+        p += 2;
+    } else if (p[0] == 'D' && p[1] == 'C') {               /* structured binding: DC <source-name>+ E */
+        for (p += 2; *p != 'E';)
+            if (!(p = cx_source_name(p, NULL, NULL))) return NULL;
+        p++;
+    } else if (p[0] == 'U' && p[1] == 't') {               /* unnamed type: Ut [<number>] _ */
+        for (p += 2; cx_digit(*p); p++) {}
+        p = *p == '_' ? p + 1 : NULL;
+    } else if (p[0] == 'U' && p[1] == 'l') {               /* lambda: Ul <parameter types> E [<number>] _ */
+        for (p += 2; p && *p != 'E';) p = *p ? cx_type(p, d) : NULL;
+        if (!p) return NULL;
+        for (p++; cx_digit(*p); p++) {}
+        p = *p == '_' ? p + 1 : NULL;
+    } else if (p[0] >= 'a' && p[0] <= 'z' && p[1]) {        /* an operator */
+        c.kind = 'o', c.id = p, c.len = 2;
+        if (p[0] == 'c' && p[1] == 'v') p = cx_type(p + 2, d);
+        else if (p[0] == 'l' && p[1] == 'i') p = cx_source_name(p + 2, NULL, NULL);
+        else if (p[0] == 'v' && cx_digit(p[1])) p = cx_source_name(p + 2, NULL, NULL);
+        else if ((p[1] >= 'a' && p[1] <= 'z') || (p[1] >= 'A' && p[1] <= 'Z')) p += 2;
+        else return NULL;
+    } else
+        return NULL;
+    while (p && *p == 'B') p = cx_source_name(p + 1, NULL, NULL);   /* ABI tags */
+    if (p && out) *out = c;
+    return p;
+}
+
+/* N [<CV-qualifiers>] [<ref-qualifier>] <prefix> <unqualified-name> E, at 'N'. last[0] and last[1]: the
+ * last two components (kind 0: none); *cv_const: the K qualifier (a const member function). */
+static const char *cx_nested(const char *p, int d, cx_comp last[2], bool *cv_const)
+{
+    cx_comp prev = {0}, cur = {0};
+    bool k = false;
+    if (++d > 64) return NULL;
+    for (p++; *p == 'r' || *p == 'V' || *p == 'K'; p++) k |= *p == 'K';
+    if (*p == 'R' || *p == 'O') p++;
+    while (*p != 'E') {
+        cx_comp c = {.kind = 's'};
+        if (!*p) return NULL;
+        if (*p == 'I') {                                   /* the template arguments of the component before */
+            if (!cur.kind || !(p = cx_template_args(p, d))) return NULL;
+            continue;
+        }
+        if (*p == 'M') { p++; continue; }                  /* a data-member prefix */
+        if (p[0] == 'S' && p[1] == 't') {                   /* ::std */
+            c.kind = 'n', c.id = "std", c.len = 3;
+            p += 2;
+        } else if (p[0] == 'S' && p[1] && strchr("absiod", p[1]))
+            p += 2;
+        else if (p[0] == 'S')
+            p = cx_seq(p + 1);
+        else if (p[0] == 'T' && (p[1] == '_' || cx_digit(p[1])))
+            p = cx_seq(p + 1);
+        else if (p[0] == 'D' && (p[1] == 't' || p[1] == 'T'))
+            return NULL;                                   /* decltype */
+        else
+            p = cx_unqualified(p, d, &c);
+        if (!p) return NULL;
+        prev = cur;
+        cur = c;
+    }
+    if (!cur.kind) return NULL;
+    if (last) { last[0] = prev; last[1] = cur; }
+    if (cv_const) *cv_const = k;
+    return p + 1;
+}
+
+static const char *cx_type(const char *p, int d)
+{
+    if (++d > 64 || !*p) return NULL;
+    char c = *p;
+    if (strchr("vwbcahstijlmxynofdegz", c)) return p + 1;
+    switch (c) {
+    case 'r': case 'V': case 'K': case 'P': case 'R': case 'O': case 'C': case 'G':
+        return cx_type(p + 1, d);
+    case 'U':                                              /* vendor qualifier U <source-name> [<template-args>] <type> */
+        if (!(p = cx_source_name(p + 1, NULL, NULL))) return NULL;
+        if (*p == 'I' && !(p = cx_template_args(p, d))) return NULL;
+        return cx_type(p, d);
+    case 'u':                                              /* vendor type */
+        if (!(p = cx_source_name(p + 1, NULL, NULL))) return NULL;
+        return *p == 'I' ? cx_template_args(p, d) : p;
+    case 'F':                                              /* F [Y] <types> [<ref-qualifier>] E */
+        if (*++p == 'Y') p++;
+        while (*p != 'E') {
+            if ((*p == 'R' || *p == 'O') && p[1] == 'E') { p++; break; }
+            if (!*p || !(p = cx_type(p, d))) return NULL;
+        }
+        return p + 1;
+    case 'A':                                              /* A [<number>] _ <type> */
+        for (p++; cx_digit(*p); p++) {}
+        return *p == '_' ? cx_type(p + 1, d) : NULL;
+    case 'M':                                              /* M <class type> <member type> */
+        if (!(p = cx_type(p + 1, d))) return NULL;
+        return cx_type(p, d);
+    case 'T':
+        if (p[1] == 's' || p[1] == 'u' || p[1] == 'e') return cx_type(p + 2, d);   /* elaborated: struct, union, enum */
+        if (!(p = cx_seq(p + 1))) return NULL;            /* a template parameter */
+        return *p == 'I' ? cx_template_args(p, d) : p;
+    case 'S':
+        if (p[1] == 't') p = cx_unqualified(p + 2, d, NULL);
+        else if (p[1] && strchr("absiod", p[1])) p += 2;
+        else p = cx_seq(p + 1);
+        return p && *p == 'I' ? cx_template_args(p, d) : p;
+    case 'N':
+        return cx_nested(p, d, NULL, NULL);
+    case 'D':
+        switch (p[1]) {
+        case 'd': case 'e': case 'f': case 'h': case 'i': case 's': case 'u': case 'a': case 'c': case 'n':
+            return p + 2;
+        case 'F':                                          /* DF <number> _ | b | x */
+            for (p += 2; cx_digit(*p); p++) {}
+            return *p == '_' || *p == 'b' || *p == 'x' ? p + 1 : NULL;
+        case 'B': case 'U':                                /* _BitInt: DB <number> _ */
+            for (p += 2; cx_digit(*p); p++) {}
+            return *p == '_' ? p + 1 : NULL;
+        case 'p':                                          /* pack expansion */
+            return cx_type(p + 2, d);
+        case 'v':                                          /* vector: Dv <number> _ <type> */
+            if (!cx_digit(p[2])) return NULL;
+            for (p += 2; cx_digit(*p); p++) {}
+            return *p == '_' ? cx_type(p + 1, d) : NULL;
+        case 'x': case 'o':                                /* transaction_safe / noexcept function type */
+            return cx_type(p + 2, d);
+        case 'w':                                          /* dynamic exception specification */
+            for (p += 2; *p != 'E';)
+                if (!*p || !(p = cx_type(p, d))) return NULL;
+            return cx_type(p + 1, d);
+        default:
+            return NULL;
+        }
+    default:
+        if (cx_digit(c) || (c == 'L' && cx_digit(p[1]))) {   /* a class or enum: <unqualified-name> [<template-args>] */
+            if (!(p = cx_unqualified(p, d, NULL))) return NULL;
+            return *p == 'I' ? cx_template_args(p, d) : p;
+        }
+        return NULL;
+    }
+}
+
 /*
  * C++ constructors and destructors. In a mangled name (Itanium C++ ABI
  * 5.1.4.3) a constructor is <ctor-dtor-name> C1/C2/C3 or CI1/CI2 <base>
@@ -1003,66 +1247,23 @@ static int table_type(const char *gname, char *kind, const char **enc)
  * (N ... E); destructors take no parameters (Ev). The ARM C++ ABI that
  * Apple arm64 follows returns `this` from constructors and from complete
  * and base-object destructors (not from the deleting D0, nor the allocating
- * C3), and guest code compiled for it uses x0 after such a call; x86_64
- * returns void. The demangled name (native libc++abi) must agree: its last
- * component is the class's own name (constructor) or ~name (destructor).
+ * C3), constructor templates included, and guest code compiled for it uses
+ * x0 after such a call; x86_64 returns void. The nested name is read from
+ * the mangled form (cx_nested), not from a demangler's spelling of it.
  */
-typedef char *(*demangle_fn)(const char *, char *, size_t *, int *);
-
-/* The last two components of a demangled function name before its
- * parameter list, template arguments removed: "ns::X<int>::X(int)" -> X, X. */
-static bool last_two(const char *d, char *cls, char *fn, size_t n)
-{
-    char comp[2][256];
-    size_t len[2] = {0, 0};
-    int cur = 0, depth = 0;
-    bool any = false;
-    for (const char *p = d; *p; p++) {
-        if (*p == '<') { depth++; continue; }
-        if (*p == '>') { depth--; continue; }
-        if (depth) continue;
-        if (*p == '(') {
-            if (!any) return false;
-            comp[cur][len[cur]] = 0;
-            int prev = cur ^ 1;
-            comp[prev][len[prev]] = 0;
-            snprintf(cls, n, "%s", comp[prev]);
-            snprintf(fn, n, "%s", comp[cur]);
-            return true;
-        }
-        if (p[0] == ':' && p[1] == ':') { p++; cur ^= 1; len[cur] = 0; any = true; continue; }
-        if (len[cur] < sizeof comp[0] - 1) comp[cur][len[cur]++] = *p;
-    }
-    return false;
-}
-
 bool hao_cxx_this_return(const char *name)
 {
     if (strncmp(name, "__ZN", 4)) return false;
-    const char *m = name + 1;
-    size_t L = strlen(m);
-    bool dtor = L > 4 && (!strcmp(m + L - 4, "D1Ev") || !strcmp(m + L - 4, "D2Ev"));
-    bool ctor = !dtor && (strstr(m, "C1E") || strstr(m, "C2E") || strstr(m, "CI1") || strstr(m, "CI2"));
-    if (!dtor && !ctor) return false;
-    /* native libc++abi's demangler (libobjc links libc++abi, so it is loaded in every process) */
-    static demangle_fn dem;
-    if (!dem) dem = (demangle_fn)dlsym(RTLD_DEFAULT, "__cxa_demangle");
-    if (!dem) return false;
-    int st = 0;
-    char *d = dem(m, NULL, NULL, &st);
-    if (!d || st) { free(d); return false; }
-    char cls[256], fn[256];
-    bool r = !strncmp(d, "virtual thunk", 13) || !strncmp(d, "non-virtual thunk", 17) ? false : last_two(d, cls, fn, sizeof cls);
-    if (r) r = dtor ? fn[0] == '~' && !strcmp(fn + 1, cls) : !strcmp(fn, cls);
-    if (r && ctor) {
-        /* the ctor-dtor-name in the mangled name is C1/C2/CI1/CI2 (not the allocating C3) */
-        r = false;
-        for (const char *q = m; (q = strchr(q, 'C')) && !r; q++)
-            r = (q[1] == '1' || q[1] == '2') && (q[2] == 'E' || (q[2] >= 'A' && q[2] <= 'Z') || (q[2] >= '0' && q[2] <= '9'))
-                    ? true : q[1] == 'I' && (q[2] == '1' || q[2] == '2');
-    }
-    free(d);
-    return r;
+    cx_comp last[2];
+    const char *params = cx_nested(name + 3, 0, last, NULL);
+    if (!params) return false;
+    if (last[1].kind == 'd') return (last[1].code == '1' || last[1].code == '2') && !strcmp(params, "v");
+    return last[1].kind == 'c' && (last[1].code == '1' || last[1].code == '2');
+}
+
+static bool cx_is(const cx_comp *c, const char *id)
+{
+    return c->kind == 'n' && c->len == strlen(id) && !memcmp(c->id, id, c->len);
 }
 
 static const hao_plan *publish(const hao_plan *tmp, const char *name)
@@ -1318,27 +1519,19 @@ static const char *libcxx_string_result(const char *name, const char *lib)
 {
     size_t ll = lib ? strlen(lib) : 0;
     if (ll < 15 || strcmp(lib + ll - 15, "/libc++.1.dylib") || strncmp(name, "__ZNK", 5)) return NULL;
-    static const char *const fns[] = {"message", "do_grouping", "do_truename", "do_falsename", "do_curr_symbol",
-                                      "do_positive_sign", "do_negative_sign", "do_transform", "do_get"};
-    bool cand = false;
-    for (size_t k = 0; k < sizeof fns / sizeof *fns && !cand; k++) cand = strstr(name, fns[k]) != NULL;
-    if (!cand) return NULL;
-    static demangle_fn dem;
-    if (!dem) dem = (demangle_fn)dlsym(RTLD_DEFAULT, "__cxa_demangle");
-    int st = 0;
-    char *d = dem ? dem(name + 1, NULL, NULL, &st) : NULL;
-    if (!d || st) { free(d); return NULL; }
-    char cls[256], fn[256];
-    const char *why = NULL;
-    if (last_two(d, cls, fn, sizeof cls)) {
-        if (!strcmp(fn, "message") && strstr(d, "::message(int) const")) why = "error_category::message returns std::string by value";
-        else if (!strcmp(fn, "do_get") && !strncmp(cls, "messages", 8)) why = "messages::do_get returns std::basic_string by value";
-        else
-            for (size_t k = 1; k < sizeof fns / sizeof *fns - 1 && !why; k++)
-                if (!strcmp(fn, fns[k])) why = "a locale facet's virtual function returns std::basic_string by value";
-    }
-    free(d);
-    return why;
+    static const char *const facet_fns[] = {"do_grouping", "do_truename", "do_falsename", "do_curr_symbol",
+                                            "do_positive_sign", "do_negative_sign", "do_transform"};
+    cx_comp last[2];
+    bool is_const = false;
+    const char *params = cx_nested(name + 3, 0, last, &is_const);   /* N K <class> <function> E <params> */
+    if (!params) return NULL;
+    if (cx_is(&last[1], "message"))
+        return is_const && !strcmp(params, "i") ? "error_category::message returns std::string by value" : NULL;
+    if (cx_is(&last[1], "do_get") && last[0].kind == 'n' && last[0].len >= 8 && !memcmp(last[0].id, "messages", 8))
+        return "messages::do_get returns std::basic_string by value";
+    for (size_t k = 0; k < sizeof facet_fns / sizeof *facet_fns; k++)
+        if (cx_is(&last[1], facet_fns[k])) return "a locale facet's virtual function returns std::basic_string by value";
+    return NULL;
 }
 
 char hao_bridge_kind_for_enc(const char *enc)
