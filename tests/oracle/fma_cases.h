@@ -14,7 +14,8 @@
  *   FC_OVERFLOW  results around the largest finite float
  *   FC_TINY      results around the smallest normal float and below
  *   FC_EXACT     small integers: exact results and exact cancellation
- *   FC_SPECIAL   one operand replaced by a zero, subnormal, infinity or NaN
+ *   FC_SPECIAL   one or two operands replaced by a zero, subnormal, infinity
+ *                or NaN
  */
 #pragma once
 #include <stdint.h>
@@ -109,7 +110,8 @@ static inline fma_ops fma_case(uint64_t *s, unsigned cat)
     }
     case FC_SPECIAL: {
         o = fma_case(s, fc_rr(s, 2) ? FC_ORDINARY : FC_TINY);
-        uint32_t v = special[fc_rr(s, sizeof special / sizeof *special)];
+        /* a third are zeros: the host path admits those among the specials */
+        uint32_t v = fc_rr(s, 3) ? special[fc_rr(s, sizeof special / sizeof *special)] : (uint32_t)fc_rr(s, 2) << 31;
         switch (fc_rr(s, 4)) {
         case 0: o.a = v; break;
         case 1: o.b = v; break;

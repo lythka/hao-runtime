@@ -593,7 +593,7 @@ bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
  * The value returned is p + c rounded to odd at 53 bits. Rounding that once to
  * 24 bits in any mode equals rounding p + c itself (Boldo and Melquiond;
  * needs 53 >= 24 + 2), and it is inexact exactly when p + c is not a float.
- * Requires MXCSR round-to-nearest and normal inputs: every nonzero value here
+ * Requires MXCSR round-to-nearest and normal or zero inputs: every nonzero value here
  * is then a normal binary64 (at least 2^-298, below 2^257), so FTZ/DAZ and
  * binary64 overflow cannot apply. The only flag this can raise is PE, and
  * only when e != 0. Assembly keeps the operation order and SSE2 encodings
@@ -639,21 +639,25 @@ static inline __attribute__((always_inline)) __m128i fma32_odd(__m128i a, __m128
     return s;
 }
 
-/* Speculative FPMulAdd(c, a, b) on 1, 2 or 4 single lanes. Admits only normal
- * inputs and results at or above 2^-125 (overflow included: the conversion
- * rounds and flags it as FPRound does). Zero and tiny results are left to the
- * exact path because ARM detects tininess before rounding, SSE after, and FZ
- * applies; so are NaNs, infinities, zeros and subnormals, checked on integer
- * bits before any FP instruction. The final conversion runs under the guest's
+/* Speculative FPMulAdd(c, a, b) on 1, 2 or 4 single lanes. Admits normal and
+ * zero inputs and results at or above 2^-125 (overflow included: the
+ * conversion rounds and flags it as FPRound does). A zero product or addend
+ * makes the binary64 sum the other term exactly, with no error term. Zero and
+ * tiny results are left to the exact path because ARM detects tininess
+ * before rounding, SSE after, FZ applies and a zero's sign has its own
+ * rules; so are NaNs, infinities and subnormals, checked on integer bits
+ * before any FP instruction. The final conversion runs under the guest's
  * MXCSR, which supplies the rounding mode and accumulates PE/OE as IXC/OFC.
  * False leaves the FP environment as it was. */
 static inline __attribute__((always_inline)) bool fma32(__m128i c, __m128i a, __m128i b, int lanes, __m128i *out)
 {
     __m128i z = _mm_setzero_si128(), mask = _mm_set1_epi32(0x7f800000);
     __m128i ea = _mm_and_si128(a, mask), eb = _mm_and_si128(b, mask), ec = _mm_and_si128(c, mask);
-    __m128i bad = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi32(ea, z), _mm_cmpeq_epi32(ea, mask)),
-                               _mm_or_si128(_mm_cmpeq_epi32(eb, z), _mm_cmpeq_epi32(eb, mask)));
-    bad = _mm_or_si128(bad, _mm_or_si128(_mm_cmpeq_epi32(ec, z), _mm_cmpeq_epi32(ec, mask)));
+    __m128i mag = _mm_set1_epi32(0x7fffffff);
+    __m128i bad = _mm_or_si128(_mm_cmpeq_epi32(ea, mask), _mm_or_si128(_mm_cmpeq_epi32(eb, mask), _mm_cmpeq_epi32(ec, mask)));
+    bad = _mm_or_si128(bad, _mm_andnot_si128(_mm_cmpeq_epi32(_mm_and_si128(a, mag), z), _mm_cmpeq_epi32(ea, z)));
+    bad = _mm_or_si128(bad, _mm_andnot_si128(_mm_cmpeq_epi32(_mm_and_si128(b, mag), z), _mm_cmpeq_epi32(eb, z)));
+    bad = _mm_or_si128(bad, _mm_andnot_si128(_mm_cmpeq_epi32(_mm_and_si128(c, mag), z), _mm_cmpeq_epi32(ec, z)));
     unsigned active = (1u << (lanes * 4)) - 1;
     if ((unsigned)_mm_movemask_epi8(bad) & active) return false;
     if (lanes == 1) {

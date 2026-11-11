@@ -8,7 +8,7 @@
  * (hash of the whole filled region). FPSR's IEEE cumulative flags are
  * counted separately (informational), except in fma records, where a flag
  * difference is a mismatch. For fma records the checker also reports how many
- * have only normal operands and results at or above 2^-125 (what the
+ * have only normal or zero operands and results at or above 2^-125 (what the
  * round-to-odd path of fp_muladd admits), and for how many of those
  * (float)((double)a * b + c) differs from native. Outcomes:
  *   native ran:     hao must run and match; a hao UNDEF passes only for
@@ -89,7 +89,7 @@ static int fma_operands(const oracle_rec *r, uint32_t a[4], uint32_t b[4], uint3
     }
     return lanes;
 }
-static bool f32_normal(uint32_t v) { uint32_t e = v >> 23 & 0xff; return e && e != 0xff; }
+static bool f32_plain(uint32_t v) { uint32_t e = v >> 23 & 0xff; return e ? e != 0xff : !(v & 0x7fffff); }   /* normal or zero */
 /* a * b + c through binary64 with two ordinary roundings: the sum to nearest
  * and the conversion in the guest's rounding mode. */
 static uint32_t fma_widened(uint32_t a, uint32_t b, uint32_t c, unsigned rmode)
@@ -151,7 +151,7 @@ int main(int argc, char **argv)
             bool admitted = lanes > 0;
             memcpy(want, &r.out.v[r.code[0] & 31], 16);
             for (int l = 0; l < lanes; l++)
-                if (!f32_normal(a[l]) || !f32_normal(b[l]) || !f32_normal(c[l]) || (want[l] >> 23 & 0xff) < 2) admitted = false;
+                if (!f32_plain(a[l]) || !f32_plain(b[l]) || !f32_plain(c[l]) || (want[l] >> 23 & 0xff) < 2) admitted = false;
             for (int l = 0; l < lanes && admitted && wrong < 0; l++)
                 if (fma_widened(a[l], b[l], c[l], r.in.fpcr >> 22 & 3) != want[l]) wrong = l;
             fma_admitted += admitted;
@@ -243,7 +243,7 @@ int main(int argc, char **argv)
     }
     if (badf) fclose(badf);
     if (mode == OM_FMA)
-        printf("fma: %ld of %ld records have normal operands and results >= 2^-125 in every lane;"
+        printf("fma: %ld of %ld records have normal or zero operands and results >= 2^-125 in every lane;"
                " binary64 with two roundings is wrong for %ld of them\n", fma_admitted, total, fma_widened_wrong);
     long fails = 0;
     for (int pass = 0; pass < 2; pass++) {
