@@ -259,6 +259,13 @@ typedef struct hao_name_index {
 long hao_name_find(hao_name_index *ix, const char *name);
 void hao_name_each(hao_name_index *ix, hao_name_fn cb, void *ctx);
 const char *hao_name_at(const hao_name_index *ix, size_t k);   /* entry k's name */
+/* The call plans that still read a demangler's spelling (swiftcc.c: Swift
+ * async narrow results and async parameters; cxxstr.c: std::string-family
+ * parameters) checked against fixed symbols: 0 as expected, n > 0 mismatches
+ * (the first in why), -1 when that demangler is not loaded. hao -v reports a
+ * mismatch; tests/host/bridge.c requires none. */
+int hao_swift_demangle_selfcheck(char *why, size_t n);
+int hao_cxx_demangle_selfcheck(char *why, size_t n);
 /* The runtime's own interposer (runtime.c: __dyld_lazy_load). */
 bool hao_runtime_interpose(const char *name, uint64_t *addr);
 void hao_runtime_interpose_names(hao_name_fn cb, void *ctx);

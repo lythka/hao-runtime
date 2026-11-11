@@ -544,6 +544,8 @@ int64_t hao_swift_async_arg_area(uint64_t fn, const char **why)
 /* char *swift_demangle(mangled, length, buffer, &size, flags) (runtime/Demangle.cpp): NULL on failure */
 typedef char *(*demangle_fn)(const char *, size_t, char *, size_t *, uint32_t);
 
+static void demangle_selfcheck_verbose(demangle_fn fn);
+
 static demangle_fn demangler(void)
 {
     static demangle_fn fn;
@@ -553,7 +555,7 @@ static demangle_fn demangler(void)
         void *h = dlopen("/usr/lib/swift/libswiftCore.dylib", RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);
         if (!h) return NULL;
         fn = (demangle_fn)dlsym(h, "swift_demangle");
-        tried = 1;
+        if (!__atomic_exchange_n(&tried, 1, __ATOMIC_ACQ_REL) && hao_verbose) demangle_selfcheck_verbose(fn);
     }
     return fn;
 }
@@ -637,9 +639,58 @@ bool hao_swift_async_param(const char *sym)
     return hao_swift_async_param_demangled(buf);
 }
 
+/* The narrow-result and async-parameter rules above read the demangler's
+ * spelling ("Name() async throws -> Swift.Bool", "@Sendable () async ->
+ * ()"): the facts sit in the mangled function type, whose result and
+ * parameters only a full Swift demangler finds. These fixed manglings
+ * (swiftc 6, -module-name hao) and what the rules must conclude from their
+ * spelling pin it: hao_swift_demangle_selfcheck runs them (tests/host/
+ * bridge.c), and hao -v reports a mismatch the first time it demangles. */
+static const struct { const char *sym; char kind; bool async_param; } spellings[] = {
+    {"_$s3hao5readySbyYaF", 'b', false},                   /* ready() async -> Bool */
+    {"_$s3hao5levels4Int8VyYaKF", 'h', false},             /* level() async throws -> Int8 */
+    {"_$s3hao5typeds6UInt16VyYaAA1EOYKF", 'T', false},     /* typed() async throws(E) -> UInt16 */
+    {"_$s3hao5plainSbyF", 0, false},                       /* plain() -> Bool */
+    {"_$s3hao3runyyyyYaYbKXEF", 0, true},                  /* run(_: @Sendable () async throws -> ()) */
+};
+
+static int demangle_selfcheck(demangle_fn dm, char *why, size_t n)
+{
+    int bad = 0;
+    why[0] = 0;
+    for (size_t k = 0; k < sizeof spellings / sizeof *spellings; k++) {
+        char buf[1024];
+        size_t len = sizeof buf;
+        const char *s = spellings[k].sym;
+        bool ok = dm(s + 1, strlen(s + 1), buf, &len, 0) != NULL;
+        buf[ok ? (len < sizeof buf ? len : sizeof buf - 1) : 0] = 0;
+        if (!ok || hao_swift_async_kind_for_demangled(buf) != spellings[k].kind ||
+            hao_swift_async_param_demangled(buf) != spellings[k].async_param)
+            if (!bad++) snprintf(why, n, "swift_demangle(%s) = \"%s\": the async result or parameter rule reads it otherwise", s + 1,
+                                 ok ? buf : "(fails)");
+    }
+    return bad;
+}
+
+int hao_swift_demangle_selfcheck(char *why, size_t n)
+{
+    demangle_fn dm = demangler();
+    return dm ? demangle_selfcheck(dm, why, n) : -1;
+}
+
+static void demangle_selfcheck_verbose(demangle_fn fn)
+{
+    char why[512];
+    if (fn && demangle_selfcheck(fn, why, sizeof why) > 0) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "demangler spelling changed: %s; narrow async results may not be extended\n", why);
+    }
+}
+
 /* A Swift entry point whose signature the metadata ABI fixes, named by its
- * mangling (docs/ABI/Mangling.rst) and confirmed by the runtime's own
- * demangler (the demangled text names the entity):
+ * mangling's final operator (docs/ABI/Mangling.rst); the runtime's demangler
+ * only confirms that the whole name is a valid mangling (its spelling of the
+ * entity is not read):
  *  - a type metadata accessor (`Ma`): swiftcc MetadataResponse
  *    (MetadataRequest, then at most 3 generic arguments or a pointer to an
  *    array of them; IRGen NumDirectGenericTypeMetadataAccessFunctionArgs):
@@ -653,30 +704,23 @@ bool hao_swift_async_param(const char *sym)
  * longer in the table and are not matched. */
 bool hao_swift_fixed_abi(const char *sym)
 {
-    static const struct { char code[3]; const char *what; } vw[] = {
-        {"CP", "initializeBufferWithCopyOfBuffer value witness for "}, {"xx", "destroy value witness for "},
-        {"cp", "initializeWithCopy value witness for "}, {"ca", "assignWithCopy value witness for "},
-        {"tk", "initializeWithTake value witness for "}, {"ta", "assignWithTake value witness for "},
-        {"et", "getEnumTagSinglePayload value witness for "}, {"st", "storeEnumTagSinglePayload value witness for "},
-        {"ug", "getEnumTag value witness for "}, {"up", "destructiveProjectEnumData value witness for "},
-        {"ui", "destructiveInjectEnumTag value witness for "},
-    };
+    /* value-witness-kind (ValueWitness.def): initializeBufferWithCopyOfBuffer, destroy, initializeWithCopy,
+     * assignWithCopy, initializeWithTake, assignWithTake, getEnumTagSinglePayload, storeEnumTagSinglePayload,
+     * getEnumTag, destructiveProjectEnumData, destructiveInjectEnumTag */
+    static const char vw[][3] = {"CP", "xx", "cp", "ca", "tk", "ta", "et", "st", "ug", "up", "ui"};
     if (!sym || strncmp(sym, "_$s", 3)) return false;
     size_t n = strlen(sym);
     if (n < 7) return false;
-    const char *want = NULL;
-    if (!strcmp(sym + n - 2, "Ma")) want = "type metadata accessor for ";
-    else if (sym[n - 3] == 'w')
+    bool fixed = !strcmp(sym + n - 2, "Ma");   /* global ::= type 'Ma' */
+    if (!fixed && sym[n - 3] == 'w')           /* global ::= type 'w' value-witness-kind */
         for (unsigned k = 0; k < sizeof vw / sizeof *vw; k++)
-            if (!strcmp(sym + n - 2, vw[k].code)) want = vw[k].what;
-    if (!want) return false;
+            if (!strcmp(sym + n - 2, vw[k])) fixed = true;
+    if (!fixed) return false;
     demangle_fn dm = demangler();
     if (!dm) return false;
     char buf[1024];
     size_t len = sizeof buf;
-    if (!dm(sym + 1, n - 1, buf, &len, 0)) return false;
-    buf[len < sizeof buf ? len : sizeof buf - 1] = 0;
-    return !strncmp(buf, want, strlen(want));
+    return dm(sym + 1, n - 1, buf, &len, 0) != NULL;
 }
 
 /* guest continuations that receive a narrow result: address -> kind. Lock-free
