@@ -870,6 +870,7 @@ static int simd_two_misc(hao_cpu *c, uint32_t i, int scalar)
         break;
     }
     case 0x02: case 0x06: {  /* SADDLP/UADDLP, SADALP/UADALP */
+        if (size == 3) return -1;           /* unallocated: the sums would be 128-bit elements */
         int oes = es * 2, on = bytes / oes;
         for (int e = 0; e < on; e++) {
             uint64_t s = U ? eget(&a, es, 2 * e) + eget(&a, es, 2 * e + 1)
@@ -914,6 +915,7 @@ static int simd_two_misc(hao_cpu *c, uint32_t i, int scalar)
         }
         break;
     case 0x12: case 0x14: {  /* XTN/SQXTUN, SQXTN/UQXTN */
+        if (size == 3) return -1;           /* unallocated: the source would be 128-bit elements */
         int oes = es, ies = es * 2, on = 8 / oes;
         bool sat = false;
         hao_vreg d = c->v[rd];
@@ -933,7 +935,7 @@ static int simd_two_misc(hao_cpu *c, uint32_t i, int scalar)
         return 0;
     }
     case 0x13: {  /* SHLL */
-        if (!U) return -1;
+        if (!U || size == 3) return -1;     /* size 3 is unallocated: no 128-bit elements */
         int oes = es * 2, on = 8 / es;
         for (int e = 0; e < on; e++) eset(&r, oes, e, eget(&a, es, (Q ? on : 0) + e) << (es * 8));
         c->v[rd] = r;
@@ -1031,6 +1033,7 @@ static int simd_across(hao_cpu *c, uint32_t i)
         c->v[rd] = r;
         return 0;
     }
+    if (size == 3 || (size == 2 && !Q)) return -1;      /* unallocated: 64-bit lanes, or two 32-bit ones */
     uint64_t acc = eget(&a, es, 0);
     int64_t sacc = esget(&a, es, 0);
     switch (op) {
@@ -1121,7 +1124,7 @@ static int simd_copy(hao_cpu *c, uint32_t i, int scalar)
 {
     unsigned Q = BIT(i, 30), op = BIT(i, 29), imm5 = BITS(i, 20, 16), imm4 = BITS(i, 14, 11);
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
-    if (!imm5) return -1;
+    if (!(imm5 & 0xF)) return -1;           /* imm5 = x0000 is unallocated: elements are 1 to 8 bytes */
     int sz = __builtin_ctz(imm5), es = 1 << sz;
     int idx = (int)(imm5 >> (sz + 1));
     hao_vreg r;
@@ -1208,7 +1211,7 @@ static int simd_shift_imm(hao_cpu *c, uint32_t i, int scalar)
     case 0x0C: case 0x0E:  /* SQSHLU, SQSHL/UQSHL imm */
         for (int e = 0; e < n; e++) {
             __int128 v = U && op == 0x0E ? (__int128)eget(&a, es, e) : (__int128)esget(&a, es, e);
-            v <<= lsh;
+            v = (__int128)((u128)v << lsh);     /* |v| < 2^64 and lsh < 64: no bit is lost; a negative v stays negative */
             uint64_t o;
             if (op == 0x0C || U) { if (v < 0) { sat = true; o = 0; } else if (v > (__int128)emask(es)) { sat = true; o = emask(es); } else o = (uint64_t)v; }
             else if (es == 8) { if (v > INT64_MAX) { sat = true; o = (uint64_t)INT64_MAX; } else if (v < INT64_MIN) { sat = true; o = (uint64_t)INT64_MIN; } else o = (uint64_t)v; }
@@ -1245,6 +1248,7 @@ static int simd_shift_imm(hao_cpu *c, uint32_t i, int scalar)
         return 0;
     }
     case 0x14: {  /* SSHLL / USHLL (UXTL/SXTL) */
+        if (es == 8) return -1;             /* immh = 1xxx is unallocated: the result would be 128-bit elements */
         int oes = es * 2, on = 8 / es;
         if (!scalar && es <= 2) {
             __m128i src = vi(&a);
@@ -1283,6 +1287,9 @@ static int simd_three_diff(hao_cpu *c, uint32_t i)
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 12);
     unsigned rm = BITS(i, 20, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
     hao_vreg a = c->v[rn], b = c->v[rm], d = c->v[rd], r;
+    /* The wide elements are twice the narrow ones, so size 3 is unallocated for every opcode but
+     * PMULL (64 x 64 -> 128, U = 0); PMULL has no unsigned form and no 16- or 32-bit one. */
+    if (op == 0xE ? U || (size != 0 && size != 3) : size == 3) return -1;
     memset(&r, 0, sizeof r);
     int es = 1 << size, oes = es * 2, n = 8 / es, part = Q ? n : 0;
     if (es <= 2 && (op <= 3 || op == 8 || op == 0xA || op == 0xC)) {
@@ -1318,33 +1325,36 @@ static int simd_three_diff(hao_cpu *c, uint32_t i)
                 for (int k = 0; k < 8; k++) if ((y >> k) & 1) p ^= x << k;
                 r.h[e] = (uint16_t)p;
             }
-        } else if (size == 3) {
+        } else {
             uint64_t x = a.d[Q], y = b.d[Q];
             u128 p = 0;
             for (int k = 0; k < 64; k++) if ((y >> k) & 1) p ^= (u128)x << k;
             r.q = p;
-        } else return -1;
+        }
         c->v[rd] = r;
         return 0;
     }
     for (int e = 0; e < n; e++) {
-        int64_t x, y;
+        /* Sign- or zero-extended operands in uint64_t: the wide result is the low oes bytes of the
+         * exact one, which unsigned (modulo 2^64) arithmetic gives for sums, differences and products. */
+        uint64_t x, y;
         bool wide = op == 1 || op == 3;
-        if (wide) x = U ? (int64_t)eget(&a, oes, e) : esget(&a, oes, e);
-        else x = U ? (int64_t)eget(&a, es, part + e) : esget(&a, es, part + e);
-        y = U ? (int64_t)eget(&b, es, part + e) : esget(&b, es, part + e);
-        int64_t acc = (int64_t)eget(&d, oes, e), v;
+        if (wide) x = U ? eget(&a, oes, e) : (uint64_t)esget(&a, oes, e);
+        else x = U ? eget(&a, es, part + e) : (uint64_t)esget(&a, es, part + e);
+        y = U ? eget(&b, es, part + e) : (uint64_t)esget(&b, es, part + e);
+        uint64_t acc = eget(&d, oes, e), v;
+        uint64_t ad = (int64_t)x > (int64_t)y ? x - y : y - x;   /* both operands fit in 33 signed bits here */
         switch (op) {
         case 0x0: case 0x1: v = x + y; break;
         case 0x2: case 0x3: v = x - y; break;
-        case 0x5: v = acc + (x > y ? x - y : y - x); break;
-        case 0x7: v = x > y ? x - y : y - x; break;
+        case 0x5: v = acc + ad; break;
+        case 0x7: v = ad; break;
         case 0x8: v = acc + x * y; break;
         case 0xA: v = acc - x * y; break;
-        case 0xC: v = U ? (int64_t)((uint64_t)x * (uint64_t)y) : x * y; break;
+        case 0xC: v = x * y; break;
         default: return -1;
         }
-        eset(&r, oes, e, (uint64_t)v & emask(oes));
+        eset(&r, oes, e, v & emask(oes));
     }
     c->v[rd] = r;
     return 0;
@@ -1454,10 +1464,10 @@ static int simd_indexed(hao_cpu *c, uint32_t i, int scalar)
             if (op != 0xA) v = op == 2 ? _mm_add_epi32(vi(&d), v) : _mm_sub_epi32(vi(&d), v);
             r = vr(v);
         } else for (int e = 0; e < n; e++) {
-            int64_t x = U ? (int64_t)eget(&a, es, part + e) : esget(&a, es, part + e);
-            int64_t p = x * (U ? (int64_t)y : sy), acc = (int64_t)eget(&d, oes, e), v;
+            uint64_t x = U ? eget(&a, es, part + e) : (uint64_t)esget(&a, es, part + e);
+            uint64_t p = x * (U ? y : (uint64_t)sy), acc = eget(&d, oes, e), v;    /* modulo 2^64, as the wide element wraps */
             v = op == 0xA ? p : (op == 2 ? acc + p : acc - p);
-            eset(&r, oes, e, (uint64_t)v & emask(oes));
+            eset(&r, oes, e, v & emask(oes));
         }
         c->v[rd] = r;
         return 0;
@@ -1533,10 +1543,10 @@ static int simd_dot(hao_cpu *c, uint32_t i, int indexed)
         for (int e = 0; e < 4; e++) b.s[e] = m.s[idx];
     } else b = c->v[rm];
     for (int e = 0; e < (Q ? 4 : 2); e++) {
-        int32_t acc = r.ss[e];
+        uint32_t acc = r.s[e];      /* the accumulator wraps */
         for (int k = 0; k < 4; k++)
-            acc += U ? (int32_t)a.b[4 * e + k] * (int32_t)b.b[4 * e + k] : (int32_t)a.sb[4 * e + k] * (int32_t)b.sb[4 * e + k];
-        r.ss[e] = acc;
+            acc += (uint32_t)(U ? (int32_t)a.b[4 * e + k] * (int32_t)b.b[4 * e + k] : (int32_t)a.sb[4 * e + k] * (int32_t)b.sb[4 * e + k]);
+        r.s[e] = acc;
     }
     vfinish(c, rd, &r, Q);
     return 0;

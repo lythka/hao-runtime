@@ -39,7 +39,7 @@ one() {  # name timeout args...   -> rc, ok, line; $OUT/name.out, $OUT/name.err
 
 G=/usr/bin/awk
 rm -rf "$OUT/aotc"; mkdir -p "$OUT/aotc"; chmod 700 "$OUT/aotc"
-HAO_CACHE=$OUT/aotc timeout -s KILL 300 "$HAO" --aot "$G" >"$OUT/aotgen.err" 2>&1
+timeout -s KILL 300 "$HAO" --aot --cache $OUT/aotc "$G" >"$OUT/aotgen.err" 2>&1
 export HAO_CACHE=$OUT/aotc
 pass=0; last=
 for i in $(seq "$AOT_RUNS"); do

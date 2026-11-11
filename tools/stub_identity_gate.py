@@ -92,8 +92,9 @@ RULES = {
            "__INFO_FILTER, ...); the arm64 code and data sections are not (libmacho lookups of those are "
            "answered from the guest's header by src/process_identity.c)"),
     0x1B: ("LC_UUID", "derive",
-           "a version 5 UUID of the arm slice's LC_UUID (hao-embed STUB_UUID_NAMESPACE): logd, crash "
-           "reports and symbolication key on it, and the stub's code is not the program's"),
+           "a version 5 UUID of the arm slice's LC_UUID and the stub's own sections (hao-embed "
+           "STUB_UUID_NAMESPACE, stub_uuid): logd, crash reports and symbolication key on it and take it to "
+           "name the image's contents, and the stub's code is not the program's"),
     0x1D: ("LC_CODE_SIGNATURE", "derive",
            "AMFI, the sandbox, TCC and SecCode read the signature: identifier, entitlements (plus allow-jit "
            "and disable-library-validation), the hardened runtime when dyld would ignore DYLD_* natively, "
@@ -333,9 +334,9 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     ast = struct.unpack_from("<Q", a[0], 16)[0] if a else None
     sst = struct.unpack_from("<Q", s[0], 16)[0] if s else None
     add("main.stacksize", ast == sst, str(ast), str(sst))
-    want_uuid = embed.stub_uuid(arm)
+    want_uuid = embed.stub_uuid(arm, stub)
     su = embed.macho_uuid(stub)
-    add("uuid", su == want_uuid, want_uuid.hex(), su.hex() if su else "-", "v5 of the arm slice's LC_UUID")
+    add("uuid", su == want_uuid, want_uuid.hex(), su.hex() if su else "-", "v5 of the arm slice's LC_UUID and the stub's sections")
     asg, ssg = segments(arm), segments(stub)
     add("pagezero", asg.get("__PAGEZERO", (None,))[0] == ssg.get("__PAGEZERO", (None,))[0],
         str(asg.get("__PAGEZERO", (None,))[0]), str(ssg.get("__PAGEZERO", (None,))[0]))

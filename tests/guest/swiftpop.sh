@@ -40,7 +40,7 @@ echo "scan      $r outlined_sp=${osp:-?} over=${over:-?}"
 grep -s '^swiftslots: over' "$OUT/scan.txt" | head -4 | sed 's/^/    /'
 fi
 rm -rf "$OUT/aot" "$OUT/diag"; mkdir -m 700 "$OUT/aot" "$OUT/diag"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/swiftpop.arm64e" >"$OUT/aot.gen" 2>&1 || echo "swiftpop: aot generation failed"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/swiftpop.arm64e" >"$OUT/aot.gen" 2>&1 || echo "swiftpop: aot generation failed"
 timeout -s KILL "$T" "$OUT/swiftpop.arm64" >"$OUT/native.out" 2>"$OUT/native.err"
 rc=$?
 echo "native    rc=$rc $(cat "$OUT/native.out")"

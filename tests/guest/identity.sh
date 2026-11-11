@@ -57,7 +57,7 @@ python3 "$repo/tools/hao-embed" --stub "$B/hao-stub" --host-test -o emb/identity
 ln -s ../emb/identity lnk/alias
 # an AOT cache for the program's arm64e slice (the embedded copy's is the same bytes)
 rm -rf aot; mkdir -m 700 aot
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot plain/identity >aot.gen 2>&1 || { echo "FAIL AOT generation: $(head -c 300 aot.gen)"; exit 2; }
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" plain/identity >aot.gen 2>&1 || { echo "FAIL AOT generation: $(head -c 300 aot.gen)"; exit 2; }
 # hardened runtime (disable-library-validation: natively it must load the ad hoc helper)
 printf '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/></dict></plist>' >hents.plist
 cp plain/identity hplain/identity

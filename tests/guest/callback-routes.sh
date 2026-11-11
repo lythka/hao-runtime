@@ -18,7 +18,7 @@ done
 mkdir -p "$OUT/aot"
 for p in cssm heapblock; do
     timeout -s KILL 30 "$OUT/$p.arm64" >"$OUT/$p.native.out" 2>"$OUT/$p.native.err"
-    HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/$p.arm64e" >"$OUT/$p.aot-build.log" 2>&1
+    timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/$p.arm64e" >"$OUT/$p.aot-build.log" 2>&1
     for m in jit interp aot; do
         case $m in
         jit) set -- env HAO_NO_AOT=1 ;;

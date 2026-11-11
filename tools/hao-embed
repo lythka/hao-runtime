@@ -54,11 +54,16 @@ run it as guest code, src/runtime.c guest_cxx_library). The stubs link
 against install-name-only text stubs (.tbd, the program's own versions),
 so no x86_64 library is read at link time.
 
-Every stub has its own LC_UUID: a version 5 UUID of the program's arm slice
-LC_UUID (STUB_UUID_NAMESPACE), so logd and everything else keyed by the main
+Every stub has its own LC_UUID: a version 5 UUID (STUB_UUID_NAMESPACE) of the
+program's arm slice LC_UUID and of the stub's own sections (their names,
+addresses and bytes), so logd and everything else keyed by the main
 executable's UUID tell programs apart, and payloads stay reproducible. Files
 that are one program natively (hard links, copies with the same LC_UUID)
-share it, as their arm64e slices do.
+share it, as their arm64e slices do. A UUID names one image's contents to
+its readers: logd saves the format strings of a UUID once (uuidtext) and
+resolves every later record of that UUID in the saved copy, so a stub whose
+code or strings lie elsewhere (another hao build of the same program) must
+not reuse the UUID.
 
 Every stub carries its program's load-time identity by rule: each load
 command type of the arm slice is copied, derived or denied as
@@ -387,19 +392,45 @@ def macho_uuid(mo):
     return None
 
 
-# Stubs get their own LC_UUID, a name-based (SHA-1, RFC 4122 version 5) UUID of
-# the program's arm slice LC_UUID in this namespace, so logd, crash reports and
-# everything else keyed by the main executable's UUID tell embedded programs
-# apart (a copied hao-stub shares one UUID), and a payload stays reproducible.
+# Stubs get their own LC_UUID, a name-based (SHA-1, RFC 4122 version 5) UUID in
+# this namespace of the program's arm slice LC_UUID and of the stub's sections,
+# so logd, crash reports and everything else keyed by the main executable's
+# UUID tell embedded programs apart (a copied hao-stub shares one UUID), and a
+# payload stays reproducible. The sections are part of the name because those
+# readers take a UUID to name the image's contents: logd keeps one copy of a
+# UUID's format strings (/var/db/uuidtext) and resolves a record's format
+# offset in it, so two stubs of one program whose strings lie at different
+# offsets (another libhao version, other rpaths) under one UUID leave every
+# os_log record of the later one as <compose failure>.
 STUB_UUID_NAMESPACE = uuid.UUID("6c1f2a4e-9b0d-5e2f-8a51-3d7c0e94b6a1")
 
 
-def stub_uuid(data):
-    """The stub's LC_UUID for the program DATA (bytes)."""
+def sections_digest(mo):
+    """SHA-256 (hex) over every section of the thin Mach-O MO: segment and
+    section name, address, size, type and, unless zero-fill, bytes. Signing
+    and the load-command edits of apply_identity leave it unchanged."""
+    h = hashlib.sha256()
+    for cmd, off, size in load_commands(mo):
+        if cmd != 0x19:
+            continue
+        nsect = int.from_bytes(mo[off + 64:off + 68], "little")
+        for k in range(min(nsect, (size - 72) // 80)):
+            so = off + 72 + 80 * k
+            ssize = int.from_bytes(mo[so + 40:so + 48], "little")
+            foff = int.from_bytes(mo[so + 48:so + 52], "little")
+            kind = mo[so + 64]
+            h.update(bytes(mo[so:so + 48]) + bytes([kind]))   # sectname, segname, addr, size; type
+            if kind not in (1, 12, 18):                       # S_ZEROFILL, S_GB_ZEROFILL, S_THREAD_LOCAL_ZEROFILL
+                h.update(bytes(mo[foff:foff + ssize]))
+    return h.hexdigest()
+
+
+def stub_uuid(data, stub):
+    """The LC_UUID of the stub STUB (a thin x86_64 Mach-O, bytes) of the program DATA (bytes)."""
     mo = arm_slice(data)
     u = macho_uuid(mo) if mo is not None else None
     name = "arm64-uuid:" + uuid.UUID(bytes=u).hex if u else "arm64-sha256:" + hashlib.sha256(mo or data).hexdigest()
-    return uuid.uuid5(STUB_UUID_NAMESPACE, name).bytes
+    return uuid.uuid5(STUB_UUID_NAMESPACE, name + ";x86_64-sections:" + sections_digest(stub)).bytes
 
 
 def set_uuid(path, u):
@@ -712,13 +743,14 @@ def tbd_for(path, name, cur, compat):
                 f"install-name: '{q}'\ncurrent-version: {version(cur)}\ncompatibility-version: {version(compat)}\n...\n")
 
 
-def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_bytes=None, arm=None):
+def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_of=None, arm=None):
     """hao-stub linked again with the program's carried sections (unsigned),
     from BUILD/front/stub.o at that object's own deployment target, with the
     rpaths STUB (the Makefile's hao-stub) was linked with; LINKS (native_deps)
     are linked after libhao and libhao_identity, in order, through
     install-name-only text stubs (libSystem, which the stub needs for its own
-    code, at its place in the order). UUID_BYTES replaces its LC_UUID; with
+    code, at its place in the order). With UUID_OF (the program) its LC_UUID
+    becomes stub_uuid's; with
     ARM (the program's arm slice) the stub gets that slice's __PAGEZERO size
     and then its load-time identity (apply_identity)."""
     obj = os.path.join(build, "front", "stub.o")
@@ -749,8 +781,8 @@ def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_byt
     r = subprocess.run(args + ["-o", out], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError("relink: " + r.stderr.strip()[-300:])
-    if uuid_bytes:
-        set_uuid(out, uuid_bytes)
+    if uuid_of is not None:
+        set_uuid(out, stub_uuid(uuid_of, open(out, "rb").read()))
     if arm is not None:
         apply_identity(out, arm, own_rpaths)
     return out
@@ -856,7 +888,7 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None):
         own = {name for _, name, _, _ in dylib_commands(open(stub, "rb").read())} - {LIBSYSTEM}
         links, skipped, _ = native_deps(src, data, x86, own)
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test,
-                           links, stub_uuid(data), arm)
+                           links, data, arm)
     elif sections or host_test:
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test)
     ident, ents = identity(src)

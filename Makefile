@@ -252,7 +252,10 @@ test-guest: all $(FUZZERS)
 	B=$(abspath $(B)) J=$(CHECK_J) tests/check.sh
 # The guest scripts exercise test-only switches, so the gate runs them on a
 # TEST_SWITCHES build in its own directory; the default build stays as shipped.
+# oracle-asan (the oracle checks under ASan and UBSan) is part of the gate and
+# not of `make test`: it builds the translator a second time.
 check: test
+	$(MAKE) oracle-asan
 	$(MAKE) B=$(B)-ts TEST_SWITCHES=1 test-guest
 
 # Fuzzing (tests/fuzz/README.md): ASan + trace-pc-guard targets driven by

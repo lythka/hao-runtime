@@ -23,7 +23,7 @@ for p in swiftboxes observation-closures generic-objc-destruct generic-objc-layo
         codesign -s - -f "$OUT/$p.$a" 2>/dev/null
     done
     timeout -s KILL 30 "$OUT/$p.arm64" >"$OUT/$p.native.out" 2>"$OUT/$p.native.err"
-    HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/$p.arm64e" >"$OUT/$p.aot-build.log" 2>&1
+    timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/$p.arm64e" >"$OUT/$p.aot-build.log" 2>&1
     for m in jit interp aot; do
         case $m in
         jit|interp) set -- env HAO_NO_AOT=1 ;;

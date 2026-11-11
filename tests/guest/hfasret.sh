@@ -43,7 +43,7 @@ done
 # A fresh private AOT cache (user-owned, not group/other-writable): generate it, then run from it.
 export HAO_CACHE="$OUT/aot"
 rm -rf "$HAO_CACHE"; mkdir -p "$HAO_CACHE"; chmod 700 "$HAO_CACHE"
-timeout -s KILL "$T" "$HAO" --aot "$OUT/hfasret.arm64e" >"$OUT/aotgen.out" 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$HAO_CACHE" "$OUT/hfasret.arm64e" >"$OUT/aotgen.out" 2>&1
 ls "$HAO_CACHE"/*.aot >/dev/null 2>&1 || { echo "hfasret aot: no cache written"; fail=1; }
 for c in $CASES; do
     line="hfasret $(printf '%-13s' $c)"

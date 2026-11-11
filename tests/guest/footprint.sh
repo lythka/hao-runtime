@@ -89,7 +89,7 @@ done
 case " $MODES " in *" aot "*)
     rm -rf "$OUT/aotc"; mkdir -p "$OUT/aotc"; chmod 700 "$OUT/aotc"
     for g in fp fpspread fpbig; do
-        HAO_CACHE=$OUT/aotc timeout -s KILL 300 "$HAO" --aot "$OUT/$g.arm64e" >"$OUT/aot-$g.log" 2>&1 ||
+        timeout -s KILL 300 "$HAO" --aot --cache $OUT/aotc "$OUT/$g.arm64e" >"$OUT/aot-$g.log" 2>&1 ||
             { echo "hao --aot $g failed: $(tail -3 "$OUT/aot-$g.log")"; exit 2; }
     done ;;
 esac

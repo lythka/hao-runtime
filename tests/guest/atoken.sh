@@ -55,7 +55,7 @@ if cmp -s "$OUT/native.out" "$OUT/native2.out"; then echo "atoken native-repeat 
 # Build an AOT cache for the guest, then run from it (HAO_NO_JIT so the cache is exercised).
 export HAO_CACHE="$OUT/aot"
 mkdir -p "$HAO_CACHE"
-timeout -s KILL "$T" "$HAO" --aot "$OUT/atoken.arm64e" >"$OUT/aotgen.out" 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$HAO_CACHE" "$OUT/atoken.arm64e" >"$OUT/aotgen.out" 2>&1
 for mode in jit interp aot; do
     flag=; [ $mode = interp ] && flag=--interp
     timeout -s KILL "$T" "$HAO" $flag "$OUT/atoken.arm64e" >"$OUT/$mode.out" 2>"$OUT/$mode.err"

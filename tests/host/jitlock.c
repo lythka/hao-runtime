@@ -72,7 +72,7 @@ static bool run_fn(hao_thread *t, const uint32_t *fn, int limit)
 
 /* ------------------------------------------------ aot */
 
-/* HAO_CACHE holds a valid cache for GUEST (made by `hao --aot GUEST`).
+/* HAO_CACHE holds a valid cache for GUEST (made by `hao --aot --cache DIR GUEST`).
  * The test loads NIMG copies of GUEST (each at its own address) and loads
  * the cache into each while NT threads translate. */
 enum { NT = 4, NIMG = 40 };

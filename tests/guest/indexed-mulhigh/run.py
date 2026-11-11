@@ -107,7 +107,7 @@ assert len(reference.splitlines())==len(cases)*52
 cache=OUT/'aot'
 cache.mkdir(exist_ok=True)
 aot_env=dict(env,HAO_CACHE=str(cache),HAO_VERBOSE='1')
-p=run([HAO,'--aot',OUT/'fixture.arm64e'],aot_env)
+p=run([HAO,'--aot','--cache',cache,OUT/'fixture.arm64e'],aot_env)
 (OUT/'aot-build.log').write_bytes(p.stdout+p.stderr)
 results=[]
 for mode,args,policy in [

@@ -29,7 +29,7 @@ for a in arm64e arm64; do
 done
 set +e
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$OUT/objcimp.arm64e" >"$OUT/aotgen.out" 2>&1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$OUT/objcimp.arm64e" >"$OUT/aotgen.out" 2>&1
 fail=0
 verdict() { if [ "$1" = 137 ]; then echo TIMEOUT; elif [ "$1" -gt 128 ]; then echo "CRASH sig=$(($1 - 128))"; else echo "rc=$1"; fi; }
 for s in $SECTIONS; do
