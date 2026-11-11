@@ -5,6 +5,7 @@ Makefile
 NOTICE.md
 README.md
 distribution/runtime-files.txt
+docs/ISSUES.md
 docs/architecture.md
 docs/async-contract.md
 docs/compatibility.md

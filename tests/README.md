@@ -194,16 +194,21 @@ UUID does; the script checks that its two different stubs of a program
 have two UUIDs. The same defect reached installed systems: a program
 embedded again with another libhao build kept its UUID.
 
-Flaky: `guest/uresume`, case `alarmnx`, exits 132 (SIGILL) in one of its
-six modes in some runs: 2 of 6 runs of the script on an unmodified a00a428
-`TEST_SWITCHES` build, and 2 of 3 after the changes above, in a different
-mode each time (`jit-user`, `jit-kern`, `aot-user`, `aot-kern`). Not
-investigated.
+Fixed: `guest/uresume`, case `alarmnx`, could exit 132 (SIGILL) when its
+SIGALRM handler made an NX callback during the first callback's
+Objective-C enum initialization. The captured RIP was
+`_os_once_gate_recursive_abort+0x17`: the handler's callback reentered the
+same unfinished `pthread_once`, not a failed signal return. The enum
+bridge now defers guest signals around the complete `pthread_once` call.
+[Measured scope and remaining limitations](../docs/ISSUES.md) record the
+bounded before/after counts and native ARM comparison.
 
 Flaky: `guest/fork`'s host stress (`test_fork`, mode `all`) ended with
 SIGSEGV in one gate run; 8 runs of the script right after and 8 on an
 a00a428 build passed. The host has `test_fork` crash reports from 5 and 8
-November as well. Not investigated.
+November as well. Those stacks are in JIT emission or bridge binding,
+without the recursive enum initialization above; no shared cause has been
+established (see [remaining issues](../docs/ISSUES.md)).
 
 Flaky under host load: `make oracle`'s `atomic16` control case ("two
 8-byte halves (must tear)") failed in one of three `make oracle` runs with 0
