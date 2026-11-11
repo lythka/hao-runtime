@@ -3,8 +3,8 @@
 ```sh
 make test          # quick gate: unit, oracle, aot, bridge/async/dyld/mulhigh, forktest, jitlocktest, check_x86
 make test-guest    # every other script that runs unattended here (tests/check.sh)
-make check         # both: the gate for runtime changes
-make oracle-asan   # oracle checks with the translator under ASan + UBSan (not in the gate: see below)
+make check         # the gate for runtime changes: test, oracle-asan, test-guest
+make oracle-asan   # oracle checks with the translator under ASan + UBSan
 ```
 
 `tests/check.sh` runs the entries of `tests/check.list` in parallel (`J`
@@ -54,7 +54,7 @@ clang/swiftc with arm64e, native arm64 execution and Rosetta.
 | `jitlocktest` (added to `make test`) | PASS | 37 | `/usr/bin/awk` copies |
 | `tools/check_x86.sh` | PASS | 1 | |
 
-`make test-guest` (159 s in all: 62 PASS, 2 XFAIL, 8 expected SKIP):
+`make test-guest` (159 s in all: 63 PASS, 1 XFAIL, 8 expected SKIP):
 
 | Entry | At b5dfc26 | Now | Time | Needs / skip reason |
 |---|---|---|---|---|
@@ -167,7 +167,15 @@ process.
   `guest wrote [Int]?? case 0, native read 2`,
   `guest wrote Three case 2, native read 0`,
   `native wrote Three case 2, guest read 2` where native arm64 reads 0, 2
-  and 3 respectively.
+  and 3 respectively. The two compilers encode the cases differently
+  (inhabitant i of a pointer is the value i on arm64 and i << 1 on x86_64,
+  whose bit 0 is the ObjC tagged-pointer bit) and each side tests for its
+  own constants inline: arm64 `caseOfDouble` compares the word with 1,
+  x86_64 with 2. The test passes the value's address as `UnsafeRawPointer`,
+  so no signature, metadata or witness names the type where it crosses, and
+  there is nothing for a bridge to convert by; `src/swiftvalue.c` converts
+  only where a typed result is published. It stays open until it is decided
+  where such types may be shared between guest and native code.
 
 Fixed: `guest/oslog` failed for the Swift program only (every `oslogswift`
 record `<compose failure [UUID]>` under JIT, `--interp` and AOT), and only
@@ -186,42 +194,51 @@ UUID does; the script checks that its two different stubs of a program
 have two UUIDs. The same defect reached installed systems: a program
 embedded again with another libhao build kept its UUID.
 
+Flaky: `guest/uresume`, case `alarmnx`, exits 132 (SIGILL) in one of its
+six modes in some runs: 2 of 6 runs of the script on an unmodified a00a428
+`TEST_SWITCHES` build, and 2 of 3 after the changes above, in a different
+mode each time (`jit-user`, `jit-kern`, `aot-user`, `aot-kern`). Not
+investigated.
+
+Flaky: `guest/fork`'s host stress (`test_fork`, mode `all`) ended with
+SIGSEGV in one gate run; 8 runs of the script right after and 8 on an
+a00a428 build passed. The host has `test_fork` crash reports from 5 and 8
+November as well. Not investigated.
+
 Flaky under host load: `make oracle`'s `atomic16` control case ("two
 8-byte halves (must tear)") failed in one of three `make oracle` runs with 0
 torn loads of 300000 while the host's load average was about 20 from other
 jobs; it is a check that the race is exercised, not a hao result, and five
 direct runs right after tore 1935 to 281425 times.
 
-## Known sanitizer findings
+## Sanitizer check
 
 `make oracle-asan` builds the interpreter, SIMD/FP code, x86 encoder,
 `src/jit.c` and the oracle checker with `-fsanitize=address,undefined`
 (objects in `build/asan/`), runs `ORACLE_ASAN_N` records per mode (default
-20000) and fails on any report; the reports stay in
-`build/asan/oracle-*.log`. AddressSanitizer reported nothing.
-UndefinedBehaviorSanitizer reports these locations in the SIMD interpreter (`simd` mode; dp, mem, block and the 16-byte atomicity
-checks are clean). Every record still matches native arm64, so these are
-undefined behaviour the current compiler happens to resolve as wrapping,
-not observed mismatches. The target therefore fails and is not part of
-`make check`.
+20000, about 36 s) and fails on any report; the reports stay in
+`build/asan/oracle-*.log`. It is part of `make check`.
 
-Measured with `ORACLE_ASAN_N=200000` (5 min; the default 20000 takes 36 s
-and found 13 of these 22 locations). UBSan reports each location once per
-run.
+It reports nothing now. AddressSanitizer never did. UndefinedBehaviorSanitizer
+reported 22 locations in the SIMD interpreter (`src/a64_simd.c`) at
+`ORACLE_ASAN_N=200000`; other seeds reached the same two shift helpers from
+three more instruction groups. They were of two kinds:
 
-| Location | Kind | Reached from |
-|---|---|---|
-| `src/a64_simd.c:21` (`sext`, two reports) | shift exponent -64 | `simd_three_diff` line 1333: `esget` with a 16-byte element (size 3) |
-| `src/a64_simd.c:43` (`emask`) | shift exponent 128 for a 64-bit type | `simd_three_diff` line 1347: `emask(oes)` with size 3 |
-| `src/a64_simd.c:938` (SHLL) | shift exponent 64 | `simd_two_misc`, size 3 |
-| `src/a64_simd.c:1211` (SQSHL/UQSHL/SQSHLU immediate) | left shift of a negative value | `simd_shift_imm`, `__int128 v <<= lsh` |
-| `src/a64_simd.c:1308` (ADDHN/SUBHN family) | shift exponent 64 | `simd_three_diff`, size 3 |
-| `src/a64_simd.c:1338`, `1339`, `1340` (x3), `1341` (x2), `1342` (x2), `1343` (x2), `1344` | signed 64-bit overflow (add, sub, absolute difference, multiply, accumulate) | `simd_three_diff` element loop: `int64_t` arithmetic where AArch64 wraps |
-| `src/a64_simd.c:1458`, `1459` (x2) | signed 64-bit overflow (multiply, accumulate) | `simd_indexed`, SMULL/UMULL/SMLAL/SMLSL by element: `x * y` of two 32-bit unsigned values in `int64_t`, `acc ± p` |
-| `src/a64_simd.c:1538` | signed 32-bit overflow | `simd_dot`, SDOT/UDOT accumulator in `int32_t` |
+- Shifts by 64, 128 or -64 in encodings AArch64 leaves unallocated because
+  their wide elements would be 128 bits, which hao executed: size 3 of the
+  three-different group (all but PMULL), of SHLL, SADDLP/UADDLP/SADALP/UADALP,
+  XTN/SQXTUN/SQXTN/UQXTN and the integer reductions across lanes (also
+  32-bit lanes without Q), SSHLL/USHLL with `immh = 1xxx`, and the copy
+  group with `imm5 = x0000`. They are undefined instructions now, as on
+  hardware; PMULL also rejects `U = 1` and the 16- and 32-bit sizes. The
+  three-different group has no reserved encoding left that hao accepts, so
+  its entry is gone from `known_lenient` in `tests/oracle/known.h`.
+- Signed overflow on valid encodings whose result wraps: the widening
+  add, subtract, absolute-difference, multiply and accumulate forms
+  (three-different and by-element), the SDOT/UDOT accumulator, and a left
+  shift of a negative value in SQSHL/UQSHL/SQSHLU by immediate. They use
+  unsigned arithmetic now.
 
-The shifts by 64, 128 and -64 come from size-3 encodings of the
-three-different and SHLL groups, which AArch64 leaves unallocated
-(`tests/oracle/known.h` lists the three-different ones as encodings hao
-accepts); the overflows are on valid encodings whose architectural result
-wraps.
+Measured after the change: `make oracle` (200000 records per mode) and
+`make oracle-asan ORACLE_ASAN_N=200000` (twice, different seeds) match
+native arm64 on every record with no sanitizer report.
