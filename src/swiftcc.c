@@ -682,8 +682,7 @@ static void demangle_selfcheck_verbose(demangle_fn fn)
 {
     char why[512];
     if (fn && demangle_selfcheck(fn, why, sizeof why) > 0) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "demangler spelling changed: %s; narrow async results may not be extended\n", why);
+        HAO_LOG(0, "demangler spelling changed: %s; narrow async results may not be extended\n", why);
     }
 }
 

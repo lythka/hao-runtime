@@ -433,7 +433,7 @@ bool hao_varsniff_bind(const char *name, uint64_t native, uint64_t *addr)
         hao_gmap_publish1(&vs, s, native);
     } else v = (vsniff *)(uintptr_t)s[1];
     pthread_mutex_unlock(&vs_lock);
-    if (hao_verbose) fprintf(stderr, "hao: %s: native variadic (%d fixed, %d fixed FP)\n", name, ngp, nfp);
+    HAO_LOG(1, "%s: native variadic (%d fixed, %d fixed FP)\n", name, ngp, nfp);
     *addr = hao_trap_address(v->name, trap_varsniff, (uint64_t)(uintptr_t)v);
     return true;
 }

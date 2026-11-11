@@ -157,8 +157,7 @@ static void resolve(void)
     n_new = (new_fn)dlsym(RTLD_DEFAULT, "_Znwm");
     del_fn d = (del_fn)dlsym(RTLD_DEFAULT, "_ZdlPv");
     if (!n_init || !n_dtor || !n_new || !d) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "cxxstr: native libc++ string members not found; cannot convert std::string arguments\n");
+        HAO_LOG(0, "cxxstr: native libc++ string members not found; cannot convert std::string arguments\n");
         abort();
     }
     __atomic_store_n(&n_del, d, __ATOMIC_RELEASE);
