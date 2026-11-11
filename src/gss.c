@@ -355,11 +355,12 @@ bool hao_gss_interpose(const char *name, uint64_t *addr)
         break;
     }
     case 'A': {
+        /* every element up to the empty OID that ends the array, as native code reads it */
         const noid *ne = nv;
-        int cnt = 0;
-        while (cnt < 64 && ne[cnt].length) cnt++;
-        goid *ga = hao_alloc_check(calloc((size_t)cnt + 1, sizeof *ga), "GSS-API OID variables");
-        for (int k = 0; k < cnt; k++) {
+        size_t cnt = 0;
+        while (ne[cnt].length) cnt++;
+        goid *ga = hao_alloc_check(calloc(cnt + 1, sizeof *ga), "GSS-API OID variables");
+        for (size_t k = 0; k < cnt; k++) {
             ga[k] = (goid){ne[k].length, 0, ne[k].elements};
             *pm_slot(&oid_g2n, (uint64_t)(uintptr_t)&ga[k], true) = (uint64_t)(uintptr_t)&ne[k];
         }
