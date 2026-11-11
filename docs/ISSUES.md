@@ -1,5 +1,42 @@
 # Runtime issues and measured scope
 
+## Guest calls of private-library functions that take a `va_list`
+
+A guest `va_list` is a pointer to 8-byte stack slots; an x86_64 `va_list` is
+a pointer to `{gp_offset, fp_offset, overflow_arg_area, reg_save_area}`. hao
+converts one only for functions in its `va_list` tables (`src/interpose.c`
+`vlists`): hand rows, plus `src/vlist_gen.inc`, which is generated from SDK
+declarations. A private library's functions are in neither, so a guest call
+of CoreUtils `NSErrorV(domain, code, format, va_list)` handed the native
+function the guest pointer itself. CoreUtils' `PrintFCoreVAList` then read
+the guest's slots as an x86_64 `va_list` and faulted at the first pointer
+conversion (`%@` through `CFGetTypeID`, `%s`).
+
+The hand rows now include the 26 CoreUtils exports that take a `va_list`.
+They were found by register flow in the arm64e code: an export whose argument
+register reaches the `va_list` position of `PrintFCoreVAList` (index 2), or
+of `CFPropertyListBuildFormatted` and `VSNScanF`, which read it in place
+(`ldr`, `add #8`, `str` on its spill slot), followed to a fixpoint. Variadic
+functions, which make their own `va_list` with `va_start`, are excluded. In
+the 26B131 x86_64 cache all 26 names are exported, and only by CoreUtils.
+The conversion is the one the SDK `v*` functions use: register save areas
+marked exhausted, overflow area at the guest's slots, so integer and floating
+arguments are read in the guest's order with no format typing.
+
+`tests/guest/cuvalist.sh` has a guest variadic wrapper hand its `va_list` to
+`VSNPrintF`, `VASPrintF`, `NSPrintV` and `NSErrorV` with string, integer,
+double, `%.6a` and `%@` conversions. Before the change it crashed with
+SIGSEGV under JIT, `--interp` and AOT; after it, all 6 lines equal native
+arm64.
+
+Remaining limitations:
+- Other private libraries' `va_list` parameters are still unconverted. These
+  hand rows are meant to give way to generated rows derived from code for
+  every library.
+- A function with a floating-point argument before its `va_list`, or with more
+  than five integer arguments before it, cannot go through `call_with_va`. No
+  CoreUtils row has either.
+
 ## Guest calls of native Optional, tuple and array witnesses
 
 A nested Optional whose outer nil is a pointer's extra inhabitant (`C??`,
