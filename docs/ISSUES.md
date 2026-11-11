@@ -177,6 +177,100 @@ Remaining limitations:
 - The packed tests for denormal lanes also send a lane equal to the minimum
   normal number to the helper (exact, slower).
 
+## Single-precision fused multiply-add cost
+
+The release CPU profile has no FMA instruction, so every fused
+multiply-add ran in the exact software path (`fp_muladd` in
+`src/a64_fp.c`: unpack, 128-bit exact sum, `round_pack`), once per lane.
+
+Single precision now takes a host path when every operand that takes part is
+a normal number (`fma32`, `fp_vec32_muladd`):
+
+1. the product is computed in binary64, where it is exact (24 + 24 bits);
+2. the addend is added in round-to-nearest and Knuth's TwoSum gives the
+   exact error of that sum;
+3. if the error is nonzero and the sum's last significand bit is 0, the sum
+   moves one unit in the last place toward the error (round to odd);
+4. one `cvtpd2ps` under the guest's MXCSR rounds to single in FPCR.RMode.
+
+Rounding to odd at 53 bits and then to 24 bits in any mode equals rounding
+the exact value once (Boldo and Melquiond; needs 53 >= 24 + 2). The odd
+last bit also makes the conversion inexact exactly when the fused result
+is, so the conversion's PE and OE are FPSR.IXC and OFC with no further
+bookkeeping. The path covers FMLA and FMLS `.4S`/`.2S`, both by element,
+the scalar by-element forms, and FMADD, FMSUB, FNMADD and FNMSUB on
+singles, in the interpreter and therefore in the JIT's and AOT code's
+helper calls. It uses SSE2 only.
+
+It declines, leaving MXCSR as it was, and the software path runs unchanged
+when an operand is a NaN, an infinity, a zero or a subnormal, when the
+result is zero or below 2^-125 (ARM detects tininess before rounding and
+SSE after, FZ flushes, and an exact zero takes its sign from the rounding
+mode), or when FPCR has a bit set other than RMode, FZ and DN. A vector
+whose lanes are not all admitted is computed lane by lane, and each lane
+is admitted or declined alone.
+
+Without step 3 the path is wrong. `0xbc000008 * 0xc03ffff4 + 0x483bb5c8`
+under round-to-nearest is `0x483bb5c9`; the binary64 sum lands on the
+midpoint of two singles and a second rounding gives `0x483bb5ca`.
+`0xde800000 * 0x5e800000 + 0x5e800000` under round-toward-zero is
+`0xfd7fffff`; the binary64 sum absorbs the addend and converts to
+`0xfd800000` with no inexact flag from the conversion.
+
+The software path also no longer calls `nans()` unless `unpack` classified
+an operand as a NaN; the call had no effect otherwise. This applies to half
+and double precision as well.
+
+Checks against native arm64. `make oracle` has an `fma` mode
+(`tests/oracle/fma_cases.h`): every form above with distinct and aliased
+registers, all sixteen RMode/FZ/DN settings, clear and preset FPSR, on
+ordinary, arbitrary, near-tie, wide exponent gap, 53 to 57 bit sum,
+overflowing, tiny, exactly cancelling and special operands, with one lane
+in six from another class. For these records FPSR's cumulative flags must
+match as well as the registers. 1,000,000 records matched in the
+interpreter and through the JIT; 853,655 of them had only normal operands
+and results of at least 2^-125 in every lane, and for 68,941 of those
+`(float)((double)a * b + c)` differs from native. With step 3 removed,
+9,699 of 100,000 records mismatched. `tests/guest/fma32.sh` runs 25
+instruction forms on the same operand classes (675,000 instructions) and
+requires the JIT, `--interp` and AOT runs to print native arm64's result
+and FPSR hashes.
+
+Measured on the Apple silicon development host, where x86_64 hao runs
+under Rosetta (not on Intel hardware), ns per instruction on normal
+operands, JIT and AOT alike since both call the interpreter helper:
+
+| Instruction | Before | After |
+|---|---|---|
+| FMLA/FMLS `.4S` | 128 | 22 |
+| FMLA/FMLS `.4S` by element | 130 | 25 |
+| FMADD/FMSUB single | 41 | 23 |
+
+Remaining limitations:
+- Each fused instruction is still a helper call from translated code; the
+  path is not emitted inline.
+- A rounding mode other than round-to-nearest needs two extra MXCSR writes
+  per instruction (the sum must run in round-to-nearest). Under Rosetta
+  `.4S` under RZ went from 167 to 86 ns rather than to 30 in the same run;
+  the cost on Intel hardware has not been measured.
+- A vector with a zero, subnormal, infinite or NaN lane, or a tiny or zero
+  result in a lane, is computed lane by lane (159 to 86 ns for `.4S` with
+  one zero multiplicand lane in that run).
+- Double precision stays in the software path: there is no wider host type
+  to hold the product. It would need error-free transformations in
+  binary64 itself (Dekker's product with Veltkamp splitting, TwoSum, and
+  the Boldo-Melquiond three-addition scheme with an emulated round-to-odd
+  addition), with guards for splitting overflow, an inexact low product
+  part near the subnormal range, and separate handling of the directed
+  modes.
+- Half precision vectors keep `fp_vec16_muladd`, which admits a lane only
+  when the exact sum fits binary64. The round-to-odd step would remove
+  that bound (53 >= 11 + 2); the final rounding would stay in `fp_cvt`,
+  since the profile has no half-precision conversion instruction. Scalar
+  half fused operations are always computed in software.
+- Not measured on Intel hardware or in an application.
+
+
 ## Guest calls of private-library functions that take a `va_list`
 
 A guest `va_list` is a pointer to 8-byte stack slots; an x86_64 `va_list` is

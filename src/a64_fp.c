@@ -14,9 +14,11 @@
  * code does). Single/double conversions to and from integers, round to
  * integral, max/min and comparisons of ordinary operands (normal numbers and
  * zeros; where it says so, infinities) are done on the bits, or by the host
- * integer conversion, when no exception other than inexact can arise. The
- * rest (NaNs, denormals, saturating conversions, FMA, half precision, FCVT
- * between formats) is computed exactly here.
+ * integer conversion, when no exception other than inexact can arise. Single
+ * fused multiply-add of normal numbers with a normal result goes through
+ * binary64 with one round-to-odd step (see fma32). The rest (NaNs, denormals,
+ * saturating conversions, other FMA, half precision, FCVT between formats) is
+ * computed exactly here.
  * Half precision ignores FZ (FZ16 is not modelled) and AHP.
  */
 #include "a64_fp.h"
@@ -583,13 +585,138 @@ bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
     return true;
 }
 
+/* Single-precision fused multiply-add without an FMA instruction, for two
+ * lanes held in the low halves of a, b and c:
+ *   p = a * b in binary64 is exact (24 + 24 significant bits);
+ *   s = RN(p + c), and Knuth's TwoSum gives e = (p + c) - s exactly;
+ *   if e != 0 and s is even, s moves one unit in the last place toward e.
+ * The value returned is p + c rounded to odd at 53 bits. Rounding that once to
+ * 24 bits in any mode equals rounding p + c itself (Boldo and Melquiond;
+ * needs 53 >= 24 + 2), and it is inexact exactly when p + c is not a float.
+ * Requires MXCSR round-to-nearest and normal inputs: every nonzero value here
+ * is then a normal binary64 (at least 2^-298, below 2^257), so FTZ/DAZ and
+ * binary64 overflow cannot apply. The only flag this can raise is PE, and
+ * only when e != 0. Assembly keeps the operation order and SSE2 encodings
+ * (the compiler otherwise selects SSE4.1 forms for the integer step). */
+static inline __attribute__((always_inline)) __m128i fma32_odd(__m128i a, __m128i b, __m128i c)
+{
+    __m128i s, e;
+    __asm__ volatile("cvtps2pd %[a], %[a]\n\t"
+                     "cvtps2pd %[b], %[b]\n\t"
+                     "cvtps2pd %[c], %[c]\n\t"
+                     "mulpd %[b], %[a]\n\t"          /* p */
+                     "movapd %[a], %[s]\n\t"
+                     "addpd %[c], %[s]\n\t"          /* s = RN(p + c) */
+                     "movapd %[s], %[b]\n\t"
+                     "subpd %[a], %[b]\n\t"          /* c' = s - p */
+                     "movapd %[s], %[e]\n\t"
+                     "subpd %[b], %[e]\n\t"          /* p' = s - c' */
+                     "subpd %[e], %[a]\n\t"          /* p - p' */
+                     "subpd %[b], %[c]\n\t"          /* c - c' */
+                     "addpd %[c], %[a]\n\t"          /* e */
+                     "xorpd %[c], %[c]\n\t"
+                     "movapd %[a], %[e]\n\t"
+                     "cmpneqpd %[c], %[a]\n\t"      /* inexact = e != 0 */
+                     /* The step is +1 when s and e have the same sign (away
+                      * from zero), else -1. An even s has no carry out of its
+                      * significand going up, and going down from a power of
+                      * two reaches the all-ones significand below: odd. */
+                     "movdqa %[s], %[b]\n\t"
+                     "pxor %[e], %[b]\n\t"
+                     "psrad $31, %[b]\n\t"
+                     "pshufd $0xf5, %[b], %[b]\n\t" /* signs differ: -1, else 0 */
+                     "pcmpeqd %[e], %[e]\n\t"
+                     "psrlq $63, %[e]\n\t"
+                     "por %[e], %[b]\n\t"           /* -1 or +1 */
+                     "movdqa %[s], %[c]\n\t"
+                     "psllq $63, %[c]\n\t"
+                     "psrad $31, %[c]\n\t"
+                     "pshufd $0xf5, %[c], %[c]\n\t" /* s odd */
+                     "pandn %[a], %[c]\n\t"         /* inexact and s even */
+                     "pand %[c], %[b]\n\t"
+                     "paddq %[b], %[s]"
+                     : [a] "+&x"(a), [b] "+&x"(b), [c] "+&x"(c), [s] "=&x"(s), [e] "=&x"(e));
+    return s;
+}
+
+/* Speculative FPMulAdd(c, a, b) on 1, 2 or 4 single lanes. Admits only normal
+ * inputs and results at or above 2^-125 (overflow included: the conversion
+ * rounds and flags it as FPRound does). Zero and tiny results are left to the
+ * exact path because ARM detects tininess before rounding, SSE after, and FZ
+ * applies; so are NaNs, infinities, zeros and subnormals, checked on integer
+ * bits before any FP instruction. The final conversion runs under the guest's
+ * MXCSR, which supplies the rounding mode and accumulates PE/OE as IXC/OFC.
+ * False leaves the FP environment as it was. */
+static inline __attribute__((always_inline)) bool fma32(__m128i c, __m128i a, __m128i b, int lanes, __m128i *out)
+{
+    __m128i z = _mm_setzero_si128(), mask = _mm_set1_epi32(0x7f800000);
+    __m128i ea = _mm_and_si128(a, mask), eb = _mm_and_si128(b, mask), ec = _mm_and_si128(c, mask);
+    __m128i bad = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi32(ea, z), _mm_cmpeq_epi32(ea, mask)),
+                               _mm_or_si128(_mm_cmpeq_epi32(eb, z), _mm_cmpeq_epi32(eb, mask)));
+    bad = _mm_or_si128(bad, _mm_or_si128(_mm_cmpeq_epi32(ec, z), _mm_cmpeq_epi32(ec, mask)));
+    unsigned active = (1u << (lanes * 4)) - 1;
+    if ((unsigned)_mm_movemask_epi8(bad) & active) return false;
+    if (lanes == 1) {
+        /* 1 * 1 + 1 in the unused lane of the pair: exact, no flags */
+        __m128i one = _mm_set1_epi32(0x3f800000);
+        a = _mm_unpacklo_epi32(a, one);
+        b = _mm_unpacklo_epi32(b, one);
+        c = _mm_unpacklo_epi32(c, one);
+    }
+    uint32_t saved = mxcsr_get();
+    bool nearest = !(saved & 0x6000);
+    if (!nearest) mxcsr_set(saved & ~0x6000u);
+    __m128i lo = fma32_odd(a, b, c), hi = z;
+    if (lanes == 4)
+        hi = fma32_odd(_mm_unpackhi_epi64(a, a), _mm_unpackhi_epi64(b, b), _mm_unpackhi_epi64(c, c));
+    /* Under round-to-nearest the sums ran in the guest's MXCSR. PE from an
+     * inexact sum is then already the result's IXC: the odd last bit makes
+     * the conversion inexact as well. A decline restores MXCSR below. */
+    if (!nearest) mxcsr_set(saved);
+    __asm__ volatile("cvtpd2ps %0, %0" : "+x"(lo));
+    if (lanes == 4) {
+        __asm__ volatile("cvtpd2ps %0, %0" : "+x"(hi));
+        lo = _mm_unpacklo_epi64(lo, hi);
+    }
+    __m128i er = _mm_and_si128(lo, mask);
+    bad = _mm_or_si128(_mm_cmpeq_epi32(er, z), _mm_cmpeq_epi32(er, _mm_set1_epi32(0x00800000)));
+    if ((unsigned)_mm_movemask_epi8(bad) & active) {
+        mxcsr_set(saved);
+        return false;
+    }
+    *out = lo;
+    return true;
+}
+
+bool fp_vec32_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
+                     const hao_vreg *b, int lanes, bool subtract, hao_vreg *out)
+{
+    /* The same FPCR contract as fp_vec16_muladd: only RMode, FZ and DN. */
+    if ((lanes != 2 && lanes != 4) || (x->c->fpcr & ~0x03c00000u)) return false;
+    __m128i va = _mm_loadu_si128((const __m128i *)a), r;
+    if (subtract) va = _mm_xor_si128(va, _mm_set1_epi32((int)0x80000000u));
+    if (!fma32(_mm_loadu_si128((const __m128i *)d), va, _mm_loadu_si128((const __m128i *)b), lanes, &r))
+        return false;
+    if (lanes == 2) r = _mm_unpacklo_epi64(r, _mm_setzero_si128());
+    _mm_storeu_si128((__m128i *)out, r);
+    return true;
+}
+
 uint64_t fp_muladd(fpctx *x, int es, uint64_t addend, uint64_t a, uint64_t b)
 {
+    if (es == 4 && !(x->c->fpcr & ~0x03c00000u)) {
+        __m128i r;
+        if (fma32(_mm_cvtsi32_si128((int)(uint32_t)addend), _mm_cvtsi32_si128((int)(uint32_t)a),
+                  _mm_cvtsi32_si128((int)(uint32_t)b), 1, &r))
+            return (uint32_t)_mm_cvtsi128_si32(r);
+    }
     fpu c = unpack(x, es, addend), u = unpack(x, es, a), v = unpack(x, es, b);
     bool inf_zero = (u.cls == C_INF && v.cls == C_ZERO) || (u.cls == C_ZERO && v.cls == C_INF);
     uint64_t ops[3] = {addend, a, b}, r;
     if (c.cls == C_QNAN && inf_zero && !is_snan(a, es) && !is_snan(b, es)) return invalid(x, es);
-    if (nans(x, es, 3, ops, &r)) return r;
+    /* unpack has classified the operands: nans() has nothing to do, and no
+     * effect, unless one of them is a NaN */
+    if ((c.cls >= C_QNAN || u.cls >= C_QNAN || v.cls >= C_QNAN) && nans(x, es, 3, ops, &r)) return r;
     int sp = u.sign ^ v.sign;
     bool infp = u.cls == C_INF || v.cls == C_INF, zerop = u.cls == C_ZERO || v.cls == C_ZERO;
     if (inf_zero || (c.cls == C_INF && infp && c.sign != sp)) return invalid(x, es);

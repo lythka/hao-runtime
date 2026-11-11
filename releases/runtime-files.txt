@@ -408,6 +408,8 @@ tests/guest/ehhelper.h
 tests/guest/features.c
 tests/guest/fenv.c
 tests/guest/fenv.sh
+tests/guest/fma32.c
+tests/guest/fma32.sh
 tests/guest/fnhelper.h
 tests/guest/fnhelper.mm
 tests/guest/fnslots.mm
@@ -638,6 +640,7 @@ tests/objc/objcreg.c
 tests/objc/run.sh
 tests/oracle/atomic16.c
 tests/oracle/check.c
+tests/oracle/fma_cases.h
 tests/oracle/known.h
 tests/oracle/native_arm64.c
 tests/oracle/record.h

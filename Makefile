@@ -116,7 +116,7 @@ $(B)/cxxstr.o: src/cxxstr.c $(wildcard include/hao/*.h src/*.inc) $(MIN_STAMP)
 $(B)/libhaocore.a: $(CORE_O)
 	ar rcs $@ $^
 
-$(B)/oracle-native: tests/oracle/native_arm64.c tests/oracle/record.h
+$(B)/oracle-native: tests/oracle/native_arm64.c tests/oracle/record.h tests/oracle/fma_cases.h
 	@mkdir -p $(B)
 	$(CC) -arch arm64 -O1 -Wall -o $@ tests/oracle/native_arm64.c && codesign -s - -f $@
 
@@ -130,7 +130,7 @@ $(B)/oracle-atomic: tests/oracle/atomic16.c $(B)/libhaocore.a $(B)/jit.o $(B)/st
 
 # Every mode runs; the target fails if any of them reports a failure.
 ORACLE_N ?= 200000
-ORACLE_MODES ?= dp simd mem block
+ORACLE_MODES ?= dp simd mem block fma
 oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	@fail=0; for m in $(ORACLE_MODES); do \
 	  $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \
