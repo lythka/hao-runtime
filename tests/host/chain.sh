@@ -48,7 +48,7 @@ ok=0
 check jit-awk $ok "rc=$rc out=$(cat "$OUT/jit.out") native=$want ${st#hao-jit: }"
 
 rm -rf "$OUT/aot"; mkdir -p "$OUT/aot"; chmod 700 "$OUT/aot"
-HAO_CACHE=$OUT/aot timeout -s KILL 300 "$HAO" --aot /usr/bin/awk >"$OUT/aotgen.out" 2>&1
+timeout -s KILL 300 "$HAO" --aot --cache $OUT/aot /usr/bin/awk >"$OUT/aotgen.out" 2>&1
 python3 -I - "$OUT/aot" >"$OUT/aotsites.out" 2>&1 <<'PY'
 import glob, struct, sys
 # aot file (include/hao/aot.h): hdr | ents[nblocks] | links[nlinks] | code; hdr: magic 8, version, hdr_size,

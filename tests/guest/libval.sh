@@ -165,7 +165,7 @@ case " $MODES " in *" aot "*)
     mkdir -m 700 "$OUT/aot"
     for f in "$OUT"/libval.*.arm64e "$OUT"/plat.*.arm64e "$OUT"/tampered.*.arm64e "$OUT"/strong.*.arm64e "$OUT"/p*/pages.*.arm64e \
              "$OUT/libgplug.dylib" "$OUT"/p4096/libgplug.dylib "$OUT"/p16384/libgplug.dylib "$PLATLIB"; do
-        HAO_CACHE="$OUT/aot" timeout -s KILL 120 "$HAO" --aot "$f" >/dev/null 2>&1
+        timeout -s KILL 120 "$HAO" --aot --cache "$OUT/aot" "$f" >/dev/null 2>&1
     done
     ls "$OUT/aot" | grep -q . || { echo "FAIL hao --aot wrote no cache"; fail=1; } ;;
 esac

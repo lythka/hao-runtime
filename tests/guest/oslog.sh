@@ -53,8 +53,12 @@ if nm oldstub/hao-stub | grep -q hao_oslog_format; then echo "FAIL setup: oldstu
 for p in $PROGS; do
     python3 "$repo/tools/hao-embed" --stub "$B/hao-stub" --host-test -o "emb/$p" "plain/$p" >/dev/null || exit 2
     python3 "$repo/tools/hao-embed" --stub "$OUT/oldstub/hao-stub" --host-test -o "emb-old/$p" "plain/$p" >/dev/null || exit 2
+    # logd keeps one copy of a UUID's format strings: two stubs of one program whose sections differ are two UUIDs
+    if [ "$(dwarfdump --uuid --arch x86_64 "emb/$p" | cut -d' ' -f2)" = "$(dwarfdump --uuid --arch x86_64 "emb-old/$p" | cut -d' ' -f2)" ]; then
+        echo "FAIL $p: two different stubs of the program have one LC_UUID"; fails=$((fails + 1))
+    fi
 done
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot plain/oslog libosloghelper.dylib plain/oslogswift >aot.gen 2>&1 ||
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" plain/oslog libosloghelper.dylib plain/oslogswift >aot.gen 2>&1 ||
     { echo "FAIL AOT generation: $(head -c 300 aot.gen)"; exit 2; }
 for p in $PROGS; do
     case " $MODES " in *" aot "*)

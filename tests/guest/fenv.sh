@@ -18,7 +18,7 @@ for a in arm64e arm64; do
     codesign -s - -f "$OUT/fenv.$a" 2>/dev/null
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/fenv.arm64e" >/dev/null 2>&1
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/fenv.arm64e" >/dev/null 2>&1
 set +e
 timeout -s KILL "$T" "$OUT/fenv.arm64" >"$OUT/native.out" 2>"$OUT/native.err"
 rc=$?

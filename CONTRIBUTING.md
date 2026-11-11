@@ -16,7 +16,7 @@ make B=build/macos-26.0       # macOS 26 deployment target, separate directory
 ## Tests
 
 Run `make check` for every runtime change: `make test`, then `make
-test-guest`. `make test` alone is the quick gate. It runs:
+oracle-asan` and `make test-guest`. `make test` alone is the quick gate. It runs:
 
 - `unit`: instruction decoding, condition mapping, ABI layout, the Mach-O
   loader and interface-unit parser (under ASan/UBSan), growable maps and option
@@ -44,7 +44,7 @@ Further targets:
 
 | Command | Covers |
 |---|---|
-| `make oracle-asan` | the oracle checks with the interpreter, JIT and x86 encoder under ASan and UBSan |
+| `make oracle-asan` | the oracle checks with the interpreter, JIT and x86 encoder under ASan and UBSan (in `make check`) |
 | `make fuzz`, `make fuzz-smoke` | parser fuzzing ([tests/fuzz/README.md](tests/fuzz/README.md)) |
 | `python3.14 tools/check_distribution.py` | every tracked file is in `distribution/runtime-files.txt` |
 

@@ -75,7 +75,7 @@ for arch in ('arm64', 'x86_64'):
     print(arch, 'PASS', flush=True)
 cache = OUT/'aot'
 cache.mkdir(mode=0o700, exist_ok=True)
-run([HAO, '--aot', OUT/'probe.arm64e'], env={**os.environ, 'HAO_CACHE':str(cache)}, capture_output=True)
+run([HAO, '--aot', '--cache', cache, OUT/'probe.arm64e'], capture_output=True)
 for mode, flags in [('jit', []), ('interp', ['--interp']), ('aot', ['-v']), ('no-fixup', [])]:
     env = {**os.environ, **({'HAO_CACHE':str(cache)} if mode=='aot' else {'HAO_NO_AOT':'1'})}
     if mode == 'no-fixup': env['HAO_NO_FIXUP_THUNKS'] = '1'

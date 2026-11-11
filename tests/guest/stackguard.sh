@@ -19,7 +19,7 @@ for a in arm64 arm64e; do
         codesign -s - -f "$OUT/stackguard.$a" 2>/dev/null || exit 2
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-HAO_CACHE="$OUT/aot" timeout -s KILL "$T" "$HAO" --aot "$OUT/stackguard.arm64e" >"$OUT/aot.gen" 2>&1 || echo "stackguard: aot generation failed"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/stackguard.arm64e" >"$OUT/aot.gen" 2>&1 || echo "stackguard: aot generation failed"
 timeout -s KILL "$T" "$OUT/stackguard.arm64" >"$OUT/native.out" 2>/dev/null; nrc=$?
 echo "native       rc=$nrc $(cat "$OUT/native.out")"
 fail=0

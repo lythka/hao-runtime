@@ -30,7 +30,7 @@ def run(name, args, env=None):
 
 cache = out / 'aot'
 cache.mkdir(mode=0o700, exist_ok=True)
-p = run('aotgen', [hao, '--aot', out / 'probe.arm64e'], {'HAO_CACHE': str(cache)})
+p = run('aotgen', [hao, '--aot', '--cache', cache, out / 'probe.arm64e'], {})
 assert p.returncode == 0 and list(cache.glob('*.aot')), p.stderr.decode()
 for section in ('controls', 'collision'):
     native = run(section + '.native', [out / 'probe.arm64', section])

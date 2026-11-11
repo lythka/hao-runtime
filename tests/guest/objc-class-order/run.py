@@ -35,7 +35,7 @@ for order in ['swift-first','objc-first']:
     cache=OUT/('aot-'+order);cache.mkdir(exist_ok=True)
     base=dict(env,HAO_NX_STATS='1',HAO_VERBOSE='2')
     guest=OUT/(order+'-arm64e')
-    aot=command([HAO,'--aot',guest],order+'-aot-generate',dict(base,HAO_CACHE=str(cache)),check=False,seconds=120)
+    aot=command([HAO,'--aot','--cache',cache,guest],order+'-aot-generate',base,check=False,seconds=120)
     for mode,args,e in [('jit',[],dict(base,HAO_NO_AOT='1')),('interp',['--interp'],dict(base,HAO_NO_AOT='1')),
                         ('aot',[],dict(base,HAO_CACHE=str(cache)))]:
         p=command([HAO,*args,guest],order+'-'+mode,e,check=False)
