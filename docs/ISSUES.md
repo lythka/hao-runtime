@@ -29,10 +29,32 @@ NSNumber. Before the change every case was refused at
 `Optional<AnyObject>`, the Notification Center refusal. After it they are
 walked with the patches of an `Optional<NSObject>` control.
 
-Not covered yet: the widget extensions on the same image refuse
-`Optional<StocksWidget.ValueChangeTrend>` and `Optional<Foundation.URL>`,
-and WeatherWidget and WeatherIntents crash in native value-witness calls.
-Each needs its own measured layout.
+The widget extensions on the same image refused two more first `Optional`s
+in values crossing the boundary:
+
+- `Optional<StocksWidget.ValueChangeTrend>` (StocksWidget). This is an enum
+  with no payload, so the Optional is one byte: a case is 0..n-1 and nil is n,
+  measured identical on both architectures. The byte rule needed 9 bytes or
+  more. Now the first Optional of a payload-free enum of up to 255 cases is
+  admitted when its byte is at most n.
+- `Optional<Foundation.URL>` (NewsTag, NewsToday2). URL is a struct whose only
+  field is `any _URLProtocol`, a class-bound existential with one witness
+  table: 16 bytes, measured identical on both architectures, nil is a zero
+  object word. Only nil of a bare such existential had been admitted, and
+  only with flags exactly 0x210007, while URL's Optional also has
+  0x2000000 (addressable for dependencies), which changes no layout. Now
+  that wrapper is admitted with a live value too. The object word must pass
+  the existential's own tag function and the witness table must lie in no
+  guest image, since a guest conformance's table is arm64 code. A bare
+  existential stays nil-only, because a weak field reports the same type and
+  its nonzero storage is not a strong pointer.
+
+`tests/host/swiftvalue.sh` covers both (nil and live values beside the
+`NSObject??` field): refused before, walked after. Its URLs all have native
+witness tables, so the refusal of a guest witness table is not exercised
+there. Still open: WeatherWidget and WeatherIntents crash inside native
+value-witness calls (`swift_retain` in `swift_cvw_initWithCopy`, an
+`OpaqueExistentialBox` destroy at an address ending in fff9).
 
 ## `%a` slots of variadics whose format family is assumed
 

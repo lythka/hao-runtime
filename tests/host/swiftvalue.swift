@@ -8,6 +8,9 @@ typealias Affected = NSObject??                         // two empty cases in an
 struct WithAnyObject { var e: Affected; var object: AnyObject? }
 struct WithNSObject { var e: Affected; var object: NSObject? }
 struct WithNested { var e: Affected; var object: AnyObject?? }
+enum Trend { case up, down }                            // no payload: Optional's nil is the byte 2
+struct WithTrend { var e: Affected; var trend: Trend? }
+struct WithURL { var e: Affected; var url: URL? }        // URL: one field, any _URLProtocol (class-bound, one witness table)
 
 typealias Walk = @convention(c) (UnsafeRawPointer, UnsafeRawPointer, UnsafeMutableRawPointer, UInt32,
                                  UnsafeMutablePointer<UnsafeRawPointer?>) -> Int32
@@ -32,4 +35,7 @@ for (label, e) in [("payload", Affected.some(.some(NSObject()))), ("inner nil", 
     run("AnyObject? tagged NSNumber, \(label)", WithAnyObject(e: e, object: NSNumber(value: 5)))
     run("NSObject? (control), \(label)", WithNSObject(e: e, object: NSObject()))
     run("AnyObject?? (stays refused), \(label)", WithNested(e: e, object: .some(nil)))
+    for (t, v) in [("nil", Trend?.none), ("up", .up), ("down", .down)] { run("Trend? \(t), \(label)", WithTrend(e: e, trend: v)) }
+    run("URL? nil, \(label)", WithURL(e: e, url: nil))
+    run("URL? live, \(label)", WithURL(e: e, url: URL(string: "https://www.apple.com/news")))
 }
