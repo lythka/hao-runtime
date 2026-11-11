@@ -253,6 +253,8 @@ tests/fidelity/run.sh
 tests/fidelity/target.c
 tests/fuzz/README.md
 tests/fuzz/corpus/codesig/codesign-ents
+tests/fuzz/corpus/codesig/codesign-runtime-dlv
+tests/fuzz/corpus/codesig/codesign-two-digests
 tests/fuzz/corpus/codesig/linker-adhoc
 tests/fuzz/corpus/fat/fat32
 tests/fuzz/corpus/fat/fat64
@@ -413,6 +415,7 @@ tests/guest/fnhelper.mm
 tests/guest/fnslots.mm
 tests/guest/footprint.m
 tests/guest/footprint.sh
+tests/guest/footprint_front.c
 tests/guest/fork.c
 tests/guest/fork.sh
 tests/guest/fork_dyld.c
@@ -457,7 +460,9 @@ tests/guest/legacy-fixups/main.c
 tests/guest/legacy-fixups/run.py
 tests/guest/libval.c
 tests/guest/libval.sh
+tests/guest/libvallate.c
 tests/guest/libvalplug.c
+tests/guest/libvalswap.c
 tests/guest/longstack.swift
 tests/guest/longstackhelper.swift
 tests/guest/msgfnptr.m
@@ -650,6 +655,7 @@ tests/tools/stubdeps.sh
 tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
+tests/tools/test_codesig.py
 tests/tools/test_install.py
 tests/tools/test_release.py
 tests/translate/run.sh

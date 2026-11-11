@@ -128,6 +128,25 @@ cp "$G" "$OUT/tampered-text"; flip_text "$OUT/tampered-text"
 run "ad hoc guest with one __text byte flipped refused (page hash)" 126 "does not match its hash" "$HAO" "$OUT/tampered-text"
 cp "$G" "$OUT/trailing" && printf 'unsigned tail' >>"$OUT/trailing"
 run "bytes after the code signature refused" 126 "code signature invalid" "$HAO" "$OUT/trailing"
+# a second LC_CODE_SIGNATURE (the same range, in the header padding): which signature would be checked and
+# which would give the policy must not be a question
+python3 -I - "$G" "$OUT/twosig" <<'PY'
+import struct, sys
+src, dst = sys.argv[1], sys.argv[2]
+d = bytearray(open(src, "rb").read())
+ncmds, sizeofcmds = struct.unpack_from("<II", d, 16)
+o = 32
+for _ in range(ncmds):
+    cmd, size = struct.unpack_from("<II", d, o)
+    if cmd == 0x1d: sig = bytes(d[o:o + 16])
+    o += size
+assert not any(d[o:o + 16]), "no room in the header padding"
+d[o:o + 16] = sig
+struct.pack_into("<II", d, 16, ncmds + 1, sizeofcmds + 16)
+open(dst, "wb").write(d)
+PY
+chmod +x "$OUT/twosig"
+run "guest with two LC_CODE_SIGNATURE commands refused" 126 "more than one LC_CODE_SIGNATURE" "$HAO" "$OUT/twosig"
 
 # --- the hand-off to the second stage carries no trust. Anyone can start hao as
 # its own stage 2 (HAO_EXEC naming argv[0]); HAO_EXEC_ID is where a first stage's
