@@ -184,7 +184,7 @@ multiply-add ran in the exact software path (`fp_muladd` in
 `src/a64_fp.c`: unpack, 128-bit exact sum, `round_pack`), once per lane.
 
 Single precision now takes a host path when every operand that takes part is
-a normal number (`fma32`, `fp_vec32_muladd`):
+a normal number or a zero (`fma32`, `fp_vec32_muladd`):
 
 1. the product is computed in binary64, where it is exact (24 + 24 bits);
 2. the addend is added in round-to-nearest and Knuth's TwoSum gives the
@@ -203,10 +203,12 @@ singles, in the interpreter and therefore in the JIT's and AOT code's
 helper calls. It uses SSE2 only.
 
 It declines, leaving MXCSR as it was, and the software path runs unchanged
-when an operand is a NaN, an infinity, a zero or a subnormal, when the
+when an operand is a NaN, an infinity or a subnormal, when the
 result is zero or below 2^-125 (ARM detects tininess before rounding and
 SSE after, FZ flushes, and an exact zero takes its sign from the rounding
-mode), or when FPCR has a bit set other than RMode, FZ and DN. A vector
+mode), or when FPCR has a bit set other than RMode, FZ and DN. A zero
+operand with a nonzero result needs no rule of its own: the binary64 sum
+is then the other term exactly. A vector
 whose lanes are not all admitted is computed lane by lane, and each lane
 is admitted or declined alone.
 
@@ -228,13 +230,17 @@ ordinary, arbitrary, near-tie, wide exponent gap, 53 to 57 bit sum,
 overflowing, tiny, exactly cancelling and special operands, with one lane
 in six from another class. For these records FPSR's cumulative flags must
 match as well as the registers. 1,000,000 records matched in the
-interpreter and through the JIT; 853,655 of them had only normal operands
-and results of at least 2^-125 in every lane, and for 68,941 of those
+interpreter and through the JIT; 868,009 of them had only normal or zero
+operands and results of at least 2^-125 in every lane, and for 68,427 of
+those
 `(float)((double)a * b + c)` differs from native. With step 3 removed,
 9,699 of 100,000 records mismatched. `tests/guest/fma32.sh` runs 25
 instruction forms on the same operand classes (675,000 instructions) and
 requires the JIT, `--interp` and AOT runs to print native arm64's result
-and FPSR hashes.
+and FPSR hashes. `make oracle ORACLE_MODES="simd dp" ORACLE_N=1000000` had
+no mismatch, and `make check` passed (`make test`, `oracle-asan` with the
+`fma` mode, and the `TEST_SWITCHES` guest harness: 68 passed, 0 failed, 1
+known failure in `guest/xinhab`, 8 expected skips).
 
 Measured on the Apple silicon development host, where x86_64 hao runs
 under Rosetta (not on Intel hardware), ns per instruction on normal
@@ -253,9 +259,9 @@ Remaining limitations:
   per instruction (the sum must run in round-to-nearest). Under Rosetta
   `.4S` under RZ went from 167 to 86 ns rather than to 30 in the same run;
   the cost on Intel hardware has not been measured.
-- A vector with a zero, subnormal, infinite or NaN lane, or a tiny or zero
-  result in a lane, is computed lane by lane (159 to 86 ns for `.4S` with
-  one zero multiplicand lane in that run).
+- A vector with a subnormal, infinite or NaN lane, or a tiny or zero
+  result in a lane, is computed lane by lane. (`.4S` with one zero
+  multiplicand lane and nonzero results is admitted whole: 159 to 23 ns.)
 - Double precision stays in the software path: there is no wider host type
   to hold the product. It would need error-free transformations in
   binary64 itself (Dekker's product with Veltkamp splitting, TwoSum, and
