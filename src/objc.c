@@ -1677,7 +1677,12 @@ void hao_objc_enum_result(hao_cpu *c, unsigned token)
 }
 unsigned hao_objc_enum_args(hao_cpu *c, uint64_t target, bool callback)
 {
+    /* Every untyped callback visits this table, including callbacks made by
+     * a guest signal handler. Defer that handler until pthread_once has
+     * published completion: reentering the same once from enum_init aborts. */
+    hao_crit_enter();
     pthread_once(&enum_once, enum_init);
+    hao_crit_leave();
     SEL sel = (SEL)(uintptr_t)c->x[1];
     bool candidate = false;
     for (unsigned i = 0; i < sizeof enum_methods / sizeof *enum_methods; i++)
