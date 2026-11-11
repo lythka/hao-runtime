@@ -1028,13 +1028,30 @@ typedef struct { id receiver; Class super_class; } objc_super_t;
  * setPositiveFormat: a plain string. For the VA_FORMAT_LAST entries the
  * format is the last argument; it is expanded here and the method gets
  * @"%@" and the string.
+ *
+ * Every other variadic method, the format methods of NSString,
+ * NSMutableString and NSAssertionHandler among them, goes through
+ * msgsend_varsniff below: the native IMP's va_start prologue gives its fixed
+ * arguments and the SDK's NS_FORMAT_FUNCTION types the slots from the format
+ * (tests/guest/objcva.sh, section nsformat).
  */
-enum { VA_ARRAY = 1, VA_DICT, VA_FORMAT_CLASS, VA_FORMAT_ARGS, VA_FORMAT_LAST };
+enum { VA_ARRAY = 1, VA_DICT, VA_FORMAT_ARGS, VA_FORMAT_LAST };
 /* The SDK's declaring class and method kind are part of each contract.
  * A selector is shared globally: CalendarFoundation's fixed-argument NSDate
  * instance method localizedStringWithFormat: is not NSString's class API.
  * Subclasses retain the declared API (including Foundation class clusters);
- * unrelated classes and the other method kind must use ordinary dispatch. */
+ * unrelated classes and the other method kind must use ordinary dispatch.
+ *
+ * Why these stay named: the collection methods take a nil-terminated object
+ * list of any length, which these recipes walk to the nil, while
+ * msgsend_varsniff passes a method without an SDK format only its first 16
+ * stack slots (varsniff.c VS_MIN); NSAlert's informativeTextWithFormat: is
+ * AppKit's and is not exercised on a development host (no GUI), so its
+ * recipe is kept until a target-system test shows varsniff's equal.
+ * (enum_methods below and callbacks.c's tables are hand-written too; both
+ * encode SDK declarations, the methods typed NSTextAlignment or
+ * NSImageResizingMode and the structs of callback pointers an API takes,
+ * so a scan of the SDK headers could generate them as fmtattr_gen.inc is.) */
 static const struct { const char *sel; int kind; const char *vsel; const char *owner; bool class_method; } va_sels[] = {
     {"arrayWithObjects:", VA_ARRAY, "arrayWithObjects:count:", "NSArray", true},
     {"initWithObjects:", VA_ARRAY, "initWithObjects:count:", "NSArray", false},
@@ -1044,12 +1061,6 @@ static const struct { const char *sel; int kind; const char *vsel; const char *o
     {"orderedSetWithObjects:", VA_ARRAY, "orderedSetWithObjects:count:", "NSOrderedSet", true},
     {"dictionaryWithObjectsAndKeys:", VA_DICT, "dictionaryWithObjects:forKeys:count:", "NSDictionary", true},
     {"initWithObjectsAndKeys:", VA_DICT, "initWithObjects:forKeys:count:", "NSDictionary", false},
-    {"stringWithFormat:", VA_FORMAT_CLASS, NULL, "NSString", true},
-    {"localizedStringWithFormat:", VA_FORMAT_CLASS, "currentLocale", "NSString", true},
-    {"handleFailureInMethod:object:file:lineNumber:description:", VA_FORMAT_LAST, NULL, "NSAssertionHandler", false},
-    {"handleFailureInFunction:file:lineNumber:description:", VA_FORMAT_LAST, NULL, "NSAssertionHandler", false},
-    {"appendFormat:", VA_FORMAT_LAST, NULL, "NSMutableString", false},
-    {"stringByAppendingFormat:", VA_FORMAT_LAST, NULL, "NSString", false},
     {"alertWithMessageText:defaultButton:alternateButton:otherButton:informativeTextWithFormat:", VA_FORMAT_LAST, NULL, "NSAlert", true},
 };
 static SEL va_sel_cache[sizeof va_sels / sizeof *va_sels];
@@ -1198,17 +1209,6 @@ static bool msgsend_variadic(hao_cpu *c, id recv, Class cls, SEL sel, IMP imp)
         return true;
     }
     /* every format the native method gets has the guest's long double conversions made double (vafmt.c) */
-    case VA_FORMAT_CLASS: {   /* +stringWithFormat: and +localizedStringWithFormat: */
-        id loc = vsel ? msg0((id)objc_getClass("NSLocale"), vsel) : nil;
-        id obj = msg0(recv, "alloc");
-        hao_fmtfix fx;
-        id fmt = (id)(uintptr_t)hao_fmt_fix('C', a[0], &fx);
-        obj = ((id (*)(id, SEL, id, id, void *))objc_msgSend)(obj, sel_registerName("initWithFormat:locale:arguments:"),
-                                                               fmt, loc, va);
-        hao_fmt_done(&fx);
-        c->x[0] = (uint64_t)(uintptr_t)msg0(obj, "autorelease");
-        return true;
-    }
     case VA_FORMAT_ARGS: {
         SEL vs = sel_registerName(vsel);
         unsigned fm = format_keywords(name);
