@@ -195,6 +195,7 @@ static void traps_fork_child(void);
 static void loads_fork_child(void);
 static void fork_child(void)
 {
+    hao_ncache_invalidate();   /* a plan another thread published may not have bumped it before the fork */
     traps_fork_child();
     loads_fork_child();
     hao_jit_fork_child();
@@ -434,11 +435,14 @@ static uint64_t trace_word(uint64_t a)
  *
  * Concurrency. Only the owning thread reads or writes its table, so there is
  * no sharing; but a guest signal handler may run on top of a probe or a
- * store on the same thread and use the table itself. A store clears the
- * key, writes the fields, sets the key and checks the fields again (clearing
- * the key if a handler rewrote the entry in between); a probe reads the
- * key, the fields and the key again. Either sees a whole entry or none.
- * Nothing here allocates or locks. */
+ * store on the same thread and use the table itself. A store marks the
+ * thread busy for its whole duration and counts itself (ncache_wseq) when
+ * done: a handler that interrupts a store misses on every probe and skips
+ * its own stores, so no entry is ever written by two stores at once; a
+ * probe that a handler's completed store interrupted sees the count change
+ * and misses. Either way the slow path runs instead. Nothing here allocates
+ * or locks. The fork child invalidates every table (fork_child): a plan
+ * published just before the fork may not have bumped the generation yet. */
 
 static inline unsigned ncache_slot(uint64_t pc)
 {
@@ -448,18 +452,24 @@ static inline unsigned ncache_slot(uint64_t pc)
 static inline bool ncache_get(hao_thread *t, uint64_t pc, uint64_t *target, uint64_t *x1, const hao_plan **plan)
 {
     __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
-    if (e->pc != pc) return false;
+    uint32_t seq = __atomic_load_n(&t->ncache_wseq, __ATOMIC_RELAXED);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED) || e->pc != pc) return false;
     uint64_t gen = e->gen;
     *target = e->target;
     *x1 = e->x1;
     *plan = e->plan;
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    return __atomic_load_n(&e->pc, __ATOMIC_RELAXED) == pc && gen == __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&t->ncache_wseq, __ATOMIC_RELAXED) == seq && !__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED) &&
+           __atomic_load_n(&e->pc, __ATOMIC_RELAXED) == pc && gen == __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE);
 }
 
 static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target, uint64_t x1, const hao_plan *plan)
 {
     if (!pc || gen != __atomic_load_n(&hao_ncache_gen, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&t->ncache_busy, __ATOMIC_RELAXED)) return;   /* a handler on top of an unfinished store */
+    __atomic_store_n(&t->ncache_busy, 1, __ATOMIC_RELAXED);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
     __typeof__(&t->ncache[0]) e = &t->ncache[ncache_slot(pc)];
     __atomic_store_n(&e->pc, 0, __ATOMIC_RELAXED);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
@@ -470,7 +480,9 @@ static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     __atomic_store_n(&e->pc, pc, __ATOMIC_RELAXED);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    if (e->gen != gen || e->target != target || e->x1 != x1 || e->plan != plan) __atomic_store_n(&e->pc, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&t->ncache_wseq, t->ncache_wseq + 1, __ATOMIC_RELAXED);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    __atomic_store_n(&t->ncache_busy, 0, __ATOMIC_RELAXED);
 }
 
 /* One native call or trap of segment `arg`. Runs inside a NATIVE guard
