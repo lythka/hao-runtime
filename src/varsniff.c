@@ -188,7 +188,7 @@ bool hao_varsniff_native_imp(uint64_t fn, int *ngp, int *nfp) { return native(fn
 
 /* ---- format typing */
 
-#define VS_SLOTS 64     /* guest stack slots passed at most */
+#define VS_SLOTS 256    /* guest stack slots passed at most (a format of more arguments is passed untyped) */
 #define VS_MIN 16       /* passed when the format is unknown or shorter */
 
 /* Types of the variadic slots from a format string in a guest image; -1 if `a` is not one.

@@ -12,8 +12,10 @@ folder; each run has a 60-second timeout. No GUI or private framework is used.
 
 ## What it tests
 
-hao has named variadic recipes for Foundation methods such as
-`stringWithFormat:`. Native classes outside that family can declare methods
+hao has named variadic recipes for Foundation's nil-terminated collection
+methods such as `arrayWithObjects:` (and once had them for format methods
+such as `stringWithFormat:`, which now go through the prologue-based
+variadic bridge). Native classes outside that family can declare methods
 with the same selectors and different meaning, for example
 `-[NSDate localizedStringWithFormat:]` in a framework category. A recipe chosen
 by selector alone would apply NSString's calling convention, or send `alloc`,
@@ -35,9 +37,10 @@ implementation. Inherited methods keep the recipe. Native overrides keep
 ordinary dispatch, the sibling rule and machine-code variadic inference. There
 is no application, address or UUID rule.
 
-The declarations come from the Foundation SDK headers NSString.h
-(`stringWithFormat:`, `localizedStringWithFormat:`, `appendFormat:`,
-`stringByAppendingFormat:`), NSArray.h, NSSet.h, NSOrderedSet.h,
-NSDictionary.h and NSException.h (`NSAssertionHandler`), and AppKit's NSAlert.h.
+The declarations come from the Foundation SDK headers NSArray.h, NSSet.h,
+NSOrderedSet.h and NSDictionary.h, and AppKit's NSAlert.h. NSString's,
+NSMutableString's and NSAssertionHandler's format methods are bridged from
+their native prologue and the SDK's format attribute (`tests/guest/objcva.sh`,
+section `nsformat`); the collision cases here still pass for them.
 `tests/guest/objcva.sh` covers the recipes themselves, including superclass
 dispatch.
