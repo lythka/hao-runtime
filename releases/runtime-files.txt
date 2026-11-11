@@ -669,6 +669,7 @@ tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
 tests/tools/test_codesig.py
+tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
 tests/tools/test_release.py
 tests/translate/run.sh

@@ -62,7 +62,9 @@
 #   --units DIR installs validated interface units (include/hao/bridge.h): files
 #   named by 32 lowercase hex digits, generated for the target x86_64 libraries.
 #   hao loads them from /usr/lib/hao/if, root-owned and not writable by others.
-#   A unit whose UUID no loaded library has is never used. NAME.thunks files
+#   A unit whose UUID no loaded library has is never used, so every unit must name an image of
+#   the x86_64 cache (--x86-cache, else the one under ROOT; tools/hao_ifunit.py match, OUT/units-match.txt,
+#   build.json interface_units.x86_cache_uuid) or the build fails. NAME.thunks files
 #   beside the units are the thunk-pair libraries named by their thunk records;
 #   hao loads them under the same ownership rules (src/thunks.c).
 #   --aot ships AOT caches (<LC_UUID>.aot, include/hao/aot.h) for every embedded program;
@@ -229,6 +231,19 @@ if [ -n "$UNITS" ]; then
         nu=$((nu + 1))
     done
     echo "interface units: $nu, thunk libraries: $nt"
+    # every unit must name an image of the x86_64 cache the stubs run with: one keyed by another
+    # build's (or the _x86_64h cache's) library is never used
+    UCACHE=$X86C
+    for d in System/Library/dyld System/Cryptexes/OS/System/Library/dyld System/Volumes/Preboot/Cryptexes/Rosetta/System/Library/dyld; do
+        [ -n "$UCACHE" ] || { [ -f "$ROOT/$d/dyld_shared_cache_x86_64" ] && UCACHE=$ROOT/$d; }
+    done
+    [ -n "$UCACHE" ] || { echo "hao-image-payload: --units: no dyld_shared_cache_x86_64 under ROOT to check the units against (give --x86-cache)" >&2; exit 1; }
+    if ! python3 -I "$H/tools/hao_ifunit.py" match "$OUT/root/usr/lib/hao/if" "$UCACHE" > "$OUT/units-match.txt"; then
+        head -20 "$OUT/units-match.txt" >&2
+        echo "hao-image-payload: interface units that name no library of $UCACHE (see $OUT/units-match.txt)" >&2
+        exit 1
+    fi
+    tail -1 "$OUT/units-match.txt"
 fi
 python3 "$H/tools/hao-trust-list" "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
 chmod 644 "$OUT/root/usr/lib/hao/trusted-cdhashes"
@@ -437,7 +452,10 @@ if os.path.isdir(ifdir):
     names = sorted(os.listdir(ifdir))
     recs = [_s.unpack_from('<I', open(os.path.join(ifdir, n), 'rb').read(), 32)[0] for n in names if not n.endswith('.thunks')]
     thunks = {n: hashlib.sha256(open(os.path.join(ifdir, n), 'rb').read()).hexdigest() for n in names if n.endswith('.thunks')}
+    # the cache every unit was matched to (hao_ifunit.py match: last line ends with its UUID)
+    um = os.path.join(out, 'units-match.txt')
     units = {'units': len(recs), 'records': sum(recs), 'thunk_libraries': thunks,
+             'x86_cache_uuid': open(um).read().split()[-1] if os.path.exists(um) else None,
              'sha256': hashlib.sha256(b''.join(open(os.path.join(ifdir, n), 'rb').read() for n in names)).hexdigest()}
 sha = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
 

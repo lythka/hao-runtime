@@ -10,6 +10,16 @@ both enforce the same rules.
   hao_ifunit.py dump UNIT
   hao_ifunit.py check UNIT [--uuid HEX]
   hao_ifunit.py uuid MACHO          the x86_64 slice's LC_UUID (32 hex digits)
+  hao_ifunit.py match UNITDIR CACHE  each unit in UNITDIR (the files named by 32 hex digits, as
+                                    installed in /usr/lib/hao/if) against the images of the x86_64
+                                    shared cache CACHE (the file, or its directory's
+                                    dyld_shared_cache_x86_64); exit 1 if a unit names no image of it
+                                    or is not valid under its name
+
+A unit is used only for a loaded library with its UUID, so a unit that names no image of the
+cache the target loads is never used, and that library's calls go unbound by it. The UUIDs differ
+between releases and between dyld_shared_cache_x86_64 and _x86_64h (Haswell and later), whose
+libraries are built separately.
 
 RECORDS.tsv, one exported symbol per line ('#' comments; '-' for an empty field):
   name     Mach-O symbol name with its leading '_'
@@ -267,6 +277,42 @@ def read(data, want_uuid=None, *, allow_legacy_code=False):
     return uuid.hex(), out
 
 
+X86_CACHE_FILE = 'dyld_shared_cache_x86_64'
+
+
+def match(unitdir, cache):
+    """(cache uuid, {unit name: install path}, [(unit name, why)]) for the units in UNITDIR
+    against the images of the x86_64 shared cache CACHE (file or directory)"""
+    import hao_macho
+    path = os.path.join(cache, X86_CACHE_FILE) if os.path.isdir(cache) else cache
+    try:
+        c = hao_macho.Cache(path)
+    except (OSError, ValueError) as e:
+        raise Bad('%s: %s' % (path, e))
+    by_uuid = {}
+    for p, _ in c.paths:
+        try:
+            im = c.image(p)
+        except ValueError:
+            continue
+        if im and im.uuid:
+            by_uuid.setdefault(im.uuid.lower(), p)
+    names = sorted(n for n in os.listdir(unitdir) if len(n) == 32 and all(ch in '0123456789abcdef' for ch in n))
+    found, missing = {}, []
+    for n in names:
+        try:
+            with open(os.path.join(unitdir, n), 'rb') as f:
+                read(f.read(), n)
+        except (OSError, Bad) as e:
+            missing.append((n, 'not a valid unit for this name: %s' % e))
+            continue
+        if n in by_uuid:
+            found[n] = by_uuid[n]
+        else:
+            missing.append((n, 'no image of the cache has this UUID'))
+    return c.uuid, found, missing
+
+
 def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
@@ -299,6 +345,13 @@ def main(argv):
             print('%s: valid, uuid %s, %d records' % (argv[2], uuid, len(recs)))
         elif cmd == 'uuid':
             print(macho_uuid(argv[2]))
+        elif cmd == 'match' and len(argv) == 4:
+            cuuid, found, missing = match(argv[2], argv[3])
+            for n, why in missing:
+                print('%s: %s' % (n, why))
+            print('%d of %d units name an image of the x86_64 cache %s' % (len(found), len(found) + len(missing), cuuid))
+            if missing:
+                sys.exit(1)
         else:
             sys.exit(__doc__)
     except Bad as e:

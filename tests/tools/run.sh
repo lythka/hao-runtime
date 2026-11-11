@@ -83,6 +83,10 @@ else bad "hao-install.py twice: rc $r1 $r2: $(cat "$d/2.log")"; fi
 if python3 -I "$here/test_install.py" >"$d/paths.log" 2>&1; then
     pass "hao-install.py path rules: $(grep '^Ran' "$d/paths.log") (unsafe manifest names and symlinks refused)"
 else bad "hao-install.py path rules: $(tail -15 "$d/paths.log")"; fi
+# --- tools/hao_ifunit.py match: each interface unit names an image of the x86_64 cache (hao-image-payload --units)
+if python3 -I "$here/test_ifunit_match.py" >"$d/ifmatch.log" 2>&1; then
+    pass "interface units against the x86_64 cache: $(grep '^Ran' "$d/ifmatch.log") (another library's or another name's unit refused)"
+else bad "hao_ifunit.py match: $(tail -15 "$d/ifmatch.log")"; fi
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["inputs_sha256"] and all("stub_sha256" in e for e in m["files"])' \
     "$d/pay/embed/manifest.json" && pass "manifest records per-stub hashes and build inputs" || bad "manifest hashes"
 
