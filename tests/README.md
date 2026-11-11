@@ -68,7 +68,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | `jitlocktest` (added to `make test`) | PASS | 37 | `/usr/bin/awk` copies |
 | `tools/check_x86.sh` | PASS | 1 | |
 
-`make test-guest` (about 150 s; 72 entries: 69 PASS, 1 XFAIL, 2 expected SKIP with `HAO_FS` set, 3 without it):
+`make test-guest` (about 150 s; 75 entries: 72 PASS, 1 XFAIL, 2 expected SKIP with `HAO_FS` set, 3 without it):
 
 | Entry | Expected | Time | Needs / skip reason |
 |---|---|---|---|
