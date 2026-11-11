@@ -101,7 +101,8 @@ static const vlist_map vlists[] = {
     /* CoreUtils (private, so not in vlist_gen.inc, which comes from SDK declarations): every export whose
      * argument register reaches the va_list of PrintFCoreVAList (2) or of a function reading it in place,
      * by register flow in the arm64e code; all of them only in CoreUtils in the 26B131 x86_64 cache.
-     * tests/guest/cuvalist.sh. To be replaced by generated rows. */
+     * tests/guest/cuvalist.sh. The code-derived rows of vlist_gen.inc agree (23 from both slices, 2 from
+     * x86_64 only; VSNScanF, a scanf consumer, is not derivable there) and leave these names out. */
     {"_CFAppendPrintV", 2}, {"_CFCreateV", 2}, {"_CFPropertyListCreateFormattedVAList", 3}, {"_CFStringAppendV", 2},
     {"_CFStringCreateV", 2}, {"_CUAppendV", 3}, {"_CUFatalErrorV", 2}, {"_FatalErrorV", 1}, {"_LogCategoryReplaceV", 2},
     {"_LogPrintV", 4}, {"_NSAppendPrintV", 2}, {"_NSAppendPrintV_safe", 2}, {"_NSErrorNestedV", 4},
