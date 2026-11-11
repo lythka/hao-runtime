@@ -296,18 +296,20 @@ uint64_t hao_fmt_fix_const(char kind, uint64_t fmt)
 
 /* ---- slot typing */
 
-int hao_fmt_types_chars(const void *s, int w, uint64_t len, char *ty, int max)
+int hao_fmt_types_chars(const void *s, int w, uint64_t len, char *ty, int max, bool hex_open)
 {
     int n = 0;
     for (uint64_t k = 0; k < len; k++) {
         if (ch(s, w, k) != '%') continue;
         k++;
         if (k < len && ch(s, w, k) == '%') continue;
-        while (k < len && in(ch(s, w, k), "-+ #0'")) k++;
+        bool addr = false;                                /* '#' or a precision: CoreUtils' address forms */
+        while (k < len && in(ch(s, w, k), "-+ #0'")) addr |= ch(s, w, k++) == '#';
         if (k < len && ch(s, w, k) == '*') { if (n >= max) return -1; ty[n++] = 'i'; k++; }
         while (k < len && ch(s, w, k) >= '0' && ch(s, w, k) <= '9') k++;
         if (k < len && ch(s, w, k) == '$') return -1;     /* positional arguments */
         if (k < len && ch(s, w, k) == '.') {
+            addr = true;
             k++;
             if (k < len && ch(s, w, k) == '*') { if (n >= max) return -1; ty[n++] = 'i'; k++; }
             while (k < len && ch(s, w, k) >= '0' && ch(s, w, k) <= '9') k++;
@@ -316,7 +318,8 @@ int hao_fmt_types_chars(const void *s, int w, uint64_t len, char *ty, int max)
         while (k < len && in(ch(s, w, k), "hlqLjztv")) { if (ch(s, w, k) == 'L') L = true; k++; }
         unsigned c = k < len ? ch(s, w, k) : 0;
         if (!c || n >= max) return -1;
-        if (in(c, "aAeEfFgG")) ty[n++] = L ? 'L' : 'd';
+        if (in(c, "aA") && hex_open && !L) ty[n++] = addr ? 'a' : 'x';
+        else if (in(c, "aAeEfFgG")) ty[n++] = L ? 'L' : 'd';
         else if (in(c, "diouxXcCsSpn@DOU")) ty[n++] = 'i';
         else return -1;
     }
@@ -326,8 +329,8 @@ int hao_fmt_types_chars(const void *s, int w, uint64_t len, char *ty, int max)
 int hao_fmt_types(char kind, uint64_t fmt, char *ty, int max)
 {
     if (!fmt) return -1;
-    if (kind == 'p') { const char *s = (const char *)(uintptr_t)fmt; return hao_fmt_types_chars(s, 1, strlen(s), ty, max); }
-    if (kind == 'w') { const wchar_t *s = (const wchar_t *)(uintptr_t)fmt; return hao_fmt_types_chars(s, 4, wcslen(s), ty, max); }
+    if (kind == 'p') { const char *s = (const char *)(uintptr_t)fmt; return hao_fmt_types_chars(s, 1, strlen(s), ty, max, false); }
+    if (kind == 'w') { const wchar_t *s = (const wchar_t *)(uintptr_t)fmt; return hao_fmt_types_chars(s, 4, wcslen(s), ty, max, false); }
     if (kind != 'C' || !cf_init()) return -1;
     cfref s = (cfref)(uintptr_t)fmt;
     long len = cf.len(s);
@@ -335,7 +338,7 @@ int hao_fmt_types(char kind, uint64_t fmt, char *ty, int max)
     uint16_t stackbuf[256], *b = len <= 256 ? stackbuf : malloc((size_t)len * 2 + 2);
     if (!b) return -1;
     cf.chars(s, (cfrange){0, len}, b);
-    int n = hao_fmt_types_chars(b, 2, (uint64_t)len, ty, max);
+    int n = hao_fmt_types_chars(b, 2, (uint64_t)len, ty, max, false);
     if (b != stackbuf) free(b);
     return n;
 }

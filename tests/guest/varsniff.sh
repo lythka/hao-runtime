@@ -12,6 +12,7 @@ OUT=${OUT:-$(mktemp -d -t hao-varsniff)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 LS=/System/Library/PrivateFrameworks/login.framework/Versions/A/Frameworks/loginsupport.framework/Versions/A/loginsupport
+CU=/System/Library/PrivateFrameworks/CoreUtils.framework/Versions/A/CoreUtils
 mkdir -p "$OUT"
 set -e
 clang -arch x86_64 -arch arm64 -arch arm64e -dynamiclib -O1 -I"$here" -framework CoreFoundation \
@@ -19,10 +20,12 @@ clang -arch x86_64 -arch arm64 -arch arm64e -dynamiclib -O1 -I"$here" -framework
 # link-time stand-in for the private loginsupport (the run binds the system's)
 echo 'void DBLoggingLogWithFormat(void){}' > "$OUT/ls.c"
 clang -arch arm64 -arch arm64e -dynamiclib -install_name "$LS" -o "$OUT/libloginsupport.dylib" "$OUT/ls.c"
+echo 'void SNPrintF(void){}' > "$OUT/cu.c"   # and for the private CoreUtils
+clang -arch arm64 -arch arm64e -dynamiclib -install_name "$CU" -o "$OUT/libcoreutils.dylib" "$OUT/cu.c"
 codesign -s - -f "$OUT/libvarsniffhelper.dylib" 2>/dev/null
 for a in arm64e arm64; do
     clang -arch $a -O1 -fobjc-arc -I"$here" -framework Foundation -L"$OUT" -lvarsniffhelper "$OUT/libloginsupport.dylib" \
-        -o "$OUT/varsniff.$a" "$here/varsniff.m"
+        "$OUT/libcoreutils.dylib" -o "$OUT/varsniff.$a" "$here/varsniff.m"
     codesign -s - -f "$OUT/varsniff.$a" 2>/dev/null
 done
 set +e
