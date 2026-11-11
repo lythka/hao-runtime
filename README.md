@@ -15,9 +15,31 @@ This repository builds:
 - `HaoExec`, a kernel extension that routes the exec of an ARM-only executable
   to `/usr/libexec/hao`.
 
-With these, macOS 27 (27.0 26A428 and 27.2.1 26B131), whose userspace ships
-ARM-only, boots through Setup Assistant to the desktop on a **13-inch 2012
-MacBook Pro (MacBookPro9,2)**.
+With these, macOS 27, whose userspace ships ARM-only, boots through Setup
+Assistant to the desktop on a **13-inch 2012 MacBook Pro (MacBookPro9,2)**.
+The current tested release is 27.2.1 (26B131); 27.0 (26A428) was the earlier
+target, and the generated interface tables still come from it.
+
+## Read first
+
+hao is experimental. Use it only on a **dedicated test machine** whose
+contents you can lose, never on a Mac you depend on.
+
+- Installing changes the System volume: it adds `/usr/libexec/hao` and
+  `/usr/lib/hao/`, adds an x86_64 slice to Apple's ARM-only executables in
+  place, and on 27.x replaces `dyld` with a fixed copy. HaoExec is a kernel
+  extension that routes the exec of ARM-only programs to hao.
+- The system images that run hao also need reduced platform security (for
+  example System Integrity Protection and AMFI relaxed) so that a modified
+  System volume and a kernel extension Apple has not signed can load. That is the image
+  builder's job, not this repository's, but it applies to any machine running
+  hao.
+- There is no uninstaller. Deleting hao's files breaks every program it was
+  embedded into, which includes launchd. To remove it, restore the System
+  volume from a snapshot or reinstall macOS, and drop HaoExec from whatever
+  loads it (the boot loader's kext list, or `/Library/Extensions` followed by
+  a kernel collection rebuild). `usr/lib/hao/install.json` records what an
+  install wrote.
 
 ![Maps on macOS 27 on a 2012 MacBook Pro (MacBookPro9,2)](docs/images/maps-intel.png)
 
