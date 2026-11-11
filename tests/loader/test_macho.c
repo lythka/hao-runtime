@@ -472,6 +472,13 @@ static void gate_plain(const uint8_t *seed, size_t n, const uint8_t *lib, size_t
     before = hao_slice_verify_passes;
     hao_image *l = load_bytes("lib.bin", lib, ln, err, sizeof err);
     note(l && hao_slice_verify_passes == before + 1 && !strcmp(l->libval_route, "integrity"), "library: loads, hashed once (integrity)");
+    {
+        /* the image keeps the cdhash it was verified with: SHA-256 of the seed's one CodeDirectory, 20 bytes */
+        size_t so = sig_at(lib), cd = so + be32at(lib + so + 16);
+        uint8_t h[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(lib + cd, be32at(lib + cd + 4), h);
+        note(l && l->cdhash_type == 2 && !memcmp(l->cdhash, h, 20) && img && img->cdhash_type == 2, "a verified image keeps its cdhash");
+    }
     if (l) hao_unload_image(l);
     d = copy_of(lib, ln);
     d[sig_at(d) - 1] ^= 1;
