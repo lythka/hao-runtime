@@ -1,6 +1,6 @@
 #!/bin/sh
 # Cross-check hao's x86 encoder against the system assembler.
-# tests/test_x86_emit.c writes our bytes (ours.s), the same instructions as
+# tests/host/test_x86_emit.c writes our bytes (ours.s), the same instructions as
 # assembler text (ref.s) and our per-instruction lengths (ours.len). Both
 # files are assembled and disassembled; the instruction text must match
 # (branch targets compared relative to the branch, `# addr` comments dropped),
@@ -9,7 +9,7 @@
 set -e
 D=${1:-build/x86check}
 mkdir -p "$D"
-clang -arch x86_64 -O1 -Wall -Iinclude -o "$D/gen" tests/test_x86_emit.c src/x86_emit.c && codesign -s - -f "$D/gen" 2>/dev/null
+clang -arch x86_64 -O1 -Wall -Iinclude -o "$D/gen" tests/host/test_x86_emit.c src/x86_emit.c && codesign -s - -f "$D/gen" 2>/dev/null
 "$D/gen" "$D/ours.s" "$D/ref.s" "$D/ours.len"
 clang -arch x86_64 -c -o "$D/ours.o" "$D/ours.s"
 clang -arch x86_64 -c -o "$D/ref.o" "$D/ref.s"

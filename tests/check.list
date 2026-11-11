@@ -73,5 +73,5 @@ translate	300	par	tests/translate/run.sh "$B" "$OUT"
 oss265	300	par	tests/oss265/run.sh
 fidelity	300	par	tests/fidelity/run.sh
 fuzz-smoke	600	par	make -s B="$B" fuzz-smoke
-corpus27_df	300	serial	tests/corpus27_df.sh
+corpus27_df	300	serial	tests/corpus27/corpus27_df.sh
 guest/jitinsns	300	par	tests/guest/jitinsns.sh

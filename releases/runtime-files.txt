@@ -4,7 +4,6 @@ LICENSE
 Makefile
 NOTICE.md
 README.md
-distribution/runtime-files.txt
 docs/ISSUES.md
 docs/architecture.md
 docs/async-contract.md
@@ -150,6 +149,8 @@ releases/contracts/26A428/0.1.0-analytical.5/contracts/fff36466fa7c30479704fcc02
 releases/contracts/26A428/0.1.0-analytical.5/export-manifest.json
 releases/contracts/26A428/0.1.0-analytical.5/release.json
 releases/contracts/26A428/0.1.0-analytical.5/swift-thunks.json
+releases/runtime-files.txt
+releases/value-contracts/optional-data-26A428.json
 src/a64_cond.c
 src/a64_fp.c
 src/a64_fp.h
@@ -240,8 +241,8 @@ tests/aot/policy.c
 tests/aot/run.sh
 tests/check.list
 tests/check.sh
-tests/corpus27.txt
-tests/corpus27_df.sh
+tests/corpus27/corpus27.txt
+tests/corpus27/corpus27_df.sh
 tests/expected-skips.txt
 tests/fidelity/expect-ab.txt
 tests/fidelity/fixtures/extrabit.tsv
@@ -621,6 +622,7 @@ tests/host/sigpolicy.c
 tests/host/sigpolicy.sh
 tests/host/sigpolicyguest.c
 tests/host/sigpolicyhelper.c
+tests/host/test_x86_emit.c
 tests/host/traps.c
 tests/loader/test_ifunit.c
 tests/loader/test_images.c
@@ -642,7 +644,6 @@ tests/oss265/build.sh
 tests/oss265/driver.c
 tests/oss265/rename.h
 tests/oss265/run.sh
-tests/test_x86_emit.c
 tests/tools/aotpayload.sh
 tests/tools/bundle.sh
 tests/tools/identity.sh
@@ -676,4 +677,3 @@ tools/hao_ifunit.py
 tools/hao_macho.py
 tools/hao_release.py
 tools/stub_identity_gate.py
-tools/value-contracts/optional-data-26A428.json

@@ -5,13 +5,26 @@ from pathlib import Path
 import subprocess
 
 
+ALLOWLIST = 'releases/runtime-files.txt'
+LEGACY_ALLOWLIST = 'distribution/runtime-files.txt'   # before the layout move
+
+
 def check(repo, ref='HEAD', history=False):
     def git(*args):
         return subprocess.check_output(['git', '-C', str(repo), *args])
-    allowed = set(git('show', ref + ':distribution/runtime-files.txt').decode().splitlines())
+
+    def allowlist(commit):
+        for path in (ALLOWLIST, LEGACY_ALLOWLIST):
+            listed = git('ls-tree', '--name-only', commit, '--', path).decode().strip()
+            if listed:
+                return set(git('show', commit + ':' + path).decode().splitlines())
+        raise ValueError('no allowlist in ' + commit)
+
+    # With --history each commit is held to the allowlist it carried.
     refs = git('rev-list', ref).decode().splitlines() if history else [ref]
     failures = []
     for commit in refs:
+        allowed = allowlist(commit)
         entries = git('ls-tree', '-rz', commit).split(b'\0')
         for entry in filter(None, entries):
             meta, raw_path = entry.split(b'\t', 1)

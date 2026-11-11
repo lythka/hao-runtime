@@ -136,7 +136,7 @@ that then exited 0 with a `SKIP` line or skipped a case without one counted
 as PASS. Changes to the scripts themselves: `SKIP` lines where a case or the
 whole script was left out silently or failed for a missing input
 (`cli.sh` x3, `libval.sh`, `run-async.sh`, `sigpolicy.sh`, `swiftpop.sh`,
-`sret-spill/run.py`, `oss265/run.sh`, `fidelity/run.sh`, `corpus27_df.sh`),
+`sret-spill/run.py`, `oss265/run.sh`, `fidelity/run.sh`, `corpus27/corpus27_df.sh`),
 timeouts on `oss265/run.sh`'s guest runs, and an absolute `B` accepted by
 `fuzz/run.sh`.
 

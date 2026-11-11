@@ -46,7 +46,7 @@ Further targets:
 |---|---|
 | `make oracle-asan` | the oracle checks with the interpreter, JIT and x86 encoder under ASan and UBSan (in `make check`) |
 | `make fuzz`, `make fuzz-smoke` | parser fuzzing ([tests/fuzz/README.md](tests/fuzz/README.md)) |
-| `python3.14 tools/check_distribution.py` | every tracked file is in `distribution/runtime-files.txt` |
+| `python3.14 tools/check_distribution.py` | every tracked file is in `releases/runtime-files.txt` |
 
 The scripts under `tests/guest/`, `tests/host/`, `tests/objc/` and
 `tests/translate/` each describe their usage in their header. Most build an
@@ -89,6 +89,6 @@ image works; those are tested on the target system.
 - Never run APFS mutation tools (`newfs_apfs`, `apfs_*`) on the development host.
 - Do not commit Apple binaries, credentials or files over 1 MB. Fixtures are
   built from source in this repository.
-- Add every new file to `distribution/runtime-files.txt`.
+- Add every new file to `releases/runtime-files.txt`.
 - Commit messages say what changed and why, and end with a `Tested:` line
   describing the checks that actually ran.

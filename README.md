@@ -97,8 +97,7 @@ included 26A428 contract export.
 | `kext/` | HaoExec kernel extension and its identity stamper |
 | `tools/` | Embedding, payload, install, trust-list, validators and release tools |
 | `tests/` | Instruction, loader, ABI, callback, Swift, AOT and packaging tests |
-| `releases/contracts/` | Versioned generated contract inputs |
-| `distribution/` | Allowlist of files in this repository |
+| `releases/` | Versioned contract inputs and the allowlist of files in this repository |
 | `docs/` | Design and reference documentation |
 
 ## Documentation

@@ -7,12 +7,12 @@
 # build/hao that writes 16 MB to the Data volume before it execs the real hao,
 # so the space on `/` always changes between the two runs.
 #
-# usage: tests/corpus27_df.sh [CORPUS]   (default tests/corpus27.txt)
+# usage: tests/corpus27/corpus27_df.sh [CORPUS]   (default tests/corpus27/corpus27.txt)
 # env:   N=runs per line (default 5), OUT=work dir (default: a temporary one)
 # Needs the 27.0 System at /private/tmp/ipsw27-fs (or $HAO_FS) and build/hao.
 # Exit: 0 all PASS, 1 some FAIL, 2 cannot test, 77 skipped (SKIP line says why).
-R=$(cd "$(dirname "$0")/.." && pwd)
-corpus=${1:-$R/tests/corpus27.txt}
+R=$(cd "$(dirname "$0")/../.." && pwd)
+corpus=${1:-$R/tests/corpus27/corpus27.txt}
 FS=${HAO_FS:-/private/tmp/ipsw27-fs}
 N=${N:-5}
 [ -x "$R/build/hao" ] || { echo "corpus27_df: no $R/build/hao (run make)"; exit 2; }
