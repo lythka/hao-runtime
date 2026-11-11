@@ -98,6 +98,9 @@ typedef struct hao_thread {
     /* runtime.c: the thread's native-target cache (guest branch target -> native target, x1, plan),
      * an entry valid while hao_ncache_gen equals its gen; read and written only by this thread */
     struct { uint64_t pc, gen, target, x1; const struct hao_plan *plan; } ncache[HAO_NCACHE_SLOTS];
+    /* ncache_busy: a store is in progress on this thread (a signal handler on top of it neither probes nor
+     * stores); ncache_wseq: completed stores, so a probe a handler's store interrupted sees the change */
+    uint32_t ncache_busy, ncache_wseq;
 } hao_thread;
 
 /* Where guest execution stands, for a signal that interrupts it. The
