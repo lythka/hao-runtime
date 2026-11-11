@@ -53,6 +53,16 @@
  * tools/hao_codesig.py is the same reader for the packaging tools;
  * tests/tools/test_codesig.py holds the two to the same answer.
  *
+ * An embedded program (tools/hao-embed) is a fat file whose x86_64 slice,
+ * the hao stub, is what the kernel validates and runs, with the program's
+ * identifier and entitlements, and whose ARM slice is the program. The
+ * stub's signature does not cover the ARM slice, so the stub says which one
+ * it was made for: hao-embed writes the slice's cdhash into the stub's
+ * __TEXT,__hao_slice, which the stub's signature does cover, and the gate
+ * below loads a main executable in such a process only if its verified
+ * CodeDirectory is that one (hao_libval_bound). Without it, a copy of the
+ * file with another ARM slice would run that code under the stub's identity.
+ *
  * This file depends only on libc (CommonCrypto is libSystem's): the loader
  * unit tests and fuzzers link it with macho.c.
  */
@@ -64,6 +74,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <crt_externs.h>
+#include <mach-o/getsect.h>
 #include <mach-o/loader.h>
 
 int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -404,6 +416,32 @@ int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n)
     return 0;
 }
 
+/* ------------------------------------------- an embedded program's slice */
+
+int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n)
+{
+    hao_slice_record r;
+    char w[300];
+    if (size != sizeof r) { snprintf(why, n, "its x86_64 slice names its ARM code in a record of %zu bytes, not %zu", size, sizeof r); return -1; }
+    memcpy(&r, record, sizeof r);
+    if (memcmp(r.magic, HAO_SLICE_MAGIC, sizeof r.magic) || r.version != 1 || r.zero[0] || r.zero[1]) {
+        snprintf(why, n, "its x86_64 slice names its ARM code in a record this hao does not read");
+        return -1;
+    }
+    if (!sl->sig_size) { snprintf(why, n, "its ARM code is not code signed; its x86_64 slice was made for signed code"); return -1; }
+    if (hao_slice_verify(sl, NULL, w, sizeof w) != 0) { snprintf(why, n, "code signature invalid (%s)", w); return -1; }
+    if (r.hash_type != sl->sig.hash_type || memcmp(r.cdhash, sl->sig.cdhash, sizeof r.cdhash)) {
+        char got[41], want[41];
+        for (int k = 0; k < 20; k++) {
+            snprintf(got + 2 * k, 3, "%02x", sl->sig.cdhash[k]);
+            snprintf(want + 2 * k, 3, "%02x", r.cdhash[k]);
+        }
+        snprintf(why, n, "its ARM code (cdhash %s) is not the code its x86_64 slice was made for (cdhash %s)", got, want);
+        return -1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------- library validation */
 
 static int mode = HAO_LIBVAL_UNDECIDED;
@@ -611,6 +649,15 @@ int hao_libval_image(hao_image *img, hao_slice *sl, char *why, size_t n)
 {
     if (expect_main) {
         expect_main = false;
+        /* An embedded program: this process's main executable is its stub, and the stub's record is in pages
+         * the kernel validated. Whatever the policy, and whether or not library validation is on, the ARM
+         * code that runs under the stub's identity is the code the stub was made for. No record: hao's own
+         * launcher, which has checked the file it was given (hao_guest_sig_enforce), or a stub made before
+         * hao-embed wrote one, whose ARM slice is verified below but is not tied to it. */
+        unsigned long size = 0;
+        const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
+                                            HAO_SLICE_SECTION, &size);
+        if (record && hao_libval_bound(record, size, sl, why, n) != 0) return -1;
         return mode == HAO_LIBVAL_UNDECIDED ? decide(sl, why, n) : 0;
     }
     if (!integrity) return 0;

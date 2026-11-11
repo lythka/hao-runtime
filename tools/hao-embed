@@ -84,6 +84,14 @@ The stub carries copies of the sections native code reads from the main
 executable (CARRY below: Info.plist, launchd/xpc sections, marker segments
 such as __SLSERVER and __RESTRICT).
 
+The stub's signature does not cover the arm slice, so every stub names the
+slice it was made for: __TEXT,__hao_slice holds the hash type and cdhash of
+the arm slice's CodeDirectory (slice_record; src/libval.c hao_libval_bound
+refuses to load any other slice under that stub). The arm slice's signature
+must therefore be valid as hao checks it (tools/hao_codesig.py check:
+structure and page hashes); a program whose arm slice is unsigned or does not
+verify is refused.
+
 A bundle's main executable (X.app/Contents/MacOS/X, .appex, .xpc, ...) is
 signed with its bundle: its CodeDirectory binds Contents/Info.plist (special
 slot -1) and _CodeSignature/CodeResources (slot -3), which is where libsecinit
@@ -748,6 +756,26 @@ def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_byt
     return out
 
 
+SLICE_SECTION = ("__TEXT", "__hao_slice")
+SLICE_MAGIC = b"haoslice"
+
+
+def slice_record(arm):
+    """The stub's __TEXT,__hao_slice for the arm slice ARM (include/hao/macho.h
+    hao_slice_record): magic, version 1, the CodeDirectory's hash type, two
+    zero bytes and its cdhash. RuntimeError if the slice's signature is
+    missing or would not verify under hao."""
+    try:
+        c = hao_codesig.check(bytes(arm))
+    except ValueError as e:
+        raise RuntimeError(f"the arm slice's load commands: {e}")
+    if c["verdict"] == "unsigned":
+        raise RuntimeError("the arm slice is not code signed (hao runs an embedded program only from signed code)")
+    if c["verdict"] != "valid":
+        raise RuntimeError(f"the arm slice's code signature is not valid ({c['why']})")
+    return SLICE_MAGIC + bytes([1, c["hash_type"], 0, 0]) + c["cdhash"]
+
+
 def hardened(data):
     """True if the program's own signature makes dyld ignore DYLD_* variables (tools/hao_codesig.py)."""
     if data is None:
@@ -824,6 +852,7 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None):
     if data is not None:
         identity_rules.check_rules(arm)
         build_version(arm)   # exactly one (a zippered program is refused)
+        sections[SLICE_SECTION] = (slice_record(arm), 5, 5)
         own = {name for _, name, _, _ in dylib_commands(open(stub, "rb").read())} - {LIBSYSTEM}
         links, skipped, _ = native_deps(src, data, x86, own)
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test,

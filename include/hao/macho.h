@@ -266,6 +266,25 @@ int hao_guest_sig_image(const hao_slice *sl, const char *path, const char *team,
  * fuzzers) a library that needs it is refused. report writes a diagnostic
  * line (the diagnostics log) before an invalid page ends the process. */
 void hao_libval_set_verifier(hao_imgsig_fn fn, bool force_user, void (*report)(const char *line));
+/* An embedded program's stub names the ARM slice it was made for in its
+ * __TEXT,__hao_slice section (tools/hao-embed writes it; the stub's own
+ * signature, which the kernel validates, covers it): the hash type and
+ * cdhash of that slice's CodeDirectory. */
+#define HAO_SLICE_SECTION "__hao_slice"
+typedef struct {
+    char magic[8];              /* HAO_SLICE_MAGIC */
+    uint8_t version;            /* 1 */
+    uint8_t hash_type;          /* the CodeDirectory's hash type (cs_blobs.h) */
+    uint8_t zero[2];
+    uint8_t cdhash[20];
+} hao_slice_record;
+#define HAO_SLICE_MAGIC "haoslice"
+/* Is sl the slice the record names? The slice's signature is verified
+ * (hao_slice_verify: structure, page hashes) and its CodeDirectory must be
+ * the recorded one. 0: yes; -1: no, or the record is not one hao reads
+ * (why). The loader's gate asks this for the main executable when the
+ * process's own main executable has the section. */
+int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n);
 enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
 /* The next image loaded is the main executable: its signature sets the
  * policy (enabled = false: off, HAO_NO_LIBVAL=1 in an ordinary process;

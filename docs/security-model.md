@@ -279,6 +279,18 @@ and refuses with status 126 unless the descriptor is that file. The slice is
 mapped from that descriptor. A link in the path that was repointed after the
 exec therefore cannot put another file's ARM code into the process.
 
+The stub's signature does not cover the ARM slice, so the stub names the
+slice it was made for. `tools/hao-embed` writes the hash type and cdhash of
+the ARM slice's CodeDirectory into the stub's `__TEXT,__hao_slice`, which the
+stub's own signature does cover, and refuses to embed a program whose ARM
+slice is unsigned or does not verify. Before it loads the slice, hao verifies
+it (structure, CodeDirectory, every page hash) and requires its cdhash to be
+the one the stub names; otherwise it exits with status 126. A copy of an
+embedded program with another ARM slice in it, even one with a valid
+signature of its own, does not run under the program's identity and
+entitlements. `tools/stub_identity_gate.py` checks the record of every stub
+of a payload. The check hashes the program's ARM slice once per launch.
+
 A stub whose program uses ObjC re-executes itself once to turn off libobjc's
 tagged-pointer obfuscation, unless its parent's exec already did. It
 re-executes the path it was started through while that still names its own
@@ -312,12 +324,12 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   check. If one of them asks for the main executable's path or sections, it
   is answered from the file `HAO_EXEC` names, unchecked. A file that fails
   the check never runs.
-- An embedded stub's signature does not cover the ARM slice. On a sealed
-  system volume this does not matter. Elsewhere hao checks that the slice
-  comes from the stub's own file and that the slice's own signature is
-  valid, but not yet that it is the slice the stub was made for: a file
-  whose ARM slice was replaced by another validly signed one runs that code
-  under the stub's identity and entitlements.
+- A stub made before `tools/hao-embed` wrote the `__hao_slice` record does
+  not name its ARM slice. hao verifies such a program's ARM slice by the
+  slice's own signature only, so a copy with another validly signed slice
+  still runs under the stub's identity and entitlements. Embed such
+  programs again; `hao-install.py` does not replace a stub that is already
+  in a file.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests
@@ -327,6 +339,7 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - A process that may not fork (a sandbox that denies `process-fork`) cannot
   ask Security.framework about a main executable: a guest whose signer only
   that route can give is refused there.
-- The stub's own-file check, the fork that asks Security.framework and the
-  loading of a guest file from a copy were tested under Rosetta on an
-  Apple-silicon host. None has been run on an Intel kernel yet.
+- The stub's own-file check, its check of the ARM slice it names, the fork
+  that asks Security.framework and the loading of a guest file from a copy
+  were tested under Rosetta on an Apple-silicon host. None has been run on
+  an Intel kernel yet.
