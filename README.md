@@ -55,19 +55,21 @@ make -j8
 make test
 ```
 
-`make` builds `build/libhao.dylib`, `build/hao` and `build/hao-stub`. The
-launcher is signed during the build; a stub is signed by `tools/hao-embed` for
-the program it is embedded in. To build for macOS 26, use a separate build
-directory: `make B=build/macos-26.0`.
+`make` builds the runtime, launcher and stub into `build/`. The launcher is
+signed during the build; a stub is signed by `tools/hao-embed` for the program
+it is embedded in. To build for macOS 26, use a separate build directory:
+`make B=build/macos-26.0`.
 
-Run an ARM64 command-line program, or generate its AOT cache:
+Run an ARM64 command-line program, or generate AOT caches:
 
 ```sh
 timeout -s KILL 60 build/hao /path/to/arm64-program [ARGS...]
 timeout -s KILL 60 build/hao --interp /path/to/arm64-program    # interpreter only
-timeout -s KILL 60 build/hao -v --stats /path/to/arm64-program  # diagnostics
-build/hao --aot [--cache DIR] /path/to/arm64-program            # AOT cache, no execution
+timeout -s KILL 60 build/hao -v --stats /path/to/arm64-program  # diagnostics (-vv for more)
+build/hao --aot [--cache DIR] FILE...                           # AOT caches, no execution
 ```
+
+Unsigned programs are refused unless `--allow-unsigned` is given.
 
 Application bundles, extensions and system services run on the target system,
 not on the development host. [CONTRIBUTING.md](CONTRIBUTING.md) covers testing
