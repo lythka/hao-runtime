@@ -7,7 +7,9 @@
 #include "hao/identity.h"
 #include "hao/native_bundle.h"
 #include "hao/bridge.h"
+#include <cpuid.h>
 #include <crt_externs.h>
+#include <sys/sysctl.h>
 #include <errno.h>
 #include <libproc.h>
 #include <stdio.h>
@@ -489,8 +491,35 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
 }
 
 /* fd: the open main executable, checked by the caller; the loader takes it. */
+/* The CPU profile (docs/releases.md): libhao and translated code use SSSE3, SSE4.1, SSE4.2, POPCNT
+ * and CMPXCHG16B (x86-64-v2), and 128-bit atomics rely on movdqa being single-copy atomic, which
+ * Intel guarantees on CPUs that enumerate AVX. Rosetta enumerates no AVX; it runs the x86-64-v2
+ * subset and is where the tests run, so AVX is required on Intel hardware only. */
+static const char *cpu_profile_missing(void)
+{
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d)) return "CPUID leaf 1";
+    if (!(d & bit_SSE2)) return "SSE2";
+    if (!(c & bit_SSE3)) return "SSE3";
+    if (!(c & bit_SSSE3)) return "SSSE3";
+    if (!(c & bit_CMPXCHG16B)) return "CMPXCHG16B";
+    if (!(c & bit_SSE41)) return "SSE4.1";
+    if (!(c & bit_SSE42)) return "SSE4.2";
+    if (!(c & bit_POPCNT)) return "POPCNT";
+    int translated = 0;
+    size_t n = sizeof translated;
+    if (sysctlbyname("sysctl.proc_translated", &translated, &n, NULL, 0) != 0) translated = 0;
+    if (!translated && !(c & bit_AVX)) return "AVX";
+    return NULL;
+}
+
 static int run_guest(const char *path, int fd, int argc, char **argv, char **envp)
 {
+    const char *missing = cpu_profile_missing();
+    if (missing) {
+        fprintf(stderr, "hao: this CPU lacks %s; hao needs an Intel CPU with AVX (Sandy Bridge or later)\n", missing);
+        return 126;
+    }
     g_argc = argc; g_argv = argv; g_envp = envp;
     hao_opts_init(NULL);          /* the front end already took the snapshot */
     hao_verbose = hao_opt.verbose;

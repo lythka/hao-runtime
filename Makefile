@@ -15,7 +15,10 @@ ifneq ($(B_MIN),$(MACOS_MIN))
 $(error B=$(B) is the macOS $(B_MIN) build directory, not MACOS_MIN=$(MACOS_MIN))
 endif
 endif
-ARCH      := -arch x86_64 -mmacosx-version-min=$(MACOS_MIN)
+# The CPU profile hao-x86_64-avx-cx16-v1 (docs/releases.md): Intel Macs with AVX, so also SSSE3, SSE4.1,
+# SSE4.2, POPCNT and CMPXCHG16B. Compiled code and the translator use at most x86-64-v2 (no VEX encodings:
+# Rosetta, where the tests run, has no AVX); src/main.c refuses a CPU without the profile at startup.
+ARCH      := -arch x86_64 -mmacosx-version-min=$(MACOS_MIN) -march=x86-64-v2
 # Debug info names sources and objects relative to the checkout, and the debug
 # map and libhaocore.a carry no file times (ZERO_AR_DATE), so the same commit
 # gives the same bytes in any checkout, worktree or rebuild.
