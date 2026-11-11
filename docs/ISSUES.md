@@ -1,5 +1,46 @@
 # Runtime issues and measured scope
 
+## `%a` slots of variadics whose format family is assumed
+
+On a 26B131 image, sharingd crashed with SIGSEGV in CoreUtils'
+`PrintFCoreVAList` whenever the Bluetooth LE private address rotated. It
+logs `LogPrintF(cat, func, 30, "BLE address changed: %.6a\n", bytes)`.
+`LogPrintF` has no SDK format attribute, so `src/varsniff.c` typed its slots
+by assuming the last fixed argument is a printf format. printf's `%a` takes
+a double, so the pointer went to xmm0. CoreUtils reads `%a` as a pointer to
+an address and took r8, which held 0.
+
+Native arm64 CoreUtils on the development host (27.2, 26B123), read through
+`VSNPrintF` with marker slots, gives these rules. `%a` takes one pointer with
+any precision or flag: `.4` is IPv4, `.6` Ethernet, `.8` 8 bytes, `.16`
+IPv6, `##` a sockaddr, and a bare `%a` prints an error. `%A`, `%D`, `%O` and
+the `L` and `q` modifiers are unknown and take no argument. `v` is a
+NumVersion conversion, not a modifier. `%m` takes one integer, `%H` takes a
+pointer and two integers, and `%N` takes nothing. `%e %f %g %E %F %G` take
+doubles.
+
+When the family is only assumed, a `%a`/`%A` slot without `L` now goes by its
+value. An x86_64 user pointer is below 2^47, which read as a double is zero or
+a positive subnormal, and no other double is. Those values go to a GPR and
+everything else to an XMM register. Zero is both NULL and 0.0. It counts as an
+address when the conversion has a `#` flag or a precision, the forms CoreUtils
+needs, and as a double otherwise. Formats with an SDK attribute are typed as
+before. `tests/guest/varsniff.sh` now checks printf `%a` (zero, precision,
+`#`, `%A`) and CoreUtils `SNPrintF` (`%.6a`, `%.4a`, `%##a`, a NULL `%.6a`
+followed by integer, string and double slots) against native arm64. Before
+the fix the CoreUtils case crashed in `PrintFCoreVAList` under the JIT and
+`--interp`.
+
+Remaining limitations:
+
+- printf `%#a` or `%.Na` of exactly 0.0, or `%a` of a positive subnormal,
+  in an unattributed variadic followed by slots of the other class: those
+  later slots read one register off.
+- CoreUtils conversions outside printf's set (`%m`, `%H`, `%N`, `%{...}`,
+  `%v`) still make the typer give up, and every slot then goes to a GPR. A
+  real `%f` in such a format prints a wrong value but cannot crash. CoreUtils'
+  `%D`, `%O` and `%q` take no argument but are typed as one slot.
+
 ## Signal callback reentry during Objective-C enum initialization
 
 The intermittent `tests/guest/uresume.sh` `alarmnx` SIGILL was a runtime

@@ -28,8 +28,12 @@ uint64_t hao_fmt_fix_const(char kind, uint64_t fmt);
  * Returns the count, or -1 when the format cannot be typed (positional arguments, an unknown conversion,
  * more than max). */
 int hao_fmt_types(char kind, uint64_t fmt, char *ty, int max);
-/* the same scan over characters of width w (1, 2 or 4) */
-int hao_fmt_types_chars(const void *s, int w, uint64_t len, char *ty, int max);
+/* the same scan over characters of width w (1, 2 or 4). hex_open: the format's family is only assumed
+ * (no SDK attribute), so %a/%A without L is a double for printf but a pointer to an address in CoreUtils'
+ * PrintF (%.6a: six bytes, %##a: a sockaddr), and the caller decides the slot by its value: typed 'a'
+ * with a '#' flag or a precision (the forms CoreUtils needs; a zero slot is a NULL address), else 'x'
+ * (a zero slot is 0.0). */
+int hao_fmt_types_chars(const void *s, int w, uint64_t len, char *ty, int max, bool hex_open);
 
 /* counters for hao_bridge_stats: formats rewritten, and calls whose variadic slots stayed untyped */
 extern uint64_t hao_fmt_fixed, hao_fmt_untyped;

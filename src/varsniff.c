@@ -19,9 +19,20 @@
  * go in registers and the guest's stack slots are passed as SysV variadic
  * arguments. The slots are typed from the format string when the last fixed
  * argument is one in a guest image (a C string or a constant CFString):
- * %f/%e/%g/%a go to XMMs, everything else to GPRs; a format with %Lf is
+ * %f/%e/%g go to XMMs, everything else to GPRs; a format with %Lf is
  * handed over as a copy whose L conversions take a double (vafmt.c). Without a format every slot is an integer, which is exact for the
  * pointer and integer lists those functions take.
+ *
+ * %a is not one type across the formatters these functions use: printf reads a
+ * double, CoreUtils' PrintF (LogPrintF, SNPrintF, ...) a pointer to a hardware or
+ * network address (%.6a: six bytes; %##a: a sockaddr). When the format's family is
+ * only assumed (no SDK attribute), such a slot goes by its value: an x86_64 user
+ * pointer is below 2^47, which as a double is zero or a positive subnormal, and no
+ * other double is, so those go to a GPR and the rest to an XMM. Zero is both a NULL
+ * address and 0.0: it is an address when the conversion has a '#' flag or a precision,
+ * which CoreUtils requires (a bare %a prints an error there), else a double. Left
+ * wrong: printf's %#a or %.Na of exactly 0.0, or %a of a positive subnormal, when later
+ * slots of the other class follow (they read one slot off).
  *
  * The decoder accepts only the instructions such prologues contain and gives
  * up on anything else, so an unrecognised function stays bound as before.
@@ -192,8 +203,8 @@ bool hao_varsniff_native_imp(uint64_t fn, int *ngp, int *nfp) { return native(fn
 #define VS_MIN 16       /* passed when the format is unknown or shorter */
 
 /* Types of the variadic slots from a format string in a guest image; -1 if `a` is not one.
- * *kind: 'p' a C string, 'C' a constant CFString. */
-static int guest_format_types(uint64_t a, char *ty, int max, char *kind)
+ * *kind: 'p' a C string, 'C' a constant CFString. hex_open: the family is assumed (hao_fmt_types_chars). */
+static int guest_format_types(uint64_t a, char *ty, int max, char *kind, bool hex_open)
 {
     hao_image *im = hao_image_for_addr(a);
     if (!im) return -1;
@@ -208,14 +219,14 @@ static int guest_format_types(uint64_t a, char *ty, int max, char *kind)
         hao_image *ci = hao_image_for_addr(chars);
         if (!ci || len > 65536 || chars + len * (wide ? 2 : 1) > hao_image_extent(ci, chars)) return -1;
         *kind = 'C';
-        return hao_fmt_types_chars((const void *)(uintptr_t)chars, wide ? 2 : 1, len, ty, max);
+        return hao_fmt_types_chars((const void *)(uintptr_t)chars, wide ? 2 : 1, len, ty, max, hex_open);
     }
     const char *s = (const char *)(uintptr_t)a;
     size_t len = 0;
     while (a + len < end && len < 65536 && s[len]) len++;
     if (a + len >= end || len >= 65536) return -1;
     *kind = 'p';
-    return hao_fmt_types_chars(s, 1, len, ty, max);
+    return hao_fmt_types_chars(s, 1, len, ty, max, hex_open);
 }
 
 /* ---- the trap */
@@ -249,12 +260,13 @@ bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow
     int nt = -1;
     bool typed = false;
     hao_fmtfix fx = {0};
+    bool assumed = !fkind;              /* no SDK attribute: printf's types are a guess (%a above) */
     if (fkind == 'o') fkind = 0;        /* os_log: the logging runtime finds the format by its address */
     if (fmt >= 0 && fmt < gi && (fkind == 's' || fkind == 'W')) {
         fixed[fmt] = hao_fmt_fix(fkind, c->x[fmt], &fx);   /* scanf: every slot is a pointer */
         typed = true;
     } else if (fmt >= 0 && fmt < gi) {
-        if (fkind != 'w') nt = guest_format_types(c->x[fmt], ty, VS_SLOTS, &kind);
+        if (fkind != 'w') nt = guest_format_types(c->x[fmt], ty, VS_SLOTS, &kind, assumed);
         /* %L: Apple arm64 long double is double. The callee gets a copy of the format whose floating
          * conversions take a double (made once per format and kept: the callee may keep the pointer), which
          * is what the arm64 format means, %La included; the slot then goes in an XMM register. */
@@ -283,6 +295,8 @@ bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow
     for (int k = 0; k < nslots; k++) {
         char ty_k = k < nt ? ty[k] : 'i';
         uint64_t s = sp[k];
+        if (ty_k == 'a' || ty_k == 'x')                /* sign and exponent 0: a pointer, or a zero or subnormal double */
+            ty_k = s >> 52 || (!s && ty_k == 'x') ? 'd' : 'i';
         if (ty_k == 'd') {
             if (fi < 8) memcpy(xmm[fi++], &s, 8);
             else stk[ns++] = s;

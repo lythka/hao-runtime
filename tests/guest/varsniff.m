@@ -5,13 +5,17 @@
 // logind call DBLoggingLogWithFormat (loginsupport, CFString format with
 // %s/%d/%@), syslog, which the SDK binds to syslog$DARWIN_EXTSN, and
 // CFCalendarDecomposeAbsoluteTime, whose fixed double the generated table
-// counted as an integer argument.
+// counted as an integer argument. %a is a double to printf but a pointer to
+// an address to CoreUtils' SNPrintF (%.6a Ethernet, %.4a IPv4, %##a sockaddr):
+// both, and the zero cases.
 // Output must match native arm64.
 #import <Foundation/Foundation.h>
+#include <netinet/in.h>
 #include <syslog.h>
 #include "varsniffhelper.h"
 
 void DBLoggingLogWithFormat(uint64_t controller, CFStringRef fmt, ...);
+int SNPrintF(void *buf, size_t size, const char *fmt, ...);   /* CoreUtils */
 
 static long f0(long k) { return k + 1; }
 static long f1(long k) { return 2 * k + 3; }
@@ -30,6 +34,14 @@ int main(void)
     printf("long  %s\n", b);
     vs_format(b, sizeof b, "%La %LA %Le %d %LG", (long double)1.5, (long double)-0.1, (long double)3e300, 4, (long double)7.0);
     printf("hexl  %s\n", b);
+    vs_format(b, sizeof b, "%a %d %s %.3a %#a %A %f", 0.0, 5, "z", 1.5, -2.0, 0.1, 6.5);
+    printf("hex   %s\n", b);
+    static const unsigned char mac[6] = {0x74, 0x68, 0x1e, 0x19, 0xf3, 0x19}, ip4[4] = {10, 1, 2, 3};
+    struct sockaddr_in sin = {sizeof sin, AF_INET, htons(80), {htonl(0x0a010203)}};
+    SNPrintF(b, sizeof b, "mac %.6a ip %.4a sa %##a f %f s %s d %d", mac, ip4, &sin, 2.5, "str", 7);
+    printf("cu    %s\n", b);
+    SNPrintF(b, sizeof b, "null %.6a d %d s %s f %f", (void *)0, 5, "s", 1.25);
+    printf("cu0   %s\n", b);
     vs_scaled(0.25, b, sizeof b, "%s=%f,%d", "k", 1.75, 12);
     printf("fixfp %s\n", b);
     vs_five(1, 2, 3, 4, "%s %f %ld", "five", 5.5, 6L);
