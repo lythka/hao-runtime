@@ -258,6 +258,163 @@ VEC2(t_sshr1, "sshr v2.4s, v1.4s, #31")
 VEC2(t_sshr2, "sshr v2.2s, v0.2s, #5")
 VEC2(t_sshr3, "sshr v2.2d, v1.2d, #7")
 VEC2(t_sshr4, "sshr d2, d0, #64")
+VEC2(t_shl7, "shl v2.8b, v1.8b, #7")
+VEC2(t_shl8, "shl v2.16b, v1.16b, #0")
+VEC2(t_ushr6, "ushr v2.8b, v0.8b, #1")
+VEC2(t_ushr7, "ushr v2.16b, v0.16b, #8")
+VEC2(t_sshr5, "sshr v2.16b, v0.16b, #1")
+VEC2(t_sshr6, "sshr v2.16b, v1.16b, #7")
+VEC2(t_sshr7, "sshr v2.8b, v0.8b, #8")
+VEC2(t_sshr8, "sshr v2.16b, v1.16b, #3")
+VEC2(t_sshr9, "sshr v2.2d, v0.2d, #64")
+VEC2(t_sshr10, "sshr v2.2d, v1.2d, #1")
+VEC2(t_sshr11, "sshr v2.2d, v0.2d, #63")
+VEC2(t_sshr12, "sshr d2, d1, #33")
+VEC2(t_sra0, "usra v2.16b, v0.16b, #3")
+VEC2(t_sra1, "ssra v2.8b, v1.8b, #8")
+VEC2(t_sra2, "ssra v2.8h, v0.8h, #15")
+VEC2(t_sra3, "usra v2.2d, v1.2d, #64")
+VEC2(t_sra4, "ssra d2, d0, #40")
+VEC2(t_rshr0, "urshr v2.16b, v1.16b, #8")
+VEC2(t_rshr1, "srshr v2.16b, v0.16b, #1")
+VEC2(t_rshr2, "urshr v2.4h, v1.4h, #16")
+VEC2(t_rshr3, "srshr v2.4s, v0.4s, #31")
+VEC2(t_rshr4, "srshr v2.2d, v1.2d, #64")
+VEC2(t_rshr5, "urshr d2, d0, #1")
+VEC2(t_rsra0, "srsra v2.8h, v1.8h, #4")
+VEC2(t_rsra1, "ursra v2.2d, v0.2d, #33")
+VEC2(t_rsra2, "srsra v2.8b, v0.8b, #7")
+VEC2(t_xtn0, "xtn v2.8b, v0.8h")
+VEC2(t_xtn1, "xtn v2.4h, v1.4s")
+VEC2(t_xtn2, "xtn v2.2s, v0.2d")
+VEC2(t_xtn3, "xtn2 v2.16b, v1.8h")
+VEC2(t_xtn4, "xtn2 v2.8h, v0.4s")
+VEC2(t_xtn5, "xtn2 v2.4s, v1.2d")
+VEC2(t_shrn0, "shrn v2.8b, v0.8h, #1")
+VEC2(t_shrn1, "shrn v2.8b, v1.8h, #8")
+VEC2(t_shrn2, "shrn v2.4h, v0.4s, #16")
+VEC2(t_shrn3, "shrn v2.2s, v1.2d, #32")
+VEC2(t_shrn4, "shrn2 v2.16b, v0.8h, #5")
+VEC2(t_shrn5, "shrn2 v2.8h, v1.4s, #3")
+VEC2(t_shrn6, "shrn2 v2.4s, v0.2d, #17")
+VEC2(t_shll0, "ushll v2.8h, v0.8b, #0")
+VEC2(t_shll1, "sshll v2.8h, v1.8b, #7")
+VEC2(t_shll2, "ushll2 v2.4s, v0.8h, #15")
+VEC2(t_shll3, "sshll2 v2.4s, v1.8h, #0")
+VEC2(t_shll4, "ushll v2.2d, v1.2s, #31")
+VEC2(t_shll5, "sshll2 v2.2d, v0.4s, #5")
+VEC2(t_shll6, "sxtl2 v2.8h, v1.16b")
+VEC2(t_shll7, "uxtl2 v2.2d, v0.4s")
+VEC2(t_fabs0, "fabs v2.4s, v0.4s")
+VEC2(t_fabs1, "fabs v2.2s, v1.2s")
+VEC2(t_fabs2, "fabs v2.2d, v0.2d")
+VEC2(t_fneg0, "fneg v2.4s, v1.4s")
+VEC2(t_fneg1, "fneg v2.2s, v0.2s")
+VEC2(t_fneg2, "fneg v2.2d, v1.2d")
+
+/* Single-precision vector arithmetic over a table of corner values (zeros,
+ * subnormals, the minimum normal, the largest finite, infinities, quiet and
+ * signalling NaNs, values that overflow, underflow or cancel exactly) under
+ * five FPCR settings: v0 and v1 are built from fv[i] and fv[j], v2 is the
+ * result; FPSR (cleared before) and NZCV (set by a compare before) are read
+ * after it. */
+static const uint32_t fv[] = {
+    0x00000000, 0x80000000, 0x00000001, 0x807fffff, 0x00800000, 0x80800000, 0x00800001, 0x01000000,
+    0x7f7fffff, 0xff7fffff, 0x7f000000, 0x7f800000, 0xff800000, 0x7fc00000, 0x7f800001, 0xffc00123,
+    0x3f800000, 0xbf800000, 0x3f800001, 0x3fffffff, 0x1f800000, 0x5f800000, 0x20000000, 0x40490fdb,
+};
+#define NF (sizeof fv / sizeof *fv)
+static const uint64_t fpcrs[] = {0, 3u << 22, 1u << 24, 1u << 25, 2u << 22 | 3u << 24};
+#define VECF(name, insn)                                                                \
+    NOINL static uint64_t name(const uint32_t *in, uint64_t fpcr, uint64_t *fl)        \
+    {                                                                                   \
+        uint64_t out[2];                                                                \
+        register const uint32_t *x4 __asm__("x4") = in;                                 \
+        register uint64_t *x5 __asm__("x5") = out;                                      \
+        register uint64_t x6 __asm__("x6") = fpcr, x3 __asm__("x3"), x7 __asm__("x7"); \
+        __asm__ volatile("ldp q0, q1, [x4]\nldr q2, [x4, #32]\nmov v17.16b, v1.16b\n"  \
+                         "msr fpcr, x6\nmsr fpsr, xzr\ncmp x4, x5\n" insn              \
+                         "\nmrs x3, nzcv\nmrs x7, fpsr\nmsr fpcr, xzr\nstr q2, [x5]"     \
+                         : "=r"(x3), "=r"(x7) : "r"(x4), "r"(x5), "r"(x6)               \
+                         : "cc", "memory", "v0", "v1", "v2", "v17");                    \
+        *fl = x3 ^ x7;                                                                  \
+        return mix(out[0], out[1]);                                                     \
+    }
+#define F4(n, mn) VECF(t_##n##4s, mn " v2.4s, v0.4s, v1.4s") VECF(t_##n##2s, mn " v2.2s, v0.2s, v1.2s")
+F4(fadd, "fadd") F4(fsub, "fsub") F4(fmul, "fmul") F4(fmax, "fmax") F4(fmin, "fmin") F4(fmaxnm, "fmaxnm")
+F4(fminnm, "fminnm") F4(fcmeq, "fcmeq") F4(fcmge, "fcmge") F4(fcmgt, "fcmgt")
+VECF(t_fmule0, "fmul v2.4s, v0.4s, v1.s[0]")
+VECF(t_fmule1, "fmul v2.4s, v0.4s, v17.s[3]")
+VECF(t_fmule2, "fmul v2.2s, v1.2s, v0.s[1]")
+VECF(t_fmule3, "fmul v2.2s, v0.2s, v17.s[2]")
+VECF(t_fchain, "fmul v2.4s, v0.4s, v1.4s\nfadd v2.4s, v2.4s, v0.4s\nfsub v2.4s, v2.4s, v1.4s\nfmax v2.4s, v2.4s, v1.4s")
+VECF(t_fadd2d, "fadd v2.2d, v0.2d, v1.2d")
+typedef uint64_t (*fnf)(const uint32_t *, uint64_t, uint64_t *);
+static void runf(const char *name, fnf f)
+{
+    uint64_t h = 14695981039346656037ull;
+    for (unsigned c = 0; c < sizeof fpcrs / sizeof *fpcrs; c++)
+        for (unsigned i = 0; i < NF; i++)
+            for (unsigned j = 0; j < NF; j++) {
+                uint32_t in[12] = {fv[i], fv[j], fv[(i + 5) % NF], fv[i] ^ 0x80000000u,
+                                   fv[j], fv[i], fv[(j + 7) % NF], fv[i],
+                                   fv[(i + j) % NF], 0x12345678, fv[j], 0x9abcdef0};
+                uint64_t fl = 0, r = f(in, fpcrs[c], &fl);
+                h = mix(mix(h, r), fl);
+            }
+    printf("%-10s %016llx\n", name, (unsigned long long)h);
+}
+
+/* Structure loads and stores: x0 = a 256-byte buffer filled from a and b,
+ * x1 = a post-index offset from b; the hash covers v2-v5, x0 after
+ * writeback (relative to the buffer) and the buffer. */
+#define LDST(name, insn)                                                                \
+    NOINL static uint64_t name(uint64_t a, uint64_t b, uint64_t *fl)                    \
+    {                                                                                   \
+        uint64_t buf[48], out[8];                                                       \
+        for (int k = 0; k < 48; k++) buf[k] = mix(a + (uint64_t)k, b);                  \
+        register uint64_t *x0 __asm__("x0") = buf + 8;                                  \
+        register uint64_t x1 __asm__("x1") = (b & 0x3f) - 16, x3 __asm__("x3");         \
+        register uint64_t *x5 __asm__("x5") = out;                                      \
+        __asm__ volatile("ldp q2, q3, [x0, #-64]\nldp q4, q5, [x0, #-32]\ncmp x1, x3\n" \
+                         insn "\nmrs x3, nzcv\nstp q2, q3, [x5]\nstp q4, q5, [x5, #32]"  \
+                         : "+r"(x0), "+r"(x1), "=r"(x3) : "r"(x5)                       \
+                         : "cc", "memory", "v0", "v2", "v3", "v4", "v5", "v6", "v31", "x9"); \
+        *fl = x3;                                                                       \
+        uint64_t h = mix((uint64_t)((uint8_t *)x0 - (uint8_t *)buf), x1);               \
+        for (int k = 0; k < 8; k++) h = mix(h, out[k]);                                 \
+        for (int k = 0; k < 48; k++) h = mix(h, buf[k]);                                \
+        return h;                                                                       \
+    }
+LDST(t_ld1a, "ld1 {v2.16b}, [x0]")
+LDST(t_ld1b, "ld1 {v2.8b, v3.8b}, [x0], #16")
+LDST(t_ld1c, "ld1 {v2.4s, v3.4s, v4.4s}, [x0], x1")
+LDST(t_ld1d, "ld1 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0], #64")
+LDST(t_ld1e, "ld1 {v2.1d, v3.1d, v4.1d, v5.1d}, [x0], x1")
+LDST(t_ld1f, "ld1 {v31.4h, v0.4h}, [x0]\nmov v2.16b, v31.16b\nmov v3.16b, v0.16b")
+LDST(t_st1a, "st1 {v2.16b}, [x0]")
+LDST(t_st1b, "st1 {v3.2s, v4.2s}, [x0], x1")
+LDST(t_st1c, "st1 {v2.8h, v3.8h, v4.8h}, [x0], #48")
+LDST(t_st1d, "st1 {v2.1d, v3.1d, v4.1d, v5.1d}, [x0], #32")
+LDST(t_st1e, "st1 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0], x1")
+LDST(t_ld1r0, "ld1r {v2.16b}, [x0]")
+LDST(t_ld1r1, "ld1r {v3.4h}, [x0], #2")
+LDST(t_ld1r2, "ld1r {v4.4s}, [x0], x1")
+LDST(t_ld1r3, "ld1r {v5.2d}, [x0], #8")
+LDST(t_ld1r4, "ld1r {v2.1d}, [x0]")
+LDST(t_ld1r5, "ld1r {v3.8b}, [x0], x1")
+LDST(t_ld1l0, "ld1 {v2.b}[13], [x0]")
+LDST(t_ld1l1, "ld1 {v3.h}[5], [x0], #2")
+LDST(t_ld1l2, "ld1 {v4.s}[3], [x0], x1")
+LDST(t_ld1l3, "ld1 {v5.d}[1], [x0], #8")
+LDST(t_st1l0, "st1 {v2.b}[7], [x0], #1")
+LDST(t_st1l1, "st1 {v3.h}[6], [x0], x1")
+LDST(t_st1l2, "st1 {v4.s}[1], [x0]")
+LDST(t_st1l3, "st1 {v5.d}[0], [x0], #8")
+/* SP as the base */
+LDST(t_ld1sp, "mov x9, sp\nsub sp, sp, #128\nst1 {v2.16b, v3.16b, v4.16b, v5.16b}, [sp]\n"
+              "movi v2.16b, #0\nld1 {v5.4s, v6.4s}, [sp], #32\nld1r {v4.8h}, [sp]\n"
+              "ld1 {v3.s}[2], [sp], #4\nmov sp, x9\nmov v2.16b, v6.16b")
 
 /* Signal contexts. A load faults with NZCV live from the compare before
  * it: the handler must see the load's pc, the compare's NZCV and x0, and
@@ -289,6 +446,18 @@ NOINL static uint64_t sg_probe(uint64_t a, uint64_t b, uint64_t *p, uint64_t *fl
     *fl = x4;
     return x3;
 }
+/* the same for a two-register LD1 with post-index: no writeback when it faults */
+NOINL static uint64_t sg_probe_v(uint64_t a, uint64_t b, uint64_t *p, uint64_t *fl)
+{
+    register uint64_t x0 __asm__("x0") = a, x1 __asm__("x1") = b;
+    register uint64_t *x2 __asm__("x2") = p;
+    register uint64_t x3 __asm__("x3") = 0, x4 __asm__("x4") = 0;
+    register volatile uint64_t *x5 __asm__("x5") = &sg_pc;
+    __asm__ volatile("adr x9, 1f\nstr x9, [x5]\ncmp x0, x1\n1: ld1 {v2.2d, v3.2d}, [x2], #32\nmrs x4, nzcv"
+                     : "+r"(x3), "+r"(x4), "+r"(x2) : "r"(x0), "r"(x1), "r"(x5) : "cc", "memory", "x9", "v2", "v3");
+    *fl = x4;
+    return mix(x3, (uint64_t)((uint8_t *)x2 - (uint8_t *)p));
+}
 static void sigctx(void)
 {
     struct sigaction sa;
@@ -311,6 +480,17 @@ static void sigctx(void)
                     h = mix(mix(mix(mix(mix(mix(h, r), fl), sg_seen_pc), sg_seen_nzcv), sg_seen_x0), sg_count);
                 }
         printf("%-10s %016llx\n", repair ? "sig-repair" : "sig-skip", (unsigned long long)h);
+        h = 14695981039346656037ull;
+        for (unsigned i = 0; i < NV; i += 3)
+            for (unsigned flip = 0; flip < 16; flip += 5) {
+                uint64_t fl = 0, r;
+                sg_repair = (uint64_t)repair;
+                sg_flip = flip;
+                if (repair) { sg_page[0] = vals[i] ^ 0x77; mprotect(sg_page, 16384, PROT_NONE); }
+                r = sg_probe_v(vals[i], vals[NV - 1 - i], repair ? sg_page : (uint64_t *)(uintptr_t)0x10, &fl);
+                h = mix(mix(mix(mix(mix(mix(h, r), fl), sg_seen_pc), sg_seen_nzcv), sg_seen_x0), sg_count);
+            }
+        printf("%-10s %016llx\n", repair ? "sigv-repair" : "sigv-skip", (unsigned long long)h);
     }
     signal(SIGSEGV, SIG_DFL);
     signal(SIGBUS, SIG_DFL);
@@ -379,6 +559,20 @@ int main(void)
     R(smov0); R(smov1); R(smov2); R(smov3); R(smov4);
     R(shl0); R(shl1); R(shl2); R(shl3); R(shl4); R(shl5); R(shl6);
     R(ushr0); R(ushr1); R(ushr2); R(ushr3); R(ushr4); R(ushr5); R(sshr0); R(sshr1); R(sshr2); R(sshr3); R(sshr4);
+    R(shl7); R(shl8); R(ushr6); R(ushr7); R(sshr5); R(sshr6); R(sshr7); R(sshr8); R(sshr9); R(sshr10); R(sshr11); R(sshr12);
+    R(sra0); R(sra1); R(sra2); R(sra3); R(sra4); R(rshr0); R(rshr1); R(rshr2); R(rshr3); R(rshr4); R(rshr5);
+    R(rsra0); R(rsra1); R(rsra2);
+    R(xtn0); R(xtn1); R(xtn2); R(xtn3); R(xtn4); R(xtn5);
+    R(shrn0); R(shrn1); R(shrn2); R(shrn3); R(shrn4); R(shrn5); R(shrn6);
+    R(shll0); R(shll1); R(shll2); R(shll3); R(shll4); R(shll5); R(shll6); R(shll7);
+    R(fabs0); R(fabs1); R(fabs2); R(fneg0); R(fneg1); R(fneg2);
+#define RF(n) runf(#n, t_##n)
+#define RF4(n) RF(n##4s); RF(n##2s)
+    RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);
+    RF(fmule0); RF(fmule1); RF(fmule2); RF(fmule3); RF(fchain); RF(fadd2d);
+    R(ld1a); R(ld1b); R(ld1c); R(ld1d); R(ld1e); R(ld1f); R(st1a); R(st1b); R(st1c); R(st1d); R(st1e);
+    R(ld1r0); R(ld1r1); R(ld1r2); R(ld1r3); R(ld1r4); R(ld1r5);
+    R(ld1l0); R(ld1l1); R(ld1l2); R(ld1l3); R(st1l0); R(st1l1); R(st1l2); R(st1l3); R(ld1sp);
     sigctx();
     pthread_t th[NT];
     for (uintptr_t k = 0; k < NT; k++) pthread_create(&th[k], NULL, worker, (void *)k);

@@ -69,7 +69,8 @@ static void fill(int n)
 }
 
 /* SSE forms jit.c emits (and the generic table they come from). kind: 0 xmm,xmm;
- * 1 xmm,r (gpr in r/m); 2 r,xmm (gpr in ModRM.reg... i.e. movd/movq r/m, xmm). */
+ * 1 xmm,r (gpr in r/m); 2 r,xmm (gpr in ModRM.reg... i.e. movd/movq r/m, xmm);
+ * 3 r32,xmm with the gpr in ModRM.reg (pmovmskb). */
 static const char *xmmn(int k) { static char b[4][8]; static int i; i = (i + 1) & 3; snprintf(b[i], 8, "xmm%d", k); return b[i]; }
 static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } sse[] = {
     {0xF2, 0x59, 0, 0, "mulsd"}, {0xF2, 0x5E, 0, 0, "divsd"}, {0xF2, 0x58, 0, 0, "addsd"}, {0xF2, 0x5C, 0, 0, "subsd"},
@@ -88,6 +89,10 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     {0x66, 0xD8, 0, 0, "psubusb"}, {0x66, 0xD9, 0, 0, "psubusw"}, {0x66, 0xDE, 0, 0, "pmaxub"}, {0x66, 0xDA, 0, 0, "pminub"},
     {0x66, 0xEE, 0, 0, "pmaxsw"}, {0x66, 0xEA, 0, 0, "pminsw"}, {0x66, 0xD5, 0, 0, "pmullw"}, {0x66, 0x60, 0, 0, "punpcklbw"},
     {0x66, 0x62, 0, 0, "punpckldq"}, {0x66, 0x6F, 0, 0, "movdqa"}, {0xF3, 0x7E, 0, 0, "movq"}, {0x66, 0xF6, 0, 0, "psadbw"},
+    /* vector floating point, widening, narrowing */
+    {0, 0x58, 0, 0, "addps"}, {0, 0x5C, 0, 0, "subps"}, {0, 0x59, 0, 0, "mulps"}, {0, 0x5F, 0, 0, "maxps"},
+    {0, 0x5D, 0, 0, "minps"}, {0x66, 0x61, 0, 0, "punpcklwd"}, {0x66, 0x67, 0, 0, "packuswb"}, {0x66, 0x6B, 0, 0, "packssdw"},
+    {0x66, 0xD7, 0, 3, "pmovmskb"},
 };
 
 static xmem mems[256];
@@ -189,6 +194,7 @@ int main(int argc, char **argv)
                 const char **g = sse[k].w ? r64 : r32;
                 if (sse[k].kind == 0) end("%s %s, %s", sse[k].mn, xmmn(a), xmmn(c));
                 else if (sse[k].kind == 1) end("%s %s, %s", sse[k].mn, xmmn(a), g[c]);
+                else if (sse[k].kind == 3) end("%s %s, %s", sse[k].mn, g[a], xmmn(c));
                 else end("%s %s, %s", sse[k].mn, g[c], xmmn(a));
             }
     }
@@ -204,6 +210,14 @@ int main(int argc, char **argv)
         for (int c = 0; c < 16; c += 5) {
             begin(); x_sse_rri(&B, 0xF2, 0x70, a, c, 0); end("pshuflw %s, %s, 0", xmmn(a), xmmn(c));
             begin(); x_sse_rri(&B, 0x66, 0x70, a, c, 0xEE); end("pshufd %s, %s, 238", xmmn(a), xmmn(c));
+            static const uint8_t shuf[] = {0x00, 0x08, 0x55, 0xAA, 0xF5, 0xFF};
+            for (unsigned k = 0; k < sizeof shuf; k++) {
+                begin(); x_sse_rri(&B, 0x66, 0x70, a, c, shuf[k]); end("pshufd %s, %s, %u", xmmn(a), xmmn(c), shuf[k]);
+            }
+            static const char *cmpn[] = {"cmpeqps", "cmpltps", "cmpleps"};
+            for (unsigned k = 0; k < 3; k++) {
+                begin(); x_sse_rri(&B, 0, 0xC2, a, c, (uint8_t)k); end("%s %s, %s", cmpn[k], xmmn(a), xmmn(c));
+            }
         }
     }
     int32_t pimms[] = {0, 1, -1, 0x202, 0x7fffffff, (int32_t)0x80000000};
@@ -243,6 +257,10 @@ int main(int argc, char **argv)
             begin(); x_movdqa_st(&B, m, a); end("movdqa %s, xmm%d", ms("xmmword", m), a);
             begin(); x_sse_rm(&B, 0xF2, 0x10, 0, a, m); end("movsd xmm%d, %s", a, ms("qword", m));
             begin(); x_sse_rm(&B, 0x66, 0x2E, 0, a, m); end("ucomisd xmm%d, %s", a, ms("qword", m));
+            if (a == 0) {
+                begin(); x_stmxcsr(&B, m); end("stmxcsr %s", ms("dword", m));
+                begin(); x_ldmxcsr(&B, m); end("ldmxcsr %s", ms("dword", m));
+            }
             begin(); x_lock_cmpxchg(&B, 4, m, a); end("lock cmpxchg %s, %s", ms("dword", m), r32[a]);
             begin(); x_lock_xadd(&B, 1, m, a); end("lock xadd %s, %s", ms("byte", m), r8n[a]);
             begin(); x_lock_xadd(&B, 2, m, a); end("lock xadd %s, %s", ms("word", m), r16[a]);

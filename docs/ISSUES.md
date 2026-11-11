@@ -1,5 +1,74 @@
 # Runtime issues and measured scope
 
+## Vector floating point and structure loads/stores in translated code
+
+Translated code ran every Advanced SIMD floating-point instruction and every
+structure load or store (LD1, ST1, LD1R, ...) through the interpreter
+helper: an indirect call, `a64_exec`'s and `a64_exec_simd`'s decoders,
+copies of the registers, and only then `fp_vec32`/`fp_vec32_select` or the
+memory copies of `a64_ldst_simd`. Byte-lane and arithmetic 64-bit shifts,
+the shift-and-accumulate and rounding shifts, SHRN, SSHLL/USHLL and XTN went
+the same way. A single-precision kernel spent nearly all its time there.
+
+`src/jit.c` now emits these inline, SSE2 only:
+- FADD, FSUB, FMUL (vector and by element), FMAX, FMAXNM, FMIN, FMINNM,
+  FCMEQ, FCMGE, FCMGT on `.2S`/`.4S`: the fast path of `fp_vec32` and
+  `fp_vec32_select` instruction for instruction (integer admission of the
+  operands, the SSE operation under the guest's MXCSR, the same result
+  check, the MXCSR saved and restored around a declined result). A declined
+  case calls the helper, which declines it again and takes the per-lane
+  path, so values and FPSR are the interpreter's. The code does not touch
+  EFLAGS; the declining path stores NZCV before the call and reloads it
+  after only when it is live. FABS and FNEG (`.2S`, `.4S`, `.2D`).
+- SHL, USHR, SSHR, USRA, SSRA, URSHR, SRSHR, URSRA, SRSRA by an immediate in
+  every lane size (bytes and the arithmetic 64-bit forms emulated), SHRN,
+  SHRN2, SSHLL/USHLL (UXTL/SXTL) and their "2" forms, XTN, XTN2.
+- LD1/ST1 of one to four registers, LD1R, LD1/ST1 of one lane, without
+  offset or post-indexed by an immediate or Xm, SP as base. Registers are
+  transferred one at a time and the base written back last, as in
+  `a64_ldst_simd`: a fault part way leaves the earlier registers transferred
+  and Xn unchanged, at the instruction's pc.
+
+Measured on the Apple silicon development host, where hao's x86_64 code
+runs under Rosetta (not on Intel hardware): `tests/guest/vbench.c` (FADD,
+FSUB, FMUL, FMUL by element, FMAX(NM), FMIN(NM), FCMGT, FCMGE, LD1/ST1 of
+one to four registers, LD1R; 4000 repetitions) went from 1.40 s to 0.40 s
+under the JIT and from 1.42-1.51 s to 0.39-0.40 s with an AOT cache (best of
+five runs each, host under load from other jobs); its dynamic helper calls
+from translated code went from 87,062,441 to 6,153 and its static helper
+instructions from 124 to 21 of 436 (`--stats`). `tests/guest/bench.c`
+(double-precision matrix code, FMLA) is unchanged: 53 to 45 static helper
+instructions, 2.20 M to 2.15 M helper calls, wall time within noise.
+`tests/aot/jit_vector.c` (in `make unit`) compares 120,000 cases of these
+encodings, alone and between a CMP and a CSEL that reads NZCV, through the
+translator and the interpreter under all 16 RMode/DN/FZ settings, with the
+full FPSR (the IEEE flags the oracle only counts), all registers and memory,
+including faulting accesses at a page end: no differences.
+`tests/guest/jitinsns.sh` compares 107 more lines (281 before) with native
+arm64 under JIT, `--interp`, helpers only and AOT: the vector FP forms over
+a corner-value table under five FPCR settings with FPSR and NZCV, the
+shifts, the loads and stores (post-index by immediate and register, SP
+base) and a faulting post-indexed LD1 in a signal handler that skips or
+repairs it.
+
+Remaining limitations:
+- Double-precision vector arithmetic, FMLA/FMLS (fused), FDIV, FMULX,
+  FRECPS/FRSQRTS, FABD, FACGE/FACGT, the pairwise forms, half precision,
+  conversions and the vector compares with zero still go through the
+  helper, as do LD2-LD4/ST2-ST4 and LD2R-LD4R.
+- A vector FP instruction with any special lane (NaN, infinity, subnormal,
+  or a result that is zero, subnormal or near the minimum normal without
+  being an exact zero) pays the inline check and then the helper.
+- Translated loads and stores, like `t_ldst_reg`'s, use the address as
+  given: a tagged (top-byte) address faults where the interpreter strips
+  the tag.
+- A 16- or 8-byte register store that straddles into an inaccessible page
+  stores nothing in translated code; the interpreter's `memcpy` may store
+  the bytes before the page end (Arm leaves them UNKNOWN). Registers before
+  it in the list are stored by both.
+- Each translated single-precision arithmetic instruction is about 250-350
+  bytes of x86 code: `vbench`'s translations grew from 13 to 33 KB.
+
 ## Guest calls of private-library functions that take a `va_list`
 
 A guest `va_list` is a pointer to 8-byte stack slots; an x86_64 `va_list` is

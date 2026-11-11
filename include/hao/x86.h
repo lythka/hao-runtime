@@ -161,6 +161,8 @@ void x_movdqa_st(xbuf *b, xmem m, int xmm);
 
 size_t x_jrcxz8(xbuf *b);            /* jrcxz rel8: jump if rcx == 0, flags untouched */
 void x_mfence(xbuf *b);
+void x_stmxcsr(xbuf *b, xmem m);     /* MXCSR to m32 (EFLAGS untouched) */
+void x_ldmxcsr(xbuf *b, xmem m);     /* MXCSR from m32 */
 void x_xchg_mr(xbuf *b, int size, xmem m, int r); /* implicit lock, size 1/2/4/8 */
 void x_shrd_ri(xbuf *b, int w, int dst, int src, uint8_t imm);
 

@@ -57,7 +57,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 
 | Target | Result | Time | Needs |
 |---|---|---|---|
-| `unit` | PASS | 3 | |
+| `unit` | PASS | 3 | (now also `tests/aot/jit_vector.c`, below) |
 | `oracle` | PASS | 153 | |
 | `aot` | PASS | 6 | |
 | `bridgetest` | PASS | <1 | |
@@ -155,6 +155,17 @@ Not entries of `tests/check.list`:
 | `tests/tools/{bundle,stubdeps,platform,identity,aotpayload}.sh` | run by `tests/tools/run.sh` |
 | `tests/fuzz/run.sh`, `tests/fuzz/fuzz_hao_fat.py` | `make fuzz-smoke` |
 | `tests/fuzz/make_seeds.sh`, `tests/guest/bridgeunit_gen.py`, `tests/aot/patch.py` | generators and helpers, not tests |
+| `tests/guest/bench.c`, `tests/guest/vbench.c` | timing programs for `hao --stats` and wall-time comparisons (`vbench`: single-precision vector arithmetic and LD1/ST1), not tests |
+
+`make unit` runs `tests/aot/jit_vector.c` (about 4 s): 120,000 cases of the
+translated vector floating-point, shift/narrow/widen and LD1/ST1/LD1R
+encodings (with neighbouring encodings that stay with the helper), each
+through the translator and the interpreter from one random state under one
+of the 16 FPCR RMode/DN/FZ settings, alone and with NZCV live across it.
+Registers, NZCV, the full FPSR (IEEE flags included), FPCR and memory must
+be equal; a store that faults straddling into an inaccessible page may
+differ only in the bytes before the page end that the interpreter's
+`memcpy` wrote (see docs/ISSUES.md).
 
 No script was left out for launching a GUI application, bundle, extension
 or XPC service: `tests/tools/bundle.sh` only signs and inspects its `.app`
