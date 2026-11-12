@@ -232,7 +232,9 @@ static uint64_t round_pack(fpctx *x, int es, int sign, int e, u128 m, bool stick
 }
 
 /* One rounding of a finite binary64 value to binary16. The vector FMA
- * caller supplies exact normal/zero doubles and excludes FZ16/AHP. Work
+ * caller supplies normal/zero doubles, exact or rounded to odd at 53 bits
+ * (both round to the same binary16 with the same flags), and excludes
+ * FZ16/AHP. Work
  * on bits only: in particular, FZ does not flush a half result. Flags are
  * accumulated separately so a vector needs only one fp_raise. */
 uint16_t fp_round16_exact(uint64_t v, unsigned mode, unsigned *flags)
@@ -565,40 +567,83 @@ uint64_t fp_sqrt(fpctx *x, int es, uint64_t a)
     return round_pack(x, es, 0, (u.e - sh) / 2, r, !exact);
 }
 
-/* FPMulAdd(addend, op1, op2) */
-static inline __m128i half_nonordinary(const hao_vreg *v)
+/* Inf or NaN lanes (exponent all ones): the only halves the fused path leaves to the reference. */
+static inline __m128i half_nonfinite(const hao_vreg *v)
 {
     __m128i raw;
     memcpy(&raw, v, sizeof raw);
-    __m128i magnitude = _mm_and_si128(raw, _mm_set1_epi16(0x7fff));
-    __m128i exponent = _mm_and_si128(raw, _mm_set1_epi16(0x7c00));
-    __m128i zero = _mm_cmpeq_epi16(magnitude, _mm_setzero_si128());
-    __m128i tiny = _mm_cmpeq_epi16(exponent, _mm_setzero_si128());
-    return _mm_or_si128(_mm_cmpeq_epi16(exponent, _mm_set1_epi16(0x7c00)),
-                        _mm_andnot_si128(zero, tiny));
+    return _mm_cmpeq_epi16(_mm_and_si128(raw, _mm_set1_epi16(0x7c00)), _mm_set1_epi16(0x7c00));
 }
 
+/* a * b + c for two binary64 lanes whose product is exact (two binary16
+ * significands: 22 bits), rounded to odd at 53 bits: s = RN(a*b + c),
+ * Knuth's TwoSum error e, and s moved one unit toward e when e != 0 and s is
+ * even, exactly as fma32_odd. Needs MXCSR round to nearest and normal or zero
+ * operands (every nonzero half product or term is a normal binary64). Only PE
+ * can be raised, and only when the binary16 result is inexact too. */
+static inline __attribute__((always_inline)) __m128i sum_odd(__m128d a, __m128d b, __m128d c)
+{
+    __m128d s, e;
+    __asm__ volatile("mulpd %[b], %[a]\n\t"          /* p */
+                     "movapd %[a], %[s]\n\t"
+                     "addpd %[c], %[s]\n\t"          /* s = RN(p + c) */
+                     "movapd %[s], %[b]\n\t"
+                     "subpd %[a], %[b]\n\t"          /* c' = s - p */
+                     "movapd %[s], %[e]\n\t"
+                     "subpd %[b], %[e]\n\t"          /* p' = s - c' */
+                     "subpd %[e], %[a]\n\t"          /* p - p' */
+                     "subpd %[b], %[c]\n\t"          /* c - c' */
+                     "addpd %[c], %[a]\n\t"          /* e */
+                     "xorpd %[c], %[c]\n\t"
+                     "movapd %[a], %[e]\n\t"
+                     "cmpneqpd %[c], %[a]\n\t"      /* inexact = e != 0 */
+                     "movdqa %[s], %[b]\n\t"
+                     "pxor %[e], %[b]\n\t"
+                     "psrad $31, %[b]\n\t"
+                     "pshufd $0xf5, %[b], %[b]\n\t" /* signs differ: -1, else 0 */
+                     "pcmpeqd %[e], %[e]\n\t"
+                     "psrlq $63, %[e]\n\t"
+                     "por %[e], %[b]\n\t"           /* -1 or +1 */
+                     "movdqa %[s], %[c]\n\t"
+                     "psllq $63, %[c]\n\t"
+                     "psrad $31, %[c]\n\t"
+                     "pshufd $0xf5, %[c], %[c]\n\t" /* s odd */
+                     "pandn %[a], %[c]\n\t"         /* inexact and s even */
+                     "pand %[c], %[b]\n\t"
+                     "paddq %[b], %[s]"
+                     : [a] "+&x"(a), [b] "+&x"(b), [c] "+&x"(c), [s] "=&x"(s), [e] "=&x"(e));
+    return _mm_castpd_si128(s);
+}
+
+/* FPMulAdd(addend, op1, op2) */
 bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
                     const hao_vreg *b, int lanes, bool subtract, hao_vreg *out)
 {
     /* All controls outside the modelled rounding/FZ/DN contract retain the
      * reference path, including FZ16, AHP and alternate-handling controls. */
     if ((lanes != 4 && lanes != 8) || (x->c->fpcr & ~0x03c00000u)) return false;
-    __m128i bad = _mm_or_si128(half_nonordinary(a),
-                              _mm_or_si128(half_nonordinary(b), half_nonordinary(d)));
+    __m128i bad = _mm_or_si128(half_nonfinite(a),
+                              _mm_or_si128(half_nonfinite(b), half_nonfinite(d)));
     if ((unsigned)_mm_movemask_epi8(bad) & ((1u << (lanes * 2)) - 1)) return false;
+    /* Round to nearest: every lane's p + c is rounded to odd at 53 bits
+     * (sum_odd), which a single rounding to binary16 turns into the correctly
+     * rounded result (Boldo and Melquiond: 53 >= 11 + 2), whatever the
+     * distance between product and addend. Other modes keep the exact sum,
+     * which needs both terms within 53 bits. */
+    bool odd = x->rmode == FPR_N;
     uint64_t av[8], bv[8], dv[8], sum[8];
     for (int k = 0; k < lanes; k++) {
         uint16_t h[3] = {a->h[k], b->h[k], d->h[k]};
         if (subtract) h[0] ^= 0x8000;
         unsigned exponent[3], mantissa[3];
         for (int j = 0; j < 3; j++) {
-            exponent[j] = h[j] >> 10 & 31;
-            unsigned fraction = h[j] & 1023;
-            mantissa[j] = exponent[j] ? fraction | 1024 : 0;
+            unsigned field = h[j] >> 10 & 31, fraction = h[j] & 1023;
+            /* value = mantissa * 2^(exponent - 25); a subnormal is fraction * 2^-24 */
+            exponent[j] = field ? field : 1;
+            mantissa[j] = field ? fraction | 1024 : fraction;
         }
         unsigned product = mantissa[0] * mantissa[1], acc = mantissa[2];
-        if (product && acc) {
+        if (!odd && product && acc) {
             int ep = (int)exponent[0] + (int)exponent[1] - 50;
             int ea = (int)exponent[2] - 25;
             int top_p = ep + 32 - __builtin_clz(product);
@@ -610,10 +655,17 @@ bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
             if (top + 1 - low > 53) return false;
         }
         uint64_t wide[3];
-        for (int j = 0; j < 3; j++)
-            wide[j] = (uint64_t)(h[j] & 0x8000) << 48 |
-                (exponent[j] ? (uint64_t)(exponent[j] + 1008) << 52 |
-                               (uint64_t)(h[j] & 1023) << 42 : 0);
+        for (int j = 0; j < 3; j++) {
+            uint64_t sign = (uint64_t)(h[j] & 0x8000) << 48;
+            if (!mantissa[j]) wide[j] = sign;
+            else if (h[j] & 0x7c00)
+                wide[j] = sign | (uint64_t)(exponent[j] + 1008) << 52 | (uint64_t)(h[j] & 1023) << 42;
+            else {                                      /* subnormal: normalize exactly */
+                int top = 31 - __builtin_clz(mantissa[j]);   /* 0..9: value 2^(top-24) * 1.f */
+                wide[j] = sign | (uint64_t)(top - 24 + 1023) << 52 |
+                          ((uint64_t)mantissa[j] << (52 - top) & ((1ull << 52) - 1));
+            }
+        }
         av[k] = wide[0]; bv[k] = wide[1]; dv[k] = wide[2];
     }
     /* Every active lane has been admitted before any floating evaluation.
@@ -623,6 +675,11 @@ bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
         __m128d p, m, acc;
         memcpy(&p, av + k, sizeof p); memcpy(&m, bv + k, sizeof m);
         memcpy(&acc, dv + k, sizeof acc);
+        if (odd) {
+            __m128i r = sum_odd(p, m, acc);
+            memcpy(sum + k, &r, sizeof r);
+            continue;
+        }
         __asm__ volatile("mulpd %1, %0\n\taddpd %2, %0"
                          : "+&x"(p) : "x"(m), "x"(acc));
         memcpy(sum + k, &p, sizeof p);

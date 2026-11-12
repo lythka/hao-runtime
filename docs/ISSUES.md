@@ -1,5 +1,49 @@
 # Runtime issues and measured scope
 
+## Half fused multiply-add: subnormal lanes and wide spans
+
+`fp_vec16_muladd`, the C fast path for half FMLA/FMLS (vector and by element)
+that the JIT's helper and the interpreter use, declined a whole vector in two
+cases. Every lane then went through softfloat `fp_muladd`:
+- any subnormal half lane;
+- any lane whose product and addend needed more than 53 bits for their exact
+  sum, that is, a product far below its accumulator.
+
+Both are common in half-precision convolution. A profile of such a workload
+had about 58% of its active time in that fallback and its rounding.
+
+Now:
+- Subnormal halves are converted exactly to binary64 (fraction × 2^-24, a
+  normal double).
+- Under round to nearest, each lane's sum is computed by `sum_odd`, rounded to
+  odd at 53 bits with Knuth's TwoSum, as `fma32_odd` does for single
+  precision. One rounding of that value to binary16 is the correctly rounded
+  result (53 ≥ 11 + 2), with the same flags: the value stays inexact when the
+  true sum is, and on the same side of the tininess threshold.
+- The other rounding modes keep the exact path and its 53-bit bound.
+
+Only infinities and NaNs decline in round to nearest.
+
+Validation:
+- A differential of the fast path against `fp_muladd` over 3,000,000 random
+  8-lane vectors, weighted toward subnormal, tiny and large halves, under all
+  16 RMode/FZ/DN settings, FMLA and FMLS: 2,334,980 vectors taken by the fast
+  path with no value or FPSR difference. The 665,020 declined vectors are
+  wide spans in other rounding modes.
+- `guest/fma16`, `guest/halfops`, `guest/extramisc` and `guest/widenfp`
+  equal native arm64.
+- The `simd` and `fma` oracle modes match native in the interpreter and the
+  JIT.
+
+Under Rosetta (information only), `fmla v.8h, v.8h, v.h[1]` in a JIT loop
+takes 234 → 86 ns for a wide span and 215 → 84 ns for a subnormal lane; an
+ordinary lane is unchanged at 56 ns.
+
+Limits:
+- The JIT still calls this helper for half FMLA by element; an inline form is
+  the next step.
+- Wide spans in directed rounding modes, and FZ16/AHP, still use softfloat.
+
 ## Generated tables regenerated for 26B131, with generated.lock
 
 All 16 `src/*_gen.inc` tables are now generator output for one stated set of
