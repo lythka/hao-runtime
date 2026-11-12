@@ -1,5 +1,42 @@
 # Runtime issues and measured scope
 
+## BOOL type codes passed to NSUnarchiver
+
+`@encode(BOOL)` is "B" on arm64 and "c" on x86_64, and the old non-keyed
+`NSUnarchiver` checks each decoded value's type code against the archive.
+Measured in native programs, each Foundation accepts one direction of that
+mismatch only:
+- arm64 decodes an archived 'c' where "B" is asked for;
+- x86_64 throws `NSArchiverArchiveInconsistency` ("read 'c', expecting 'B'"),
+  but decodes an archived 'B' where "c" is asked for.
+
+A guest decoding a BOOL with its own `@encode` therefore failed under hao on
+any archive that holds a 'c', for example one written on x86_64. The same held
+for arrays, structs and `decodeValuesOfObjCTypes:`. Keyed archives and
+`NSValue` accept either code on both architectures.
+
+hao now passes the 'B' type codes of a guest's type string to NSUnarchiver's
+four decoders (`decodeValueOfObjCType:at:`, `...at:size:`,
+`decodeValuesOfObjCTypes:` and `decodeArrayOfObjCType:count:at:`) as 'c'.
+This decodes exactly the archives arm64 does, since both codes are one byte.
+Struct and union names and quoted names are left as they are. The rewrite
+uses the class-and-selector table that converts `NSTextAlignment`
+(`src/objc.c`, kind 3), now also applied before a variadic native method's
+call. The converted copy of a string in a guest image is made once and kept.
+`--stats` prints `unarchiver BOOL strings=N unconverted=M`.
+
+`tests/guest/unarchbool.sh` decodes archives holding 'c' and 'B' as a value,
+an array, a struct, multiple values, a struct whose name contains a 'B', and
+without a size. JIT, `--interp` and AOT all print what native arm64 prints.
+Without the conversion, the archived 'c' throws in all three.
+
+Limits:
+- A type string outside a guest image (built at run time in heap memory) is
+  passed unchanged and counted as unconverted.
+- Only the four NSUnarchiver decoders are converted. A native caller of a
+  guest NSCoder subclass, and other APIs that compare type strings, are not.
+- Encoding is unchanged: an archive a guest writes holds 'B', as on arm64.
+
 ## Fifteen more aggregate-by-value functions in the aggspi table
 
 `src/aggspi_gen.inc` gains 15 rows of generator output: system functions

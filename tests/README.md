@@ -138,6 +138,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/native-bundle | PASS | 5 | loads a plug-in `.bundle` into a command-line guest |
 | guest/objc-class-order | PASS | 6 | |
 | guest/objcvascope | PASS | 2 | |
+| guest/unarchbool | PASS | 3 | NSUnarchiver decoding with arm64's `@encode(BOOL)` ("B") of archives holding 'c' and 'B': value, array, struct, multiple values, a struct named with a 'B', no size; native arm64 output under JIT, `--interp` and AOT. Without the conversion, an archived 'c' throws NSArchiverArchiveInconsistency (the control) |
 | host/runtime | PASS | 2 | |
 | host/chain | PASS | 6 | |
 | host/commpage | PASS | 1 | |

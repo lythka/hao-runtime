@@ -1422,7 +1422,10 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
     uint64_t g = hao_guest_of_entry((uint64_t)(uintptr_t)imp);
     if (g) { c->pc = g; return; }               /* guest method: stay in translated code */
     hao_thunk_native_blocks(t);                 /* guest blocks passed as arguments */
-    if (msgsend_variadic(c, recv, cls, sel, imp)) return;
+    /* argument conversions by class and selector, once for every native path below (a variadic
+     * one too: -[NSUnarchiver decodeValuesOfObjCTypes:]) */
+    unsigned enum_result = hao_objc_enum_args(c, 0, false);
+    if (msgsend_variadic(c, recv, cls, sel, imp)) { hao_objc_enum_result(c, enum_result); return; }
     Method m = class_getInstanceMethod(cls, sel);
     const char *enc = m ? method_getTypeEncoding(m) : NULL;
     /* guest functions in the slots the encoding types as code ('^?': -[NSArray
@@ -1465,7 +1468,6 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
             return;
         }
     }
-    unsigned enum_result = hao_objc_enum_args(c, 0, false);
     /* the signature path converts the result by its encoding, narrow types included */
     if (!simple && hao_call_native_sig(c, (uint64_t)(uintptr_t)imp, enc)) {
         hao_objc_enum_result(c, enum_result);
@@ -1640,7 +1642,17 @@ static bool class_ptr(uint64_t k)
  * same NSInteger on ARM and Intel. ObjC encodings erase the enum typedef.
  * Match the SDK-declared class and selector, never an arbitrary integer or
  * every method named alignment (NSStackView's is NSLayoutAttribute).
- * The two maps are involutions, so native callbacks use the same conversion. */
+ * The two maps are involutions, so native callbacks use the same conversion.
+ *
+ * Kind 3 is an ObjC type-encoding string a guest passes to NSUnarchiver's
+ * decoders. @encode(BOOL) is "B" on arm64 and "c" on x86_64, and each
+ * Foundation accepts only its own direction of that legacy mismatch: arm64's
+ * NSUnarchiver decodes an archived 'c' where "B" is asked for, x86_64's throws
+ * NSArchiverArchiveInconsistency ("read 'c', expecting 'B'"), but accepts an
+ * archived 'B' where "c" is asked for. Passing the guest's "B" codes as "c"
+ * therefore decodes exactly the archives arm64 does (value, array, struct and
+ * multiple values; both are one byte). Keyed archives and NSValue accept
+ * either on both and are not listed. Guest to native only. */
 static struct enum_method {
     const char *owner, *name;
     unsigned slot, kind;       /* slot 0: result; otherwise ARM argument register */
@@ -1657,6 +1669,10 @@ static struct enum_method {
     {"NSTextView","setAlignment:range:",2,1,0},
     {"NSMutableAttributedString","setAlignment:range:",2,1,0},
     {"NSImage","resizingMode",0,2,0}, {"NSImage","setResizingMode:",2,2,0},
+    {"NSUnarchiver","decodeValueOfObjCType:at:",2,3,0},
+    {"NSUnarchiver","decodeValueOfObjCType:at:size:",2,3,0},
+    {"NSUnarchiver","decodeValuesOfObjCTypes:",2,3,0},
+    {"NSUnarchiver","decodeArrayOfObjCType:count:at:",2,3,0},
 #undef ALIGN
 };
 static pthread_once_t enum_once = PTHREAD_ONCE_INIT;
@@ -1667,8 +1683,80 @@ static void enum_init(void)
         enum_methods[i].sel = sel_registerName(enum_methods[i].name);
     __atomic_store_n(&enum_ready, true, __ATOMIC_RELEASE);
 }
+/* A guest type-encoding string with its BOOL codes ('B') as x86_64's ('c'):
+ * only type codes, never a struct or union name ({Name=...}) or a quoted
+ * field or class name ("..."). The string must lie in a guest image (an
+ * @encode constant, a guest ivar's or method's encoding): its copy is made
+ * once and kept, lock-free, like hao_fmt_fix_const's. Anything else, or a
+ * string without a 'B' code, is passed unchanged. */
+#define TYPESTR_TAB 1024
+#define TYPESTR_MAX 1024
+static struct { uint64_t key, val; } typestr_tab[TYPESTR_TAB];
+uint64_t hao_objc_bool_strings, hao_objc_bool_unconverted;
+
+static uint64_t typestr_make(uint64_t a)
+{
+    const char *s = (const char *)(uintptr_t)a;
+    size_t n = strlen(s);
+    if (n >= TYPESTR_MAX) return 0;
+    char *d = NULL;
+    for (size_t k = 0; k < n; k++) {
+        char c = s[k];
+        if (c == '"') {                                   /* a quoted name */
+            const char *e = memchr(s + k + 1, '"', n - k - 1);
+            if (!e) break;
+            k = (size_t)(e - s);
+        } else if (c == '{' || c == '(') {                /* the aggregate's name, up to '=' */
+            while (k + 1 < n && !strchr("={}()", s[k + 1])) k++;
+        } else if (c == 'B') {
+            if (!d) {
+                if (!(d = malloc(n + 1))) return 0;
+                memcpy(d, s, n + 1);
+            }
+            d[k] = 'c';
+        }
+    }
+    return (uint64_t)(uintptr_t)d;
+}
+
+static uint64_t typestr_fix(uint64_t a)
+{
+    if (!a || !cstring_at(a)) return a;
+    hao_image *im = hao_image_for_addr(a);
+    if (!im || a + strnlen((const char *)(uintptr_t)a, TYPESTR_MAX) >= hao_image_extent(im, a)) {
+        if (strchr((const char *)(uintptr_t)a, 'B')) __atomic_fetch_add(&hao_objc_bool_unconverted, 1, __ATOMIC_RELAXED);
+        return a;
+    }
+    uint32_t h = (uint32_t)((a >> 3) * 2654435761u) & (TYPESTR_TAB - 1);
+    for (uint32_t k = 0; k < TYPESTR_TAB; k++) {
+        uint32_t i = (h + k) & (TYPESTR_TAB - 1);
+        uint64_t key = __atomic_load_n(&typestr_tab[i].key, __ATOMIC_ACQUIRE);
+        if (key == a) {
+            uint64_t v;
+            while (!(v = __atomic_load_n(&typestr_tab[i].val, __ATOMIC_ACQUIRE))) {}   /* being made */
+            return v == 1 ? a : v;
+        }
+        if (key) continue;
+        hao_crit_enter();
+        uint64_t zero = 0;
+        if (!__atomic_compare_exchange_n(&typestr_tab[i].key, &zero, a, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            hao_crit_leave();
+            k--;
+            continue;
+        }
+        uint64_t v = typestr_make(a);
+        if (v) __atomic_fetch_add(&hao_objc_bool_strings, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&typestr_tab[i].val, v ? v : 1, __ATOMIC_RELEASE);   /* 1: nothing to change */
+        hao_crit_leave();
+        return v ? v : a;
+    }
+    __atomic_fetch_add(&hao_objc_bool_unconverted, 1, __ATOMIC_RELAXED);   /* table full */
+    return a;
+}
+
 static uint64_t enum_convert(uint64_t value, unsigned kind)
 {
+    if (kind == 3) return typestr_fix(value);
     if (kind == 1 && (value == 1 || value == 2)) return 3 - value;
     if (kind == 2 && value <= 1) return 1 - value;
     return value;
@@ -1719,6 +1807,7 @@ unsigned hao_objc_enum_args(hao_cpu *c, uint64_t target, bool callback)
         for (Class k = cls; k; k = class_getSuperclass(k)) {
             if (strcmp(class_getName(k), m->owner)) continue;
             if (!m->slot) return m->kind;
+            if (m->kind == 3 && callback) return 0;
             c->x[m->slot] = enum_convert(c->x[m->slot], m->kind);
             return 0;
         }

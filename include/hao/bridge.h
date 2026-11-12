@@ -216,6 +216,9 @@ const char *hao_objc_imp_types(uint64_t self, uint64_t sel, uint64_t imp);
 struct hao_cpu;
 unsigned hao_objc_enum_args(struct hao_cpu *c, uint64_t target, bool callback);
 void hao_objc_enum_result(struct hao_cpu *c, unsigned token);
+/* NSUnarchiver type strings whose BOOL codes were passed as x86_64's, and ones with a 'B' left as
+ * they were (not in a guest image, or the table full) */
+extern uint64_t hao_objc_bool_strings, hao_objc_bool_unconverted;
 const char *hao_native_block_sig(uint64_t a, uint64_t inv);
 /* A native IMP the runtime handed back detached from its method (the old IMP
  * of class_replaceMethod, method_setImplementation): typed now by enc. */
