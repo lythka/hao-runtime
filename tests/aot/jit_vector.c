@@ -17,6 +17,7 @@
  * hold in EFLAGS, are not compared then).
  */
 #include "hao/cpu.h"
+#include "../oracle/fma_cases.h"
 #include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
@@ -199,7 +200,7 @@ static uint32_t sval(void)
 
 static uint32_t enc_three_same(void)
 {
-    static const unsigned keys[] = {0x02, 0x22, 0x43, 0x00, 0x06, 0x20, 0x26, 0x04, 0x44, 0x64, 0x47, 0x01, 0x42, 0x65};
+    static const unsigned keys[] = {0x02, 0x22, 0x43, 0x00, 0x06, 0x20, 0x26, 0x04, 0x44, 0x64, 0x47, 0x01, 0x42, 0x65, 0x01, 0x21};
     unsigned key = keys[rr(sizeof keys / sizeof *keys)], dbl = rr(8) == 0, Q = rr(2) || dbl;
     return 0x0e200400u | Q << 30 | (key >> 6) << 29 | (((key >> 5) & 1) << 1 | dbl) << 22 | (0x18 | (key & 7)) << 11;
 }
@@ -211,7 +212,8 @@ static uint32_t enc_frint(void)
 static uint32_t enc_indexed(void)
 {
     unsigned size = rr(6) ? 2 : rr(4), U = rr(8) == 0;
-    return 0x0f009000u | rr(2) << 30 | U << 29 | size << 22 | rr(2) << 21 | rr(2) << 11;   /* M and Rm below */
+    static const unsigned ops[] = {1, 5, 9};
+    return 0x0f000000u | ops[rr(3)] << 12 | rr(2) << 30 | U << 29 | size << 22 | rr(2) << 21 | rr(2) << 11;   /* M and Rm below */
 }
 
 int main(void)
@@ -221,6 +223,54 @@ int main(void)
     signal(SIGSEGV, on_fault);
     signal(SIGBUS, on_fault);
     for (unsigned k = 0; k < sizeof init_mem; k++) init_mem[k] = (uint8_t)rnd();
+    /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
+     * Directed near-ties detect removing the odd step; random bits alone
+     * almost never land close enough to a binary32 midpoint. */
+    for (unsigned control = 0; control < 16; control++)
+        for (unsigned form = 0; form < 20; form++)
+            for (unsigned k = 0; k < 144; k++) {
+                unsigned q = form & 1, sub = (form >> 1) & 1;
+                int idx = form < 4 ? -1 : (int)((form - 4) >> 2);
+                unsigned rd = reg(), rn = reg(), rm = reg();
+                hao_cpu in;
+                state(&in, rn, rm);
+                in.fpcr = control << 22;
+                for (unsigned lane = 0; lane < 4; lane++) {
+                    fma_ops o = fma_case(&seed, k % FC_N);
+                    in.v[rd].s[lane] = o.c;
+                    in.v[rn].s[lane] = o.a;
+                    in.v[rm].s[lane] = o.b;
+                }
+                uint32_t insn = idx < 0 ? 0x0e20cc00u | sub << 23 :
+                    0x0f801000u | sub << 14 | (unsigned)(idx >> 1) << 11 | (unsigned)(idx & 1) << 21;
+                insn |= q << 30 | rm << 16 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    check(insn, 0, &in, live);
+                    if (k % 8 == 0) check(insn, 0x4e20d400u | rd << 16 | rn << 5 | rd, &in, live);
+                }
+            }
+    /* A maximum-length block must fit the emitter's scratch/cache budget,
+     * including both pairs of the largest fused translation. */
+    for (unsigned form = 0; form < 2; form++) {
+        hao_cpu in;
+        state(&in, 1, 2);
+        for (unsigned r = 0; r < 3; r++)
+            for (unsigned lane = 0; lane < 4; lane++) in.v[r].f[lane] = 0.25f;
+        uint32_t code[98];
+        code[0] = 0xeb01001fu;
+        for (unsigned k = 1; k <= 96; k++) code[k] = form ? 0x4fa21820u : 0x4e22cc20u;
+        code[97] = 0x9a818002u;
+        static outcome a, b;
+        run(&a, &in, code, 98, 0x7400000000ull, false);
+        run(&b, &in, code, 98, 0x7400000000ull, true);
+        if (a.faulted || b.faulted || a.rc != b.rc || a.c.pc != b.c.pc ||
+            memcmp(a.c.x, b.c.x, sizeof a.c.x) || memcmp(a.c.v, b.c.v, sizeof a.c.v) ||
+            hao_nzcv(&a.c) != hao_nzcv(&b.c) || a.fpsr != b.fpsr || a.fpcr != b.fpcr) {
+            printf("MISMATCH maximum FMLA block form %u: rc %d/%d\n", form, a.rc, b.rc);
+            fails++;
+        }
+        cases++;
+    }
     long per[12] = {0};
     for (int round = 0; round < 100000; round++) {
         hao_cpu in;
