@@ -845,6 +845,13 @@ static unsigned rsqrt_estimate(unsigned a)            /* a: 9 bits, 128..511 */
     while (a * (b + 1) * (b + 1) < (1u << 28)) b++;
     return (b + 1) / 2;
 }
+/* Unsigned estimates share the same nine-bit approximation as FP estimates,
+ * but have no FP environment or exception side effects. */
+uint32_t fp_unsigned_estimate(uint32_t a, bool rsqrt)
+{
+    if (a < (rsqrt ? 0x40000000u : 0x80000000u)) return UINT32_MAX;
+    return (rsqrt ? rsqrt_estimate(a >> 23) : recip_estimate(a >> 23)) << 23;
+}
 uint64_t fp_recpe(fpctx *x, int es, uint64_t a)
 {
     fmt f = F(es);

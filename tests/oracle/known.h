@@ -16,8 +16,10 @@ static const known_enc known_unimpl[] = {
 
 /* Reserved on Apple silicon (SIGILL), executed by hao. */
 static const known_enc known_lenient[] = {
-    /* Advanced SIMD groups whose decoders do not yet reject every reserved
-     * size/opcode combination (the three-same, FP and load/store groups do). */
+};
+
+/* Permanent decoder regression groups, independent of exception policy. */
+static const known_enc encoding_sweeps[] = {
     {0x9F3E0C00, 0x0E200800, "two-reg misc (vector): reserved size/opcode combinations"},
     {0xDF3E0C00, 0x5E200800, "two-reg misc (scalar): reserved size/opcode combinations"},
     {0x9F3E0C00, 0x0E300800, "across lanes: reserved size/opcode combinations"},

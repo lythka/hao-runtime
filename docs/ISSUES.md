@@ -2344,3 +2344,77 @@ checks. The complete 103-entry manifest retains one unrelated expected
 failure and three expected platform skips. Memory-footprint measurements
 use MallocMaxMagazines=4 for native and translated processes at the existing
 budgets; other checks use the default environment.
+
+
+## Advanced SIMD reserved selector validation
+
+The two-register miscellaneous, reduction, copy, immediate-shift, permute
+and scalar indexed decoders accepted reserved scalar/vector sizes, U values
+and opcode combinations. They now enforce the A64 allocation constraints:
+scalar non-saturating integer operations require D lanes, vector D operations
+require Q, vector-only operations have no scalar counterpart, and copy moves
+validate destination widths and scalar DUP's opcode. Ignored INS imm4 low bits
+and DUP-general imm5 high bits remain accepted. JIT/AOT already declined the
+rejected forms; their descriptor helpers now return UNDEF consistently with
+the interpreter. No inline emitter or generated table changes are needed.
+
+The native `reserved` sweep covers all 30,016 non-register selector combinations
+in the nine groups at FPCR=0, including ignored immediate bits. All 7,960 allocated
+records match register values and FPSR; all 22,056 native SIGILL records return
+UNDEF in interpreter and JIT. Before correction, 3,805 of those SIGILL records
+executed in each engine. The sweep also exposes URECPE/URSQRTE .2S/.4S, which
+the conservative x18 filter excluded because an opcode field equals 18.
+Their shared helper now uses the existing nine-bit estimate calculation,
+with no FP flags, and rejects non-S sizes. Guest comparisons check all 512
+input buckets at both ends, upper clearing, and saturation regions.
+
+Fixed-seed (0x97f984a) before/after counts per engine, written as
+`hao-accepts (+known)`, on identical native records:
+
+| Mode | Records | Before | After |
+|---|---:|---:|---:|
+| dp | 200,000 | 0 (+0) | 0 (+0) |
+| simd | 200,000 | 0 (+1,971) | 0 (+0) |
+| mem | 200,000 | 0 (+0) | 0 (+0) |
+| block | 200,000 | 0 (+0) | 0 (+0) |
+| fma | 200,000 | 0 (+0) | 0 (+0) |
+| known | 9,216 | 0 (+1,893) | 0 (+0) |
+
+The known sample's nine groups contributed 45, 196, 10, 279, 929, 72, 115,
+109 and 138 tolerated executions respectively; each is now zero. The exception
+table is empty, and a compile-time assertion rejects any new lenient entry.
+The permanent sampled and exhaustive groups are independent of that table.
+Architecture constraints were checked against Arm's A64 encoding tables and
+instruction pseudocode (2026-03), including [copy ignored bits](https://www.scs.stanford.edu/~zyedidia/arm64/ins_advsimd_elt.html),
+[scalar shifts](https://www.scs.stanford.edu/~zyedidia/arm64/sshr_advsimd.html)
+and [the encoding index](https://www.scs.stanford.edu/~zyedidia/arm64/encodingindex.html).
+
+Scope limits: selector exhaustion fixes source/destination register choices;
+random modes supply additional register and operand coverage. The guest test
+checks the runtime's existing undefined-instruction termination, which is
+SIGABRT with a diagnostic, not delivery of guest SIGILL. SM3/SM4, SVE/SME,
+feature advertisement and application acceptance are outside this validation.
+
+Validation: `make -j8 check` passes (including `make test`, native/sanitizer
+oracles and 103 passing guest/host checks, one expected failure and three
+expected skips). The exhaustive regression fails against the original core;
+a nonempty-exception mutation fails compilation at the new assertion.
+A loaded AOT guest run reports 56 cached blocks and zero JIT blocks.
+
+Development-host timings, ns/op, minimum of three interleaved runs of
+200,000 iterations with 16 independent operations per iteration and native
+result equality. These Rosetta measurements include loop overhead and
+concurrent host load; they are informational, not Intel performance acceptance.
+The complete translator object is byte-identical before/after.
+
+| Valid neighboring form | Before | After |
+|---|---:|---:|
+| rev64_16b | 0.73 | 0.70 |
+| abs_d | 23.32 | 23.28 |
+| addv_16b | 2.39 | 2.20 |
+| dup_4s | 0.44 | 0.41 |
+| dup_s | 0.32 | 0.26 |
+| shl_4s | 0.31 | 0.29 |
+| sshr_d | 0.65 | 0.59 |
+| zip1_16b | 0.41 | 0.38 |
+| sqdmulh_h | 32.82 | 30.43 |

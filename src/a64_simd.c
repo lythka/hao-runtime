@@ -1067,12 +1067,22 @@ static int simd_two_misc(hao_cpu *c, uint32_t i, int scalar)
     hao_vreg a = c->v[rn], r;
     memset(&r, 0, sizeof r);
     int es = 1 << size, bytes = scalar ? es : (Q ? 16 : 8), n = bytes / es;
+    if (op == 0x1C && size == 2 && !scalar) { /* URECPE / URSQRTE */
+        for (int e = 0; e < n; e++) r.s[e] = fp_unsigned_estimate(a.s[e], U);
+        vfinish(c, rd, &r, Q);
+        return 0;
+    }
+    /* A64 two-register miscellaneous: scalar integer compares/ABS/NEG
+     * have only D lanes; vector D lanes require Q. Other integer scalar
+     * operations below are the saturating narrow forms. */
+    if (op >= 8 && op <= 11 && (scalar ? size != 3 : size == 3 && !Q)) return -1;
+    if (scalar && (op <= 6 || op == 0x13 || (op == 0x12 && !U))) return -1;
     if (scalar) Q = 0;
 
     switch (op) {
     case 0x00: case 0x01: {  /* REV64 / REV32 / REV16 */
         int cont = op == 1 ? 2 : (U ? 4 : 8);
-        if (es >= cont || scalar) return -1;                 /* reserved element sizes */
+        if (es >= cont || scalar || (op == 1 && U)) return -1;                 /* reserved element sizes */
         for (int e = 0; e < n; e++) {
             int per = cont / es, base = (e / per) * per, j = base + (per - 1 - (e - base));
             eset(&r, es, e, eget(&a, es, j));
@@ -1091,6 +1101,7 @@ static int simd_two_misc(hao_cpu *c, uint32_t i, int scalar)
         break;
     }
     case 0x04:  /* CLS / CLZ */
+        if (size == 3) return -1;
         for (int e = 0; e < n; e++) {
             uint64_t x = eget(&a, es, e);
             int bits = es * 8, cnt = 0;
@@ -1100,6 +1111,7 @@ static int simd_two_misc(hao_cpu *c, uint32_t i, int scalar)
         }
         break;
     case 0x05:
+        if (!U && size) return -1;
         if (!U) { for (int e = 0; e < bytes; e++) r.b[e] = (uint8_t)__builtin_popcount(a.b[e]); }   /* CNT */
         else if (size == 0) { for (int k = 0; k < 2; k++) r.d[k] = ~a.d[k]; }                       /* NOT */
         else if (size == 1) {                                                                        /* RBIT */
@@ -1266,6 +1278,7 @@ static int simd_across(hao_cpu *c, uint32_t i)
         eset(&r, es, 0, (U ? acc : (uint64_t)sacc) & emask(es));
         break;
     case 0x1B: {  /* ADDV */
+        if (U) return -1;
         uint64_t s = 0;
         for (int e = 0; e < n; e++) s += eget(&a, es, e);
         eset(&r, es, 0, s & emask(es));
@@ -1344,11 +1357,13 @@ static int simd_copy(hao_cpu *c, uint32_t i, int scalar)
     hao_vreg r;
     memset(&r, 0, sizeof r);
     if (scalar) {  /* DUP (element) scalar */
+        if (op || imm4) return -1;
         eset(&r, es, 0, eget(&c->v[rn], es, idx));
         c->v[rd] = r;
         return 0;
     }
-    if (op) {  /* INS (element) */
+    if (op) {  /* INS (element); low imm4 bits are architecturally ignored */
+        if (!Q) return -1;
         r = c->v[rd];
         eset(&r, es, idx, eget(&c->v[rn], es, (int)(imm4 >> sz)));
         c->v[rd] = r;
@@ -1356,24 +1371,29 @@ static int simd_copy(hao_cpu *c, uint32_t i, int scalar)
     }
     switch (imm4) {
     case 0: {  /* DUP element */
+        if (es == 8 && !Q) return -1;
         uint64_t x = eget(&c->v[rn], es, idx);
         for (int e = 0; e < (Q ? 16 : 8) / es; e++) eset(&r, es, e, x);
         vfinish(c, rd, &r, Q);
         return 0;
     }
-    case 1: {  /* DUP general */
+    case 1: {  /* DUP general; high imm5 bits are ignored */
+        if (es == 8 && !Q) return -1;
         uint64_t x = rx(c, rn);
         for (int e = 0; e < (Q ? 16 : 8) / es; e++) eset(&r, es, e, x);
         vfinish(c, rd, &r, Q);
         return 0;
     }
     case 3:  /* INS general */
+        if (!Q) return -1;
         eset(&c->v[rd], es, idx, rx(c, rn));
         return 0;
     case 5:  /* SMOV */
+        if (es > (Q ? 4 : 2)) return -1;
         wx(c, rd, Q ? (uint64_t)esget(&c->v[rn], es, idx) : (uint32_t)esget(&c->v[rn], es, idx));
         return 0;
     case 7:  /* UMOV */
+        if (Q ? es != 8 : es == 8) return -1;
         wx(c, rd, eget(&c->v[rn], es, idx));
         return 0;
     default: return -1;
@@ -1386,6 +1406,12 @@ static int simd_shift_imm(hao_cpu *c, uint32_t i, int scalar)
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
     if (!immh) return -1;
     int hb = 31 - __builtin_clz(immh), es = 1 << hb, bits = es * 8;
+    /* Immediate shifts with scalar non-saturating results are D-only.
+     * SHRN/RSHRN and SSHLL/USHLL have no scalar encoding. */
+    if (!scalar && es == 8 && !Q) return -1;
+    if (scalar && ((op <= 0x0A && es != 8) ||
+                   ((op == 0x10 || op == 0x11) && !U) || op == 0x14)) return -1;
+    if (op == 0x0C && !U) return -1;       /* SQSHLU requires U=1 */
     unsigned immhb = immh << 3 | immb;
     int rsh = 2 * bits - (int)immhb, lsh = (int)immhb - bits;
     hao_vreg a = c->v[rn], d = c->v[rd], r;
@@ -1592,6 +1618,7 @@ static int simd_permute(hao_cpu *c, uint32_t i)
     unsigned rm = BITS(i, 20, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
     hao_vreg a = c->v[rn], b = c->v[rm], r;
     memset(&r, 0, sizeof r);
+    if (size == 3 && !Q) return -1;       /* no one-element permute */
     int es = 1 << size, n = (Q ? 16 : 8) / es, half = n / 2;
     for (int e = 0; e < n; e++) {
         uint64_t v;
@@ -1613,6 +1640,8 @@ static int simd_indexed(hao_cpu *c, uint32_t i, int scalar)
     unsigned L = BIT(i, 21), M = BIT(i, 20), H = BIT(i, 11), rm = BITS(i, 19, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
     hao_vreg a = c->v[rn], d = c->v[rd], r;
     memset(&r, 0, sizeof r);
+    /* Integer MUL/MLA/MLS and non-saturating long multiplies are vector-only. */
+    if (scalar && (op == 0 || op == 2 || op == 4 || op == 6 || op == 8 || op == 10)) return -1;
     int es, idx;
     if (((op == 1 || op == 5) && !U) || op == 9) {  /* FMLA/FMLS/FMUL(X) by element (single/double) */
         if (size == 0) { es = 2; idx = (int)(H << 2 | L << 1 | M); }
