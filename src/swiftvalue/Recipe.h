@@ -4,11 +4,17 @@
 #include "Common.h"
 typedef struct { uint64_t size, offset; uint32_t consumed; } empty_plan;
 int discover_empty_plan(const void *type, empty_plan *out);
+/* Whether TYPE is an Optional whose nil is an extra inhabitant of a native
+ * spare-bit enum that differs between arm64 and x86_64 (translated by the
+ * walk from the mpenum table's masks). */
+int translated_nil_type(const void *type);
 /* Destination is uninitialized, exclusive storage. Returns
  * zero without writing if type/value is outside the proven empty case. */
 int initialize_empty(void *destination, const void *source, const void *type,
                      int destination_arm);
-typedef struct { uint64_t offset, bits, receiver_bits; uint32_t consumed; } empty_patch;
+/* A nil's word at OFFSET: BITS as found, RECEIVER_BITS the receiving witness
+ * set's encoding (native), ARM_BITS the arm64 encoding (guest code's). */
+typedef struct { uint64_t offset, bits, receiver_bits; uint32_t consumed; uint64_t arm_bits; } empty_patch;
 /* Structural walk only; an unknown enum context rejects the whole plan. */
 int collect_empty_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
 /* On refusal, reports the deepest unresolved field's metadata. */

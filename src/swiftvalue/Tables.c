@@ -14,9 +14,24 @@
 #include <stdbool.h>
 #include <string.h>
 
-static const struct { const char *uuid; uint64_t offset; uint32_t payload, empty, xi, flags; } mpenums[] = {
+/* Row format 2: the counts and flags, then the arm64 XI count, both
+ * architectures' extra tag bits, and for rows without flag 4 the common
+ * spare-bit masks of both, mask_bytes bytes from mask_offset. */
+#define HAO_MPENUM_ROWS 2
+static const struct {
+    const char *uuid; uint64_t offset;
+    uint32_t payload, empty, xi, flags, arm_xi, x86_extra_bits, arm_extra_bits, mask_offset, mask_bytes;
+    const char *x86_mask, *arm_mask;
+} mpenums[] = {
 #include "mpenum_gen.inc"
 };
+static mpenum_row row_at(long at)
+{
+    return (mpenum_row){mpenums[at].payload, mpenums[at].empty, mpenums[at].xi, mpenums[at].flags,
+                        mpenums[at].arm_xi, mpenums[at].x86_extra_bits, mpenums[at].arm_extra_bits,
+                        mpenums[at].mask_offset, mpenums[at].mask_bytes,
+                        (const unsigned char *)mpenums[at].x86_mask, (const unsigned char *)mpenums[at].arm_mask};
+}
 static const struct { const char *uuid; uint64_t offset; char change; } archdiffs[] = {
 #include "archdiff_gen.inc"
 };
@@ -48,7 +63,7 @@ int mpenum_lookup(const uint8_t uuid[16], uint64_t offset, mpenum_row *out)
     hex(uuid, text);
     long at = FIND(mpenums, text, offset);
     if (at < 0) return 0;
-    if (out) *out = (mpenum_row){mpenums[at].payload, mpenums[at].empty, mpenums[at].xi, mpenums[at].flags};
+    if (out) *out = row_at(at);
     return 1;
 }
 
@@ -116,7 +131,7 @@ int mpenum_type(const void *type, mpenum_row *out)
 {
     uint64_t m = rows_of(type) >> 8;
     if (!m) return 0;
-    if (out) *out = (mpenum_row){mpenums[m - 1].payload, mpenums[m - 1].empty, mpenums[m - 1].xi, mpenums[m - 1].flags};
+    if (out) *out = row_at((long)m - 1);
     return 1;
 }
 

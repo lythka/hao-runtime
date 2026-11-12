@@ -202,6 +202,50 @@ static int tag_byte_case(const void *type, const unsigned char *value, fixed_enu
     return 1;
 }
 
+int spare_bit_xi(const unsigned char *spare, uint64_t area, unsigned payload_cases, unsigned empty,
+                 uint32_t k, unsigned char *out)
+{
+    if (!area || area > 4096) return 0;
+    uint64_t bits = 8 * area, count = 0;
+    for (uint64_t i = 0; i < bits; ++i) count += spare[i >> 3] >> (i & 7) & 1;
+    uint64_t used = bits - count;
+    uint64_t empty_tags = !empty ? 0 : used >= 32 ? 1 : (empty + (UINT64_C(1) << used) - 1) >> used;
+    uint64_t tags = payload_cases + empty_tags, tag_bits = 0;
+    while ((UINT64_C(1) << tag_bits) < tags) ++tag_bits;
+    if (!tag_bits) tag_bits = 1;
+    if (!count || tag_bits > count) return 0;            /* extra tag bits: not this layout */
+    uint32_t m = ~k;
+    if (count != tag_bits && count - tag_bits < 32) {   /* rotate so the tag bits come last */
+        unsigned shl = (unsigned)(count - tag_bits), shr = (unsigned)((count < 32 ? count : 32) - shl);
+        if (count < 32) m &= (UINT32_C(1) << count) - 1;
+        m = (uint32_t)((m >> shr) | ((uint64_t)m << shl));
+    }
+    if (count < 32) m &= (UINT32_C(1) << count) - 1;
+    memset(out, 0, (size_t)area);
+    for (uint64_t i = 0; i < bits && m; ++i)             /* scatter, lowest spare bit first */
+        if (spare[i >> 3] >> (i & 7) & 1) {
+            if (m & 1) out[i >> 3] |= (unsigned char)(1u << (i & 7));
+            m >>= 1;
+        }
+    return 1;
+}
+
+int tag_byte_layout(const void *type, uint64_t *tag_offset, unsigned *tags)
+{
+    const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
+    unsigned empty;
+    uint64_t maximum;
+    int count = direct_cases(type, 3, payloads, &empty, &maximum);
+    const witnesses *v = vwt(type);
+    if (!count || !maximum || v->size != maximum + 1) return 0;
+    uint64_t used = 8 * maximum;
+    unsigned empty_tags = !empty ? 0 : used >= 32 ? 1 : (unsigned)((empty + (UINT64_C(1) << used) - 1) >> used);
+    if ((unsigned)count + empty_tags > 256 || v->extra != 256 - (unsigned)count - empty_tags) return 0;
+    *tag_offset = maximum;
+    *tags = (unsigned)count + empty_tags;
+    return 1;
+}
+
 #ifdef HAO_SWIFT_VALUE_RUNTIME
 static int native_code(const void *f)
 {

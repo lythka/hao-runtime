@@ -7,6 +7,7 @@
 #include "Common.h"
 #include "Enum.h"
 #include "hao/macho.h"
+#include "hao/runtime.h"
 #include <dlfcn.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -47,7 +48,25 @@ typedef struct {
     unsigned surveyed;  /* survey mode: refusing types printed so far (collect) */
     int survey;
     unsigned opaque;    /* collect: native opaque types (native_opaque) the walk is inside */
+    /* Exact identities of the standard types selected() plans (nominals()): */
+    const void *set, *dictionary;               /* nominal descriptors $sShMn, $sSDMn */
+    const void *native_box, *unknown_box;       /* class reference witness tables $sBoWV, $sBOWV */
+    const void *metatype_box;                   /* thick metatype witness table $sBomWV */
+    const void *single[5];                      /* one-XI pointer nominals */
 } reflection;
+static void nominals(reflection *r)
+{
+    r->set = dlsym(RTLD_DEFAULT, "$sShMn");
+    r->dictionary = dlsym(RTLD_DEFAULT, "$sSDMn");
+    r->native_box = dlsym(RTLD_DEFAULT, "$sBoWV");
+    r->unknown_box = dlsym(RTLD_DEFAULT, "$sBOWV");
+    r->metatype_box = dlsym(RTLD_DEFAULT, "$sBomWV");
+    r->single[0] = dlsym(RTLD_DEFAULT, "$sSVMn");                       /* UnsafeRawPointer */
+    r->single[1] = dlsym(RTLD_DEFAULT, "$sSvMn");                       /* UnsafeMutableRawPointer */
+    r->single[2] = dlsym(RTLD_DEFAULT, "$ss13OpaquePointerVMn");
+    r->single[3] = dlsym(RTLD_DEFAULT, "$sSOMn");                       /* ObjectIdentifier */
+    r->single[4] = dlsym(RTLD_DEFAULT, "$s10ObjectiveC8SelectorVMn");   /* NULL until ObjectiveC is loaded */
+}
 static int guest_laid_listed(const void *type);
 
 static const witnesses *vwt(const void *type)
@@ -86,14 +105,16 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
 {
     if (depth > 16 || guest_laid_listed(type)) return 0;   /* declared differently on arm64 */
     uintptr_t kind = r->kind(type);
-    if (kind != 0x200 && kind != 0x202 && kind != 0x301 && kind != 0x305 &&
-        ((kind != 0x303 && kind != 0) || !r->existentials)) return 0;
+    if (kind != 0x200 && kind != 0x202 && kind != 0x301 && kind != 0x305 && kind != 0x303 && kind != 0 &&
+        kind != 0x304 && kind != 0x306) return 0;
     const void *const *m = type;
     const witnesses *v = vwt(type);
     if (v->size < 8 || v->size > 4096) return 0;
-    /* Existentials and Swift class references, only for guest calls of
-     * native value witnesses (the value stays where it is; see
-     * collect_witness_patches). Metadata.h
+    /* Existentials, Swift class references and metatypes, on every path
+     * (published values too, since the nil probes of 26B131 applications;
+     * before, only guest calls of native value witnesses). Only their own
+     * word is planned: a present existential's contents and an object's
+     * fields are not walked. Metadata.h
      * TargetExistentialTypeMetadata: after the kind a flags word (witness
      * tables in bits 0-23, special protocol in 24-29, superclass bit 30,
      * bit 31 set when not class-bound). The opaque container is three buffer
@@ -103,10 +124,22 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
      * for `(any P)??`, `(any Q: AnyObject)??` and `AnyObject??` in native
      * programs of both. The Error box (special protocol 1) and any other
      * special representation stay out. */
-    /* A Swift class reference (MetadataKind::Class, its table Builtin.NativeObject's,
-     * native): the same inhabitants, measured for `C??` (1 arm64, 2 x86_64). */
+    /* A Swift class reference (MetadataKind::Class, its value witness table
+     * Builtin.NativeObject's, or Builtin.UnknownObject's for a class with ObjC
+     * ancestry such as NSKeyValueObservation): the same inhabitants, measured
+     * for `C??` (1 arm64, 2 x86_64) and the XIs of both kinds (k, 2k). */
     if (kind == 0) {
-        if (v->size != 8 || v->stride != 8 || (v->flags & 255) != 7 || v->extra < 2) return 0;
+        if (!v || (v != r->native_box && v != r->unknown_box) ||
+            v->size != 8 || v->stride != 8 || (v->flags & 255) != 7 || v->extra < 2) return 0;
+        *out = (empty_plan){8, 0, 0};
+        return 1;
+    }
+    /* A thick metatype, concrete (`C.Type`) or existential (`Any.Type`,
+     * `AnyObject.Type`): one metadata pointer word, value witness table the
+     * Builtin metatype's ($sBomWV); XI0 0, XI k k on arm64 and 2k on x86_64,
+     * measured for all three. */
+    if (kind == 0x304 || kind == 0x306) {
+        if (!v || v != r->metatype_box || v->size != 8 || v->stride != 8 || v->extra != 0x7fffffff) return 0;
         *out = (empty_plan){8, 0, 0};
         return 1;
     }
@@ -137,6 +170,28 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
             (v->flags & 255) != 7 || (v->flags & 0x01900000)) return 0;
         *out = (empty_plan){16, 8, 0};
         return 1;
+    }
+    /* Set and Dictionary: one storage word, like Array's buffer word (size
+     * 8, flags 0x10007, xi 0x7fffffff; XI0 0, XI k k on arm64 and 2k on
+     * x86_64, measured for Set<String> and Dictionary<String, Int>). Only
+     * the empty encodings are planned; a live one is not walked. */
+    if (kind == 0x200 && m[1] && (m[1] == r->set || m[1] == r->dictionary)) {
+        if (v->size != 8 || v->stride != 8 || v->extra != 0x7fffffff || (v->flags & 255) != 7) return 0;
+        *out = (empty_plan){8, 0, 0};
+        return 1;
+    }
+    /* Pointers with a single extra inhabitant, the zero word, identical on
+     * both: UnsafeRawPointer, UnsafeMutableRawPointer, OpaquePointer,
+     * ObjectIdentifier and Selector (size 8, xi 1, XI0 0, measured). Only
+     * the first Optional: the next one has no inhabitant left and adds a tag
+     * byte (the Optional branch below finds none). */
+    if (kind == 0x200 && m[1]) {
+        for (unsigned k = 0; k < sizeof r->single / sizeof *r->single; ++k)
+            if (r->single[k] && m[1] == r->single[k]) {
+                if (v->size != 8 || v->stride != 8 || v->extra != 1 || (v->flags & 255) != 7) return 0;
+                *out = (empty_plan){8, 0, 0};
+                return 1;
+            }
     }
     if (kind == 0x200 && m[1] == r->array) {
         /* The buffer word's inhabitants do not depend on the Element:
@@ -193,6 +248,7 @@ static int discover(const void *type, empty_plan *out, int existentials)
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
         dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
     };
+    nominals(&r);
     if (!type || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional ||
         r.kind(type) != 0x202) return 0;
     empty_plan result;
@@ -293,6 +349,135 @@ static int function_xi_word(reflection *r, const void *type, uint64_t *offset)
         type = best;
     }
     return 0;
+}
+
+/* The offset of the tag byte that supplies TYPE's extra inhabitants, when
+ * they come from a multi-payload enum with one extra tag byte and no spare
+ * bit (Enum.c tag_byte_layout): through Optionals and the first field with
+ * the most inhabitants of a struct or tuple, each step checked against the
+ * value witness tables, as function_xi_word. The enum's inhabitants are the
+ * byte's values 255, 254, ... on both architectures (measured for
+ * IndexPath, whose storage is such an enum, and String / (String, String)
+ * enums), so an Optional over such a type has the same nil on both. *XI is
+ * the enum's inhabitant count. */
+static int tag_byte_xi(reflection *r, const void *type, uint64_t *offset, uint32_t *xi)
+{
+    uint64_t at = 0;
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uintptr_t kind = r->kind(type);
+        if (!v->extra || v->extra > 255) return 0;
+        if (kind == 0x201) {
+            uint64_t tag_at;
+            unsigned tags;
+            if (!tag_byte_layout(type, &tag_at, &tags)) return 0;
+            *offset = at + tag_at;
+            *xi = v->extra;
+            return 1;
+        }
+        if (kind == 0x202 && m[1] == r->optional) {
+            if (vwt(m[2])->extra != v->extra + 1) return 0;
+            type = m[2];
+            continue;
+        }
+        if (kind != 0x200 && kind != 0x301) return 0;
+        intptr_t count = r->count(type);
+        if (count < 1 || count > 64) return 0;
+        const void *best = NULL;
+        intptr_t best_at = -1;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type,i,&info);
+            intptr_t o = r->offset(type,i);
+            if (info.free_name) info.free_name(info.name);
+            if (!child || o < 0 || (uint64_t)o + vwt(child)->size > v->size) return 0;
+            if (!best || vwt(child)->extra > vwt(best)->extra) { best = child; best_at = o; }
+        }
+        if (vwt(best)->extra != v->extra) return 0;
+        at += (uint64_t)best_at;
+        type = best;
+    }
+    return 0;
+}
+
+/* The native spare-bit enum whose extra inhabitants TYPE's are, when the
+ * mpenum table (row format 2) says they differ between arm64 and x86_64 and
+ * gives both layouts' masks: through Optionals and the first field with the
+ * most inhabitants of a struct or tuple (a struct only where known_layout
+ * admits it), each step checked against the value witness tables. The row
+ * must apply (live XI count = its x86_64 one; a payload that is not loadable
+ * gives a tag byte instead) and use no extra tag bits on either side.
+ * *OFFSET is the enum's offset in TYPE. */
+typedef struct { const void *type; uint64_t offset; mpenum_row row; } xi_enum;
+static int translated_xi_enum(reflection *r, const void *type, xi_enum *out)
+{
+    uint64_t at = 0;
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uintptr_t kind = r->kind(type);
+        if (!v->extra) return 0;
+        if (kind == 0x201) {
+            mpenum_row row;
+            if (!mpenum_type(type, &row) || (row.flags & MPENUM_XI) || row.xi != v->extra ||
+                row.x86_extra_bits || row.arm_extra_bits || !row.mask_bytes || !row.x86_mask || !row.arm_mask ||
+                v->size < 8 || v->size > 8 * HAO_SV_SPARE_WORDS ||
+                (uint64_t)row.mask_offset + row.mask_bytes > v->size) return 0;
+            *out = (xi_enum){type, at, row};
+            return 1;
+        }
+        if (kind == 0x202 && m[1] == r->optional) {
+            if (vwt(m[2])->extra != v->extra + 1) return 0;
+            type = m[2];
+            continue;
+        }
+        if (kind != 0x200 && kind != 0x301) return 0;
+        if (kind == 0x200 && r->known_layout && !r->known_layout(type)) return 0;
+        intptr_t count = r->count(type);
+        if (count < 1 || count > 64) return 0;
+        const void *best = NULL;
+        intptr_t best_at = -1;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type,i,&info);
+            intptr_t o = r->offset(type,i);
+            if (info.free_name) info.free_name(info.name);
+            if (!child || o < 0 || (uint64_t)o + vwt(child)->size > v->size) return 0;
+            if (!best || vwt(child)->extra > vwt(best)->extra) { best = child; best_at = o; }
+        }
+        if (vwt(best)->extra != v->extra) return 0;
+        at += (uint64_t)best_at;
+        type = best;
+    }
+    return 0;
+}
+
+/* XI K of E on both architectures (Enum.c spare_bit_xi over each row mask). */
+static int xi_patterns(const xi_enum *e, uint32_t k, unsigned char *x86, unsigned char *arm, int *have_arm)
+{
+    uint64_t area = vwt(e->type)->size;
+    unsigned char xm[8 * HAO_SV_SPARE_WORDS] = {0}, am[8 * HAO_SV_SPARE_WORDS] = {0};
+    memcpy(xm + e->row.mask_offset, e->row.x86_mask, e->row.mask_bytes);
+    memcpy(am + e->row.mask_offset, e->row.arm_mask, e->row.mask_bytes);
+    if (!spare_bit_xi(xm, area, e->row.payload, e->row.empty, k, x86)) return 0;
+    *have_arm = k < e->row.arm_xi && spare_bit_xi(am, area, e->row.payload, e->row.empty, k, arm);
+    return 1;
+}
+
+int translated_nil_type(const void *type)
+{
+    reflection r = {
+        dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
+        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount"),
+        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
+        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
+        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, 1,
+    };
+    xi_enum e;
+    if (!type || !r.kind || !r.count || !r.offset || !r.field || !r.optional || r.kind(type) != 0x202 ||
+        ((const void *const *)type)[1] != r.optional) return 0;
+    return translated_xi_enum(&r, ((const void *const *)type)[2], &e);
 }
 
 /* A type declared differently on arm64 (Tables.h archdiff_type,
@@ -401,6 +586,70 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             if (word > none && word < 0x7fffffffu) return 0; /* an outer Optional's nil: not this type's value */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
+        /* A payload whose inhabitants are an enum's tag byte: this
+         * Optional's nil is the byte 255 - the inhabitants inner Optionals
+         * consumed, the same on both architectures. */
+        uint64_t tag_at;
+        uint32_t enum_xi;
+        if (m[1] == r->optional && payload->extra && v->extra + 1 == payload->extra &&
+            tag_byte_xi(r,m[2],&tag_at,&enum_xi) && enum_xi >= payload->extra) {
+            unsigned tag = value[tag_at], none = 255 - (enum_xi - payload->extra);
+            if (tag == none) return 1;                       /* inactive payload remains opaque */
+            if (tag >= 256 - enum_xi && tag < none) return 0; /* an outer Optional's nil */
+            return collect(r,m[2],value,base,out,capacity,used,depth + 1);
+        }
+        /* A payload whose inhabitants are a native spare-bit enum's that
+         * differ by architecture (Foundation's Data: its representation's
+         * spare bits are one byte's top nibble on arm64, the whole byte on
+         * x86_64): this Optional's nil is the enum's XI k, k the inhabitants
+         * inner Optionals consumed, in either architecture's encoding. Each
+         * word in which the two differ is a patch: the encoding found, the
+         * receiving witness set's (materialized as receiver_empty_bits does)
+         * and arm64's. An index past arm64's XI count has no arm64 encoding,
+         * and an outer Optional's nil is no value of this one: both refuse. */
+        xi_enum xe;
+        if (m[1] == r->optional && payload->extra && v->extra + 1 == payload->extra &&
+            translated_xi_enum(r,m[2],&xe) && vwt(xe.type)->extra >= payload->extra &&
+            xe.offset + vwt(xe.type)->size <= payload->size) {
+            uint64_t size = vwt(xe.type)->size;
+            uint32_t k = vwt(xe.type)->extra - payload->extra;
+            unsigned char x86[8 * HAO_SV_SPARE_WORDS], arm[8 * HAO_SV_SPARE_WORDS];
+            int have_arm;
+            const unsigned char *found = value + xe.offset;
+            if (!xi_patterns(&xe,k,x86,arm,&have_arm)) return 0;
+            int is_x86 = !memcmp(found,x86,(size_t)size), is_arm = have_arm && !memcmp(found,arm,(size_t)size);
+            if (!is_x86 && !is_arm) {
+                for (uint32_t j = k + 1; j < vwt(xe.type)->extra && j < k + 9; ++j) {   /* an outer nil */
+                    unsigned char ox[8 * HAO_SV_SPARE_WORDS], oa[8 * HAO_SV_SPARE_WORDS];
+                    int oh;
+                    if (xi_patterns(&xe,j,ox,oa,&oh) &&
+                        (!memcmp(found,ox,(size_t)size) || (oh && !memcmp(found,oa,(size_t)size)))) return 0;
+                }
+                return collect(r,m[2],value,base,out,capacity,used,depth + 1);
+            }
+            if (!have_arm || xe.offset % 8) return 0;
+            /* The receiving witness set's own nil. */
+            const witnesses *ov = vwt(type);
+            inject_tag_fn *inject = ((inject_tag_fn *const *)ov)[13];
+            unsigned char *scratch = NULL;
+            size_t alignment = (ov->flags & 255) + 1;
+            if (alignment < sizeof(void *)) alignment = sizeof(void *);
+            if (!inject || ov->stride < ov->size || ov->stride > 8192 ||
+                posix_memalign((void **)&scratch,alignment,(size_t)ov->stride)) return 0;
+            memset(scratch,0xa5,(size_t)ov->stride);
+            inject(scratch,1,type);
+            const unsigned char *receiver = scratch + xe.offset;
+            int ok = !memcmp(receiver,x86,(size_t)size) || !memcmp(receiver,arm,(size_t)size);
+            for (uint64_t w = 0; ok && w < size; w += 8) {
+                if (!memcmp(x86 + w,arm + w,8)) continue;
+                if (w + 8 > size || *used == capacity) { ok = 0; break; }
+                uint64_t f, rb, ab;
+                memcpy(&f,found + w,8); memcpy(&rb,receiver + w,8); memcpy(&ab,arm + w,8);
+                out[(*used)++] = (empty_patch){base + xe.offset + w, f, rb, k + 1, ab};
+            }
+            free(scratch);   /* a nil owns no payload */
+            return ok;
+        }
         /* No payload extra inhabitants: Swift's single-payload enum layout
          * adds a trailing 0/1 tag. Admit POD payloads only, and still walk a
          * present payload so unknown active enum fields cannot hide behind
@@ -427,7 +676,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
              * independently of both the process architecture and source bits. */
             uint64_t receiver;
             if (!receiver_empty_bits(type,&plan,&receiver)) return 0;
-            out[(*used)++] = (empty_patch){base + plan.offset, word, receiver, plan.consumed};
+            out[(*used)++] = (empty_patch){base + plan.offset, word, receiver, plan.consumed, plan.consumed - 1u};
             return 1;                     /* inactive payload must remain opaque */
         }
         /* This is a present payload in either admitted representation. */
@@ -455,6 +704,28 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         return 1;
     }
     if (kind == 0x305) return common_objc_reference_value(type,value);
+    /* A live existential or Swift object in a published value (the plain
+     * walk; selected() plans their nils there too): native code takes it, so
+     * each witness table must be native, its conformance descriptor in no
+     * guest image (a guest conformance's table is arm64 code; a generic one's
+     * table is instantiated on the heap), and a Swift object word a heap
+     * pointer. A guest call of a native witness only copies them. */
+    if ((kind == 0x303 || kind == 0) && !r->existentials) {
+        if (kind == 0) {
+            uint64_t bits; memcpy(&bits,value,8);
+            return bits >= 4096 && !(bits & 7);
+        }
+        uint32_t flags; memcpy(&flags,(const char *)type + 8,4);
+        uint64_t tables = flags & 0xffffff, first = (flags & 0x80000000u) ? 32 : 8;
+        if ((flags & 0x3f000000u) || first + 8 * tables > v->size) return 0;
+        for (uint64_t i = 0; i < tables; ++i) {
+            uint64_t table, conformance = 0;
+            memcpy(&table,value + first + 8 * i,8);
+            if (!table || hao_image_for_addr(table) || !hao_probe_read8(table,&conformance) ||
+                !conformance || hao_image_for_addr(conformance)) return 0;
+        }
+        return 1;
+    }
     if (kind != 0x200 && kind != 0x301) return 1;
     intptr_t count = r->count(type);
     if (count < 0 || count > 64) return 0;
@@ -534,6 +805,7 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
         dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
         known_layout, 0, survey_mode,
     };
+    nominals(&r);
     unsigned used = 0;
     if (unresolved) *unresolved = type;
     if (!type || !value || !out || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional) return -1;

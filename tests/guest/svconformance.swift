@@ -10,7 +10,7 @@ typealias Image = @convention(c) (UInt64) -> UnsafeRawPointer?
 let lib=dlopen(CommandLine.arguments[1],RTLD_NOW)!
 let walk=unsafeBitCast(dlsym(lib,"hao_sv_collect_empty_patches_detail")!,to:Walk.self)
 let image=unsafeBitCast(dlsym(lib,"hao_image_for_addr")!,to:Image.self)
-let patches=UnsafeMutableRawPointer.allocate(byteCount:2048,alignment:8)
+let patches=UnsafeMutableRawPointer.allocate(byteCount:64*40,alignment:8)
 for (name,obj):(String,any R) in [("static",StaticR()),("generic",GenericR(7))] {
  var w=Wrap(object:obj)
  withUnsafeBytes(of:&w) { b in

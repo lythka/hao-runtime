@@ -18,7 +18,7 @@ guard let lib = dlopen(CommandLine.arguments[1], RTLD_NOW), let sym = dlsym(lib,
     print("no libhao walker"); exit(2)
 }
 let walk = unsafeBitCast(sym, to: Walk.self)
-let patches = UnsafeMutableRawPointer.allocate(byteCount: 64 * 32, alignment: 8)
+let patches = UnsafeMutableRawPointer.allocate(byteCount: 64 * 40, alignment: 8)   // empty_patch: 40 bytes
 
 func run<T>(_ name: String, _ value: T) {
     var v = value
@@ -34,7 +34,7 @@ for (label, e) in [("payload", Affected.some(.some(NSObject()))), ("inner nil", 
     run("AnyObject? Swift object, \(label)", WithAnyObject(e: e, object: Box(2)))
     run("AnyObject? tagged NSNumber, \(label)", WithAnyObject(e: e, object: NSNumber(value: 5)))
     run("NSObject? (control), \(label)", WithNSObject(e: e, object: NSObject()))
-    run("AnyObject?? (stays refused), \(label)", WithNested(e: e, object: .some(nil)))
+    run("AnyObject??, \(label)", WithNested(e: e, object: .some(nil)))
     for (t, v) in [("nil", Trend?.none), ("up", .up), ("down", .down)] { run("Trend? \(t), \(label)", WithTrend(e: e, trend: v)) }
     run("URL? nil, \(label)", WithURL(e: e, url: nil))
     run("URL? live, \(label)", WithURL(e: e, url: URL(string: "https://www.apple.com/news")))

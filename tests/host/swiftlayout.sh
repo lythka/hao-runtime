@@ -6,7 +6,8 @@
 #    2k on x86_64); Optional<S>.none writes only that word; a live Array's elements are not walked.
 # B. a multi-payload enum of class-reference words with its tag in bits 60-63 and no empty case (also the
 #    SwiftUI type of that shape) is walked through native witnesses; a 17-case enum (tag bits differ), an
-#    enum with an empty case and an Optional of such an enum (its nil encodings differ) stay refused.
+#    enum with an empty case and an Optional of such an enum (its nil encodings differ) stay refused,
+#    unless a table row gives both layouts (the SwiftUI type's Optional nil is translated, see N2).
 # C. a multi-payload enum with a trailing tag byte equal to the case index is walked by layout; two empty
 #    cases, a size or xi that does not match and a tag byte past the cases stay refused.
 # F. a function value other than a block, under any number of Optionals, has identical nils on both and
@@ -27,6 +28,12 @@
 #    where frozen (Float16: alone, in a tuple, as an Optional nil) unless inside a native unfrozen struct.
 #    Where this host's image is not the build the tables describe, the program prints "T LABEL none" and
 #    that label's lines are skipped.
+# N. nils of standard pointer-word types (Set/Dictionary storage, Any, any P, AnyHashable, AnyObject, Swift
+#    class references, metatypes, URL; DateComponents' second level) are planned like Array's buffer word on
+#    the plain walk too; raw pointers, OpaquePointer, Selector and ObjectIdentifier have one XI, 0, and
+#    only their first Optional is planned; IndexPath's XIs are tag bytes, the same on both; Data's differ
+#    and are translated from the mpenum table's masks (N2: native and arm64 nils of Data?, Data??, a struct
+#    holding Data?, the patches' arm64 words after "~"; an XI arm64 has no encoding for is refused).
 # Every measured line must be equal on both architectures except the listed keys, the contract lines must
 # hold on each, and the walk, row and table lines must be exactly the expected ones.
 #   OUT=dir [LIB=build] tests/host/swiftlayout.sh   (Apple silicon host: the arm64 program runs natively)
@@ -65,6 +72,15 @@ comm -3 "$OUT/arm64.keyed" "$OUT/x86_64.keyed" | sed 's/^[[:space:]]*//; s/ | .*
     echo "V SpareNested.b(outerNil)"; echo "V TextNil.two(outerNil)"
     echo "X BAction 1"; echo "X BAction 2"
     echo "L BundleDescription"   # its XI count: pointer spare bits
+    # N: pointer-word inhabitants k against 2k; DateComponents' come from an Optional (1, 2 against 2, 4);
+    # Data's from its representation's spare bits.
+    for t in Set\<String\> Dictionary\<String,Int\> Any anyNP AnyHashable AnyObject Box NSKeyValueObservation \
+             Box.Type AnyObject.Type Any.Type URL; do echo "X $t 1"; echo "X $t 2"; done
+    for k in 0 1 2; do echo "X DateComponents $k"; echo "X Data $k"; done
+    echo "C Optional<DateComponents>#1 f"; echo "C Optional<Data>#0 f"; echo "C Optional<Data>#1 f"
+    echo "L Data"; echo "L Optional<Data>"
+    echo "C Optional<Optional<Data>>#0 f"; echo "C Optional<Optional<Data>>#1 f"; echo "L Optional<Optional<Data>>"
+    echo "L DataBox"; echo "X DataBox 0"; echo "X DataBox 1"
 } | sort -u >"$OUT/differ.expected"
 # The native spare-bit enums of section E must have been measured on both (their lines are then equal).
 for k in "C NWListener.State#4 z" "C BundleDescription#2 z" "C ResizeBehavior#1 z" "C ZoomBehavior#2 z"; do
@@ -136,6 +152,22 @@ X CAction 0 $z
 X CAction 1 0000000000000001
 X CAction 2 0000000000000002
 X BAction 0 $z
+L Set<String> size=8 stride=8 flags=0x10007 xi=0x7fffffff
+X Set<String> 0 $z
+X Any 0 $a5 $a5 $a5 $z
+X AnyHashable 0 $a5 $a5 $a5 $z $a5
+X Box.Type 0 $z
+X URL 0 $z $a5
+L UnsafeRawPointer size=8 stride=8 flags=0x7 xi=0x1
+X UnsafeRawPointer 0 $z
+L Optional<UnsafeRawPointer> size=8 stride=8 flags=0x200007 xi=0x0
+L ObjectIdentifier size=8 stride=8 flags=0x7 xi=0x1
+L Selector size=8 stride=8 flags=0x7 xi=0x1
+L OpaquePointer size=8 stride=8 flags=0x7 xi=0x1
+L IndexPath size=17 stride=24 flags=0x2010007 xi=0xfc
+X IndexPath 0 $a5 $a5 ff
+X IndexPath 1 $a5 $a5 fe
+C Optional<IndexPath>#1 f $a5 $a5 ff back=1
 EOF
 )
 arm=$(cat <<EOF
@@ -151,6 +183,16 @@ X Content 0 f000000000000007 f000000000000007
 X SwiftUI.Content 0 f000000000000007 f000000000000007
 C Seventeen#1 z 0000000000000004 back=1
 V TextNil.two(outerNil) 0000000000000001 0000000000000078 e100000000000000 01
+X Set<String> 1 0000000000000001
+X Any 1 $a5 $a5 $a5 0000000000000001
+X AnyHashable 1 $a5 $a5 $a5 0000000000000001 $a5
+X Box.Type 1 0000000000000001
+X URL 1 0000000000000001 $a5
+L Data size=16 stride=16 flags=0x2010007 xi=0xc
+X Data 0 $z f000000000000000
+C Optional<Data>#1 f $z f000000000000000 back=1
+C Optional<Optional<Data>>#1 f $z b000000000000000 back=1
+X DataBox 0 $z b000000000000000 $a5
 EOF
 )
 intel=$(cat <<EOF
@@ -166,6 +208,16 @@ X Content 0 ff00000000000007 ff00000000000007
 X SwiftUI.Content 0 ff00000000000007 ff00000000000007
 C Seventeen#1 z 0800000000000000 back=1
 V TextNil.two(outerNil) 0000000000000002 0000000000000078 e100000000000000 01
+X Set<String> 1 0000000000000002
+X Any 1 $a5 $a5 $a5 0000000000000002
+X AnyHashable 1 $a5 $a5 $a5 0000000000000002 $a5
+X Box.Type 1 0000000000000002
+X URL 1 0000000000000002 $a5
+L Data size=16 stride=16 flags=0x2010007 xi=0xfc
+X Data 0 $z ff00000000000000
+C Optional<Data>#1 f $z ff00000000000000 back=1
+C Optional<Optional<Data>>#1 f $z bf00000000000000 back=1
+X DataBox 0 $z bf00000000000000 $a5
 EOF
 )
 need() {   # ARCH LINES
@@ -209,7 +261,7 @@ W SpareNested.b(outer nil) walk 1 8:2>2
 W SpareNested.b(inner nil) walk 1 8:0>0
 W SwiftUI.Content view walk 0
 W SwiftUI.Content styled walk 0
-W Optional<SwiftUI.Content> nil (stays refused) refused Optional<Content>
+W Optional<SwiftUI.Content> nil (translated: a table row) walk 2 0:ff00000000000007>ff00000000000007~f000000000000007 8:ff00000000000007>ff00000000000007~f000000000000007
 W SecondaryText.one(small) walk 0
 W SecondaryText.one(large) walk 0
 W SecondaryText.two(small) walk 0
@@ -221,7 +273,7 @@ W TextNil.two(inner nil) walk 1 0:0>0
 W TextNil.two(object) walk 0
 W TextNil.none walk 0
 W TwoEmpty.one walk 0
-W Optional<SecondaryText> nil (stays refused) refused Optional<SecondaryText>
+W Optional<SecondaryText> nil walk 0
 W SecondaryText size+1 (stays refused) refused SecondaryText
 W SecondaryText xi-1 (stays refused) refused SecondaryText
 W SecondaryText tag 3 (stays refused) refused SecondaryText
@@ -317,7 +369,7 @@ W BundleDescription.atURL walk 0
 T ComputationalGraph.Output.Errors archdiff p size=17
 W ComputationalGraph.Output.Errors walk 0
 W ComputationalGraph.Output.Errors in a tuple walk 0
-W ComputationalGraph.Output.Errors Optional nil refused Optional<Errors>
+W ComputationalGraph.Output.Errors Optional nil walk 0
 W ComputationalGraph.Output.Errors in a native unfrozen struct walk 0
 T ComputationalGraph.Feature.DataType archdiff s size=1
 W ComputationalGraph.Feature.DataType walk 0
@@ -329,6 +381,93 @@ W Swift.Float16 refused Float16
 W Swift.Float16 in a tuple refused (Int, Float16)
 W Swift.Float16 Optional nil refused Optional<Float16>
 W Swift.Float16 in a native unfrozen struct walk 0
+W N Optional<Set<String>> nil walk 1 0:0>0
+W N Optional<Set<String>> some walk 0
+W N Optional<Optional<Set<String>>> outer nil walk 1 0:2>2
+W N Optional<Optional<Set<String>>> inner nil walk 1 0:0>0
+W N Optional<Dictionary<String,Int>> nil walk 1 0:0>0
+W N Optional<Dictionary<String,Int>> some walk 0
+W N Optional<Optional<Dictionary<String,Int>>> outer nil walk 1 0:2>2
+W N Optional<Optional<Dictionary<String,Int>>> inner nil walk 1 0:0>0
+W N Optional<Any> nil walk 1 24:0>0
+W N Optional<Any> some walk 0
+W N Optional<Optional<Any>> outer nil walk 1 24:2>2
+W N Optional<Optional<Any>> inner nil walk 1 24:0>0
+W N Optional<anyNP> nil walk 1 24:0>0
+W N Optional<anyNP> some walk 0
+W N Optional<Optional<anyNP>> outer nil walk 1 24:2>2
+W N Optional<Optional<anyNP>> inner nil walk 1 24:0>0
+W N Optional<AnyHashable> nil walk 1 24:0>0
+W N Optional<AnyHashable> some walk 0
+W N Optional<Optional<AnyHashable>> outer nil walk 1 24:2>2
+W N Optional<Optional<AnyHashable>> inner nil walk 1 24:0>0
+W N Optional<AnyObject> nil walk 1 0:0>0
+W N Optional<AnyObject> some walk 0
+W N Optional<Optional<AnyObject>> outer nil walk 1 0:2>2
+W N Optional<Optional<AnyObject>> inner nil walk 1 0:0>0
+W N Optional<Box> nil walk 1 0:0>0
+W N Optional<Box> some walk 0
+W N Optional<Optional<Box>> outer nil walk 1 0:2>2
+W N Optional<Optional<Box>> inner nil walk 1 0:0>0
+W N Optional<NSKeyValueObservation> nil walk 1 0:0>0
+W N Optional<NSKeyValueObservation> some walk 0
+W N Optional<Optional<NSKeyValueObservation>> outer nil walk 1 0:2>2
+W N Optional<Optional<NSKeyValueObservation>> inner nil walk 1 0:0>0
+W N Optional<Box.Type> nil walk 1 0:0>0
+W N Optional<Box.Type> some walk 0
+W N Optional<Optional<Box.Type>> outer nil walk 1 0:2>2
+W N Optional<Optional<Box.Type>> inner nil walk 1 0:0>0
+W N Optional<AnyObject.Type> nil walk 1 0:0>0
+W N Optional<AnyObject.Type> some walk 0
+W N Optional<Optional<AnyObject.Type>> outer nil walk 1 0:2>2
+W N Optional<Optional<AnyObject.Type>> inner nil walk 1 0:0>0
+W N Optional<Any.Type> nil walk 1 0:0>0
+W N Optional<Any.Type> some walk 0
+W N Optional<Optional<Any.Type>> outer nil walk 1 0:2>2
+W N Optional<Optional<Any.Type>> inner nil walk 1 0:0>0
+W N Optional<URL> nil walk 1 0:0>0
+W N Optional<URL> some walk 0
+W N Optional<Optional<URL>> outer nil walk 1 0:2>2
+W N Optional<Optional<URL>> inner nil walk 1 0:0>0
+W N Optional<DateComponents> nil walk 1 0:2>2
+W N Optional<DateComponents> some walk 2 0:0>0 16:0>0
+W N Optional<Optional<DateComponents>> outer nil refused Optional<Optional<DateComponents>>
+W N Optional<Optional<DateComponents>> inner nil refused Optional<Optional<DateComponents>>
+W N Optional<UnsafeRawPointer> nil walk 1 0:0>0
+W N Optional<UnsafeRawPointer> some walk 0
+W N Optional<Optional<UnsafeRawPointer>> outer nil walk 0
+W N Optional<Optional<UnsafeRawPointer>> inner nil walk 1 0:0>0
+W N Optional<UnsafeMutableRawPointer> nil walk 1 0:0>0
+W N Optional<UnsafeMutableRawPointer> some walk 0
+W N Optional<Optional<UnsafeMutableRawPointer>> outer nil walk 0
+W N Optional<Optional<UnsafeMutableRawPointer>> inner nil walk 1 0:0>0
+W N Optional<OpaquePointer> nil walk 1 0:0>0
+W N Optional<OpaquePointer> some walk 0
+W N Optional<Optional<OpaquePointer>> outer nil walk 0
+W N Optional<Optional<OpaquePointer>> inner nil walk 1 0:0>0
+W N Optional<Selector> nil walk 1 0:0>0
+W N Optional<Selector> some walk 0
+W N Optional<Optional<Selector>> outer nil walk 0
+W N Optional<Optional<Selector>> inner nil walk 1 0:0>0
+W N Optional<ObjectIdentifier> nil walk 1 0:0>0
+W N Optional<ObjectIdentifier> some walk 0
+W N Optional<Optional<ObjectIdentifier>> outer nil walk 0
+W N Optional<Optional<ObjectIdentifier>> inner nil walk 1 0:0>0
+W N Optional<IndexPath> nil walk 0
+W N Optional<IndexPath> some walk 0
+W N Optional<Optional<IndexPath>> outer nil walk 0
+W N Optional<Optional<IndexPath>> inner nil walk 0
+W N Optional<Data> nil walk 1 8:ff00000000000000>ff00000000000000~f000000000000000
+W N Optional<Data> some walk 0
+W N Optional<Optional<Data>> outer nil walk 1 8:bf00000000000000>bf00000000000000~b000000000000000
+W N Optional<Optional<Data>> inner nil walk 1 8:ff00000000000000>ff00000000000000~f000000000000000
+W N2 DataBox nil walk 1 8:ff00000000000000>ff00000000000000~f000000000000000
+W N2 DataBox some walk 0
+W N2 Optional<DataBox> nil walk 1 8:bf00000000000000>bf00000000000000~b000000000000000
+W N2 Optional<Data> arm64 nil walk 1 8:f000000000000000>ff00000000000000~f000000000000000
+W N2 Optional<Optional<Data>> arm64 outer nil walk 1 8:b000000000000000>bf00000000000000~b000000000000000
+W N2 Optional<Optional<Data>> arm64 inner nil walk 1 8:f000000000000000>ff00000000000000~f000000000000000
+W N2 Data, 13 Optionals: outer nil (no arm64 encoding) refused Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Data>>>>>>>>>>>>>
 EOF
 grep '^[WRT] ' "$OUT/x86_64" >"$OUT/walk" || true
 # Native types whose image on this host is another build than the tables': their lines are skipped.

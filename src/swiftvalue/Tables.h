@@ -17,6 +17,10 @@ typedef struct {
     uint32_t flags;            /* MPENUM_CASES: payload-case encodings identical on arm64 and
                                   x86_64; MPENUM_EMPTY: empty-case ones too (or no empty case);
                                   MPENUM_XI: extra inhabitants identical */
+    uint32_t arm_xi;           /* arm64 XI count */
+    uint32_t x86_extra_bits, arm_extra_bits;   /* extra tag bits after the payload area */
+    uint32_t mask_offset, mask_bytes;          /* the masks' place in the payload area */
+    const unsigned char *x86_mask, *arm_mask;  /* common spare bits, without flag 4 only */
 } mpenum_row;
 int mpenum_lookup(const uint8_t uuid[16], uint64_t offset, mpenum_row *out);
 

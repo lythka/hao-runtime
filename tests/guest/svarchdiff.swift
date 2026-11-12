@@ -26,7 +26,7 @@ if CommandLine.arguments.count > 1 {
     let lib = dlopen(CommandLine.arguments[1], RTLD_NOW)!
     let walk = unsafeBitCast(dlsym(lib, "hao_sv_collect_empty_patches_detail")!, to: Walk.self)
     let listed = dlsym(lib, "hao_sv_archdiff_type").map { unsafeBitCast($0, to: Listed.self) }
-    let patches = UnsafeMutableRawPointer.allocate(byteCount: 2048, alignment: 8)
+    let patches = UnsafeMutableRawPointer.allocate(byteCount: 64 * 40, alignment: 8)
     let f16 = unsafeBitCast(Float16.self, to: UnsafeRawPointer.self)
     let vwt = f16.load(fromByteOffset: -8, as: UnsafeRawPointer.self)
     print("hao Float16 metadata size", vwt.load(fromByteOffset: 64, as: UInt64.self), "listed", listed.map { $0(f16) != 0 ? "yes" : "no" } ?? "unknown")

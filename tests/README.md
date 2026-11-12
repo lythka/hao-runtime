@@ -111,7 +111,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/nojit | PASS | 5 | |
 | guest/objcimp | PASS | 4 | |
 | guest/objcva | PASS | 3 | |
-| guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals, also beside guest multi-payload enums (tag byte with several empty cases, spare-bit tags decoded from the image's layout record); see below |
+| guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals, also beside guest multi-payload enums (tag byte with several empty cases, spare-bit tags decoded from the image's layout record), and `Data??` whose nils are translated between the architectures' spare-bit encodings; see below |
 | guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below. Under heavy parallel load one `oslogswift` mode can miss its records; it passes alone |
 | guest/signals | PASS | 36 | |
 | guest/sret-forward | PASS | 3 | |
@@ -143,7 +143,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | host/near-map | PASS | 1 | |
 | host/dscselhoist | PASS | 1 | |
 | host/swiftvalue | PASS | 1 | |
-| host/swiftlayout | PASS | 4 | builds one Swift program for arm64 and x86_64, runs both natively (the arm64 one needs Apple silicon) and loads SwiftUI, Network and AppIntents in both, without making a view, to resolve some of their enum types; the x86_64 one also dlopens ComputationalGraph. Its native-type table checks (section E) apply where this host's images are the build `src/mpenum_gen.inc` and `src/archdiff_gen.inc` describe; elsewhere it prints a note and skips those labels |
+| host/swiftlayout | PASS | 4 | builds one Swift program for arm64 and x86_64, runs both natively (the arm64 one needs Apple silicon) and loads SwiftUI, Network and AppIntents in both, without making a view, to resolve some of their enum types; the x86_64 one also dlopens ComputationalGraph. Section N walks nils of standard types (pointer words, single inhabitants, tag bytes, Data translated). Its native-type table checks (section E) apply where this host's images are the build `src/mpenum_gen.inc` and `src/archdiff_gen.inc` describe; elsewhere it prints a note and skips those labels |
 | objc | PASS | 5 | |
 | tools | SKIP (expected) | 25 | runs bundle, stubdeps, platform, identity and aotpayload; stamp cases need `KC` (a kernel collection); MenuBarAgent case needs `HAO_FS` |
 | tools/release | PASS | 1 | python3.14 |

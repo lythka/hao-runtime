@@ -20,7 +20,11 @@ import SwiftUI   // loaded only to resolve SwiftUI.ContainerBackgroundValue.Cont
 //    tags decided by a generated table row (mpenum_gen.inc): rows given explicitly to authored enums
 //    whose encodings are measured equal here (empty cases, tags in a Bool's spare bits) or not (17
 //    cases), and the table's own rows for native types of this host; native types the tables list as
-//    declared differently on arm64 (archdiff_gen.inc), refused under every rule.
+//    declared differently on arm64 (archdiff_gen.inc): refused where frozen, walked where resilient.
+// N: nils of standard pointer-word types: Set/Dictionary storage, Any and any P, AnyHashable, AnyObject,
+//    Swift class references, metatypes and URL have XI0 0 and XI k k on arm64, 2k on x86_64 (as Array);
+//    the raw pointers, OpaquePointer, Selector and ObjectIdentifier have one XI, 0; IndexPath's XIs are
+//    tag bytes ff, fe, ... on both; Data's differ (spare bits of its representation) and stay refused.
 // Lines: L layout, X extra inhabitant k written into 0xa5 storage, C case injected into zeroed (z) or
 // 0xa5 (f) storage with the tag read back, V a live value's words (P = the Box object's address),
 // W a walk: "walk N" with each patch offset:source>receiver, or "refused TYPE"; x86_64 only: R the
@@ -142,7 +146,7 @@ typealias Walk = @convention(c) (UnsafeRawPointer, UnsafeRawPointer, UnsafeMutab
                                  UnsafeMutablePointer<UnsafeRawPointer?>) -> Int32
 var walker: Walk? = nil
 var surveyor: Walk? = nil
-let patches = UnsafeMutableRawPointer.allocate(byteCount: 64 * 32, alignment: 8)
+let patches = UnsafeMutableRawPointer.allocate(byteCount: 64 * 40, alignment: 8)
 func name(_ m: UnsafeRawPointer) -> String { String(describing: unsafeBitCast(m, to: Any.Type.self)) }
 func walkRaw(_ label: String, _ type: UnsafeRawPointer, _ p: UnsafeRawPointer) {
     guard let walk = walker else { return }
@@ -151,8 +155,11 @@ func walkRaw(_ label: String, _ type: UnsafeRawPointer, _ p: UnsafeRawPointer) {
     if n < 0 { print("W \(label) refused \(unresolved.map(name) ?? "?")"); return }
     var line = "W \(label) walk \(n)"
     for i in 0..<Int(n) {
-        let e = patches + 32 * i   // empty_patch {offset, bits, receiver_bits, consumed}
+        let e = patches + 40 * i   // empty_patch {offset, bits, receiver_bits, consumed, arm_bits}
         line += " \(e.load(as: UInt64.self)):\(hex(e.load(fromByteOffset: 8, as: UInt64.self)))>\(hex(e.load(fromByteOffset: 16, as: UInt64.self)))"
+        // The arm64 encoding, where it is not a pointer word's (consumed - 1): a translated spare-bit XI.
+        let consumed = UInt64(e.load(fromByteOffset: 24, as: UInt32.self)), arm = e.load(fromByteOffset: 32, as: UInt64.self)
+        if arm != consumed - 1 { line += "~\(hex(arm))" }
     }
     print(line)
 }
@@ -187,7 +194,9 @@ var archdiffLookup: ArchdiffLookup? = nil, mpenumLookup: MpenumLookup? = nil
 let fixedOut = UnsafeMutableRawPointer.allocate(byteCount: 512, alignment: 16)
 func rowRaw(_ label: String, _ type: UnsafeRawPointer, _ p: UnsafeRawPointer, _ row: [UInt32]?) {
     guard let f = fixedRow else { return }
-    let ok = (row ?? [0]).withUnsafeBytes { f(type, p, fixedOut, row == nil ? nil : $0.baseAddress!) }
+    // mpenum_row: 9 UInt32 fields, then two mask pointers (zero here: not used by this rule).
+    let full = (row ?? [0]) + [UInt32](repeating: 0, count: 14 - (row ?? [0]).count)
+    let ok = full.withUnsafeBytes { f(type, p, fixedOut, row == nil ? nil : $0.baseAddress!) }
     let shown = row.map { "{\($0[0]),\($0[1]),0x\(hex(UInt64($0[2]))),\($0[3])}" } ?? "none"
     if ok == 0 { print("R \(label) row \(shown) refused"); return }
     let payload = fixedOut.load(as: UInt.self), tag = fixedOut.load(fromByteOffset: 8, as: UInt32.self)
@@ -325,7 +334,7 @@ if let t = _typeByName("7SwiftUI24ContainerBackgroundValueV7ContentO"),
     }
     let p = storage(meta(o), 0xa5)
     fn(meta(o), 13, Inject.self)(p, 1, meta(o))   // Optional.none
-    walkRaw("Optional<SwiftUI.Content> nil (stays refused)", meta(o), p)
+    walkRaw("Optional<SwiftUI.Content> nil (translated: a table row)", meta(o), p)
     p.deallocate()
 } else {
     print("SwiftUI.ContainerBackgroundValue.Content unresolved")
@@ -356,7 +365,7 @@ walk("TextNil.two(inner nil)", TextNil.two(.some(nil), "x"))
 walk("TextNil.two(object)", TextNil.two(NSObject(), "x"))
 walk("TextNil.none", TextNil.none)
 walk("TwoEmpty.one", TwoEmpty.one("x"))
-walk("Optional<SecondaryText> nil (stays refused)", SecondaryText?.none)
+walk("Optional<SecondaryText> nil", SecondaryText?.none)
 do {
     var v = SecondaryText.one("Cupertino")
     withUnsafeMutableBytes(of: &v) { p in
@@ -586,3 +595,84 @@ listedType("ComputationalGraph.Output.Errors", graph, "df649c0e20ba3737acf6823cd
 }
 listedType("ComputationalGraph.Feature.DataType", graph, "df649c0e20ba3737acf6823cd32bdeae", 0x117bf0)
 listedType("Swift.Float16", "/usr/lib/swift/libswiftCore.dylib", "54f671eeb22d3f02930c2cc027116e14", 0x507a10)
+
+// N. Nils of standard types (x86_64 walks: the plain walker, as for a published value).
+protocol NP {}
+struct NPS: NP { var n = 1 }
+final class Obs: NSObject {}
+let pointerWord: [(String, Any.Type)] = [
+    ("Set<String>", Set<String>.self), ("Dictionary<String,Int>", [String: Int].self), ("Any", Any.self),
+    ("anyNP", (any NP).self), ("AnyHashable", AnyHashable.self), ("AnyObject", AnyObject.self), ("Box", Box.self),
+    ("NSKeyValueObservation", NSKeyValueObservation.self), ("Box.Type", Box.Type.self),
+    ("AnyObject.Type", AnyObject.Type.self), ("Any.Type", Any.Type.self), ("URL", URL.self),
+    ("DateComponents", DateComponents.self), ("UnsafeRawPointer", UnsafeRawPointer.self),
+    ("UnsafeMutableRawPointer", UnsafeMutableRawPointer.self), ("OpaquePointer", OpaquePointer.self),
+    ("Selector", Selector.self), ("ObjectIdentifier", ObjectIdentifier.self), ("IndexPath", IndexPath.self),
+    ("Data", Data.self)]
+for (label, t) in pointerWord {
+    func optional<T>(_: T.Type) -> Any.Type { T?.self }
+    layout(label, t)
+    inhabitants(label, t, 3)
+    let o = _openExistential(t, do: optional)
+    layout("Optional<\(label)>", o)
+    cases("Optional<\(label)>", o, 2, 0xa5)
+}
+// Each Optional's nil and its Optional's inner and outer nils, made by native generic code.
+@inline(never) func nils<T>(_ label: String, _ some: T) {
+    walk("N Optional<\(label)> nil", T?.none)
+    walk("N Optional<\(label)> some", T?.some(some))
+    walk("N Optional<Optional<\(label)>> outer nil", T??.none)
+    walk("N Optional<Optional<\(label)>> inner nil", T??.some(nil))
+}
+let kvo = NSObject().observe(\.description) { _, _ in }
+let raw = UnsafeMutableRawPointer.allocate(byteCount: 8, alignment: 8)
+var dc = DateComponents(); dc.year = 2026
+nils("Set<String>", Set(["a"]))
+nils("Dictionary<String,Int>", ["a": 1])
+nils("Any", 7 as Any)
+nils("anyNP", NPS() as any NP)
+nils("AnyHashable", AnyHashable("a"))
+nils("AnyObject", Box(1) as AnyObject)
+nils("Box", Box(2))
+nils("NSKeyValueObservation", kvo)
+nils("Box.Type", Box.self)
+nils("AnyObject.Type", Box.self as AnyObject.Type)
+nils("Any.Type", Int.self as Any.Type)
+nils("URL", URL(fileURLWithPath: "/System"))
+nils("DateComponents", dc)
+nils("UnsafeRawPointer", UnsafeRawPointer(raw))
+nils("UnsafeMutableRawPointer", raw)
+nils("OpaquePointer", OpaquePointer(raw))
+nils("Selector", #selector(NSObject.description))
+nils("ObjectIdentifier", ObjectIdentifier(Box.self))
+nils("IndexPath", IndexPath(indexes: [1, 2, 3]))
+nils("Data", Data([1, 2, 3]))   // its nil differs (word 1 f000... against ff00...): translated (N2)
+
+// N2. Data's nils translated from the mpenum table's masks of Data._Representation (x86_64 spare byte
+// 15 ff, arm64 f0): XI k on both, a nil in either encoding patched, the arm64 one beside it (~).
+struct DataBox { var d: Data?; var n: Int }
+layout("Optional<Optional<Data>>", Data??.self)
+cases("Optional<Optional<Data>>", Data??.self, 2, 0xa5)
+layout("DataBox", DataBox.self)
+inhabitants("DataBox", DataBox.self, 2)
+walk("N2 DataBox nil", DataBox(d: nil, n: 1))
+walk("N2 DataBox some", DataBox(d: Data([4]), n: 1))
+walk("N2 Optional<DataBox> nil", DataBox?.none)
+do {   // guest-made (arm64) nils: XI 0 and 1 of the arm64 layout
+    for (label, t, word) in [("N2 Optional<Data> arm64 nil", Data?.self as Any.Type, UInt64(0xf000_0000_0000_0000)),
+                             ("N2 Optional<Optional<Data>> arm64 outer nil", Data??.self, 0xb000_0000_0000_0000),
+                             ("N2 Optional<Optional<Data>> arm64 inner nil", Data??.self, 0xf000_0000_0000_0000)] {
+        let p = storage(meta(t), 0)
+        p.storeBytes(of: word, toByteOffset: 8, as: UInt64.self)
+        walkRaw(label, meta(t), p)
+        p.deallocate()
+    }
+    // Thirteen Optionals: the outermost nil is XI 12, past arm64's 12 (refused: no arm64 encoding).
+    func optional<T>(_: T.Type) -> Any.Type { T?.self }
+    var t: Any.Type = Data.self
+    for _ in 0..<13 { t = _openExistential(t, do: optional) }
+    let p = storage(meta(t), 0)
+    fn(meta(t), 13, Inject.self)(p, 1, meta(t))
+    walkRaw("N2 Data, 13 Optionals: outer nil (no arm64 encoding)", meta(t), p)
+    p.deallocate()
+}
