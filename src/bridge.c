@@ -495,7 +495,7 @@ static bool rec_same(const hao_if_view *v, const hao_if_rec *a, const hao_if_rec
 {
     uint8_t conv = HAO_IFR_SIG | HAO_IFR_THUNK;
     if (a->cls != b->cls || a->kind != b->kind || ((a->flags ^ b->flags) & conv)) return false;
-    if ((a->flags & HAO_IFR_SIG || a->kind == HAO_IF_KIND_STACKPACK || a->kind == 'Z') && strcmp(v->str + a->enc, v->str + b->enc)) return false;
+    if ((a->flags & HAO_IFR_SIG || a->kind == HAO_IF_KIND_STACKPACK || a->kind == 'Z' || a->kind == 'D') && strcmp(v->str + a->enc, v->str + b->enc)) return false;
     if ((a->flags & HAO_IFR_THUNK) && strcmp(v->str + a->thunk, v->str + b->thunk)) return false;
     return true;
 }
@@ -963,7 +963,7 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
         } else {
             p->kind = (char)r->kind;
             if (r->kind == HAO_IF_KIND_STACKPACK) p->enc = v->str + r->enc;
-            if (p->kind == 'Z') p->enc = v->str + r->enc;   /* std::string roles (hao_ifunit_check validated them) */
+            if (p->kind == 'Z' || p->kind == 'D') p->enc = v->str + r->enc;   /* roles (hao_ifunit_check validated them) */
         }
         if (r->why) p->why = v->str + r->why;
         if (tsrc && !thunk && (tkind != p->kind || (tenc && (!p->enc || strcmp(tenc, p->enc))))) {

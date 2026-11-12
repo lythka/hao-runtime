@@ -140,7 +140,8 @@ typedef struct hao_plan {
                                        * 'P' (returns its this argument on arm64, void on x86_64),
                                        * 'K' (Swift packed stack arguments: enc is the layout,
                                        * hao_ifunit_stackpack),
-                                       * 'Z' (std::string parameters converted, roles in enc: src/cxxstr.c), 0 */
+                                       * 'Z' (std::string parameters converted, roles in enc: src/cxxstr.c),
+                                       * 'D' (Foundation.Data? nils converted, roles in enc: hao_optdata_enc_ok), 0 */
     uint8_t reported;                 /* HAO_BRIDGE_CHECK printed its first-call line */
     uint8_t probes;                   /* HAO_PLAN_PROBE: calls that looked for an ObjC type */
     uint64_t sel;                     /* HAO_BRS_OBJCIMP: the selector the method was found by */
@@ -322,6 +323,30 @@ static inline bool hao_cxxstr_enc_ok(const char *e)
         if (*p != '-') roles++;
     }
     return n >= 1 && n <= 6 && roles;
+}
+/* Foundation.Data? (Optional<Data>) passed or returned directly by a native
+ * Swift function (plan kind 'D', from an interface unit). A live Data has the
+ * same 16 bytes on both architectures (its tag is the top two bits of byte 15:
+ * 00 inline, 01 slice, 11 empty); only the Optional's nil differs:
+ * (0, 0xf000000000000000) on arm64, (0, 0xff00000000000000) on x86_64. The
+ * arm64 nil read by x86_64 code is a live empty Data, so a nil argument
+ * arrives as "present, 0 bytes". enc is 'R' (the result in x0/x1 is a
+ * Data? too) or '.', then one role per integer argument register x0..x7:
+ * 'd' the first word of a Data? argument, '+' its second word (always next),
+ * '-' anything else (trailing '-' may be left out: 'R' alone is a result-only
+ * function). At least one Data?. Only exact nil words are rewritten;
+ * live values pass unchanged. */
+#define HAO_OPTDATA_NIL_ARM UINT64_C(0xf000000000000000)
+#define HAO_OPTDATA_NIL_X86 UINT64_C(0xff00000000000000)
+static inline bool hao_optdata_enc_ok(const char *e)
+{
+    if (!e || (e[0] != 'R' && e[0] != '.')) return false;
+    size_t n = 0, pairs = e[0] == 'R';
+    for (const char *p = e + 1; *p; p++, n++) {
+        if (*p == 'd') { if (p[1] != '+') return false; pairs++; p++; n++; }
+        else if (*p != '-') return false;
+    }
+    return n <= 8 && pairs;
 }
 struct hao_cpu;
 /* The call (kind 'Z'): guest strings converted to native ones around it. */

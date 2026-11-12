@@ -350,6 +350,14 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
 {
     char kind = p ? p->kind : 0;
     if (kind == 'A' && hao_call_native_sig(c, pc, p->enc)) return;
+    /* Foundation.Data? arguments and result (hao/bridge.h kind 'D'): only the nil differs */
+    const char *optdata = NULL;
+    if (kind == 'D') {
+        optdata = p->enc;
+        for (int i = 0; optdata[i + 1] && i < 8; i++)
+            if (optdata[i + 1] == 'd' && c->x[i] == 0 && c->x[i + 1] == HAO_OPTDATA_NIL_ARM) c->x[i + 1] = HAO_OPTDATA_NIL_X86;
+        kind = 0;
+    }
     if (kind == 'Z') { hao_cxxstr_call(c, pc, p->enc); return; }   /* std::string arguments (cxxstr.c) */
     if (kind == 'P') {   /* a C++ constructor or destructor: arm64 returns this, x86_64 nothing */
         uint64_t self = c->x[0];
@@ -389,6 +397,7 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
         return;
     }
     hao_native_call(pc, c, 16);
+    if (optdata && optdata[0] == 'R' && c->x[0] == 0 && c->x[1] == HAO_OPTDATA_NIL_X86) c->x[1] = HAO_OPTDATA_NIL_ARM;
     if (kind && kind != 'A') c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
 }
 

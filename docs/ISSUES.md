@@ -1,5 +1,36 @@
 # Runtime issues and measured scope
 
+## Foundation.Data? arguments of native Swift functions (unit kind D)
+
+A live `Data` has the same 16 bytes on arm64 and x86_64 (the tag is the top two
+bits of byte 15: 00 inline, 01 slice, 11 empty), but `Optional<Data>.none` does
+not: (0, 0xf000000000000000) on arm64, (0, 0xff00000000000000) on x86_64. The
+plain bridge passes argument registers unchanged, so an arm64 nil handed to a
+native Swift function arrives as a present, empty `Data` (tag 11), and a
+callee that checks the argument's length fails. In the cases measured, a nil
+result needs no change for arm64 code, but it is converted too.
+
+Interface-unit records now have kind `D` (`hao/bridge.h`, `tools/hao_ifunit.py`):
+class TYPED, enc `R` or `.` (whether the result in x0/x1 is a `Data?`), then
+one role per argument register x0..x7, `d+` for the two words of a `Data?`.
+`native_call` (`src/runtime.c`) rewrites only the exact arm64 nil of each
+named argument before the call and the exact x86_64 nil of the result after
+it; live values and every other register pass unchanged. The runtime infers
+nothing: register positions come from the unit, whose generator reads them
+from the function's mangled signature and both slices.
+
+`tests/guest/optdata.sh` builds a universal Swift library (a `Data?` after
+three words, two around an `Int`, a `Data?` result), types it with a kind-D
+unit and requires native arm64 output under JIT, `--interp`, helpers-only and
+AOT; without the unit the nil arrives as an empty `Data`. `test_ifunit`
+rejects kind-D records without roles, with invalid roles, or not TYPED.
+
+Limits: only a direct `Data?` in two argument registers (or the result's
+two). A `Data?` on the stack (past x7), inside a struct or another enum, or a
+`Data??` is not converted; neither is a nil written through memory. Until an
+interface unit carries kind-D records for a system framework, its calls stay
+untyped.
+
 ## JIT tail: nine instruction groups translated
 
 Nine groups that previously always entered the interpreter helper now
