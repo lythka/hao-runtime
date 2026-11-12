@@ -687,6 +687,7 @@ tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
 tests/tools/test_codesig.py
+tests/tools/test_contract.py
 tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
 tests/tools/test_release.py
@@ -695,6 +696,8 @@ tools/check_distribution.py
 tools/check_x86.sh
 tools/dyld-ignition-fix.py
 tools/hao-aot-extend
+tools/hao-contract/PIN
+tools/hao-contract/hao_contract.py
 tools/hao-embed
 tools/hao-image-payload
 tools/hao-install.py
@@ -756,3 +759,5 @@ tests/aot/aes_profile.c
 tests/aot/aes_profile.sh
 tests/guest/reserved_simd.c
 tests/guest/reserved_simd.sh
+
+contract.json

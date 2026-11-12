@@ -150,6 +150,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | host/runtime | PASS | 2 | |
 | host/chain | PASS | 6 | |
 | host/commpage | PASS | 1 | |
+| host/contract | PASS | 1 | `contract.json` through the vendored hao-assets checker (`tools/hao-contract`, pinned in `PIN`): `generated.lock` matches every `src/*_gen.inc` byte for byte, cache tables carry `HAO_GEN_OS_BUILD` and every format is `HAO_GEN_FORMAT`; the vendored copy matches its pin. A hand-edited table fails |
 | host/sigpolicy | SKIP (expected) | 1 | the profile cases need `PROFILE`; the hao cases x86_64 hardware |
 | host/near-map | PASS | 1 | |
 | host/dscselhoist | PASS | 1 | |
