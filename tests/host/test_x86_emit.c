@@ -243,6 +243,7 @@ int main(int argc, char **argv)
             static const struct { uint8_t op, imm; const char *mn; } s3a[] = {
                 {0x0F, 0, "palignr"}, {0x0F, 5, "palignr"}, {0x0F, 15, "palignr"}, {0x08, 0x04, "roundps"}, {0x08, 0x0B, "roundps"},
                 {0x09, 0x08, "roundpd"}, {0x09, 0x0C, "roundpd"}, {0x0A, 0x09, "roundss"}, {0x0B, 0x0A, "roundsd"},
+                {0x0B, 0, "roundsd"}, {0x0B, 1, "roundsd"}, {0x0B, 2, "roundsd"}, {0x0B, 3, "roundsd"},
             };
             for (unsigned k = 0; k < sizeof s3a / sizeof *s3a; k++) {
                 begin(); x_sse3a_rri(&B, s3a[k].op, a, c, s3a[k].imm); end("%s %s, %s, %u", s3a[k].mn, xmmn(a), xmmn(c), s3a[k].imm);

@@ -304,6 +304,89 @@ static void integer_tail(void)
         }
 }
 
+/* Conversion-specific limits: each mode, alias, inactive lane, sticky flag,
+ * saturation/NaN decline and half rounding boundary has complete-state checks. */
+static void conversion_cases(void)
+{
+    static const unsigned ops[] = {0,1,4,5,8,9,16,17,24,25,2,3};
+    static const uint16_t hs[] = {0,0x8000,1,0x3bff,0x3800,0x3c00,0xbc00,0x3e00,0xc100,0x7bff,0x7c00,0x7d01,0x7e00};
+    for (unsigned type = 0; type < 4; type++) for (unsigned sf = 0; sf < 2; sf++)
+        for (unsigned op = 0; op < sizeof ops / sizeof *ops; op++) for (unsigned k = 0; k < 32; k++) {
+            unsigned rn = k & 1 ? 3 : 31, rd = k & 2 ? rn : 4;
+            hao_cpu in; state(&in, rn, rn); in.fpcr = (k & 15) << 22;
+            in.v[rn].d[0] = dval();
+            if (type == 0) in.v[rn].s[0] = sval();
+            if (type == 3) in.v[rn].h[0] = hs[k % (sizeof hs / sizeof *hs)];
+            in.x[rn] = k & 4 ? rnd() : (uint64_t)((int)k - 16);
+            uint32_t i = 0x1e200000 | type << 22 | sf << 31 | ops[op] << 16 | rn << 5 | rd;
+            check(i, 0, &in, false); check(i, 0, &in, true);
+        }
+    static const unsigned vops[] = {0x1a,0x1b,0x1c,0x3a,0x3b,0x1d};
+    for (unsigned scalar = 0; scalar < 2; scalar++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned dbl = 0; dbl < 2; dbl++) for (unsigned u = 0; u < 2; u++)
+            for (unsigned op = 0; op < sizeof vops / sizeof *vops; op++) for (unsigned k = 0; k < 32; k++) {
+                unsigned rn = 3, rd = k & 1 ? 3 : 4;
+                hao_cpu in; state(&in, rn, rn); in.fpcr = (k & 15) << 22;
+                for (int lane = 0; lane < 2; lane++) in.v[rn].d[lane] = dval();
+                if (!dbl) for (int lane = 0; lane < 4; lane++) in.v[rn].s[lane] = sval();
+                uint32_t i = (scalar ? 0x5e200800 : 0x0e200800) | q << 30 | u << 29 | dbl << 22 |
+                    (vops[op] >> 5) << 23 | (vops[op] & 31) << 12 | rn << 5 | rd;
+                check(i, 0, &in, false); check(i, 0, &in, true);
+            }
+    static const uint32_t halfops[] = {0x0e79d800,0x2e79d800,0x0ef9b800,0x2ef9b800,0x0e79a800,0x2e79a800};
+    for (unsigned q = 0; q < 2; q++) for (unsigned op = 0; op < 6; op++) for (unsigned k = 0; k < 64; k++) {
+        hao_cpu in; state(&in, 3, 3); in.fpcr = (k & 15) << 22;
+        for (int lane = 0; lane < 8; lane++) in.v[3].h[lane] = k & 1 ? (uint16_t)rnd() : hs[(k + lane) % (sizeof hs / sizeof *hs)];
+        uint32_t i = halfops[op] | q << 30 | 3 << 5 | (k & 2 ? 3 : 4);
+        check(i, 0, &in, false); check(i, 0, &in, true);
+    }
+    for (unsigned type = 0; type < 4; type++) for (unsigned op = 4; op < 8; op++) for (unsigned k = 0; k < 64; k++) {
+        hao_cpu in; state(&in, 3, 3); in.fpcr = (k & 15) << 22;
+        in.v[3].d[0] = dval();
+        if (type == 0) in.v[3].s[0] = sval();
+        if (type == 3) in.v[3].h[0] = k & 1 ? (uint16_t)rnd() : hs[k % (sizeof hs / sizeof *hs)];
+        uint32_t i = 0x1e204000 | type << 22 | op << 15 | 3 << 5 | (k & 2 ? 3 : 4);
+        check(i, 0, &in, false); check(i, 0, &in, true);
+    }
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned u = 0; u < 2; u++) for (unsigned wide = 0; wide < 2; wide++) for (unsigned k = 0; k < 32; k++) {
+            hao_cpu in; state(&in, 3, 3); in.fpcr = (k & 15) << 22;
+            for (int lane = 0; lane < 2; lane++) in.v[3].d[lane] = dval();
+            if (size == 0) for (int lane = 0; lane < 4; lane++) in.v[3].s[lane] = sval();
+            uint32_t i = 0x0e216800 | q << 30 | u << 29 | size << 22 | wide << 12 | 3 << 5 | (k & 1 ? 3 : 4);
+            check(i, 0, &in, false); check(i, 0, &in, true);
+        }
+    /* Saturating after an inexact ROUND must not leak PE: architectural
+     * FPToFixed raises IOC alone for these operands. */
+    static const uint64_t bad_double[] = {0x41dfffffffe00000ull, 0xbfe0000000000000ull};
+    static const uint32_t bad_ops[] = {0x1e600000u, 0x1e710000u};
+    for (unsigned k = 0; k < 2; k++) for (unsigned sticky = 0; sticky < 2; sticky++) {
+        hao_cpu in; state(&in, 3, 3); in.fpcr = 0; in.fpsr = sticky ? 0x0800009f : 0;
+        in.v[3].d[0] = bad_double[k];
+        check(bad_ops[k] | 3 << 5 | 4, 0, &in, false);
+        check(bad_ops[k] | 3 << 5 | 4, 0, &in, true);
+    }
+    for (unsigned bit = 0; bit < 2; bit++) {
+        hao_cpu in; state(&in, 3, 3); in.fpcr = 1u << (bit ? 26 : 19);
+        memset(&in.v[3], 0, sizeof in.v[3]);
+        unsigned before = vector_helper_calls;
+        check(0x1e23c064, 0, &in, true);
+        if (vector_helper_calls == before) { fprintf(stderr, "MISMATCH conversion unsupported control admission\n"); fails++; }
+    }
+    /* Ordinary inputs must really avoid the helper; late saturation must
+     * restore PE raised by earlier fractional lanes before retrying. */
+    static const uint32_t inline_ops[] = {0x4ea1b800,0x6ea1b800,0x4e21a800,0x4ea1a800,0x4e21b800,
+        0x5e21d800,0x7e21d800,0x4e61d800,0x6e61d800,0x4e79d800,0x6e79d800,0x4ef9b800,0x6ef9b800,
+        0x1e240000,0x9e690000,0x1e23c000,0x1ee24000,0x1ee2c000};
+    for (unsigned k = 0; k < sizeof inline_ops / sizeof *inline_ops; k++) {
+        hao_cpu in; state(&in, 3, 3); in.fpcr = 0;
+        memset(&in.v[3], 0, sizeof in.v[3]); in.x[3] = 1;
+        unsigned before = vector_helper_calls;
+        check(inline_ops[k] | 3 << 5 | 4, 0, &in, true);
+        if (vector_helper_calls != before) { fprintf(stderr, "MISMATCH conversion ordinary helper %08x\n", inline_ops[k]); fails++; }
+    }
+}
+
 int main(void)
 {
     mem = mmap(NULL, 3 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -330,6 +413,8 @@ int main(void)
             }
         }
     integer_tail();
+
+    conversion_cases();
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {

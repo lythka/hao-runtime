@@ -16,6 +16,9 @@ static const vec shift32_a = {0x8123456789abcdefull, 0x0123456776543210ull};
 static const vec shift32_b = {0x00000001000000fcull, 0x0000008000000020ull};
 static const vec shift64_a = {0x8123456789abcdefull, 0x0123456776543210ull};
 static const vec shift64_b = {0x01000000000000f4ull, 0x8000000000000007ull};
+static const vec integer_a = {1, 2}, integer_b = {3, 4};
+static const vec half_integer_a = {0x0004000300020001ull, 0x0008000700060005ull}, half_integer_b = {0,0};
+static const vec half_a = {0x4400420040003c00ull, 0x4800470046004500ull}, half_b = {0,0};
 static uint64_t now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000 + (uint64_t)t.tv_nsec; }
 #define BENCH(name, insn, kind) \
 static __attribute__((noinline)) vec name(unsigned long n) { \
@@ -27,6 +30,32 @@ static __attribute__((noinline)) vec name(unsigned long n) { \
         : "v0", "v1", "v2", "cc", "memory"); \
     return out; \
 }
+BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
+BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
+BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
+BENCH(tail_fcvtn2_4s, "fcvtn2 v2.4s,v0.2d", double)
+BENCH(tail_fcvtl_4s, "fcvtl v2.4s,v0.4h", half)
+BENCH(tail_fcvtl_2d, "fcvtl v2.2d,v0.2s", single)
+BENCH(tail_fcvtl2_4s, "fcvtl2 v2.4s,v0.8h", half)
+BENCH(tail_fcvtl2_2d, "fcvtl2 v2.2d,v0.4s", single)
+BENCH(tail_fcvtzu_4s, "fcvtzu v2.4s,v0.4s", single)
+BENCH(tail_fcvtns_4s, "fcvtns v2.4s,v0.4s", single)
+BENCH(tail_fcvtps_4s, "fcvtps v2.4s,v0.4s", single)
+BENCH(tail_fcvtms_4s, "fcvtms v2.4s,v0.4s", single)
+BENCH(tail_scvtf_s, "scvtf s2,s0", integer)
+BENCH(tail_scvtf_d, "scvtf d2,d0", integer)
+BENCH(tail_scvtf_2d, "scvtf v2.2d,v0.2d", integer)
+BENCH(tail_scvtf_8h, "scvtf v2.8h,v0.8h", half_integer)
+BENCH(tail_ucvtf_s, "ucvtf s2,s0", integer)
+BENCH(tail_ucvtf_d, "ucvtf d2,d0", integer)
+BENCH(tail_ucvtf_2d, "ucvtf v2.2d,v0.2d", integer)
+BENCH(tail_ucvtf_8h, "ucvtf v2.8h,v0.8h", half_integer)
+BENCH(tail_fcvtzu_8h, "fcvtzu v2.8h,v0.8h", half)
+BENCH(tail_fcvtns_8h, "fcvtns v2.8h,v0.8h", half)
+BENCH(tail_fcvt_hs, "fcvt h2,s0", single)
+BENCH(tail_fcvt_hd, "fcvt h2,d0", double)
+BENCH(tail_fcvt_sh, "fcvt s2,h0", half)
+BENCH(tail_fcvt_dh, "fcvt d2,h0", half)
 BENCH(zip1_8b, "zip1 v2.8b, v0.8b, v1.8b", single)
 BENCH(zip1_16b, "zip1 v2.16b, v0.16b, v1.16b", single)
 BENCH(zip1_4h, "zip1 v2.4h, v0.4h, v1.4h", single)
@@ -378,6 +407,33 @@ int main(int argc, char **argv)
     printf("%-18s %016llx:%016llx\n", #name, (unsigned long long)v.hi, (unsigned long long)v.lo); \
     fprintf(stderr, "%-18s %.6f ns/op\n", #name, (double)elapsed / (16.0 * n)); } while (0)
     RUN(tail_fmadd); RUN(tail_fmsub); RUN(tail_fnmadd); RUN(tail_fnmsub); RUN(tail_fnmul); RUN(tail_frecpss); RUN(tail_frecps2s); RUN(tail_frecps4s); RUN(tail_frsqrtss); RUN(tail_frsqrts2s); RUN(tail_frsqrts4s);
+
+    RUN(tail_fcvtn_4h);
+    RUN(tail_fcvtn_2s);
+    RUN(tail_fcvtn2_8h);
+    RUN(tail_fcvtn2_4s);
+    RUN(tail_fcvtl_4s);
+    RUN(tail_fcvtl_2d);
+    RUN(tail_fcvtl2_4s);
+    RUN(tail_fcvtl2_2d);
+    RUN(tail_fcvtzu_4s);
+    RUN(tail_fcvtns_4s);
+    RUN(tail_fcvtps_4s);
+    RUN(tail_fcvtms_4s);
+    RUN(tail_scvtf_s);
+    RUN(tail_scvtf_d);
+    RUN(tail_scvtf_2d);
+    RUN(tail_scvtf_8h);
+    RUN(tail_ucvtf_s);
+    RUN(tail_ucvtf_d);
+    RUN(tail_ucvtf_2d);
+    RUN(tail_ucvtf_8h);
+    RUN(tail_fcvtzu_8h);
+    RUN(tail_fcvtns_8h);
+    RUN(tail_fcvt_hs);
+    RUN(tail_fcvt_hd);
+    RUN(tail_fcvt_sh);
+    RUN(tail_fcvt_dh);
     RUN(zip1_8b);
     RUN(zip1_16b);
     RUN(zip1_4h);

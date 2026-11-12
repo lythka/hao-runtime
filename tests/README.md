@@ -383,3 +383,13 @@ Scalar SIMD B/H memory checks include inaccessible pages and writeback.
 `guest/coverage-bench` adds 219 integer instruction loops. `aot/integer-mutations`
 also suppresses QC and selects the wrong wide operand half; each independent
 mutation must be caught after an unmodified control passes.
+
+The conversion tail cases in `aot/jit_vector` cover explicit scalar-to-GPR
+rounding, H/S/D SIMD integer conversions, scalar H/S/D format conversions, vector FCVTN/N2 and FCVTL/L2,
+register aliases, unsupported and reserved encodings, all sixteen FPCR
+settings, sticky FPSR, and helper routing for ordinary inputs. D-to-S
+includes FZ input and output cases that previously lost IDC or added IXC.
+`guest/jitinsns` compares those forms to native in all four engines;
+`guest/coverage-bench` adds twenty-six ordinary conversion workloads.
+`aot/fp-coverage-mutations` additionally replaces all conversion rounding
+modes with truncation and requires the complete-state test to detect it.
