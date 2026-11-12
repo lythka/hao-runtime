@@ -13,6 +13,7 @@
 #error "mpenum_gen.inc is table format 1: include hao/gen_stamp.h first"
 #endif
     {"00301d5b02e23a8fa67b06efa0bdcbfa", 0x56eac0, 2, 0, 0x7fe, 3}, /* ModelCatalog.CatalogAssetLock */
+    {"008e4ac23ee831a0bc5cb1f2df2d8b91", 0x2ef140, 2, 1, 0x7d, 7}, /* SnippetKit.TableRow.Content */
     {"015e67b9180e3fb487262988baacc958", 0x137828, 3, 1, 0x7fc, 3}, /* AXCoreUtilities.AXDataHolder */
     {"015e67b9180e3fb487262988baacc958", 0x138a4c, 6, 1, 0x7f9, 3}, /* AXCoreUtilities.AXCTLJSONValue */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b28e4, 2, 3, 0x3d, 7}, /* Network.NetworkBrowser.State */
@@ -22,6 +23,7 @@
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b2de4, 2, 1, 0x7fd, 3}, /* Network.ProtocolStack.InternetProtocol */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b2e00, 6, 1, 0x7f9, 3}, /* Network.ProtocolStack.TransportProtocol */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b3b94, 2, 0, 0x7fffffff, 7}, /* Network.IPProtocol.IPInstance.IPInstanceType */
+    {"04e480edd6803b4d9121165ab0e7048e", 0x16b4388, 2, 3, 0x3d, 7}, /* Network.NWBrowser.State */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b58d8, 2, 1, 0x7fffffff, 3}, /* Network.NWActorSystem.(private).Role */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b6b50, 2, 3, 0x3d, 7}, /* Network.NWListener.State */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16b7670, 2, 0, 0x2, 7}, /* Network.NWInterface.RadioType */
@@ -31,6 +33,7 @@
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bc1a0, 2, 4, 0x3d, 7}, /* Network.SendState */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bcc24, 2, 4, 0x3d, 7}, /* Network.NetworkChannel.State */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bd070, 2, 0, 0x7fe, 3}, /* Network.ParametersStorage.InternalStorage */
+    {"04e480edd6803b4d9121165ab0e7048e", 0x16bd4e4, 2, 4, 0x3d, 7}, /* Network.NWConnection.State */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bda58, 2, 3, 0x3d, 7}, /* Network.NWConnectionGroup.State */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bdbac, 7, 1, 0x38, 7}, /* Network.QUICError */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16be054, 20, 1, 0x3ffeb, 3}, /* Network.ProtocolInstanceReference._ProtocolInstanceReference */
@@ -40,11 +43,14 @@
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bf070, 10, 7, 0x7f5, 3}, /* Network.ActorSystemError */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bf08c, 11, 6, 0x7f4, 3}, /* Network.NWActorSystemError */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16bfc7c, 2, 0, 0x7fffffff, 3}, /* Network.AbstractProtocolOptions.AssociatedProtocolInstance */
+    {"04e480edd6803b4d9121165ab0e7048e", 0x16bfe08, 2, 0, 0x1fffe, 3}, /* Network.NetworkActorSystem.ListenerSession.(private).Listener */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16c023c, 4, 2, 0x3b, 0}, /* Network.ReplyEnvelope.Error */
+    {"04e480edd6803b4d9121165ab0e7048e", 0x16c0724, 2, 0, 0x1fffe, 3}, /* Network.NetworkActorSystem.ActorConnection.(private).Transport */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16c0954, 4, 2, 0x3b, 0}, /* Network.NetworkActorReplyEnvelope.Error */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16c0ea8, 11, 6, 0x7f4, 3}, /* Network.NetworkActorSystemError */
     {"04e480edd6803b4d9121165ab0e7048e", 0x16c12e4, 20, 0, 0x7fffffff, 7}, /* Network.TransportParameter */
     {"04fdfdc32cdc397e944d29922bbc72d6", 0x58f54, 2, 1, 0x3d, 7}, /* CoreTransparency.PatInclusionProofVerificationError */
+    {"04fdfdc32cdc397e944d29922bbc72d6", 0x59628, 6, 4, 0x39, 7}, /* CoreTransparency.MapProofVerificationError */
     {"05a7545b44f738b7908d218827de57a0", 0x352aa4, 2, 11, 0x7fd, 3}, /* VisualIntelligenceUI.CardLayout */
     {"05a7545b44f738b7908d218827de57a0", 0x356060, 2, 0, 0x7fe, 3}, /* VisualIntelligenceUI.FocusSelection */
     {"0628abeddfa235c4849264536e73e953", 0x6d978, 2, 2, 0x7d, 7}, /* AppleAccountTransparency.AATStreamSignal */
@@ -71,8 +77,11 @@
     {"08cc2ac3938137368bb0aa5a594b146f", 0x14032fc, 2, 0, 0x7e, 7}, /* GameStoreKit.FamilyCircleLookupResult */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1407b10, 4, 2, 0x7fffffff, 7}, /* GameStoreKit.ProductAskToBuyPresenter.Status */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1409740, 2, 0, 0x7fe, 3}, /* GameStoreKit.ProductTopLockup.PrimaryBanner */
+    {"08cc2ac3938137368bb0aa5a594b146f", 0x140ac94, 3, 0, 0x7fffffff, 7}, /* GameStoreKit.EditorialMediaDisplaySpec.EffectLayer.Region */
+    {"08cc2ac3938137368bb0aa5a594b146f", 0x140ae78, 3, 1, 0x3c, 7}, /* GameStoreKit.EditorialMediaDisplaySpec.EffectLayer.ReachAnchor */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x140bf64, 2, 0, 0x3fffe, 3}, /* GameStoreKit.TopChartsDiffablePageContentPresenter.PageFetchResult */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x140d9ac, 8, 4, 0x7fffffff, 7}, /* GameStoreKit.AppStoreAppState */
+    {"08cc2ac3938137368bb0aa5a594b146f", 0x140def0, 2, 2, 0x7fd, 3}, /* GameStoreKit.TopChartsDiffablePagePresenter.UpdatePhase */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x140f434, 9, 2, 0x7f6, 3}, /* GameStoreKit.LayoutCondition */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1414738, 7, 0, 0x79, 7}, /* GameStoreKit.ChallengesRules.TimeRule */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1415de0, 5, 0, 0x7fb, 3}, /* GameStoreKit.ThreeColumnGroup */
@@ -90,7 +99,12 @@
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1435b98, 2, 0, 0x7fe, 3}, /* GameStoreKit.ArticleDiffablePagePresenter.FooterLockup */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1435ea8, 3, 0, 0x7fd, 3}, /* GameStoreKit.ProductReview.ReviewSource */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x14379ac, 4, 0, 0x7fffffff, 7}, /* GameStoreKit.AccountSection.ContentItem */
+    {"08cc2ac3938137368bb0aa5a594b146f", 0x1438f14, 4, 0, 0x3c, 7}, /* GameStoreKit.ArcadeState */
     {"08cc2ac3938137368bb0aa5a594b146f", 0x1438fb8, 3, 2, 0x7c, 7}, /* GameStoreKit.EntitlementRefeshCondition */
+    {"08cc2ac3938137368bb0aa5a594b146f", 0x143a14c, 6, 1, 0x3ffffff9, 7}, /* GameStoreKit.Shelf.ContentsMetadata */
+    {"08cc2ac3938137368bb0aa5a594b146f", 0x143c3b8, 4, 4, 0xffb, 7}, /* GameStoreKit.ShelfBackground */
+    {"08ed96509e26352da31501fc6727d094", 0x19e398, 3, 0, 0x7fffffff, 7}, /* NewsLiveActivitiesCore.ActivityColor */
+    {"08ed96509e26352da31501fc6727d094", 0x19e4b4, 3, 0, 0x1d, 7}, /* NewsLiveActivitiesCore.ActivityFill */
     {"08ed96509e26352da31501fc6727d094", 0x19e9d8, 2, 1, 0x3d, 3}, /* NewsLiveActivitiesCore.NetworkRequest.Body */
     {"08ed96509e26352da31501fc6727d094", 0x19f568, 2, 0, 0x1e, 7}, /* NewsLiveActivitiesCore.BalanceOfPowerView.ActivityType */
     {"08ed96509e26352da31501fc6727d094", 0x19f9c4, 2, 0, 0x7fffffff, 7}, /* NewsLiveActivitiesCore.RaceBarGauge.Configuration */
@@ -108,9 +122,11 @@
     {"09a28790a6a034b2a393bb4c669a2ddc", 0x54054, 4, 0, 0x7fc, 3}, /* TeaDB.SearchExpression */
     {"09a28790a6a034b2a393bb4c669a2ddc", 0x54090, 6, 0, 0x7fa, 3}, /* TeaDB.SearchMatchExpression */
     {"09a28790a6a034b2a393bb4c669a2ddc", 0x540cc, 4, 0, 0x7fc, 3}, /* TeaDB.SearchMatchPhrase */
+    {"09a28790a6a034b2a393bb4c669a2ddc", 0x54294, 10, 0, 0x7f6, 3}, /* TeaDB.Expression */
     {"09a28790a6a034b2a393bb4c669a2ddc", 0x554c0, 7, 0, 0x19, 7}, /* TeaDB.Unicode61TokenizerOptions.UnicodeCategories */
     {"0afe5cf3ba8a3f81a8cd46aa19ccbda7", 0x938f8, 3, 1, 0x7c, 7}, /* CryptexKit.AppleImage4Error */
     {"0afe5cf3ba8a3f81a8cd46aa19ccbda7", 0x93c4c, 3, 0, 0x7fd, 3}, /* CryptexKit.(private).ValueBox */
+    {"0b0e113cbe913e6e9add1c20616d1d79", 0xef57c, 4, 2, 0xfb, 3}, /* _MusicKitInternal_SwiftUI.MusicPicker.PageID */
     {"0b3af4f1d76333a88f46730ad3368500", 0x10556ec, 2, 0, 0x7fffffff, 7}, /* VFX.Scheduler.Event */
     {"0b3af4f1d76333a88f46730ad3368500", 0x1055798, 8, 2, 0x77, 7}, /* VFX.SerializationError */
     {"0b3af4f1d76333a88f46730ad3368500", 0x105626c, 2, 1, 0x7fd, 3}, /* VFX.ScriptStatus */
@@ -119,9 +135,11 @@
     {"0b3af4f1d76333a88f46730ad3368500", 0x105bc7c, 5, 0, 0x7b, 7}, /* VFX.BufferArgument */
     {"0b3af4f1d76333a88f46730ad3368500", 0x105bdf8, 2, 0, 0xe, 7}, /* VFX.ShaderParameter */
     {"0b3af4f1d76333a88f46730ad3368500", 0x105d3cc, 2, 0, 0x7e, 7}, /* VFX.TextureOptions.SizeModification */
+    {"0b3af4f1d76333a88f46730ad3368500", 0x105d47c, 6, 31, 0x7f9, 3}, /* VFX.AnyType */
     {"0b3af4f1d76333a88f46730ad3368500", 0x105dcb4, 2, 2, 0x7fffffff, 7}, /* VFX.GraphScheduling */
     {"0b3af4f1d76333a88f46730ad3368500", 0x105df70, 6, 9, 0x79, 7}, /* VFX.GraphError.Kind */
     {"0b3af4f1d76333a88f46730ad3368500", 0x105e964, 2, 1, 0xfd, 0}, /* VFX.MappingMode.InputFilter */
+    {"0b3af4f1d76333a88f46730ad3368500", 0x106b6b0, 5, 11, 0x7fa, 3}, /* VFX.TypeConstraint */
     {"0b3af4f1d76333a88f46730ad3368500", 0x106e88c, 16, 3, 0x7ef, 0}, /* VFX.ScriptLocation */
     {"0b3af4f1d76333a88f46730ad3368500", 0x106f2a4, 2, 0, 0x3ffffe, 3}, /* VFX.ScriptKeyPathReference */
     {"0b8fd9f0dc403c458206df3930628e88", 0xb3e2c, 2, 2, 0xd, 7}, /* EnergyKit.ElectricVehicleStatusEvent.Status */
@@ -129,6 +147,7 @@
     {"0ce597f8a4db3f90a7248147a168bd48", 0x1740ec8, 2, 0, 0x7e, 7}, /* AppKit._NSPersistentUIStoreDirectoryMapper.(private).AppIdentifier */
     {"0ce597f8a4db3f90a7248147a168bd48", 0x1749f14, 2, 1, 0x3d, 7}, /* AppKit.NSDebugMenuDumpHitTestMapProvider.(private).Output */
     {"0d87437e09133c83ac76dcfa6f651156", 0x16fcd90, 2, 0, 0x3e, 3}, /* WebKit.URLSchemeTaskResult */
+    {"0d87437e09133c83ac76dcfa6f651156", 0x16fd560, 2, 0, 0x7fffffff, 7}, /* WebKit.WebPage.ExportedContentConfiguration.(private).Storage */
     {"0d92a69d8f3b39508b9be5e72503952a", 0x21880, 2, 0, 0x7fe, 3}, /* OpenAPIURLSessionInternal.BufferedStream._StateMachine.EnqueueProducerAction */
     {"0dea8e57ccb03ad6817157049329b20b", 0xc89c, 2, 2, 0x7d, 7}, /* DockKit.DockAccessory.AccessoryEvent */
     {"0f1d377e5a9335f2b9d3b884714534c4", 0x253218, 5, 0, 0x7fffffff, 7}, /* ImmersiveMediaSupport.PresentationCommand */
@@ -149,26 +168,40 @@
     {"1005e505dc67396bae955bbce311656c", 0x209880, 2, 0, 0x7fffffff, 7}, /* NewsPersonalization.PersonalizationScript.NumericValue */
     {"106870769323322587d8b2eec1ed882a", 0x12dd4, 3, 2, 0x7fffffff, 7}, /* CoreSpeechExclave.VoiceTriggerSecondPassResult */
     {"109543eb0feb318dbc663e458ce17dbf", 0x47d0b8, 2, 0, 0x7fe, 3}, /* CampoUIInternal.(private).AssistantIslandCommonUIContext.Source */
+    {"109543eb0feb318dbc663e458ce17dbf", 0x48189c, 2, 0, 0x1e, 7}, /* CampoUIInternal.ChatSelectionUpdateCoordinator.UpdateContext */
     {"109543eb0feb318dbc663e458ce17dbf", 0x4830d4, 3, 1, 0x7fc, 3}, /* CampoUIInternal.CaptureUpdate */
+    {"109543eb0feb318dbc663e458ce17dbf", 0x486934, 2, 0, 0x7fe, 3}, /* CampoUIInternal.TextSuggestion */
+    {"109543eb0feb318dbc663e458ce17dbf", 0x48839c, 2, 0, 0x7e, 7}, /* CampoUIInternal.MacWindowManager.(private).(private).SceneRequestAction */
+    {"110a78f1adb331d0bedbcd0b7ed7f88b", 0x1f3b98, 17, 0, 0x7ef, 0}, /* SensitiveContentAnalysisUI.SensitiveContentOverlay.Kind */
     {"110a78f1adb331d0bedbcd0b7ed7f88b", 0x1f7578, 3, 4, 0x7fc, 3}, /* SensitiveContentAnalysisUI.Report.Error */
     {"1153e9c35145311aa08d0aedf2f82ff6", 0x2e30f0, 2, 0, 0x7e, 7}, /* CreateMLComponents.RandomImageCropper.CroppingStrategy */
+    {"133277ebd09e3799ae7b8f409bb83f48", 0x340edc, 3, 0, 0x3d, 7}, /* TextToSpeech.TTSMarkup.Prosody.Pitch */
     {"133277ebd09e3799ae7b8f409bb83f48", 0x341a5c, 3, 2, 0x7fc, 3}, /* TextToSpeech.AudioRendererError */
     {"133277ebd09e3799ae7b8f409bb83f48", 0x342000, 4, 3, 0x7fffffff, 7}, /* TextToSpeech.CoreSynthesizer.Event */
     {"133277ebd09e3799ae7b8f409bb83f48", 0x3422a0, 3, 2, 0x3c, 7}, /* TextToSpeech.VoiceResolver.VoiceSortKey */
     {"133277ebd09e3799ae7b8f409bb83f48", 0x342548, 5, 1, 0x7fa, 3}, /* TextToSpeech.RulesetActivationRule */
+    {"133277ebd09e3799ae7b8f409bb83f48", 0x343dd4, 4, 1, 0x7fb, 3}, /* TextToSpeech.CoreSynthesizer.Substitution.Scope */
+    {"133277ebd09e3799ae7b8f409bb83f48", 0x343df0, 2, 0, 0x7e, 7}, /* TextToSpeech.CoreSynthesizer.Substitution.Search */
     {"133277ebd09e3799ae7b8f409bb83f48", 0x34497c, 3, 0, 0x7d, 7}, /* TextToSpeech.ImperativeMarkupWriter.MarkupOutput */
+    {"133277ebd09e3799ae7b8f409bb83f48", 0x346ae0, 4, 0, 0x7fc, 3}, /* TextToSpeech.TTSAudioEffect.Spec.Control */
     {"1373f0fe371532d9a7ebe3aad6b8ce5e", 0x3341c, 2, 1, 0x7fffffff, 7}, /* _RealityKit_SwiftUI.Model3DPhase */
     {"13ab965b777b3004a6dfed9991a79fac", 0x52fa8c, 2, 0, 0x3ffe, 7}, /* IntelligencePlatform.AssetRegistryParameters */
+    {"13ab965b777b3004a6dfed9991a79fac", 0x52fc60, 2, 0, 0x7e, 7}, /* IntelligencePlatform.AssetRegistryAssetLocation */
     {"13ab965b777b3004a6dfed9991a79fac", 0x5311d8, 2, 3, 0x1d, 7}, /* IntelligencePlatform.CandidateGenerationAlgorithm */
     {"13ab965b777b3004a6dfed9991a79fac", 0x538cc8, 2, 0, 0x7e, 7}, /* IntelligencePlatform.InferenceServerParameters.SupportServerMode */
     {"13ab965b777b3004a6dfed9991a79fac", 0x53bd10, 7, 23, 0x38, 7}, /* IntelligencePlatform.LexerV2.Token */
     {"13ab965b777b3004a6dfed9991a79fac", 0x53e9d0, 2, 0, 0x7fffffff, 7}, /* IntelligencePlatform.IndexQuery.IndexQueryImpl */
     {"13ab965b777b3004a6dfed9991a79fac", 0x540040, 3, 0, 0xd, 7}, /* IntelligencePlatform.TrialAssetManager.AssetError */
+    {"13ab965b777b3004a6dfed9991a79fac", 0x540370, 7, 0, 0x7fffffff, 7}, /* IntelligencePlatform.TriplesQuery.Clause.Impl */
     {"13ab965b777b3004a6dfed9991a79fac", 0x540af0, 6, 0, 0x7fffffff, 7}, /* IntelligencePlatform.KTSQueryConstraint */
+    {"13ab965b777b3004a6dfed9991a79fac", 0x541ca0, 24, 0, 0x7e8, 0}, /* IntelligencePlatform.VOPBuilder */
+    {"13d2ecc8e30239dd872a27e6f131c25a", 0x22e460, 2, 3, 0x1d, 7}, /* SiriInformationSearch.PommesSearchRequestProcessorError */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4b52ac, 3, 0, 0x3ffffd, 3}, /* AppIntents.AppDependencyManager.Error */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4b61b8, 2, 3, 0x7fd, 3}, /* AppIntents.IntentValueRepresentation.(private).Errors */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4b6ce0, 5, 0, 0x7b, 7}, /* AppIntents._ModelDelegationConfiguration */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4b6dc0, 5, 0, 0x7fffffff, 3}, /* AppIntents._ModelDelegationConfiguration.Configuration */
+    {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4b8d2c, 2, 0, 0x3e, 3}, /* AppIntents.DisplayRepresentation.Image.ColorSpecification */
+    {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4b8d48, 2, 0, 0x3e, 3}, /* AppIntents.DisplayRepresentation.Image.SymbolConfiguration */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4c4658, 9, 16, 0x7fffffff, 7}, /* AppIntents.PerformIntentError */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4c4e4c, 3, 0, 0x7fffffff, 3}, /* LNQueryMetadata.Query */
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4c5690, 2, 0, 0x3ffffe, 3}, /* AppIntents.ResolvedSnippetEntity */
@@ -177,10 +210,12 @@
     {"13d4d58b61093a6aa8d2badbc8bd1fa7", 0x4c70e0, 3, 0, 0x7d, 7}, /* AppIntents.ZoomBehavior */
     {"13f18cef8530326798006e3a5524d6cb", 0x1126c1c, 2, 0, 0x3ffffe, 3}, /* SwiftUI.ContainerBackgroundValue.Content */
     {"13f18cef8530326798006e3a5524d6cb", 0x1128830, 2, 0, 0x7fffffff, 7}, /* SwiftUI.NavigationSplitViewColumnWidth */
+    {"13f18cef8530326798006e3a5524d6cb", 0x1129408, 2, 0, 0x7fffffff, 7}, /* SwiftUI.TextSelection.Item.Node.Value */
     {"13f18cef8530326798006e3a5524d6cb", 0x112b048, 2, 21, 0x38, 7}, /* SwiftUI.SensoryFeedback.FeedbackType */
     {"13f18cef8530326798006e3a5524d6cb", 0x112da48, 2, 2, 0x3ffffd, 3}, /* SwiftUI.AnyNavigationPath.Error */
     {"13f18cef8530326798006e3a5524d6cb", 0x1139dc0, 2, 3, 0x1d, 7}, /* SwiftUI.DragSession.Phase */
     {"13f18cef8530326798006e3a5524d6cb", 0x113ae1c, 2, 0, 0x3e, 3}, /* SwiftUI.PathToken */
+    {"13f18cef8530326798006e3a5524d6cb", 0x113d604, 2, 0, 0x7fe, 3}, /* SwiftUI.SharingPickerSource */
     {"13f18cef8530326798006e3a5524d6cb", 0x113fef0, 2, 0, 0x7fffffff, 7}, /* SwiftUI.SectionIndexLabel */
     {"13f18cef8530326798006e3a5524d6cb", 0x114704c, 3, 1, 0x7fc, 3}, /* SwiftUI.ScrollTransitionConfiguration.Threshold.(private).Storage */
     {"13f18cef8530326798006e3a5524d6cb", 0x1159350, 2, 0, 0x7fffe, 3}, /* SwiftUI.(private).ResolvableModifier.Guts */
@@ -221,9 +256,16 @@
     {"167ccc84702e32d6b6a667a327e0706b", 0x26b6d8, 2, 0, 0x3e, 7}, /* WorkflowUI.SmartShortcutPickerCollectionViewDataSource.SectionLayoutKind */
     {"167ccc84702e32d6b6a667a327e0706b", 0x26f274, 2, 0, 0x7e, 7}, /* WorkflowUI.GalleryRecordLoadingView.RecordType */
     {"167ccc84702e32d6b6a667a327e0706b", 0x27195c, 2, 0, 0x7fffffff, 3}, /* WorkflowUI.(private).AutomationDeletionRequest */
+    {"167ccc84702e32d6b6a667a327e0706b", 0x271d90, 4, 0, 0x7fffffff, 7}, /* WorkflowUI.SmartShortcutPickerSelection */
+    {"167ccc84702e32d6b6a667a327e0706b", 0x272304, 4, 0, 0x7fffffff, 7}, /* WorkflowUI.SmartShortcutPickerEntry.Identifier */
     {"16d63b31be913d1abbf22026b0a5bfc4", 0x895fc, 6, 2, 0x7f9, 3}, /* AgentSessionKit.AgentMediaStoreError */
+    {"16e7efff823b3cb49da335c638ffa32f", 0xab77c8, 3, 0, 0xd, 7}, /* HomeDataModel.Event.CharacteristicEvent.Condition */
+    {"16e7efff823b3cb49da335c638ffa32f", 0xabae74, 2, 1, 0x7d, 7}, /* HomeDataModel.Camera.Mode */
     {"16e7efff823b3cb49da335c638ffa32f", 0xabe4f0, 5, 1, 0x1a, 7}, /* HomeDataModel.StatusIcon.(private).StatusIconPayload */
+    {"16e7efff823b3cb49da335c638ffa32f", 0xabeeb8, 4, 5, 0x3b, 7}, /* HomeDataModel.StaticRVCClusterGroup.Command.Template */
+    {"16e7efff823b3cb49da335c638ffa32f", 0xabf62c, 2, 0, 0x7fffffff, 7}, /* HomeDataModel.StaticThermostatClusterGroup.Command */
     {"16e7efff823b3cb49da335c638ffa32f", 0xabf6b4, 5, 0, 0x1b, 7}, /* HomeDataModel.MatterThermostatPresetContextTag */
+    {"16e7efff823b3cb49da335c638ffa32f", 0xabfadc, 2, 0, 0x3e, 7}, /* HomeDataModel.StaticThermostatClusterGroup.NotFollowingReason */
     {"16e7efff823b3cb49da335c638ffa32f", 0xac24dc, 5, 0, 0x3b, 7}, /* HomeDataModel.MatterCommandError.ErrorCode.RVC */
     {"16e7efff823b3cb49da335c638ffa32f", 0xac7098, 2, 0, 0x7e, 7}, /* HomeDataModel.StaticProfileBag.ValueUpdate */
     {"16e7efff823b3cb49da335c638ffa32f", 0xac7e88, 2, 1, 0xffd, 7}, /* HomeDataModel.StateSnapshot.ActionSetUpdateType */
@@ -233,6 +275,8 @@
     {"1788a2ef4b0739989a9c57ca571ad298", 0x25d8cc, 25, 0, 0x67, 7}, /* CoreIDVShared.DaemonAnalytics.DigitalPresentmentRequestedEventElement */
     {"1788a2ef4b0739989a9c57ca571ad298", 0x25d904, 2, 1, 0x7fd, 3}, /* CoreIDVShared.DaemonAnalytics.DigitalPresentmentSpinnerShownOutcome */
     {"1788a2ef4b0739989a9c57ca571ad298", 0x2620e0, 2, 0, 0x3e, 3}, /* CoreIDVShared.WebPresentmentRequestState */
+    {"17af87c04d3b3d6bb02cce1af84405a6", 0x260d98, 7, 0, 0x39, 0}, /* MLModelSpecification.MLProgram.Value.Tensor */
+    {"17af87c04d3b3d6bb02cce1af84405a6", 0x2626f8, 5, 0, 0x7fb, 3}, /* MLModelSpecification.MLProgram.ValueType */
     {"181e7d61063d3a298f1f0db6658f9ca3", 0x503fcc, 2, 0, 0x7fffffff, 7}, /* PodcastsFoundation.Chapter.Artwork */
     {"181e7d61063d3a298f1f0db6658f9ca3", 0x508fa4, 2, 3, 0x7fd, 3}, /* PodcastsFoundation.FeedUpdateError */
     {"181e7d61063d3a298f1f0db6658f9ca3", 0x509218, 5, 2, 0x7a, 7}, /* PodcastsFoundation.RSSFeedUpdaterJob.(private).State */
@@ -243,6 +287,7 @@
     {"181e7d61063d3a298f1f0db6658f9ca3", 0x511eac, 2, 6, 0x7fd, 3}, /* PodcastsFoundation.AlignmentCoordinatorError */
     {"181e7d61063d3a298f1f0db6658f9ca3", 0x512600, 2, 2, 0x7fffffff, 7}, /* PodcastsFoundation.TranscriptModelBuilder.Phase */
     {"181e7d61063d3a298f1f0db6658f9ca3", 0x513468, 4, 0, 0x7fc, 3}, /* NSPredicate.EvaluationTree */
+    {"18274862907130efa9d961e437c0536a", 0xad3fc, 2, 0, 0x7fffffff, 7}, /* CommunicationDetails.DetailsViewController.CommunicationType */
     {"18274862907130efa9d961e437c0536a", 0xb00f4, 2, 0, 0x7fffffff, 7}, /* CommunicationDetails.DetailsStyleGuide.TabBarConfiguration */
     {"18bc3d74bc783d83b6cc967bad7d876e", 0x2d2420, 2, 0, 0x7fe, 3}, /* SoundAnalysis.FeatureExtractorConfiguration */
     {"18bc3d74bc783d83b6cc967bad7d876e", 0x2d250c, 5, 2, 0x7fffffff, 7}, /* SoundAnalysis.SNSystemAudioAnalyzerRemote.Request */
@@ -253,14 +298,20 @@
     {"18fa53ff7452312890eecb85805d5146", 0xf2a74, 5, 0, 0x7fffffff, 7}, /* SuggestedImage.GenerationProgressEvent */
     {"1a30241e3dc93f65a7fdeb802abb6e1e", 0x6e934, 2, 0, 0x7fffffff, 7}, /* ArgumentParserInternal.ParsedArgument */
     {"1a30241e3dc93f65a7fdeb802abb6e1e", 0x6e9c0, 2, 1, 0x7fffffff, 7}, /* ArgumentParserInternal.SplitArguments.Element.Value */
+    {"1a30241e3dc93f65a7fdeb802abb6e1e", 0x6ec3c, 2, 0, 0x3ffffe, 3}, /* ArgumentParserInternal.Tree.InitializationError */
     {"1a30241e3dc93f65a7fdeb802abb6e1e", 0x6f014, 2, 2, 0x7d, 7}, /* ArgumentParserInternal.NameSpecification.Element.Representation */
+    {"1a30241e3dc93f65a7fdeb802abb6e1e", 0x6f490, 3, 0, 0x7d, 7}, /* ArgumentParserInternal.Name */
     {"1a4c95f383e8366ebfce3d3fcfc14a1b", 0xc2ccc, 2, 0, 0x1e, 7}, /* NDOAPI.Com_Apple_Sse_Ocean_Ndo_Api_AckData.OneOf_Action */
     {"1abc9a6149343944805cbd3c93395c58", 0xfb8a0, 13, 0, 0x7fffffff, 7}, /* MusicKitPlaybackSupport.PlaybackGenericMusicItem */
     {"1abc9a6149343944805cbd3c93395c58", 0xfb8e0, 4, 0, 0x7fffffff, 7}, /* MusicKitPlaybackSupport.PlaybackPlaylistEntryItem */
     {"1abc9a6149343944805cbd3c93395c58", 0xfb9e0, 2, 0, 0x7fffffff, 7}, /* MusicKitPlaybackSupport.PlaybackTrack */
+    {"1abc9a6149343944805cbd3c93395c58", 0xfbb54, 2, 1, 0x7fd, 3}, /* MusicKitPlaybackSupport.MusicLibraryQueryRequest.FilterResolver.Kind */
     {"1abc9a6149343944805cbd3c93395c58", 0xfc91c, 2, 0, 0x7e, 7}, /* MusicKitPlaybackSupport.MusicPlaybackResourceIdentifier.Kind */
     {"1b5349661bcf391f8478f4179dc2d847", 0x29e44, 2, 2, 0x7fd, 3}, /* AppleMediaServicesUIPaymentSheets.AppleLogoHeaderViewModel.State */
     {"1b68612cd84231c09e9a571704b40c75", 0x525b80, 2, 5, 0x7fffffff, 7}, /* SafariSharedUI.WBSNotifyMeWhenWebPageContextExtractor.WebPageContextExtractorError */
+    {"1bd86ba2d2c138cdb4b19c5dfb1eb1e0", 0x851a8, 5, 1, 0x3a, 7}, /* SiriSuggestionsIntelligence.SiriSuggestionsIntelligence.MotionActivity */
+    {"1bd86ba2d2c138cdb4b19c5dfb1eb1e0", 0x86478, 3, 2, 0x7c, 7}, /* SiriSuggestionsIntelligence.SiriSuggestionsIntelligence.ProbabilityErrors */
+    {"1c7dcd544f623fc0bde1a525467e13f3", 0x17e698, 7, 1, 0x7f8, 3}, /* SiriSuggestions.ProviderKey */
     {"1cc8c9711f833c7190b8463680f6acb8", 0xf0664, 3, 1, 0x7fc, 3}, /* RequestDispatcherBridges.ChildRequestControllerErrors */
     {"1cd2f3dadcde3004917a23f3e10e9b37", 0x10f3e0, 3, 1, 0x7fffffff, 7}, /* TabularData.JSONReadingError */
     {"1cd941395d19315c9e30b0108d91e2c6", 0xc4a924, 2, 0, 0x7e, 7}, /* PegasusAPI.Apple_Parsec_Feedback_V2_StartNetworkSearchFeedback.OneOf_Trigger */
@@ -269,6 +320,9 @@
     {"1de726b00f8333b1868690bb22f7e2c5", 0xe67a0, 3, 1, 0x7fffffff, 7}, /* WorkflowUIServices.SystemActionColorScheme */
     {"1de726b00f8333b1868690bb22f7e2c5", 0xe7410, 2, 0, 0x7fe, 3}, /* WorkflowUIServices.ParameterSummaryViewModel.ToolTemplateDataSource.SessionBackend */
     {"1dfd2f1668663d68a6eba21fde421f4f", 0xfa9c4, 9, 0, 0x77, 7}, /* RealityIO.InputDescriptor */
+    {"1e5f4ca770353dc189bf7a8c881c1b16", 0x19e874, 6, 1, 0x7f9, 3}, /* ServicesAnalyticsDaemon.SDMetricsSchemaV3.LiteralValue */
+    {"1e5f4ca770353dc189bf7a8c881c1b16", 0x1a0e74, 3, 0, 0x7fd, 3}, /* ServicesAnalyticsDaemon.Expression */
+    {"1e5f4ca770353dc189bf7a8c881c1b16", 0x1a12a8, 13, 0, 0x7f3, 3}, /* ServicesAnalyticsDaemon.Predicate */
     {"1e8b2d455922340a82d326115a688109", 0x3b8d0, 2, 0, 0x7fe, 3}, /* TextInputUI.(private).TaskCacheEntry */
     {"1f3138d323f6391fa71b6d8b76ddc1e3", 0x93bb4, 6, 0, 0x7fa, 3}, /* SiriUIFoundation.ModulePluginBundleError */
     {"1f385bc2e7bd34f380783236cba584fb", 0x41dcb8, 2, 1, 0x3d, 3}, /* FinanceDaemon.(private).LineItemImageCacheEntry */
@@ -277,16 +331,22 @@
     {"1f385bc2e7bd34f380783236cba584fb", 0x421b2c, 2, 1, 0xd, 7}, /* FinanceDaemon.ExtractedOrderAutomaticIngestionProcessor.ProcessingResult */
     {"1f385bc2e7bd34f380783236cba584fb", 0x42374c, 2, 4, 0x7fd, 3}, /* FinanceDaemon.PruningError */
     {"1f385bc2e7bd34f380783236cba584fb", 0x424d8c, 2, 1, 0x3ffd, 7}, /* FinanceDaemon.ExecutionProfile */
+    {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x4651c8, 2, 4, 0x7c, 7}, /* FindMyUICore.BubbleMessageTemplateContentType */
     {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x4660c4, 3, 0, 0x7d, 7}, /* FindMyUICore.OnboardingBulletPoint */
     {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x4660e0, 2, 1, 0x1ffd, 7}, /* FindMyUICore.OnboardingErrorMessage */
     {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x467a84, 2, 0, 0x7e, 7}, /* FindMyUICore.BadgeStyle.Placement */
     {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x467fc8, 2, 0, 0x7fffffff, 7}, /* FindMyUICore.GenericControl.Info */
     {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x468584, 2, 1, 0x7fd, 3}, /* FindMyUICore.ServerImageView.ViewState */
+    {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x46c7f8, 5, 0, 0x7b, 7}, /* FindMyUICore.SystemConditionsProvider.UpdateStreamChange */
     {"1faef9ab2b3b3baf8b80ec6e7be649f8", 0x46ca5c, 2, 1, 0x7d, 7}, /* FindMyUICore.ConfirmRepairCompletionReason */
     {"1fafa3fff538380ca7da90658df818ec", 0x3929a4, 2, 0, 0x7e, 7}, /* X509.ServerIdentityPolicy.LazyIPAddress */
     {"1fafa3fff538380ca7da90658df818ec", 0x3929c0, 2, 0, 0x7e, 7}, /* X509.ServerIdentityPolicy.LazyServerHostname */
+    {"21acabfab6cc3ec9a3cf6d4d6b637f5a", 0x5c68e4, 12, 4, 0x7fffffff, 7}, /* PKGCore.WindowInteractionSession.OutputEvent */
+    {"22211ca758823646baba8becda95f1a8", 0x1bb2cc, 16, 2, 0x7ef, 0}, /* CallHistory.CallPredicate */
     {"22833cc404563fb391a9ef003c60dde3", 0xeedc0, 2, 0, 0xe, 7}, /* XavierNews.ClusteringJournal.Result.ClusteringEvent.HeadlineOutcome */
+    {"22833cc404563fb391a9ef003c60dde3", 0xf13b4, 3, 0, 0x3d, 7}, /* XavierNews.Classic.HeadlineClusterer.AcceptanceReason */
     {"22999508cbe832c695951a3c77d6ed9b", 0x26b9c, 3, 2, 0x3c, 3}, /* ContactProvider.ItemContentObserverImpl.State */
+    {"22999508cbe832c695951a3c77d6ed9b", 0x27098, 2, 2, 0x1ffd, 3}, /* ContactProvider.ItemChangeObserverImpl.State */
     {"22dea17f703232fc90fe55396fc11605", 0xd6fb8, 2, 0, 0x7fffffff, 7}, /* SensitiveContentAnalysis.Sample */
     {"22dea17f703232fc90fe55396fc11605", 0xd8244, 4, 4, 0x7b, 7}, /* SensitiveContentAnalysis.Entitlements.Error */
     {"2413e1f080b93e66a0bc128f90367f1d", 0x34ccc, 2, 0, 0x7fe, 3}, /* ModelInterfaces.VisualGenerationInferenceImage.ImageBuffer.Backing */
@@ -297,8 +357,10 @@
     {"246a98417af5354b8629a9b3cb96c2d4", 0x22a7ec, 4, 0, 0x7fc, 3}, /* WeatherDaemon.GeoJSON */
     {"247c2ffcbbe5386080fabff8901758bb", 0xc6fdc, 2, 0, 0x7fe, 3}, /* SiriProcessing.MessageStoreReader.(private).Strategy */
     {"247c2ffcbbe5386080fabff8901758bb", 0xc79d0, 2, 0, 0x3ffffe, 3}, /* SiriProcessing.StreamHandle */
+    {"247c2ffcbbe5386080fabff8901758bb", 0xc7e48, 5, 2, 0x7fa, 3}, /* SiriProcessing.TagPredicate */
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5c9ebc, 3, 1, 0x3ffc, 7}, /* IDSFoundation.GroupEncryptionDebugRequest */
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5caac8, 5, 0, 0x3ffb, 7}, /* IDSFoundation.IDSLinkQualityReportMeasurement */
+    {"24f7d342ac0539b3a48de240c2a7b04c", 0x5cbd94, 2, 0, 0x7fe, 3}, /* IDSFoundation.IDSGLLinkEngineConnectionStrategy */
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5ccc38, 2, 0, 0x7fffffff, 7}, /* IDSFoundation.LEToolIDSRelayConnectorResponse */
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5cd390, 4, 1, 0x7fffffff, 7}, /* IDSFoundation.LEToolResponse */
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5cd3e4, 2, 0, 0x7fffffff, 7}, /* IDSFoundation.LEToolResponseMessage */
@@ -308,6 +370,8 @@
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5d1ec8, 11, 1, 0x74, 7}, /* IDSFoundation.MaterialDistributionRequest.MaterialDistributionPolicy */
     {"24f7d342ac0539b3a48de240c2a7b04c", 0x5d2370, 2, 0, 0x3e, 3}, /* IDSFoundation.RealTimeGroupSessionParticipantAllocationResponse.Allocation */
     {"252bd49b8157311dbacd7804a8bb6e62", 0x15a674, 2, 1, 0x7fd, 3}, /* CoreIDVUI.IdentityProofingViewOrchestrator.(private).ViewType */
+    {"25f08cbaf33a36ad99f68abd7ccfbff8", 0x2c0a10, 8, 0, 0x7fffffff, 7}, /* AppIntentsServices.QuerySpecification */
+    {"25f08cbaf33a36ad99f68abd7ccfbff8", 0x2c1220, 5, 3, 0x1a, 7}, /* AppIntentsServices.IntentsServices.DevicePredicate */
     {"25f08cbaf33a36ad99f68abd7ccfbff8", 0x2c3f48, 2, 0, 0x7fffffff, 7}, /* AppIntentsServices.AppIntentsProtocol.FetchAppDescription.Response */
     {"25f08cbaf33a36ad99f68abd7ccfbff8", 0x2c4088, 2, 0, 0x7e, 7}, /* AppIntentsServices.AppIntentsProtocol.FetchOptionsForAction.Response */
     {"270dc7b01b3c335fb76c2c0e1409d665", 0x11dde8, 2, 2, 0x3ffd, 7}, /* AppletTranslationFramework.LyonConstants.State */
@@ -325,6 +389,7 @@
     {"2a8358f2df893c9abe579621274e5738", 0x16efc0, 2, 6, 0x1d, 7}, /* PlatformSSOCoreUI.POCUIAuthEvent.Hardware */
     {"2a8358f2df893c9abe579621274e5738", 0x16f11c, 3, 3, 0x3c, 3}, /* PlatformSSOCoreUI.POCUIAuthenticationResult */
     {"2a8358f2df893c9abe579621274e5738", 0x16f564, 5, 1, 0x3a, 0}, /* PlatformSSOCoreUI.POCUIBiometricVerificationResult */
+    {"2a8358f2df893c9abe579621274e5738", 0x1707a0, 3, 4, 0x1ffc, 3}, /* PlatformSSOCoreUI.POCUIAppCoordinatorEvent */
     {"2a8358f2df893c9abe579621274e5738", 0x170850, 3, 4, 0x1ffc, 3}, /* PlatformSSOCoreUI.POCUILoginCoordinatorEvent */
     {"2a8358f2df893c9abe579621274e5738", 0x170b54, 2, 10, 0x7d, 7}, /* PlatformSSOCoreUI.POCUICredentialAction */
     {"2a8358f2df893c9abe579621274e5738", 0x170b70, 2, 6, 0x3d, 3}, /* PlatformSSOCoreUI.POCUICredentialEvent */
@@ -333,23 +398,37 @@
     {"2a8358f2df893c9abe579621274e5738", 0x170e44, 2, 0, 0x3e, 3}, /* PlatformSSOCoreUI.POCUINewPasswordSubmissionResult */
     {"2a8358f2df893c9abe579621274e5738", 0x1714d4, 2, 4, 0x3d, 3}, /* PlatformSSOCoreUI.POCUIWebLandingPageEvent */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x118ca70, 6, 0, 0x7fa, 3}, /* NewsUI2.RecipeFilterViewModel.Section */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x118da54, 5, 0, 0x7fffffff, 7}, /* NewsUI2.ChannelPickerSectionDescriptor */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x118e5a0, 3, 1, 0x7fffffff, 7}, /* NewsUI2.SearchMoreFeedContentChunk */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x1190d88, 2, 0, 0x7fe, 3}, /* NewsUI2.ChannelSectionHeadlinesService.Errors */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x119778c, 2, 0, 0x3e, 7}, /* NewsUI2.FollowingNotificationModify */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x119d9d0, 2, 0, 0x7fe, 3}, /* NewsUI2.SavedServiceChange */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11a0d94, 2, 3, 0x7fffffff, 7}, /* NewsUI2.ChannelPickerEntryPointType */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11a1cc8, 2, 0, 0x7fffffff, 3}, /* NewsUI2.FollowingDislikedLayoutModel */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11a1ce4, 2, 0, 0x3fe, 3}, /* NewsUI2.FoodRecipeItemsFetchResult */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11a3434, 3, 0, 0x7d, 7}, /* NewsUI2.RecipeFilterItem */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11a499c, 5, 0, 0x7fffffff, 7}, /* NewsUI2.TagFeedViewerPresentation */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11a5328, 59, 15, 0x7c4, 0}, /* NewsUI2.NewsActivity2 */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11a5360, 3, 0, 0x7fffffff, 7}, /* NewsUI2.NewsActivity2.Issue */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11a543c, 2, 0, 0x7fffffff, 7}, /* NewsUI2.NewsActivity2.SearchMoreResults */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11a7e5c, 15, 0, 0x7f1, 3}, /* NewsUI2.MagazineFeedGroupConfig */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11ad8c0, 2, 0, 0xe, 0}, /* NewsUI2.MagazineTodayFeedGroupConfigProcessor */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11aeb10, 3, 1, 0xffc, 7}, /* NewsUI2.TagAccessorySetting */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11af3a8, 3, 0, 0x7d, 7}, /* NewsUI2.AudioPlaylistFeedAnimator.Context */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11af590, 35, 0, 0x7dd, 0}, /* NewsUI2.TodaySectionDescriptor */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11b005c, 3, 0, 0x7fd, 3}, /* NewsUI2.HistoryServiceChange */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11b1430, 2, 0, 0x7e, 7}, /* NewsUI2.TagSubscription */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11b1758, 49, 0, 0x7cf, 0}, /* NewsUI2.TagFeedSectionDescriptor */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11b2160, 5, 0, 0x7fb, 3}, /* NewsUI2.MainTabOrdering.Resolved */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11b2354, 5, 0, 0x7fb, 3}, /* NewsUI2.SportsScoreSortingCondition */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11b5690, 2, 0, 0x7e, 7}, /* NewsUI2.HeroSelectionStrategy */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11b8894, 10, 0, 0x7f6, 3}, /* NewsUI2.SportsScoreSortingFilter */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11bab68, 3, 0, 0x7fd, 3}, /* NewsUI2.IssueSubscribeAction */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11bcd88, 47, 0, 0x7d1, 0}, /* NewsUI2.TagFeedGroupConfig */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11c188c, 2, 0, 0x7e, 7}, /* NewsUI2.AudioPlaylistSweepEligibility */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11c8250, 4, 0, 0xfffc, 3}, /* NewsUI2.SubscriptionChange */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11c83e8, 2, 0, 0x7fe, 3}, /* NewsUI2.PersonalizationScriptTestCase.Destination */
+    {"2accce5e9dfc3215b4fe1827725d7902", 0x11ca698, 2, 0, 0x7fe, 3}, /* NewsUI2.FollowingDislikedModel */
     {"2accce5e9dfc3215b4fe1827725d7902", 0x11cd210, 5, 0, 0x3ffffb, 3}, /* NewsUI2.FollowingSubscribe */
     {"2adf65c06f8c3c99be6bc248ed304cf8", 0x278c58, 2, 0, 0x1fe, 0}, /* FontParser.(private).GlyphMap */
     {"2adf65c06f8c3c99be6bc248ed304cf8", 0x279248, 2, 0, 0x3e, 3}, /* FontParser.PSInputByteStream.(private).StartingPoint */
@@ -362,6 +441,9 @@
     {"2d0002b89bb73a79859ccc19a4fea2e2", 0x1e0564, 2, 1, 0x7d, 7}, /* APFoundation.BackgroundTaskMode */
     {"2d154d16f1a63ba18833cd9d2508b680", 0x105bcc, 2, 0, 0x7fe, 3}, /* WorkflowUICore.AppKitAutocompleteCoordinator.Mode */
     {"2d154d16f1a63ba18833cd9d2508b680", 0x105cf0, 2, 0, 0x7e, 7}, /* WorkflowUICore.TopHitCollectionView.Layout */
+    {"2d154d16f1a63ba18833cd9d2508b680", 0x109258, 3, 0, 0x3d, 7}, /* WorkflowUICore.ContentCollectionPreviewView.PreviewState */
+    {"2d21c31161b9336681edd379bef15813", 0x16cf58, 4, 0, 0x7c, 7}, /* ScreenTimeSettingsServices.ScreenTimeSettings.TimeAllowances.Group.IconType */
+    {"2d21c31161b9336681edd379bef15813", 0x16dbb4, 2, 9, 0x7fd, 3}, /* ScreenTimeSettingsServices.ScreenTimeSettings.XPCError */
     {"2d6da5765c7c336fa55b352a77f3d909", 0x79d30, 14, 3, 0x7f1, 3}, /* _StringProcessing.DSLTree.Node */
     {"2f38e026273c37c88a51acfa150d5532", 0xec55c, 2, 0, 0x1e, 7}, /* SiriSignals.PrewarmDeviceTypeRestriction */
     {"2f4bc642e17e3eefa5bbe7666864b75e", 0x44d2c, 2, 4, 0x7fd, 3}, /* SiriIdentityInternal.ExecutionDeviceResolutionFlow.State */
@@ -373,8 +455,10 @@
     {"30aeafe1da2338ac8db8d63a002f722c", 0x154a8, 3, 0, 0x3d, 7}, /* FindMyCommon.Analytics.Mode */
     {"30c0560ee1a431acaafdc0fb8465838d", 0x2a7cdc, 2, 3, 0x7fd, 3}, /* CopresenceCore.ActivitySession.State */
     {"30c0560ee1a431acaafdc0fb8465838d", 0x2a9964, 2, 3, 0x7fffffff, 7}, /* CopresenceCore.PluginAttachmentLedgerTopic.State */
+    {"30c0560ee1a431acaafdc0fb8465838d", 0x2ad168, 3, 6, 0x7fc, 3}, /* CopresenceCore.BackgroundSession.State */
     {"30c0560ee1a431acaafdc0fb8465838d", 0x2ad650, 2, 2, 0x7fd, 3}, /* CopresenceCore.PluginClient.ConnectionState */
     {"31a280b0eb713057b43934889ebf9deb", 0x6f7e0, 43, 26, 0x1fd4, 7}, /* DirectResource.ResourceError.UnderlyingError */
+    {"329140b821953d8c8f1f0c5eb4bb1c2f", 0xd30f4, 5, 0, 0x3ffb, 7}, /* HybridQueryProcessing.QueryIntent */
     {"3355571dbdce3ce3ae93690cbc816c24", 0x4eaa8, 9, 0, 0x7f7, 3}, /* AccessoryNotifications.AccessoryNotificationService.SettingsOperation */
     {"3355571dbdce3ce3ae93690cbc816c24", 0x4f10c, 3, 1, 0x7c, 7}, /* AccessoryNotifications.AccessorySettingsPublicRecord.ForwardingPolicy */
     {"335a3088af8936099c42d073d0bb112f", 0xe25f24, 2, 1, 0x7fd, 3}, /* IntelligenceFlowRuntime.CompanionAudioRemoteError */
@@ -383,35 +467,58 @@
     {"335a3088af8936099c42d073d0bb112f", 0xe2dbe8, 3, 0, 0x7fd, 3}, /* IntelligenceFlowRuntime.FROGFixture.LoadError */
     {"335a3088af8936099c42d073d0bb112f", 0xe31944, 9, 0, 0x7fffffff, 7}, /* IntelligenceFlowRuntime.(private).FormatWorkItem.BuildOperation */
     {"335a3088af8936099c42d073d0bb112f", 0xe33be8, 2, 0, 0x1ffe, 3}, /* IntelligenceFlowRuntime.SiriXRequestStartData.SiriXRequestType */
+    {"335a3088af8936099c42d073d0bb112f", 0xe36410, 10, 3, 0x7f5, 3}, /* IntelligenceFlowRuntime.PseudoPlannerBinding */
+    {"335a3088af8936099c42d073d0bb112f", 0xe36464, 25, 47, 0x1fe6, 0}, /* IntelligenceFlowRuntime.DialogType */
+    {"335a3088af8936099c42d073d0bb112f", 0xe391a8, 2, 0, 0x7fffffff, 7}, /* IntelligenceFlowRuntime.TTM_v2.ActionInfo */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5916c, 3, 1, 0x7c, 7}, /* Mail.PersistenceAdaptor.CredentialsHelper.State */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5a134, 3, 1, 0x7c, 7}, /* Mail.(private).MailboxUpdateTree.FindResult */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5aa58, 2, 0, 0x7fffffff, 7}, /* Mail.PersistenceAdaptor.SearchState.MakeSearchResult */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5b73c, 2, 0, 0x7e, 7}, /* IMAP2Behavior.PendingServerResponses.CapturedValue */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5bd68, 3, 4, 0x7fc, 7}, /* IMAP2Behavior.StateWithTasks.MailboxesToSelect.Reason */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5c204, 2, 2, 0x7d, 7}, /* IMAP2Behavior.RunningTask.Task */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5c2dc, 2, 0, 0x7fffffff, 7}, /* IMAP2Behavior.Task.Logger.ID */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5d560, 2, 1, 0x3d, 3}, /* IMAP2Behavior.UploadMessages.ActionID */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5e0e4, 2, 1, 0x7fd, 3}, /* IMAP2Behavior.Update */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5e480, 2, 4, 0x3d, 3}, /* IMAP2Connection.AuthenticationTask.State.Step */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5e560, 2, 0, 0x7ffe, 0}, /* IMAP2Connection.MechanismKind */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5e57c, 7, 0, 0x3fff9, 0}, /* IMAP2Connection.MechanismKind.SASLKind */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5efd0, 2, 1, 0x3d, 7}, /* IMAP2Connection.ConnectionConfiguration.TransportLayerSecurity */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5f128, 2, 5, 0x7fffffff, 7}, /* IMAP2Connection.ConnectionAction */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5f1dc, 3, 0, 0x7fffffff, 7}, /* IMAP2Connection.AuthenticatedState.Selection */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5f584, 8, 3, 0x7f7, 3}, /* IMAP2Connection.Event.Payload */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5f834, 4, 2, 0x7fffffff, 7}, /* IMAP2Connection.MailboxSelectionState.State */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5fe40, 3, 10, 0x3c, 7}, /* IMAP2Connection.UnauthenticatedState.Error */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb5fe78, 2, 1, 0x7fffffff, 7}, /* IMAP2Connection.UnauthenticatedState.ConnectionTLS */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb60b48, 3, 0, 0x7fffffff, 7}, /* IMAP2MIME.DisplayPart */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb60ef8, 2, 0, 0x7e, 7}, /* IMAP2MIME.UnsafeMediaType.Multipart */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb60f14, 11, 0, 0x75, 7}, /* IMAP2MIME.UnsafeMediaType */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb611e8, 2, 0, 0x3ffe, 7}, /* IMAP2MIME.RFC_2231.UnsafeAttributeValue.Element */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb61354, 21, 0, 0x7fffffff, 7}, /* IMAP2MIME.UnsafeHeader */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb61488, 44, 5, 0x7d3, 0}, /* IMAP2Persistence.Action */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb616ac, 2, 1, 0x3d, 7}, /* IMAP2Persistence.ConnectionConfiguration.TransportLayerSecurity */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb61700, 4, 1, 0x3fffb, 0}, /* IMAP2Persistence.Credentials */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb61890, 2, 0, 0x6, 0}, /* IMAP2Persistence.Event */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb618ac, 22, 1, 0x7e9, 0}, /* IMAP2Persistence.Event.Update */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb61f94, 2, 0, 0x7e, 0}, /* IMAP2Persistence.SearchRequest.Kind */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb61fcc, 12, 4, 0x7f3, 3}, /* IMAP2Persistence.SearchRequest.Predicate */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb62d44, 3, 0, 0x7fd, 3}, /* NIOIMAPCore2.BodyStructure.Singlepart.Kind */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb62e14, 6, 3, 0x1ffffff9, 3}, /* NIOIMAPCore2.AppendCommand */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb62e74, 2, 0, 0x7fe, 3}, /* NIOIMAPCore2.Command.CustomCommandPayload */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb63008, 2, 0, 0x7fffffff, 7}, /* NIOIMAPCore2.StoreData */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb63104, 11, 0, 0x7fffffff, 7}, /* NIOIMAPCore2.MailboxData */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb6313c, 2, 0, 0x7fe, 3}, /* NIOIMAPCore2.EmailAddressListElement */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb63318, 15, 0, 0x71, 7}, /* NIOIMAPCore2.MessageAttribute */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb63588, 5, 2, 0x2, 7}, /* NIOIMAPCore2.FetchResponse */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb635a4, 2, 3, 0x7fffffff, 7}, /* NIOIMAPCore2.StreamingKind */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb63648, 17, 31, 0x7ee, 0}, /* NIOIMAPCore2.ResponseTextCode */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb636f0, 31, 14, 0x7e0, 0}, /* NIOIMAPCore2.SearchKey */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb637b8, 2, 0, 0xe, 7}, /* NIOIMAPCore2.SortCriterion */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb63df0, 6, 14, 0x7fffffff, 7}, /* NIOIMAPCore2.FetchAttribute */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb6406c, 2, 0, 0xfe, 3}, /* NIOIMAPCore2.MetadataResponse */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb640c0, 2, 3, 0x7fffffff, 7}, /* NIOIMAPCore2.ReturnOption */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb64240, 2, 0, 0x7fffffff, 7}, /* NIOIMAPCore2.URLCommand */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb64320, 2, 0, 0x7fffffff, 7}, /* NIOIMAPCore2.GrammarParser.AppendOrCatenateMessage */
+    {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb6433c, 5, 1, 0x2, 7}, /* NIOIMAPCore2.GrammarParser._FetchResponse */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb64664, 2, 0, 0x7fffffff, 7}, /* NIOIMAPCore2.EncodeBuffer.Mode */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb646d4, 4, 0, 0xfc, 7}, /* NIOIMAPCore2.FramingResult */
     {"336aeaeaa4d13e5a87de70ac25bc34e4", 0xb6470c, 4, 1, 0x1b, 7}, /* NIOIMAPCore2.FramingParser.State */
@@ -439,13 +546,18 @@
     {"3825ddec72013b968fe9ab77c58742cf", 0xf7ead4, 8, 1, 0x7fffffff, 7}, /* SwiftUI._SymbolEffect.Storage */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf7eaf0, 2, 0, 0x3fe, 3}, /* SwiftUI._SymbolEffect.Trigger */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf813ec, 2, 0, 0x7fffffff, 7}, /* SwiftUI.AccessibilityCustomContentKey.Identifier */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf831d0, 2, 7, 0x1, 7}, /* SwiftUI.Font.ProviderTag */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf83908, 2, 0, 0x3e, 3}, /* SwiftUI.AccessibilitySpecificChartDescriptorStorage.(private).Storage */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf84e90, 2, 1, 0x7fffffff, 7}, /* SwiftUI.VariableBlurStyle.Mask */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf855d4, 5, 1, 0x7fffffff, 7}, /* SwiftUI._ShapeStyle_RenderedShape.Shape */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf856e4, 2, 1, 0x7fffffff, 7}, /* SwiftUI._ShapeStyle_RenderedLayers.(private).Layers */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf882cc, 9, 0, 0x7fffffff, 7}, /* SwiftUI.GraphicsContext.ResolvedShading */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf883c4, 25, 1, 0xfffffe6, 7}, /* SwiftUI.GraphicsContext.Filter.Storage */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf8874c, 23, 3, 0x1ffe8, 7}, /* SwiftUI.GraphicsFilter */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf8a718, 2, 1, 0x7fffffff, 3}, /* SwiftUI.GlassContainer.Entry.ModelID */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf8a7f8, 2, 1, 0x7fffffff, 7}, /* SwiftUI.GlassContainer.ResolvedPhase */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf8a94c, 6, 0, 0x7fa, 3}, /* SwiftUI.GlassContainer.DisplayMaterial.(private).Value */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf8adbc, 2, 1, 0x3d, 7}, /* SwiftUI.Font.StaticModifierTag */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf8d13c, 2, 0, 0x7fffffff, 7}, /* SwiftUI.ShadowStyle.Storage */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf8e378, 2, 0, 0x7e, 7}, /* SwiftUI.FlexCoreInteractionModifier.FlexValue.Interaction.Phase */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf8ed64, 2, 0, 0x1e, 7}, /* SwiftUI.NamedImage.WeakOrStrongImageContents */
@@ -454,24 +566,33 @@
     {"3825ddec72013b968fe9ab77c58742cf", 0xf93868, 2, 0, 0x3ffe, 7}, /* SwiftUI.AdaptiveStackLayout.(private).CollectionStorage */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf940f4, 2, 0, 0x7fffffff, 3}, /* SwiftUI._LazyLayout_Subviews.Node */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf9714c, 2, 0, 0x7fe, 3}, /* SwiftUI.__LazyStack_CacheRegion */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf98534, 2, 1, 0x7fffffff, 7}, /* SwiftUI.AccessibilityLargeContentViewTree */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf98e58, 2, 0, 0x7fe, 3}, /* Foundation.AttributedString.(private).AnyAttribute */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf9ba38, 2, 0, 0x1e, 7}, /* SwiftUI.SDFLayer.(private).SDFElement.Contents */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf9be24, 2, 2, 0x7fffffff, 7}, /* SwiftUI.Text.Suffix.Storage */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xf9be40, 2, 1, 0x7fffffff, 7}, /* SwiftUI.ResolvedTextSuffix */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf9cadc, 2, 24, 0x7fd, 3}, /* SwiftUI._Glass.Variant.Role */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf9cd54, 3, 1, 0x7fc, 3}, /* SwiftUI._Glass.BackgroundContent.Content */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf9cfd8, 9, 0, 0x7f7, 3}, /* SwiftUI._Glass.(private).Value */
     {"3825ddec72013b968fe9ab77c58742cf", 0xf9d328, 2, 24, 0x7fd, 3}, /* SwiftUI._Glass.Variant.ID.Role */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xfa2328, 2, 2, 0x7fd, 3}, /* SwiftUI.Text.Style.TextStyleColor */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfa4a60, 2, 0, 0x7fffffff, 7}, /* SwiftUI.(private).LayoutGestureBox.Child.DebugData */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfaab04, 2, 5, 0x7d, 7}, /* SwiftUI.ContentTransition.NamedTransition.Name */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfaf50c, 2, 0, 0x7fffffff, 7}, /* SwiftUI.AccessibilityImageLabel */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xfafe20, 2, 4, 0x7fffffff, 7}, /* SwiftUI.Material.Layer.SDFLayer.GroupType */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfafe74, 3, 0, 0xfd, 3}, /* SwiftUI.Material.Layer.SDFLayer.GroupLayer.Blend */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfaff44, 12, 0, 0x7fffffff, 7}, /* SwiftUI.Material.Layer.SDFLayer.Contents */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb00b0, 13, 0, 0x1fff3, 7}, /* SwiftUI.Material.Layer.Filter.Contents */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb0390, 2, 0, 0x7e, 7}, /* SwiftUI.Material.ShapeMetricsProvider */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb1a94, 2, 0, 0x7fe, 3}, /* SwiftUI.BackdropGroupID */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb1f00, 6, 0, 0x7a, 7}, /* SwiftUI.ViewTransform.Item */
+    {"3825ddec72013b968fe9ab77c58742cf", 0xfb2510, 2, 3, 0x7fd, 3}, /* SwiftUI.Gradient.ProviderTag */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb2f54, 6, 0, 0x7fffffff, 7}, /* SwiftUI.HoverEffectActivationBehaviorInfo */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb3070, 7, 2, 0x78, 7}, /* SwiftUI.Text.Modifier */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb3734, 2, 1, 0x7d, 7}, /* SwiftUI._LocalizationInfo */
     {"3825ddec72013b968fe9ab77c58742cf", 0xfb5a10, 2, 1, 0x7fffffff, 7}, /* SwiftUI.AccessibilityActivationKind.RawValue */
+    {"3866706487553a24a3295c7382aeadef", 0x5fb04, 2, 0, 0x7fffffff, 7}, /* RealityFoundation.ParticleEmitterComponent.ParticleEmitter.ParticleColor */
+    {"3866706487553a24a3295c7382aeadef", 0x5fb48, 2, 0, 0x7fffffff, 7}, /* RealityFoundation.ParticleEmitterComponent.Timing */
     {"38c91f67376f3b879fbe2a8782e2b0bf", 0xad3a8, 2, 0, 0x3e, 7}, /* GenerativePartnerService.ExternalProviderService.AgentIntentResponseStream_v3.StreamError */
     {"38c91f67376f3b879fbe2a8782e2b0bf", 0xadce0, 2, 1, 0x7d, 7}, /* GenerativePartnerService.SignInAvailability */
     {"38fec853835c3762a5bb5a3cb5973ff4", 0x3d7fc, 2, 0, 0x7fffffff, 7}, /* SiriFindMyUI.TextContent.Content */
@@ -480,6 +601,7 @@
     {"3a50b0d0796c3bcd996050a5556beb2e", 0x8533c, 2, 13, 0x7fd, 3}, /* SiriPlaybackControlSupport.PlaybackControllingError */
     {"3a56cd0598083addb6cb2889473b305b", 0xb3238, 2, 1, 0x7fd, 3}, /* ScreenTimeUICore.ActivityBundleIDIcon.Phase */
     {"3b277dd891e835a8848f427f389b84d1", 0xae978, 6, 0, 0x1a, 7}, /* PnROnDeviceFramework.ReliabilityCategory */
+    {"3bc47193b9153bf4bbd87f9d07e9d277", 0x1ba8d8, 3, 6, 0x3ffb, 7}, /* SwiftUI.Color.PeerPaymentColor */
     {"3c122a19d46a38a59172979cd2754ab8", 0x8538, 3, 0, 0x1d, 7}, /* HIDRMClientKit.HIDRMClient.Notification */
     {"3c218071e4dc3e62ba88860edb7fb31a", 0x16a918, 2, 0, 0x7fffffff, 7}, /* LocalAuthenticationCore.LACPasscodeVerificationOutcome */
     {"3c218071e4dc3e62ba88860edb7fb31a", 0x16ab38, 4, 0, 0x7fc, 3}, /* LocalAuthenticationCore.LACEvaluationResultWithAssociatedValue */
@@ -489,10 +611,18 @@
     {"3d8ed0c74ec73f9ca32c36fc9b0df2f1", 0xfef98, 2, 0, 0xffe, 7}, /* CommunicationsUICore.LocalCameraViewModel.DisplayMode */
     {"3da58d7d40ef35c888e0511029834f9b", 0x148cd0, 2, 0, 0x1e, 7}, /* SiriPrivateLearningInference.MediaGroundTruthSource */
     {"3e76179e9f483de19c4c63a94b0a28e4", 0x1268e4, 4, 2, 0xfffffb, 7}, /* CollectionsInternal._FindResult */
+    {"3efb93d3f3193b32909412d4490e5ac9", 0x78fb4, 10, 0, 0x76, 7}, /* GenerativeFunctionsFoundation.GenerativeError.PromptError.ErrorType */
+    {"3efb93d3f3193b32909412d4490e5ac9", 0x7a6ac, 2, 0, 0x7e, 7}, /* GenerativeFunctionsFoundation.GenerativeErrors.ModelError */
     {"3f95eed99d343508b45078d5d2e37a99", 0x269d0, 2, 1, 0x7fd, 3}, /* DataFlow.(private).JournalDatabaseMode */
     {"3f95eed99d343508b45078d5d2e37a99", 0x26b04, 5, 0, 0x7fffffff, 7}, /* DataFlow.DatabaseStatement.(private).Failure */
+    {"3fa3a21a1ea632019aca5d4ae661629e", 0x84500, 2, 0, 0x7fffffff, 7}, /* CoreCDPUI.RemoteSecretType */
+    {"3fd6aa2eae8d32e0bec71d4bf574cb71", 0x49144, 4, 1, 0x3b, 0}, /* FileVault.CryptoUser.PasswordStorage */
+    {"3fd6aa2eae8d32e0bec71d4bf574cb71", 0x49374, 6, 16, 0x19, 7}, /* FileVault.FileVaultCore.Error */
     {"3fe7f228e85136dab560ef4dcc22eb0f", 0x5a0614, 2, 0, 0x7fe, 3}, /* ScreenTimeSettingsServicesUI.ChangePINFlowModel.Destination */
+    {"3ff5881abd3836779d17858afbe652de", 0x1b36c8, 2, 0, 0x7fffffff, 7}, /* PosterKit.IncomingCallTextView.NameStyle */
+    {"407bec32ea1b337b9733241e92c68e1f", 0x199174, 3, 0, 0xd, 7}, /* HomeAppIntents.DeviceType */
     {"407bec32ea1b337b9733241e92c68e1f", 0x199b24, 4, 0, 0x7c, 7}, /* HomeAppIntents.PossibleValuesForAttribute */
+    {"40a47e13fc5435afa56a44b060036f5f", 0x1bd1dc, 2, 0, 0x2, 7}, /* AccessibilitySharedUISupport.CommandType */
     {"4119eebcb75533d3bbd37ca38b0e0d75", 0x24f7c, 2, 0, 0xe, 7}, /* QOSToolkit.QOSItem */
     {"41372a74da073be58794a431ad5b8911", 0x915a0, 9, 0, 0x7f7, 3}, /* HDSQLiteSchemaEntity.ColumnType */
     {"413f34cd922f3af795af5f12b65e359b", 0xdae7c, 3, 1, 0x7fc, 3}, /* CoreDeviceSelection.ConfigValue */
@@ -501,11 +631,13 @@
     {"41925f92c3f7308e9d2009dff327cf33", 0x13ece8, 2, 0, 0x3e, 3}, /* ProximityReaderCore.IdentityMerchantDetails.MerchantImage */
     {"41925f92c3f7308e9d2009dff327cf33", 0x13f064, 2, 0, 0x7fffffff, 7}, /* ProximityReaderCore.RegistrationType */
     {"41c3bf6a69a235f79c2444a72300ce5d", 0x8fdd34, 2, 1, 0x7fd, 3}, /* AppleMediaServices.AccountCachedServerData.Error */
+    {"41c3bf6a69a235f79c2444a72300ce5d", 0x900f74, 7, 5, 0x7f8, 3}, /* AppleMediaServices.QRCodeHandlerError */
     {"41c3bf6a69a235f79c2444a72300ce5d", 0x9014c8, 4, 0, 0x7fffffff, 7}, /* AppleMediaServices.BagUnderlyingDataPersistence.Error */
     {"41ed109f0ed03e77b604a3ac020ba873", 0xada9c, 3, 0, 0x7fd, 3}, /* _MapKit_SwiftUI.RegionBinding */
     {"41ed109f0ed03e77b604a3ac020ba873", 0xae07c, 5, 2, 0x7fa, 3}, /* _MapKit_SwiftUI.MapCameraPosition.Storage */
     {"41ed109f0ed03e77b604a3ac020ba873", 0xaed84, 2, 0, 0x7fffffff, 7}, /* _MapKit_SwiftUI.MapPolygon.Storage */
     {"41ed109f0ed03e77b604a3ac020ba873", 0xaf024, 3, 0, 0x7fffffff, 3}, /* _MapKit_SwiftUI.MapStylePicker.Option.(private).StyleRecipe */
+    {"41ed109f0ed03e77b604a3ac020ba873", 0xaf168, 2, 0, 0x7fe, 3}, /* _MapKit_SwiftUI._LookAroundPreview.SceneStorage */
     {"41ed109f0ed03e77b604a3ac020ba873", 0xb0b0c, 2, 0, 0x3ffe, 7}, /* _MapKit_SwiftUI.MapPolyline.Storage */
     {"42361703a64b3eeea98ef99e98f63fe4", 0x74148, 2, 0, 0x7e, 7}, /* CallIntelligence.HoldTimePredictionType */
     {"423ec2dcb48036d9a54156158890ad45", 0x480fc, 2, 0, 0x7fffffff, 7}, /* GameControllerSettings.GCSControllerParameters.(private).Backing */
@@ -513,16 +645,19 @@
     {"423ec2dcb48036d9a54156158890ad45", 0x481e4, 2, 0, 0x1ffffe, 7}, /* GameControllerSettings.GCSElementMappingParameters.(private).Backing */
     {"42a7b1463ef63317b3dd1d4dcd3ba237", 0x15b8ec, 6, 0, 0x7fa, 3}, /* AppRemoteAssets.SearchMatchExpression */
     {"42a7b1463ef63317b3dd1d4dcd3ba237", 0x15b928, 4, 0, 0x7fc, 3}, /* AppRemoteAssets.SearchMatchPhrase */
+    {"4347b1bd85773120bff3a3eca91fb8be", 0x1122a4, 4, 0, 0xffffffc, 3}, /* ContactsUI.CNAvatarPickerItem */
     {"43fed86fd9fd3b108621b7f7ee694260", 0x3ae458, 2, 0, 0x7e, 7}, /* SwiftUITracingSupport.SExpression.Visitor.Ctx */
     {"43fed86fd9fd3b108621b7f7ee694260", 0x3ae5b4, 2, 0, 0x7e, 7}, /* SwiftUITracingSupport.HumanReadable.Visitor.Ctx */
     {"43fed86fd9fd3b108621b7f7ee694260", 0x3aeb30, 2, 0, 0x7e, 7}, /* SwiftUITracingSupport.Interpreter.Storage.Mode */
     {"43fed86fd9fd3b108621b7f7ee694260", 0x3b1968, 2, 0, 0x7fe, 3}, /* SwiftUITracingSupport.CauseEffectBacktrace.TElement */
     {"43fed86fd9fd3b108621b7f7ee694260", 0x3b19bc, 3, 1, 0x7fc, 3}, /* SwiftUITracingSupport.ViewTree.TElement */
     {"43fed86fd9fd3b108621b7f7ee694260", 0x3b26d8, 5, 1, 0x7fa, 3}, /* SwiftUITracingSupport.PType.Pattern.IsA */
+    {"43fed86fd9fd3b108621b7f7ee694260", 0x3b33a8, 3, 0, 0x7d, 7}, /* SwiftUITracingSupport.Event.Layout.Method */
     {"442920505398308288adbef10a74f024", 0xb927c, 2, 0, 0x3ffe, 7}, /* _MusicKitInternal_AppIntents.MusicSnippetPluginModel */
     {"45736b2efc8a3a92be6e736ce798c8db", 0x34d808, 2, 3, 0x1d, 7}, /* ChronoCore.ReplicatedType */
     {"45a42b9ac44c323d8108233f901b8179", 0x7a700, 7, 3, 0x78, 7}, /* PhotosRendering.ControlDescriptor */
     {"461c234c97b932cfa235a8a4e7b0ba13", 0x130fb0, 2, 2, 0x7ffffd, 7}, /* ChronoServices.ImageFormat */
+    {"46474021faed3c2898ea4adb544404f7", 0xb4f28, 2, 4, 0x3d, 7}, /* PrivateCloudCompute.ConnectionStateCodableValue */
     {"46474021faed3c2898ea4adb544404f7", 0xb5508, 4, 0, 0x3c, 3}, /* PrivateCloudCompute.XPCResponseMessage */
     {"46c22195eddf37d5aec64454e41f0c24", 0x204c8, 2, 1, 0x7d, 7}, /* SessionAlert.Alert.AlertState */
     {"472cc0291e1c33f0981da2ec8d9c86cc", 0x323b40, 2, 0, 0x1e, 7}, /* CMPhoto.DataElement.(private).ElementData */
@@ -530,6 +665,7 @@
     {"472cc0291e1c33f0981da2ec8d9c86cc", 0x32427c, 2, 0, 0x3e, 3}, /* CMPhoto.TIFFDataPayload */
     {"479c5545ee513232acab46ec963fb9c7", 0x560b8, 2, 0, 0x1ffffffe, 7}, /* SiriCrossDeviceArbitrationFeedback.BoostType */
     {"47aff75e2c913883a3d7649df4e6d6b0", 0x7c95e8, 3, 0, 0x7fd, 3}, /* IntelligenceFlowPlannerRuntime.DialogOverridesError */
+    {"47aff75e2c913883a3d7649df4e6d6b0", 0x7c9604, 3, 0, 0x3d, 7}, /* IntelligenceFlowPlannerRuntime.PredicateLogic */
     {"47aff75e2c913883a3d7649df4e6d6b0", 0x7cb2f0, 2, 1, 0x3fd, 3}, /* IntelligenceFlowPlannerRuntime.MockActionValidator.MockBehavior */
     {"47daa1496c5f360fa2723d3ae2987f1a", 0x4268c, 2, 2, 0x7fd, 3}, /* AssistantIslandClient.AssistantIslandCommonUIMode */
     {"47daa1496c5f360fa2723d3ae2987f1a", 0x439ec, 2, 2, 0x7d, 7}, /* AssistantIslandClient.SystemAuxiliary.SystemPresentation.Storage */
@@ -539,7 +675,9 @@
     {"48c946ef18c33cbaaaca064ba380f118", 0x962684, 2, 0, 0x7e, 7}, /* RemindersUICore.TTRReminderSectionPerformMoveTarget */
     {"48c946ef18c33cbaaaca064ba380f118", 0x962bb8, 2, 0, 0x3e, 7}, /* RemindersUICore.TTRRemindersListInteractor.(private).MoveReminderArguments */
     {"48c946ef18c33cbaaaca064ba380f118", 0x969aa4, 2, 1, 0x7d, 7}, /* RemindersUICore.TTRReminderCellStyle.CompletedButtonType */
+    {"48c946ef18c33cbaaaca064ba380f118", 0x96a8e4, 2, 3, 0x7d, 7}, /* RemindersUICore.TTRReminderDetailViewModel.LocationState */
     {"48c946ef18c33cbaaaca064ba380f118", 0x96f43c, 2, 4, 0x1ffffd, 7}, /* RemindersUICore.TTRMReminderDetailStyle */
+    {"48c946ef18c33cbaaaca064ba380f118", 0x971ca0, 5, 2, 0x7a, 7}, /* RemindersUICore.TTRReminderLocationPickerModel.Item */
     {"48c946ef18c33cbaaaca064ba380f118", 0x972cc4, 2, 1, 0x7fffffff, 7}, /* RemindersUICore.TTRMReminderCompletionButton.Icon */
     {"48c946ef18c33cbaaaca064ba380f118", 0x974fc0, 2, 1, 0x7fffffff, 7}, /* RemindersUICore.TTRMReminderDetailListPickerView.(private).ListPickerMenuItem */
     {"48c946ef18c33cbaaaca064ba380f118", 0x975e04, 2, 0, 0x7fffffff, 7}, /* RemindersUICore.TTRMRemindersListCellFirstResponderChangeFilter.(private).Call */
@@ -552,6 +690,7 @@
     {"48f9a2e6506d3c1fbc48eebe21d98c8b", 0x19d784, 2, 0, 0x3e, 3}, /* ServiceDiscovery.ServiceMetadata.Payload */
     {"49108603ba403392aba48e7815296603", 0x1197b94, 2, 0, 0x3ffffe, 3}, /* SwiftUI.ContainerBackgroundValue.Content */
     {"49108603ba403392aba48e7815296603", 0x119933c, 2, 0, 0x7fffffff, 7}, /* SwiftUI.NavigationSplitViewColumnWidth */
+    {"49108603ba403392aba48e7815296603", 0x1199f3c, 2, 0, 0x7fffffff, 7}, /* SwiftUI.TextSelection.Item.Node.Value */
     {"49108603ba403392aba48e7815296603", 0x119bcf4, 2, 21, 0x38, 7}, /* SwiftUI.SensoryFeedback.FeedbackType */
     {"49108603ba403392aba48e7815296603", 0x119e3ac, 2, 2, 0x3ffffd, 3}, /* SwiftUI.AnyNavigationPath.Error */
     {"49108603ba403392aba48e7815296603", 0x11a3024, 3, 0, 0xfd, 3}, /* SwiftUI.SurroundingsEffectKind */
@@ -586,18 +725,25 @@
     {"497d395744e53edcb3cbd5e7922590da", 0x392f8, 15, 1, 0x7f0, 7}, /* SiriTaskEngagement.ReliabilityCategory */
     {"4a77beb417c33986993d5ef29edce953", 0x71b64, 4, 0, 0x7fc, 3}, /* DACrypto.Error */
     {"4abe472e367e3e3ebb8afa169f9219c3", 0xe614, 2, 1, 0x7fd, 3}, /* _IconServices_SwiftUI.AsyncIconImagePhase */
+    {"4af1d63e589f3b70affb9fa3635e1d77", 0x22c300, 2, 0, 0x7fffffff, 7}, /* __C.CMFormatDescription.Extensions.Value.CameraCalibrationDataLensCollection */
     {"4b2103baebee3ea0a93d6ab9fdf3eaff", 0x16e0ec, 6, 17, 0x7f9, 3}, /* ChronoKit.ReloadConfiguration.ReloadReason */
     {"4be8c9cf3b16312d89e8cebf6afc5ced", 0x1be0e4, 2, 1, 0x3d, 7}, /* ScreenTimeSettingsFoundation.PersistentStoreError */
+    {"4c2174fcf6513350b1cebe67cddf2904", 0x260f2c, 2, 0, 0x3e, 7}, /* AppleAccount.ProximityCustodianRecovery.XPC.State */
+    {"4c2174fcf6513350b1cebe67cddf2904", 0x261e18, 2, 1, 0x7fd, 3}, /* AppleAccount.IdentityLoadingState */
     {"4c587c04a289314989aae0e544158305", 0x13fd54, 5, 1, 0x7fa, 3}, /* WebBookmarks.FastSyncStateMachine.State */
     {"4d3b0a3f17c936dca9bfc2bbe4d7c963", 0x12c4c4, 2, 0, 0x3ffe, 7}, /* _JetEngine_SwiftUI.ImpressionableViewModifier.(private).ViewState */
     {"4d3b0a3f17c936dca9bfc2bbe4d7c963", 0x130ac0, 2, 0, 0x3ffe, 7}, /* _JetEngine_SwiftUI.Impressionable_StateObject.(private).ViewState */
     {"4d3b0a3f17c936dca9bfc2bbe4d7c963", 0x131f80, 2, 1, 0x7fd, 3}, /* _JetEngine_SwiftUI._MultiCacheImageMatch */
+    {"4d3b0a3f17c936dca9bfc2bbe4d7c963", 0x132eb0, 6, 0, 0x7fffffff, 7}, /* _JetEngine_SwiftUI.ShelfGridLayout */
     {"4d3b0a3f17c936dca9bfc2bbe4d7c963", 0x13600c, 2, 0, 0x7e, 7}, /* _JetEngine_SwiftUI._StateOrObservedObject */
+    {"4d45ffd20f863a3ba7a6535d614076af", 0xb8038, 2, 0, 0x7e, 7}, /* MorpheusExtensions.MorpheusPromptConfig */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x109cdd8, 2, 0, 0x7fffffff, 7}, /* IntelligenceFlowPlannerSupport.SecurityValidationEvent */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x109e2e0, 5, 0, 0x3, 7}, /* IntelligenceFlowPlannerSupport.StartedState */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x109e2fc, 5, 0, 0x7fffffff, 7}, /* IntelligenceFlowPlannerSupport.EndedState */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x109e318, 5, 0, 0x3, 7}, /* IntelligenceFlowPlannerSupport.FailedState */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x109e7e4, 6, 0, 0x7fa, 3}, /* IntelligenceFlowPlannerSupport.JinjaASTNode */
+    {"4d71b1560e7d3ae681fd370a0a138d63", 0x109ee78, 3, 0, 0x7fd, 3}, /* IntelligenceFlow.AST.Stmt */
+    {"4d71b1560e7d3ae681fd370a0a138d63", 0x109ee94, 11, 2, 0x7f4, 3}, /* IntelligenceFlow.AST.Expr */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x10a0b94, 7, 0, 0x39, 7}, /* IntelligenceFlowPlannerSupport.ExpressionFlattenerError */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x10a16e8, 3, 0, 0x7fd, 3}, /* IntelligenceFlowPlannerSupport.FuzzyShortcutMatcher.Error */
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x10a7010, 4, 0, 0x7fc, 3}, /* IntelligenceFlowPlannerSupport.(private).PlannerToolParameter */
@@ -607,6 +753,7 @@
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x10b0758, 2, 0, 0x7fffffff, 7}, /* IntelligenceFlowPlannerSupport.AttendingRequest.RequestType */
     {"4d7a0762f22a3074a5bd3aed83f9ed9b", 0x3f8f2c, 3, 0, 0x7fd, 3}, /* IMDPersistence.SQLEntitySnapshotBindingDecoder.DecodeError */
     {"4dfb9506422c3eb199715080484bf5bc", 0x82e74, 2, 0, 0x7fe, 3}, /* SetupAssistantSupportUI.(private).ColorTracker */
+    {"4f0a1dd9d80b362aaaff5e61c5435b28", 0x5c0fe4, 2, 0, 0x1ffe, 7}, /* SnippetUI.SmartDialogAnimationTriggerType */
     {"4f0a1dd9d80b362aaaff5e61c5435b28", 0x5c4504, 4, 0, 0x7fc, 3}, /* SnippetUI.AttributionSource.Source */
     {"4f0a1dd9d80b362aaaff5e61c5435b28", 0x5c6998, 2, 1, 0xfd, 3}, /* SnippetUI.HostBackground */
     {"4f0a1dd9d80b362aaaff5e61c5435b28", 0x5c8de4, 3, 0, 0x3d, 3}, /* SnippetUI.ResponseModelInstrumentationPayload */
@@ -623,7 +770,10 @@
     {"50151d36bb03313ebb2cc85d9766c19b", 0x63ffc, 4, 1, 0x7b, 7}, /* MenuBarClient.MBCampoDragPhase */
     {"50151d36bb03313ebb2cc85d9766c19b", 0x64cb4, 4, 1, 0x7b, 7}, /* MenuBarClient.ControlCenterItemSceneAction */
     {"50845dbd9bbd37f49e1d108ea3b3a5e5", 0xff950, 4, 3, 0x1b, 7}, /* FinHealthCore.UpcomingPaymentDatePattern */
+    {"5119c02feccd3c209858a2d9e725c718", 0x132bd4c, 4, 0, 0x7fffffff, 7}, /* String.LocalizationValue.FormatArgument.DateArgumentFormatStyle.(private).Format */
     {"5119c02feccd3c209858a2d9e725c718", 0x132d644, 2, 0, 0x7fffffff, 7}, /* Foundation.GregorianCalendarError */
+    {"5119c02feccd3c209858a2d9e725c718", 0x132d88c, 2, 0, 0x1e, 7}, /* Foundation.Calendar.RecurrenceRule.Weekday */
+    {"5119c02feccd3c209858a2d9e725c718", 0x132daec, 3, 1, 0xfc, 3}, /* Foundation.Data._Representation */
     {"5119c02feccd3c209858a2d9e725c718", 0x132ee08, 2, 0, 0x7fe, 3}, /* Foundation.(private).__JSONReferencingEncoder.Reference */
     {"5119c02feccd3c209858a2d9e725c718", 0x132ee24, 3, 0, 0x1d, 7}, /* Foundation.JSONFuture */
     {"5119c02feccd3c209858a2d9e725c718", 0x132ef8c, 5, 1, 0x7a, 7}, /* Foundation.JSONMap.Value */
@@ -632,6 +782,10 @@
     {"5119c02feccd3c209858a2d9e725c718", 0x1331e5c, 9, 3, 0x76, 7}, /* Foundation.BPlistMap.Value */
     {"5119c02feccd3c209858a2d9e725c718", 0x133294c, 2, 0, 0x7fffffff, 7}, /* Foundation.(private).__PlistReferencingEncoderXML.Reference */
     {"5119c02feccd3c209858a2d9e725c718", 0x1332b38, 8, 2, 0x7f7, 3}, /* Foundation.XMLPlistMap.Value */
+    {"5119c02feccd3c209858a2d9e725c718", 0x1333864, 3, 0, 0x7fd, 3}, /* Foundation.URL.Template.Value.Underlying */
+    {"5119c02feccd3c209858a2d9e725c718", 0x1333940, 2, 1, 0x7fd, 3}, /* Foundation._CodingPathNode */
+    {"5119c02feccd3c209858a2d9e725c718", 0x13345e8, 19, 0, 0x2d, 7}, /* Foundation.Date.FormatStyle.Symbol.SymbolType */
+    {"5119c02feccd3c209858a2d9e725c718", 0x13347e0, 2, 0, 0x7fffffff, 7}, /* Foundation.Date.AttributedStyle.InnerStyle */
     {"5119c02feccd3c209858a2d9e725c718", 0x1335a60, 2, 0, 0x7fffffff, 7}, /* Foundation.NumberFormatStyleConfiguration.Precision.Option */
     {"5119c02feccd3c209858a2d9e725c718", 0x1336788, 4, 1, 0x7fb, 3}, /* Foundation.SortDescriptor.AllowedComparison */
     {"5119c02feccd3c209858a2d9e725c718", 0x1337aec, 4, 0, 0x7fc, 3}, /* Foundation.PropertyListValue */
@@ -639,8 +793,16 @@
     {"515e38719d553a088291c4db7d49bddb", 0x85ccc8, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.MonotonicTimestampValue */
     {"515e38719d553a088291c4db7d49bddb", 0x85ce20, 14, 0, 0x7f2, 3}, /* IntelligencePlatformLibrary.GenerativeFunctionsInstrumentationMetadata */
     {"515e38719d553a088291c4db7d49bddb", 0x85d2d4, 7, 0, 0x7f9, 3}, /* IntelligencePlatformLibrary.GenerativeFunctionsInstrumentationError */
+    {"515e38719d553a088291c4db7d49bddb", 0x85d30c, 5, 0, 0x7fb, 3}, /* IntelligencePlatformLibrary.GenerativeFunctionsInstrumentationError.ModelManagerSessionError */
+    {"515e38719d553a088291c4db7d49bddb", 0x85d3ec, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.GenerativeFunctionsInstrumentationError.GenerativeFunctionError */
+    {"515e38719d553a088291c4db7d49bddb", 0x85d4e8, 8, 0, 0x7f8, 3}, /* IntelligencePlatformLibrary.GenerativeFunctionsInstrumentationError.SummarizationError */
+    {"515e38719d553a088291c4db7d49bddb", 0x85d600, 4, 0, 0x7fc, 3}, /* IntelligencePlatformLibrary.GenerativeFunctionsInstrumentationError.ClassificationError */
     {"515e38719d553a088291c4db7d49bddb", 0x85deb0, 3, 0, 0x7d, 7}, /* IntelligencePlatformLibrary.CacheManagerInsert */
+    {"515e38719d553a088291c4db7d49bddb", 0x85df20, 3, 0, 0x7fffffff, 7}, /* IntelligencePlatformLibrary.CacheManagerSearch */
+    {"515e38719d553a088291c4db7d49bddb", 0x85e07c, 3, 0, 0x7fffffff, 7}, /* IntelligencePlatformLibrary.IntelligenceFlowPlatformPnR.StateInfo */
+    {"515e38719d553a088291c4db7d49bddb", 0x85e304, 3, 0, 0x7fffffff, 7}, /* IntelligencePlatformLibrary.ResponseGeneration.Event.Override.StateInfo */
     {"515e38719d553a088291c4db7d49bddb", 0x85e6e8, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.PlanGeneration.Event */
+    {"515e38719d553a088291c4db7d49bddb", 0x85e840, 3, 0, 0x7d, 7}, /* IntelligencePlatformLibrary.PlanGeneration.Event.ModelInference.StateInfo */
     {"515e38719d553a088291c4db7d49bddb", 0x85edcc, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.IntelligenceFlowJointResolverTelemetry.JRInferenceContext */
     {"515e38719d553a088291c4db7d49bddb", 0x85f270, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.IntelligenceFlowResponseGeneration.RequestContext */
     {"515e38719d553a088291c4db7d49bddb", 0x85f314, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.IntelligenceFlowResponseGeneration.OverrideContext */
@@ -670,17 +832,25 @@
     {"515e38719d553a088291c4db7d49bddb", 0x862648, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.IntelligenceFlowPlanGenerationTelemetry.PGGeneratePlanContext */
     {"515e38719d553a088291c4db7d49bddb", 0x8628cc, 5, 0, 0x7fb, 3}, /* IntelligencePlatformLibrary.OasisAnalyticsHandTracking.Payload */
     {"515e38719d553a088291c4db7d49bddb", 0x862b6c, 4, 0, 0x7fc, 3}, /* IntelligencePlatformLibrary.DeviceExpertTroubleshooting.Entity */
+    {"515e38719d553a088291c4db7d49bddb", 0x862ca0, 5, 0, 0x7fb, 3}, /* IntelligencePlatformLibrary.ToolKitToolTypeIdentifier */
+    {"515e38719d553a088291c4db7d49bddb", 0x862cbc, 25, 0, 0x7e7, 0}, /* IntelligencePlatformLibrary.ToolKitToolTypeIdentifier.Primitive */
+    {"515e38719d553a088291c4db7d49bddb", 0x862d10, 17, 0, 0x7ef, 0}, /* IntelligencePlatformLibrary.ToolKitToolTypeIdentifier.Builtin */
     {"515e38719d553a088291c4db7d49bddb", 0x862d64, 18, 0, 0x7ee, 0}, /* IntelligencePlatformLibrary.ToolKitToolSystemTypeProtocol */
     {"515e38719d553a088291c4db7d49bddb", 0x862df0, 5, 0, 0x7fb, 3}, /* IntelligencePlatformLibrary.ToolKitToolTypeDefinition.Version1 */
+    {"515e38719d553a088291c4db7d49bddb", 0x862f24, 8, 0, 0x7f8, 3}, /* IntelligencePlatformLibrary.ToolKitToolTypedValue */
+    {"515e38719d553a088291c4db7d49bddb", 0x862f5c, 24, 0, 0x7e8, 0}, /* IntelligencePlatformLibrary.ToolKitToolTypedValue.PrimitiveValue */
     {"515e38719d553a088291c4db7d49bddb", 0x8633a0, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolTypedValue.DeferredValue.Storage */
+    {"515e38719d553a088291c4db7d49bddb", 0x8633f4, 7, 0, 0x7f9, 3}, /* IntelligencePlatformLibrary.ToolKitToolTypeInstance */
     {"515e38719d553a088291c4db7d49bddb", 0x86349c, 7, 0, 0x7f9, 3}, /* IntelligencePlatformLibrary.ToolKitToolRestrictionContext */
     {"515e38719d553a088291c4db7d49bddb", 0x86365c, 4, 0, 0x7fc, 3}, /* IntelligencePlatformLibrary.ToolKitToolContentItemClassDescriptor */
     {"515e38719d553a088291c4db7d49bddb", 0x8636e8, 16, 0, 0x7f0, 3}, /* IntelligencePlatformLibrary.ToolKitToolComparisonPredicate.Comparison */
     {"515e38719d553a088291c4db7d49bddb", 0x863720, 16, 0, 0x7f0, 3}, /* IntelligencePlatformLibrary.ToolKitToolComparisonPredicate.Comparison.Template */
     {"515e38719d553a088291c4db7d49bddb", 0x8638fc, 9, 0, 0x7f7, 3}, /* IntelligencePlatformLibrary.ToolKitToolQuery.AnyPredicate */
     {"515e38719d553a088291c4db7d49bddb", 0x863934, 4, 0, 0x7fc, 3}, /* IntelligencePlatformLibrary.ToolKitToolRuntimeRequirement */
+    {"515e38719d553a088291c4db7d49bddb", 0x863988, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolRuntimeRequirement.DeviceCapability */
     {"515e38719d553a088291c4db7d49bddb", 0x863a14, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolToolSummaryString.Component */
     {"515e38719d553a088291c4db7d49bddb", 0x863af4, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolAssistantTypeSchemaDefinition */
+    {"515e38719d553a088291c4db7d49bddb", 0x863c0c, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.ToolKitToolSystemToolProtocol.IntentSideEffect */
     {"515e38719d553a088291c4db7d49bddb", 0x863d78, 8, 0, 0x7f8, 3}, /* IntelligencePlatformLibrary.ToolKitToolToolDefinition.Version1.Parameter.Relationship.Relation */
     {"515e38719d553a088291c4db7d49bddb", 0x863e90, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.ToolKitToolToolDefinition.Version1.ToolIcon */
     {"515e38719d553a088291c4db7d49bddb", 0x863f54, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolAppDefinition.Device */
@@ -688,8 +858,10 @@
     {"515e38719d553a088291c4db7d49bddb", 0x8640a4, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolDisplayRepresentation.Subtitle */
     {"515e38719d553a088291c4db7d49bddb", 0x8640dc, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolDisplayRepresentation.AltText */
     {"515e38719d553a088291c4db7d49bddb", 0x864114, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolDisplayRepresentation.Image */
+    {"515e38719d553a088291c4db7d49bddb", 0x864130, 3, 0, 0x7fd, 3}, /* IntelligencePlatformLibrary.ToolKitToolDisplayRepresentation.Image.Static */
     {"515e38719d553a088291c4db7d49bddb", 0x8641f4, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitToolTypedValueResolvable */
     {"515e38719d553a088291c4db7d49bddb", 0x8642c4, 2, 0, 0x7fe, 3}, /* IntelligencePlatformLibrary.ToolKitTranscript.Resolvable */
+    {"51755b81bd9a31f9885f399e76e98a21", 0x40654c, 3, 0, 0x7d, 7}, /* CKAsset.AssetType */
     {"51d10cafc4773d1db3f87b70d7c3ae29", 0x49b0f8, 2, 3, 0x7fd, 3}, /* CoreData.CDSwiftResult.ToOneRelationship */
     {"51d10cafc4773d1db3f87b70d7c3ae29", 0x49b2f0, 6, 4, 0x79, 7}, /* CoreData.ColumnMetadata.ColumnKind */
     {"51fae5166cef37c2a9aa310e24bb0495", 0xaf0d0, 2, 0, 0xfe, 3}, /* SpatialDataStreaming.SDSLoopbackListener.LoopbackConnectionType */
@@ -700,11 +872,22 @@
     {"5202d825ae0c38c1b271ba546d19ec1f", 0x19ad44, 7, 3, 0x7f8, 3}, /* PromptKit.Promptkit_Wireformat_GenerationSchemaEnum */
     {"5202d825ae0c38c1b271ba546d19ec1f", 0x19af68, 11, 0, 0x7f5, 3}, /* PromptKit.Promptkit_Wireformat_JsonschemaEnum */
     {"5202d825ae0c38c1b271ba546d19ec1f", 0x19b7b8, 2, 0, 0x7fffffff, 7}, /* PromptKit.WireFormatError */
+    {"522919840000365a868a3bed66bbf13d", 0x29c3a0, 2, 0, 0x3e, 3}, /* SwiftMLS.MLS.Credential */
+    {"522919840000365a868a3bed66bbf13d", 0x29c3d8, 2, 0, 0x7fffffff, 3}, /* SwiftMLS.MLS.Node.Inner */
+    {"522919840000365a868a3bed66bbf13d", 0x29da78, 3, 0, 0x3d, 3}, /* SwiftMLS.MLS.PreSharedKeyID.Inner */
+    {"522919840000365a868a3bed66bbf13d", 0x29dbb4, 2, 0, 0x1ffe, 0}, /* SwiftMLS.MLS.ProposalOrRef */
+    {"522919840000365a868a3bed66bbf13d", 0x29dcb0, 3, 0, 0x7d, 0}, /* SwiftMLS.MLS.FramedContent.Content */
+    {"522919840000365a868a3bed66bbf13d", 0x29ea0c, 19, 1, 0x3ffec, 0}, /* SwiftMLS.MLS.Proposal */
+    {"522919840000365a868a3bed66bbf13d", 0x29fe28, 2, 0, 0x3e, 3}, /* SwiftMLS.MLS.Identity.Credential */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x56924c, 5, 1, 0x7fa, 3}, /* CoreAIRuntime.Location */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x569454, 4, 1, 0x7fb, 3}, /* CoreAIRuntime.Metadata.Value */
+    {"5254da06665136c981eaaeb1f9dbd6e1", 0x569a34, 3, 0, 0x7fffffff, 7}, /* CoreAIRuntime.InferenceFunction.AsyncValue.(private).UnderlyingValue */
+    {"5254da06665136c981eaaeb1f9dbd6e1", 0x569f98, 2, 0, 0x3e, 7}, /* CoreAIRuntime.InferenceValue.Descriptor */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x569ff0, 2, 0, 0x7fffffff, 7}, /* CoreAIRuntime._InoutValue */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x56a0cc, 2, 0, 0x7fffffff, 7}, /* CoreAIRuntime._BorrowedValue */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x56aa54, 2, 0, 0x7fe, 3}, /* CoreAIRuntime.UnsafeNDArrayReference.Backing */
+    {"5254da06665136c981eaaeb1f9dbd6e1", 0x56aa70, 12, 0, 0x3f4, 0}, /* CoreAIRuntime._Operand */
+    {"5254da06665136c981eaaeb1f9dbd6e1", 0x56ab94, 10, 1, 0x7fffffff, 7}, /* CoreAIRuntime._OperandType */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x56b158, 3, 0, 0x7fffffff, 7}, /* CoreAIRuntime.Debugger.BreakpointLocation */
     {"5254da06665136c981eaaeb1f9dbd6e1", 0x56bf94, 2, 1, 0xd, 7}, /* CoreAIRuntime.CallTable.Entry */
     {"534ea51c634b3258a43785dec2d028bb", 0xa22804, 2, 0, 0x2, 7}, /* PassKitCore.ProvisioningRequirement */
@@ -713,16 +896,33 @@
     {"53abd4c15c043282bf96bd770decc906", 0xb1b00, 3, 0, 0x7fd, 3}, /* _MapKit_SwiftUI.RegionBinding */
     {"53abd4c15c043282bf96bd770decc906", 0xb233c, 2, 0, 0x7fffffff, 7}, /* _MapKit_SwiftUI.MapPolygon.Storage */
     {"53abd4c15c043282bf96bd770decc906", 0xb278c, 3, 0, 0x7fffffff, 7}, /* _MapKit_SwiftUI.MapStylePicker.Option.(private).StyleRecipe */
+    {"53abd4c15c043282bf96bd770decc906", 0xb2804, 2, 0, 0x7fe, 3}, /* _MapKit_SwiftUI._LookAroundPreview.SceneStorage */
+    {"53abd4c15c043282bf96bd770decc906", 0xb3884, 5, 2, 0x7fa, 3}, /* _MapKit_SwiftUI.MapCameraPosition.Storage */
     {"53abd4c15c043282bf96bd770decc906", 0xb42b8, 2, 0, 0x3ffe, 7}, /* _MapKit_SwiftUI.MapPolyline.Storage */
     {"54f671eeb22d3f02930c2cc027116e14", 0x5029f0, 2, 0, 0x7fe, 3}, /* Swift.Dictionary.Iterator._Variant */
     {"54f671eeb22d3f02930c2cc027116e14", 0x505df8, 2, 0, 0x7fe, 3}, /* Swift.Set.Iterator._Variant */
     {"54f671eeb22d3f02930c2cc027116e14", 0x507758, 7, 0, 0x7fffffff, 7}, /* Swift._SwiftifyInfo */
     {"54f671eeb22d3f02930c2cc027116e14", 0x509148, 5, 3, 0x7fffffff, 7}, /* Swift.KeyPathComponent */
     {"54f671eeb22d3f02930c2cc027116e14", 0x509164, 2, 0, 0x7fffffff, 7}, /* Swift.UTF8ValidationResult */
+    {"5536ca3c59873fbda7b23ced610fa4af", 0x38dac, 3, 0, 0x7d, 7}, /* EligibilityQuorum.EligibilityXPCMessage.Client */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3aef5c, 3, 0, 0x7fffffff, 7}, /* SecureMessaging.MLS.EncryptedRCS.SigningInput.ContentType */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3af594, 2, 2, 0x3d, 3}, /* SecureMessaging.KDSRegistration.EncryptedRCS.PhoneAuthenticationResult */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b2a24, 2, 2, 0x3d, 3}, /* SecureMessaging.MLS.FetchGroupRecoveryInfoResult */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b2a40, 2, 0, 0x3e, 3}, /* SecureMessaging.MLS.EnhancedGroupRecoveryFetchResult */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b43c8, 12, 0, 0x7fffffff, 7}, /* SecureMessaging.MLS.OutgoingEventState.EventSpecificState */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b5b64, 5, 7, 0x7fa, 3}, /* SecureMessaging.MLS.SelfHealReason */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b5b80, 5, 7, 0x7fa, 3}, /* SecureMessaging.MLS.EraAdvancementReason */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b6ec8, 3, 0, 0x7fffffff, 7}, /* SecureMessaging.MLS.OutgoingEventUpdate */
+    {"55d33c18acc03a1a9bdcd99806f7f39a", 0x3b7478, 2, 0, 0x7e, 7}, /* SecureMessaging.MLS.AllMember */
+    {"560de45427d539919e29e87adcc9d1ff", 0x1d34dc, 2, 0, 0x7e, 7}, /* CipherML.RequestsManager.Index */
     {"560de45427d539919e29e87adcc9d1ff", 0x1d4a20, 2, 0, 0x3e, 3}, /* CipherML.TokenFetcher.TokenKey */
     {"560de45427d539919e29e87adcc9d1ff", 0x1d4cd0, 2, 0, 0x3e, 3}, /* CipherML.TokenCache.CachedData */
+    {"56315edf2eb83758941f831ded54635e", 0x76ed58, 2, 1, 0x7d, 7}, /* AppleMediaServicesKitInternal.BagService.ExpiredDataUsage.Configuration */
+    {"56a1dbdc9f463d9bb302777e3fde5c44", 0x121eb8, 6, 0, 0x7fa, 3}, /* LiftUI.DecodableState */
     {"56a1dbdc9f463d9bb302777e3fde5c44", 0x12213c, 2, 0, 0x7fe, 3}, /* LiftUI.NumericResolvable */
     {"56a1dbdc9f463d9bb302777e3fde5c44", 0x122158, 2, 0, 0x7e, 7}, /* LiftUI.DoubleResolvable */
+    {"56a1dbdc9f463d9bb302777e3fde5c44", 0x122174, 2, 0, 0x7e, 7}, /* LiftUI.IntResolvable */
+    {"56a1dbdc9f463d9bb302777e3fde5c44", 0x1221fc, 3, 0, 0x7d, 7}, /* LiftUI.StringResolvable */
     {"56a1dbdc9f463d9bb302777e3fde5c44", 0x122258, 2, 1, 0x7fd, 3}, /* LiftUI.SubReference */
     {"56a1dbdc9f463d9bb302777e3fde5c44", 0x1244b4, 2, 0, 0x1e, 7}, /* LiftUI.TextView.TextType */
     {"56a1dbdc9f463d9bb302777e3fde5c44", 0x125b60, 2, 0, 0x7e, 7}, /* LiftUI.ComparisonOperand */
@@ -739,24 +939,41 @@
     {"58913f56ca0b329b86c0dcc97d631e35", 0x36474, 3, 2, 0x3fc, 7}, /* SleepHealth.SleepScoreNote.Level */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d575c, 3, 0, 0x7fffffff, 7}, /* PhotosIntelligence.FreeformStoryCurator.(private).InternalReconciliationResult */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d5eb8, 3, 2, 0x3c, 3}, /* PhotosIntelligence.AlchemistOutput */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d6dbc, 4, 0, 0x7c, 7}, /* PhotosIntelligence.Hastings.ClusterComparator.DiagnosticReporter.Reason */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d764c, 2, 0, 0x7fe, 3}, /* PhotosIntelligence.FreeformStoryGeneration.Generator.UncuratedStoryResult */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d88e0, 2, 5, 0x7b, 7}, /* PhotosIntelligence.FreeformStoryType */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d9510, 2, 0, 0x3fe, 3}, /* PhotosIntelligence.FreeformStoryGeneration.Generator.Error */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d9aec, 5, 0, 0x7fb, 3}, /* PhotosIntelligence.StoryState.TokenState */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d9b24, 3, 1, 0x7fc, 3}, /* PhotosIntelligence.StoryState.AssetState */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d9b40, 2, 1, 0x7fd, 3}, /* PhotosIntelligence.StoryState.TraitState */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6d9b5c, 4, 0, 0x7fc, 3}, /* PhotosIntelligence.StoryState.PromptState */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6dd8dc, 2, 0, 0x7fe, 3}, /* PhotosIntelligence.FreeformStoryGeneration.Generator.CuratedStoryResult */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6dedf4, 2, 0, 0x7fffffff, 7}, /* PhotosIntelligence.NonInternalDiagnosticsGenerator.NonInternalDiagnosticsLLMCommunication */
     {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6df988, 4, 0, 0x7fc, 3}, /* PhotosIntelligence.CompletionParserError */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6e09ac, 3, 2, 0x7fffffff, 7}, /* PhotosIntelligence.MemoryCreationAvailabilityState */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6e1a70, 4, 2, 0x7b, 7}, /* PhotosIntelligence.Spatial3DCuration.PresentationTarget */
+    {"5905544c9a0a3de3b4ef7db44a0e39e1", 0x6e1d70, 2, 0, 0x7fffffff, 7}, /* PhotosIntelligence.MessagesBackdrop.PresentationTarget */
     {"599240846c89357ab838c00f2a63da28", 0x3bfcc, 2, 1, 0x7d, 7}, /* UserNotificationsServices.NotificationEventService.ListEvent */
     {"59ed9ca8ca60381aac0486a0b585abcc", 0x20f184, 4, 0, 0x7fffffff, 7}, /* DesignLibrary.Button.(private).ButtonMorphology */
     {"59ed9ca8ca60381aac0486a0b585abcc", 0x21045c, 4, 3, 0x7a, 7}, /* DesignLibrary.WindowControlVariant */
+    {"59ed9ca8ca60381aac0486a0b585abcc", 0x212f08, 4, 25, 0x7fb, 3}, /* DesignLibrary.GlassMaterialProvider.Configuration.Base */
+    {"59ed9ca8ca60381aac0486a0b585abcc", 0x2149d4, 2, 0, 0x7fffe, 7}, /* DesignLibrary.GlassMaterialProvider.MixKey */
+    {"59ed9ca8ca60381aac0486a0b585abcc", 0x214d68, 3, 0, 0x7fffffff, 7}, /* DesignLibrary.GlassMaterialProvider.Spec.BackdropScale */
+    {"59ed9ca8ca60381aac0486a0b585abcc", 0x218358, 4, 23, 0x7b, 7}, /* DesignLibrary.GlassMaterialProvider.ResolvedConfiguration.Base */
     {"5a5b73b217c43c29b740e713f4b7efbf", 0xe93a8, 4, 5, 0x3b, 7}, /* VisualActionPredictionSupport.ServiceFailure */
     {"5a5b73b217c43c29b740e713f4b7efbf", 0xea764, 2, 1, 0x7fffffff, 7}, /* VisualActionPredictionSupport.ExecutionResourceRetriever.(private).State */
     {"5a5b73b217c43c29b740e713f4b7efbf", 0xea860, 7, 0, 0x79, 7}, /* VisualActionPredictionSupport.VisualClassification.Result */
     {"5a5b73b217c43c29b740e713f4b7efbf", 0xea9dc, 2, 0, 0x3e, 3}, /* VisualActionPredictionSupport.ImageBuffer.Storage */
     {"5a5b73b217c43c29b740e713f4b7efbf", 0xeab48, 2, 0, 0x7fe, 3}, /* VisualActionPredictionSupport.SceneDescriptor.(private).PixelBufferSource */
     {"5a5b73b217c43c29b740e713f4b7efbf", 0xeafb4, 2, 4, 0x7fffffff, 7}, /* VisualActionPredictionSupport.ImageProcessing.Failure */
+    {"5ad9338796403340bce11b7bf2b52406", 0x68f874, 5, 0, 0x7fffffff, 7}, /* __C.VTRAWProcessingSession.Parameter */
     {"5b868e609f743738828122cf7f5784a7", 0x5da5b4, 2, 0, 0x7fe, 3}, /* MusicKit.LibraryPredicateResolver.KeyPathKind */
     {"5b868e609f743738828122cf7f5784a7", 0x5ddc5c, 4, 0, 0x7fffffff, 7}, /* MusicKit.MusicPersonalRecommendation.Content */
     {"5b868e609f743738828122cf7f5784a7", 0x5de094, 2, 0, 0x7fffffff, 7}, /* MusicKit.MusicCatalogResourceRequest.(private).Kind */
     {"5b868e609f743738828122cf7f5784a7", 0x5de124, 4, 0, 0x7fffffff, 7}, /* MusicKit.MusicCatalogResourceRequest.FilterContext.Filter */
+    {"5b868e609f743738828122cf7f5784a7", 0x5e3680, 2, 0, 0x7fffffff, 7}, /* MusicKit.MusicPlayer.Queue.Entry.(private).PropertyProvider */
+    {"5b868e609f743738828122cf7f5784a7", 0x5e3774, 2, 0, 0x7fffffff, 7}, /* MusicKit.MusicPlayer.Queue.LazyEntryPropertyProvider.(private).LoadingState */
+    {"5c56c46f3e1a300985d18e27544ab790", 0x2918c4, 3, 1, 0xffc, 3}, /* NewsAnalytics.EventUserInfoHeadlineEmbeddings */
     {"5c629c711ae235c29289a2368345a5d9", 0x1647bc, 3, 0, 0x7fffffff, 7}, /* Nexus.NXProximityServiceData */
     {"5c629c711ae235c29289a2368345a5d9", 0x164958, 4, 2, 0x7fffffff, 7}, /* Nexus.NXClientEvent */
     {"5c629c711ae235c29289a2368345a5d9", 0x164a1c, 2, 3, 0x7fd, 3}, /* Nexus.NXConnectionStatus */
@@ -780,19 +997,28 @@
     {"5cfb819a0aac3993b2053a909ab7207c", 0x75b580, 2, 0, 0x7e, 7}, /* FinanceKit.TokenInfo */
     {"5cfb819a0aac3993b2053a909ab7207c", 0x768478, 2, 0, 0x3fe, 3}, /* FinanceKit.ManagedOrderContentItem */
     {"5cfb819a0aac3993b2053a909ab7207c", 0x76a520, 2, 0, 0x7e, 7}, /* FinanceKit.TrackedOrder.OrderDate */
+    {"5cfb819a0aac3993b2053a909ab7207c", 0x76a53c, 2, 0, 0x7e, 7}, /* FinanceKit.TrackedOrder.ShippingDate */
+    {"5cfb819a0aac3993b2053a909ab7207c", 0x76a558, 2, 0, 0x7e, 7}, /* FinanceKit.TrackedOrder.DeliveryDate */
+    {"5cfb819a0aac3993b2053a909ab7207c", 0x76a574, 8, 0, 0x7fffffff, 7}, /* FinanceKit.TrackedOrder.EstimatedDeliveryDate */
     {"5cfb819a0aac3993b2053a909ab7207c", 0x76b444, 2, 0, 0x7fe, 3}, /* FinanceKit.ManagedTransactionImporter.FKTransactionResult */
+    {"5cfb819a0aac3993b2053a909ab7207c", 0x76c7a0, 2, 0, 0x7fe, 3}, /* FinanceKit.ManagedOrderFulfillment */
     {"5cfb819a0aac3993b2053a909ab7207c", 0x76c8b0, 2, 0, 0x7fe, 3}, /* FinanceKit.ManagedOrderDashboardItem.BackingItem */
     {"5cfb819a0aac3993b2053a909ab7207c", 0x76de6c, 2, 1, 0x3d, 3}, /* FinanceKit.OrderMessagesPreviewMetadata.(private).OrderImage */
     {"5cfb819a0aac3993b2053a909ab7207c", 0x76ea88, 2, 0, 0x7e, 7}, /* FinanceKit.FKNFHardwareStateChangeMonitor.Implementation.(private).State */
     {"5d0108f9b2c237758da7dda3ac6c541a", 0xdaaec, 2, 0, 0x3e, 3}, /* HomeUtilityServices.RecordTransport.OneOf_Contents */
+    {"5d496157a85f3b46923c18b983ff9a51", 0x12bbf0, 10, 10, 0x7fffffff, 7}, /* SiriNetwork.NetworkConnectionError */
+    {"5d55fd9ad7993a289bc60c68b1916240", 0x17dd764, 2, 1, 0x7d, 7}, /* ImagePlaygroundInternal.ImageGeneration.GenerationError.Phase */
+    {"5d55fd9ad7993a289bc60c68b1916240", 0x17e01b4, 2, 0, 0x7fffffff, 7}, /* ImagePlaygroundInternal.TextStorage */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17e2cd0, 2, 0, 0x7fe, 3}, /* ImagePlaygroundInternal.NotificationManagerError */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17e2d28, 2, 0, 0x7fe, 3}, /* ImagePlaygroundInternal.NotificationPlatformError */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17e3580, 7, 36, 0x78, 7}, /* ImagePlaygroundInternal.ImageGeneration.Limitation */
+    {"5d55fd9ad7993a289bc60c68b1916240", 0x17e5730, 4, 17, 0x37, 7}, /* ImagePlaygroundInternal.InputAnalyticsHelper.BlockingSubCategory */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17e6a48, 3, 0, 0x1d, 7}, /* ImagePlaygroundInternal.VisualEffectLoader.LoadingError */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17ea440, 2, 0, 0x7e, 7}, /* ImagePlaygroundInternal.FacePickerCarouselViewStaticMetrics.Theme */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17f3164, 2, 5, 0x7d, 7}, /* ImagePlaygroundInternal.EffectViewModel.State */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17f4da4, 4, 11, 0x7b, 7}, /* ImagePlaygroundInternal.GenerateImageIntentError */
     {"5d55fd9ad7993a289bc60c68b1916240", 0x17f5858, 3, 6, 0xc, 7}, /* ImagePlaygroundInternal.GenerationState */
+    {"5d55fd9ad7993a289bc60c68b1916240", 0x17f64d4, 2, 0, 0x7e, 7}, /* ImagePlaygroundInternal.DirectManipulationUI.SegmentationInputViewModel.InstallationViewModel */
     {"5d9f450b341d3e20bb05813f3a92ffbc", 0x39efdc, 3, 3, 0x7b, 7}, /* ConversationKit.InCallControlsMode */
     {"5d9f450b341d3e20bb05813f3a92ffbc", 0x39f068, 4, 1, 0x7b, 7}, /* ConversationKit.InCallControlsParticipantCellViewModel.SubtitleState */
     {"5d9f450b341d3e20bb05813f3a92ffbc", 0x39f514, 4, 0, 0x7c, 7}, /* ConversationKit.LocalParticipantViewConstraintManager.(private).LocalParticipantLayoutType */
@@ -803,6 +1029,7 @@
     {"5d9f450b341d3e20bb05813f3a92ffbc", 0x3a9e30, 3, 11, 0x7fffffff, 7}, /* ConversationKit.SessionActionNotice.NoticeType */
     {"5dd2b7e48cff36a2ad8f6379a3a65cfb", 0xfac70, 3, 0, 0x7d, 7}, /* CKModifyRecordsOperation.ZoneWritesResult */
     {"5dd2b7e48cff36a2ad8f6379a3a65cfb", 0xfc9c8, 3, 0, 0x7d, 7}, /* CKFetchRecordZoneChangesOperation.ZoneChangesResult */
+    {"5e1970cbff8736ee9247fb6f9df8de5e", 0x11244, 4, 0, 0x7fc, 3}, /* ServicesAnalyticsKit.Metrics.EnqueueError */
     {"5e5a4e9401e8341c9788980c68b66c67", 0x2b81c, 4, 0, 0x7c, 7}, /* MediaIntentsSnippetModels.VideoSnippetModels.VideoUIMetadata */
     {"5e5e02f1d2ca3288ba9c1a42ca83461d", 0x298570, 2, 0, 0xfffffe, 7}, /* FinanceKitUI.FoundInPhotoEventExtractor.ExtractionResult */
     {"5e5e02f1d2ca3288ba9c1a42ca83461d", 0x298e7c, 2, 2, 0x7fd, 3}, /* FinanceKitUI.LineItemImagePhase */
@@ -812,15 +1039,21 @@
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x741e6c, 3, 1, 0x7c, 7}, /* AppStoreKit.InAppPurchaseState */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x7432f4, 8, 4, 0x7fffffff, 7}, /* AppStoreKit.AppStoreAppState */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x747ad8, 2, 0, 0x7e, 7}, /* AppStoreKit.FamilyCircleLookupResult */
+    {"5ebe5feb1cd43369a7eafb5de52e4801", 0x748488, 2, 2, 0x7fd, 3}, /* AppStoreKit.TopChartsDiffablePagePresenter.UpdatePhase */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x7486e4, 2, 0, 0x3fffe, 3}, /* AppStoreKit.TopChartsDiffablePageContentPresenter.PageFetchResult */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x74af74, 4, 0, 0x7fc, 3}, /* AppStoreKit.ShareSheetData.Metadata */
+    {"5ebe5feb1cd43369a7eafb5de52e4801", 0x74b224, 6, 1, 0x3ffffff9, 7}, /* AppStoreKit.Shelf.ContentsMetadata */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x74cf9c, 2, 0, 0x7fe, 3}, /* AppStoreKit.ProductTopLockup.PrimaryBanner */
+    {"5ebe5feb1cd43369a7eafb5de52e4801", 0x74cfd4, 3, 0, 0x7fffffff, 7}, /* AppStoreKit.EditorialMediaDisplaySpec.EffectLayer.Region */
+    {"5ebe5feb1cd43369a7eafb5de52e4801", 0x74d2d4, 3, 1, 0x3c, 7}, /* AppStoreKit.EditorialMediaDisplaySpec.EffectLayer.ReachAnchor */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x7502d8, 2, 0, 0x7fe, 3}, /* AppStoreKit.ProductReviewAction.ReviewAction */
+    {"5ebe5feb1cd43369a7eafb5de52e4801", 0x7510d0, 4, 0, 0x3c, 7}, /* AppStoreKit.ArcadeState */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x751174, 3, 2, 0x7c, 7}, /* AppStoreKit.EntitlementRefeshCondition */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x751520, 4, 0, 0x7fffffff, 7}, /* AppStoreKit.AccountSection.ContentItem */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x752344, 2, 0, 0x7fe, 3}, /* AppStoreKit.ArticleDiffablePagePresenter.FooterLockup */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x7543c0, 2, 0, 0x7fe, 3}, /* AppStoreKit.MixedMediaItem.Content */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x755330, 4, 1, 0x7fffffff, 7}, /* AppStoreKit.ProductAskToBuyPresenter.Status */
+    {"5ebe5feb1cd43369a7eafb5de52e4801", 0x757194, 4, 4, 0xffb, 7}, /* AppStoreKit.ShelfBackground */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x7579f8, 2, 0, 0x7fe, 3}, /* AppStoreKit.HorizontalAlignmentLayout.ContainerDestinationOffset */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x75a8f0, 3, 0, 0x7fd, 3}, /* AppStoreKit.SearchResultsPhase */
     {"5ebe5feb1cd43369a7eafb5de52e4801", 0x75ad34, 5, 0, 0x7b, 7}, /* AppStoreKit.AppStoreAMSEngagementRequest */
@@ -829,7 +1062,9 @@
     {"5ee7cec92f0b3d249c721275f35a9347", 0x121e38, 2, 0, 0x7fffffff, 7}, /* Anvil.FraudTicketing.FetchRLTResult */
     {"5ee7cec92f0b3d249c721275f35a9347", 0x121ed4, 2, 1, 0x3d, 7}, /* Anvil.FraudTicketing.TicketingSubType */
     {"5ee7cec92f0b3d249c721275f35a9347", 0x1230fc, 2, 4, 0x7d, 7}, /* Anvil.ToolingDescription */
+    {"5f503d19e1053eea861cc1b2a4f34258", 0xadebc, 3, 0, 0x7fffffff, 7}, /* SettingsHost.SettingsListItemViewType */
     {"5f503d19e1053eea861cc1b2a4f34258", 0xaf054, 2, 14, 0x7fffffff, 7}, /* SettingsHost.SettingsSearchIndexingRequestIssue.IssueType */
+    {"5f503d19e1053eea861cc1b2a4f34258", 0xaf178, 3, 0, 0x7d, 7}, /* SettingsHost.AssociatedParameterValue */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x17f15c, 2, 0, 0x7fffffff, 7}, /* GRDBv7Internal.Database.TraceEvent */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x17f2fc, 2, 1, 0x7fffffff, 7}, /* GRDBv7Internal.PrimaryKeyInfo.(private).Impl */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x1805dc, 5, 0, 0x7fffffff, 7}, /* GRDBv7Internal.SQL.Element */
@@ -837,19 +1072,28 @@
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x181e20, 3, 0, 0x7fffffff, 7}, /* GRDBv7Internal.SQLCollection.(private).Impl */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x181f0c, 23, 2, 0x7fffffff, 7}, /* GRDBv7Internal.SQLExpression.(private).Impl */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x182030, 6, 0, 0x7fffffff, 7}, /* GRDBv7Internal.SQLOrdering.(private).Impl */
+    {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x182180, 2, 0, 0x7e, 7}, /* GRDBv7Internal.SQLAssociationCondition */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x182234, 6, 1, 0x7fffffff, 7}, /* GRDBv7Internal.SQLSelection.(private).Impl */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x1822c4, 2, 0, 0x7fffffff, 7}, /* GRDBv7Internal.SQLSubquery.(private).Impl */
     {"5f51dbb7a50b38e7a01f058cde51c4e0", 0x1823d4, 2, 0, 0x3ffffe, 3}, /* GRDBv7Internal.SQLGenerationContext.(private).Parent */
     {"5fadb65f687836b1aa04fcc711e6cd31", 0x12a0e8, 2, 3, 0x7d, 7}, /* ExtensionFoundation.AppExtensionPoint.Scope.Restriction */
     {"5fee1b1cb558386fb3569ea539cf79a0", 0x82c94, 2, 0, 0x1e, 7}, /* AudioTranscriptionAnalysis.ATASessionClient._ObservedPhaseUpdate */
+    {"5ff2917059383557be888d2197079ffe", 0xa717c, 18, 0, 0x7fffffff, 7}, /* ShortcutsAgent.DescribeAShortcutAgentEvent */
     {"5ff2917059383557be888d2197079ffe", 0xa72b0, 3, 0, 0xfd, 3}, /* ShortcutsAgent.DescribeAShortcutSanitizer.SanitizerError */
+    {"607f57a7f13d3136b2eca3cb30c6dabb", 0xadad84, 3, 0, 0xd, 7}, /* HomeDataModel.Event.CharacteristicEvent.Condition */
+    {"607f57a7f13d3136b2eca3cb30c6dabb", 0xade430, 2, 1, 0x7d, 7}, /* HomeDataModel.Camera.Mode */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xae1be4, 5, 1, 0x1a, 7}, /* HomeDataModel.StatusIcon.(private).StatusIconPayload */
+    {"607f57a7f13d3136b2eca3cb30c6dabb", 0xae25ac, 4, 5, 0x3b, 7}, /* HomeDataModel.StaticRVCClusterGroup.Command.Template */
+    {"607f57a7f13d3136b2eca3cb30c6dabb", 0xae2d20, 2, 0, 0x7fffffff, 7}, /* HomeDataModel.StaticThermostatClusterGroup.Command */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xae2da8, 5, 0, 0x1b, 7}, /* HomeDataModel.MatterThermostatPresetContextTag */
+    {"607f57a7f13d3136b2eca3cb30c6dabb", 0xae31d0, 2, 0, 0x3e, 7}, /* HomeDataModel.StaticThermostatClusterGroup.NotFollowingReason */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xae5bd0, 5, 0, 0x3b, 7}, /* HomeDataModel.MatterCommandError.ErrorCode.RVC */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xaea78c, 2, 0, 0x7e, 7}, /* HomeDataModel.StaticProfileBag.ValueUpdate */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xaeb57c, 2, 1, 0xffd, 7}, /* HomeDataModel.StateSnapshot.ActionSetUpdateType */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xaeb850, 3, 3, 0x7c, 7}, /* HomeDataModel.StaticCharacteristic.LoadingState */
     {"607f57a7f13d3136b2eca3cb30c6dabb", 0xaeba54, 3, 1, 0x7fffffff, 7}, /* HomeDataModel.StaticCharacteristicMetadata */
+    {"60d1ad42065a31d4a8476dea3ad02ebb", 0x447568, 5, 0, 0x7fb, 3}, /* PassKitMacHelper.UIFlowManager.(private).PresentationAction */
+    {"60d1ad42065a31d4a8476dea3ad02ebb", 0x447584, 2, 0, 0x7fe, 3}, /* PassKitMacHelper.UIFlowManager.PresentationItem */
     {"60d1ad42065a31d4a8476dea3ad02ebb", 0x447654, 2, 2, 0x7fd, 3}, /* PassKitMacHelper.CachedAsyncImagePhase */
     {"60d1ad42065a31d4a8476dea3ad02ebb", 0x44ab08, 5, 5, 0x3a, 7}, /* PassKitMacHelper.FooterStatus.FooterGlyphMode */
     {"60d1ad42065a31d4a8476dea3ad02ebb", 0x44b5bc, 7, 1, 0x78, 7}, /* PassKitMacHelper.PaymentOfferSelectionContext */
@@ -866,6 +1110,7 @@
     {"615ca4e6e4813aca9cc705b070f4f092", 0xa43150, 2, 0, 0x7fffffff, 7}, /* BlastDoor.Chatbot.MapAction.Location.Method */
     {"615ca4e6e4813aca9cc705b070f4f092", 0xa44390, 2, 0, 0x7fffffff, 7}, /* BlastDoor.StyleSheet.Font */
     {"615ca4e6e4813aca9cc705b070f4f092", 0xa443e4, 2, 0, 0x3e, 7}, /* BlastDoor.StyleSheet.Font.Size */
+    {"615ca4e6e4813aca9cc705b070f4f092", 0xa450f4, 2, 3, 0x7fffffff, 7}, /* BlastDoor.Image.Encoding */
     {"615ca4e6e4813aca9cc705b070f4f092", 0xa474e8, 2, 0, 0xe, 7}, /* BlastDoor.IMDispositionNotification.DeliveryNotification.Status.FailureReason */
     {"615ca4e6e4813aca9cc705b070f4f092", 0xa48418, 3, 0, 0x7fffffff, 7}, /* BlastDoor.NameAndPhoto.UpdateType */
     {"61ac26182fbd3e9f86ac670903d129d1", 0x23b490, 10, 0, 0x76, 7}, /* TextComposer.TextCompositionError.ErrorType */
@@ -874,9 +1119,13 @@
     {"61ac26182fbd3e9f86ac670903d129d1", 0x23bb78, 2, 0, 0x7fe, 3}, /* TextComposer.WritingAssistantServerDraft */
     {"61ac26182fbd3e9f86ac670903d129d1", 0x23bc1c, 3, 0, 0x7fd, 3}, /* TextComposer.WritingAssistantServerInput */
     {"61e4de757122377e8f0a690cdbb025af", 0xbd0f4, 4, 1, 0x7fb, 3}, /* FindMyPairing.ExecutionDirective */
+    {"61e4de757122377e8f0a690cdbb025af", 0xbd330, 2, 16, 0x1fd, 3}, /* FindMyPairing.PairingCoordinatorState */
     {"62273ec9812f34488aa6debf92ce2eb8", 0xc3714, 2, 0, 0x7e, 7}, /* WorkflowUICore.TopHitCollectionView.Layout */
+    {"62273ec9812f34488aa6debf92ce2eb8", 0xc6164, 3, 0, 0x3d, 7}, /* WorkflowUICore.ContentCollectionPreviewView.PreviewState */
     {"622d9558810d3b189c43f917a91d90ee", 0x274f3c, 7, 1, 0x7f8, 3}, /* JetCore.JSONError */
     {"622d9558810d3b189c43f917a91d90ee", 0x275b08, 9, 0, 0x7fffffff, 7}, /* JetCore.OperationCheckpoint */
+    {"622d9558810d3b189c43f917a91d90ee", 0x276bd0, 2, 3, 0x3d, 3}, /* JetCore.JetPackSigningPolicy */
+    {"622d9558810d3b189c43f917a91d90ee", 0x277024, 3, 0, 0x7fffffff, 7}, /* JetCore.Models.Menu.Child */
     {"622d9558810d3b189c43f917a91d90ee", 0x278c70, 2, 0, 0x7fe, 3}, /* JetCore.AnyActionTypes.(private).Registry */
     {"62fcec273dc63b00ad87876c41edfb92", 0x92f4c, 11, 0, 0x7f5, 3}, /* AssistantActionSuggestionSupport.AggregatedContext.Context */
     {"635f6b73d3a7396281fbc7e6cccbfe93", 0x3a5d18, 2, 0, 0x3e, 3}, /* PrivateMLClient.Tie_ImageData.OneOf_Representative */
@@ -886,15 +1135,22 @@
     {"635f6b73d3a7396281fbc7e6cccbfe93", 0x3ac7f8, 2, 0, 0x3e, 3}, /* PrivateMLClient.TieVisualGeneration_Tensor.OneOf_Buffer */
     {"638663bfca063101a51286b33fdec979", 0x33e068, 2, 0, 0x7fffffff, 7}, /* NewsArticles.IssuePages.ANF.Page */
     {"638663bfca063101a51286b33fdec979", 0x341284, 2, 0, 0x7e, 7}, /* NewsArticles.EndOfArticleItem */
+    {"638663bfca063101a51286b33fdec979", 0x3414cc, 2, 0, 0x7fe, 3}, /* NewsArticles.ArticleRecipeResult */
     {"638663bfca063101a51286b33fdec979", 0x3418c4, 2, 1, 0x1fd, 3}, /* NewsArticles.RecipeViewerBlueprint */
     {"638663bfca063101a51286b33fdec979", 0x3418fc, 3, 0, 0x7fd, 3}, /* NewsArticles.RecipeViewerBlueprint.RecipeItem.Model */
     {"638663bfca063101a51286b33fdec979", 0x341d24, 3, 1, 0x1c, 7}, /* NewsArticles.RecipeSessionTrigger */
+    {"638663bfca063101a51286b33fdec979", 0x34451c, 2, 0, 0x7fffffff, 7}, /* NewsArticles.ArticleGroupData */
+    {"638663bfca063101a51286b33fdec979", 0x344e8c, 6, 0, 0x7fa, 3}, /* NewsArticles.EndOfArticleSectionDescriptor */
     {"638663bfca063101a51286b33fdec979", 0x3489a4, 2, 1, 0x7fd, 3}, /* NewsArticles.InterstitialAdManagerErrors */
     {"63c1491d8cea3f7a9350e1d202d0b745", 0x318e90, 2, 0, 0x3e, 3}, /* PCCAgentClientCommon.Tie_ImageData.OneOf_Representative */
     {"63c1491d8cea3f7a9350e1d202d0b745", 0x31eb00, 2, 0, 0x3e, 3}, /* PCCAgentClientCommon.TieVisualGeneration_Tensor.OneOf_Buffer */
     {"650f45c826433d9199513c39a70618de", 0x2990a0, 2, 0, 0x7e, 7}, /* ContentKit.WFAskLLMPrompt */
     {"65b7c63d056235a7a9f0902f383005d6", 0x26b7e8, 2, 1, 0x3ffffd, 3}, /* PhotoAnalysis.WorkerFactory.Error */
     {"65b7c63d056235a7a9f0902f383005d6", 0x26c820, 3, 2, 0x7fc, 3}, /* PhotoAnalysis.MomentGraphService.Error */
+    {"662c63db10c7383993f89bc471c26de8", 0x160630, 6, 1, 0x1ffff9, 7}, /* SafetyMonitorUI.CheckInViewState */
+    {"6711afb55a243d15a571364e8887cb2a", 0x3accd0, 3, 1, 0x7c, 7}, /* MusicUI_Mac.Page.Section.Presentation.CollectionPresentation */
+    {"6711afb55a243d15a571364e8887cb2a", 0x3b7348, 2, 0, 0x7e, 7}, /* MusicUI_Mac.PlayMode */
+    {"6711afb55a243d15a571364e8887cb2a", 0x3b8980, 4, 1, 0x3ffb, 7}, /* MusicUI_Mac.TrackLockup.LayoutStyle */
     {"671d081369a53dff9cd72da0e56834af", 0x132f30, 2, 2, 0x7fd, 3}, /* PreviewsFoundationOS.(private).FlatMapFuture.Activity */
     {"671d081369a53dff9cd72da0e56834af", 0x1352fc, 2, 0, 0x7fffffff, 7}, /* PreviewsFoundationOS.InvalidationTrace.Link */
     {"671d081369a53dff9cd72da0e56834af", 0x13663c, 3, 4, 0x7c, 7}, /* PreviewsFoundationOS.StructuredDescriptionBuildAction */
@@ -903,14 +1159,25 @@
     {"673f03f29f6b32b3ab927e86d4f64cec", 0x276a80, 3, 0, 0x7fd, 3}, /* PrivateCloudComputeDaemon.RequestMetrics.(private).ResponseReceiveFailedAction */
     {"673f03f29f6b32b3ab927e86d4f64cec", 0x276c54, 3, 4, 0x3fc, 3}, /* PrivateCloudComputeDaemon.RequestMetrics.State.NodeMetadata.State */
     {"673f03f29f6b32b3ab927e86d4f64cec", 0x2772fc, 5, 1, 0x7a, 7}, /* PrivateCloudComputeDaemon.TrustedRequest.(private).RunSubTask */
+    {"6795841266b33c2fa6acb1ffbef259fa", 0xf6b68, 2, 0, 0x3e, 3}, /* SwiftTLSLibrary.Extension.PAKE */
     {"6795841266b33c2fa6acb1ffbef259fa", 0xf6e50, 15, 0, 0x11, 0}, /* SwiftTLSLibrary.Extension */
+    {"6795841266b33c2fa6acb1ffbef259fa", 0xf768c, 3, 0, 0x3d, 3}, /* SwiftTLSLibrary.Extension.KeyShare */
+    {"67c95b72ff5338b8b71259fb1a086a0d", 0x3e574, 2, 0, 0x7fffffff, 7}, /* RealityFoundation.ParticleEmitterComponent.ParticleEmitter.ParticleColor */
+    {"67c95b72ff5338b8b71259fb1a086a0d", 0x3e5b8, 2, 0, 0x7fffffff, 7}, /* RealityFoundation.ParticleEmitterComponent.Timing */
     {"68100c86cd7e3673b99b4a9bb4294267", 0xb5e40, 2, 2, 0x7fd, 3}, /* WallpaperExtensionKit.SceneWallpaperPhase */
     {"68100c86cd7e3673b99b4a9bb4294267", 0xb795c, 2, 1, 0x7fd, 3}, /* WallpaperExtensionKit.WallpaperExtensionProxy.(private).ConnectionState */
     {"6812311adeef3cc280074aba6306fead", 0x1221b0, 2, 0, 0x7fe, 3}, /* SiriMessageTypes.MessageXPCTransporter */
+    {"6812311adeef3cc280074aba6306fead", 0x123250, 4, 3, 0x7fffffff, 7}, /* SiriMessageTypes.NLRoutingDecisionMessage.RoutingDecision */
     {"6812311adeef3cc280074aba6306fead", 0x1232c0, 3, 0, 0x7d, 7}, /* SiriMessageTypes.NLRoutingDecisionMessage.QueryRewrite */
     {"6812311adeef3cc280074aba6306fead", 0x123cc4, 2, 0, 0x7fffffff, 7}, /* SiriMessageTypes.AjaxMetadata.AjaxQuery */
+    {"6812311adeef3cc280074aba6306fead", 0x1245ec, 2, 4, 0x7d, 7}, /* SiriMessageTypes.RequestSummary.ExecutionSource */
     {"68396d43031236198bed9282b8f95bae", 0x410430, 2, 2, 0x7fd, 3}, /* NotesShared.RecordingState */
     {"68396d43031236198bed9282b8f95bae", 0x4113b0, 4, 0, 0x7fc, 3}, /* NotesShared.ICObjectReferences */
+    {"68396d43031236198bed9282b8f95bae", 0x412248, 24, 0, 0x7e8, 0}, /* NotesShared.ICQueryType */
+    {"68396d43031236198bed9282b8f95bae", 0x4123c0, 3, 1, 0x7fc, 3}, /* NotesShared.RealtimeCollaborationSelectionDocument.Selection */
+    {"68396d43031236198bed9282b8f95bae", 0x4123dc, 4, 1, 0x7fb, 3}, /* NotesShared.RealtimeCollaborationSelectionDocument.TableSelection */
+    {"6852dbe28176310ea3442bc770d7c890", 0x2333f4, 2, 4, 0x7c, 7}, /* Navigation.NavigationService.NavigationState */
+    {"6852dbe28176310ea3442bc770d7c890", 0x233ca4, 2, 4, 0x7c, 7}, /* Navigation.InternalNavigationState */
     {"6852dbe28176310ea3442bc770d7c890", 0x234620, 2, 0, 0x3e, 3}, /* Navigation.NavigationTrace.DirectionsRequest.Response */
     {"6852dbe28176310ea3442bc770d7c890", 0x234658, 2, 0, 0x3e, 3}, /* Navigation.NavigationTrace.ETATrafficUpdateRequest.Response */
     {"6852dbe28176310ea3442bc770d7c890", 0x2346ac, 2, 0, 0x3e, 3}, /* Navigation.NavigationTrace.RealtimeTransitUpdate.Response */
@@ -919,37 +1186,66 @@
     {"686e142083cc3af393692784a703639b", 0x21db3a0, 2, 0, 0x7fffffff, 7}, /* UIKit.UICellAccessory.Placement */
     {"686e142083cc3af393692784a703639b", 0x21dfebc, 2, 0, 0x7fe, 3}, /* UIKit.CrossSceneMorphAnimationClientProviderProxy */
     {"686e142083cc3af393692784a703639b", 0x21e152c, 4, 3, 0x7fffffff, 7}, /* UIKit._Material.Layer.Kind */
+    {"686e142083cc3af393692784a703639b", 0x21e3d80, 2, 2, 0x7fffffff, 7}, /* UIKit.UIHostingViewBase.(private).KeyboardLog */
     {"686e142083cc3af393692784a703639b", 0x21e569c, 4, 0, 0xffffc, 7}, /* UIKit.UIPointerEffect */
+    {"686e142083cc3af393692784a703639b", 0x21ea540, 2, 0, 0x7e, 7}, /* UIKit.NavigationButtonBar.GroupLayout.Child */
     {"686e142083cc3af393692784a703639b", 0x21ec3c4, 3, 3, 0x7fc, 3}, /* UIKit._UICornerMaskingConfiguration.CornerStyle.Representation */
     {"686e142083cc3af393692784a703639b", 0x21ec674, 7, 0, 0x79, 7}, /* UIView.LayoutRegion.(private).Storage */
     {"686e142083cc3af393692784a703639b", 0x21ef55c, 3, 0, 0x7fd, 3}, /* UIKit.TargetScrollPocket.ReceiverStorage */
     {"686e142083cc3af393692784a703639b", 0x21f3848, 2, 0, 0x7fe, 3}, /* UIView.(private)._ManagedContentStateKey */
     {"6912b19d34a835d3b0db8139e48bfe19", 0x1a76b5c, 3, 3, 0x7fc, 3}, /* HomeKitDaemon.(private).MediaSourceGroupSessionOwner.SessionState */
     {"6912b19d34a835d3b0db8139e48bfe19", 0x1a79f10, 8, 0, 0x7f8, 3}, /* HomeKitDaemon.OpaqueValue */
+    {"6912b19d34a835d3b0db8139e48bfe19", 0x1a7b76c, 6, 0, 0x7fa, 3}, /* HomeKitDaemon.HomeIntelligence.DistributedScheduler.ExecutionLogic */
     {"6912b19d34a835d3b0db8139e48bfe19", 0x1a7f778, 2, 0, 0xfe, 3}, /* HomeKitDaemon.GroupPluginMessaging.Error */
     {"6912b19d34a835d3b0db8139e48bfe19", 0x1a82fe0, 2, 3, 0x7fd, 3}, /* HomeKitDaemon.(private).MediaSinkGroupSessionOwner.SessionState */
     {"69c388927f643770b1eb2af1f489affd", 0x11b588, 2, 1, 0x7fd, 3}, /* AuthenticationServices.ASPasskeyCredentialExtensionInput */
+    {"69c388927f643770b1eb2af1f489affd", 0x11c458, 2, 0, 0x7e, 7}, /* AuthenticationServices.ASPasswordSavingModalState */
     {"6a7aa2f2fd9a370cb0c6a1a6d4df6072", 0x18b66c, 2, 1, 0x7fd, 3}, /* VoiceActions.JSONParseError */
     {"6a9d41feccdd3663b733d87d42fc644e", 0x16e674, 4, 0, 0x7fc, 3}, /* VoiceShortcutClient.(private).XPCEncoderStorage */
+    {"6a9d41feccdd3663b733d87d42fc644e", 0x16ef6c, 2, 2, 0x7d, 7}, /* VoiceShortcutClient.VoiceShortcutClientRequest.Spotlight */
     {"6a9d41feccdd3663b733d87d42fc644e", 0x16f42c, 3, 0, 0x3ffd, 7}, /* VoiceShortcutClient.ToolKitSyncRequest */
+    {"6a9d41feccdd3663b733d87d42fc644e", 0x170748, 3, 0, 0xffd, 7}, /* VoiceShortcutClient.VoiceShortcutClientRequest.ToolKit */
     {"6ab71755dc19315f8b667dbf601b82d7", 0x1403c0, 7, 1, 0x7f8, 3}, /* HomeKitEvents.RecordError */
+    {"6ab71755dc19315f8b667dbf601b82d7", 0x1404ac, 3, 0, 0x7fffffff, 7}, /* HomeKitEvents.EnergyKit.ContinuousEnergyLoadEvent.Measurement */
     {"6ab71755dc19315f8b667dbf601b82d7", 0x140d40, 2, 0, 0x3e, 3}, /* HomeKitEvents.AsyncCompressionStreamBlock.(private).Storage */
+    {"6ab71755dc19315f8b667dbf601b82d7", 0x14142c, 2, 0, 0x7e, 7}, /* HomeKitEvents.EnergyKit.ElectricVehicleStatusEvent.Reason */
     {"6ab71755dc19315f8b667dbf601b82d7", 0x141cac, 2, 2, 0xd, 7}, /* HomeKitEvents.EVConnectionEvent.ConnectionStatus */
+    {"6ab71755dc19315f8b667dbf601b82d7", 0x1428c4, 2, 0, 0x7fffffff, 7}, /* HomeKitEvents.DatabaseConfiguration */
     {"6aed4807822c3d00882fdaad579f755f", 0xd7c48, 15, 0, 0x11, 0}, /* SwiftTLS.Extension */
+    {"6aed4807822c3d00882fdaad579f755f", 0xd7cd4, 2, 0, 0x3e, 3}, /* SwiftTLS.Extension.PAKE */
+    {"6aed4807822c3d00882fdaad579f755f", 0xd7ee4, 3, 0, 0x3d, 3}, /* SwiftTLS.Extension.KeyShare */
     {"6aed4807822c3d00882fdaad579f755f", 0xd82b0, 2, 0, 0x3e, 7}, /* SwiftTLS.(private).LatestError */
+    {"6bb342f9ee4c35dabb3838f2467f4544", 0x197778, 2, 1, 0xffd, 3}, /* ManagedBackgroundAssetsHelper.LicenseRecord.State */
+    {"6bfd79803ac6373280f14b3ec9fa76e2", 0x178a14, 2, 1, 0xd, 7}, /* ProactiveSummarization.SpotlightWriter.InMemoryMailResultCache.Result.Kind */
     {"6bfd79803ac6373280f14b3ec9fa76e2", 0x1792f0, 2, 4, 0x7fd, 3}, /* ProactiveSummarization.(private).MessageContentError */
     {"6bfd79803ac6373280f14b3ec9fa76e2", 0x17a9ac, 2, 0, 0x3fe, 3}, /* PSUSummarizationPipeline.SummarizationPipelineAvailability */
     {"6c1706dd6a003433a8bd828d63aee003", 0x6e060, 2, 1, 0x3d, 7}, /* RapidResourceDelivery.ResourceInfo.AssetValidationError */
     {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17a560, 2, 0, 0x3e, 3}, /* ScreenSharingKit.AccessibilityMessage */
     {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17ae14, 2, 0, 0x7fffffff, 7}, /* ScreenSharingKit.StatusEvent */
+    {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17c23c, 3, 5, 0x3c, 3}, /* ScreenSharingKit.SystemGestureEvent */
     {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17e130, 5, 2, 0x3a, 0}, /* ScreenSharingKit.RTISessionState */
+    {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17e830, 2, 1, 0x1fd, 3}, /* ScreenSharingKit.ClientStatusEvent */
+    {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17f8c8, 2, 21, 0x3d, 7}, /* ScreenSharingKit.ServerError */
+    {"6c560ee88ebe3dcaa34caed87a87a2db", 0x17fe0c, 7, 6, 0x7fffffff, 7}, /* ScreenSharingKit.ServerStatusEvent */
     {"6c7024d401073a1a9191cfa3fffc920c", 0x1f7668, 2, 0, 0x3e, 7}, /* WidgetKit.ActivityEncodingVersion */
+    {"6c7024d401073a1a9191cfa3fffc920c", 0x1fd41c, 2, 0, 0x7fe, 3}, /* WidgetKit.WidgetArchiver.ValidationError */
     {"6c7024d401073a1a9191cfa3fffc920c", 0x201800, 3, 1, 0x3ffffc, 3}, /* WidgetKit.DynamicIslandBackground.Storage */
     {"6cfb4988439b3c0d8780c7f3452c5cc1", 0x10f1e8, 2, 4, 0x3ffd, 7}, /* FindMyCore.OpenIntentNavigationTarget */
     {"6cfb4988439b3c0d8780c7f3452c5cc1", 0x10f760, 3, 0, 0x7d, 7}, /* FindMyCore.CombinedUniqueIdentifier */
+    {"6cfb4988439b3c0d8780c7f3452c5cc1", 0x10feb8, 2, 0, 0xe, 7}, /* FindMyCore.ItemModel.ImageDefinition */
+    {"6cfb4988439b3c0d8780c7f3452c5cc1", 0x10fff8, 2, 2, 0x7d, 7}, /* FindMyCore.ItemModel.LostModeKind */
+    {"6cfb4988439b3c0d8780c7f3452c5cc1", 0x11003c, 2, 2, 0x3d, 7}, /* FindMyCore.ItemModel.NotifyWhenFoundState */
+    {"6cfb4988439b3c0d8780c7f3452c5cc1", 0x110074, 3, 2, 0x7fffffff, 7}, /* FindMyCore.ItemModel.Section */
     {"6d0473ddaa423ffea6b0d9b49f09887d", 0x4770b8, 2, 10, 0x7fd, 3}, /* ActionKit.(private).WFParameterStateToolKitConversionError */
+    {"6d163d3e63aa3b4e81dad73d4f4f920d", 0x58ae0, 2, 0, 0x1fe, 3}, /* XPCDistributed.XPCSystem.RawActorID */
+    {"6d163d3e63aa3b4e81dad73d4f4f920d", 0x58b34, 3, 0, 0x7fd, 3}, /* XPCDistributed.XPCSystem.SharedActorKey */
+    {"6d163d3e63aa3b4e81dad73d4f4f920d", 0x58f74, 2, 0, 0x7fe, 3}, /* XPCDistributed.XPCSystem.ResultHandler.(private).Mode */
+    {"6d163d3e63aa3b4e81dad73d4f4f920d", 0x58fd4, 2, 0, 0x7fe, 3}, /* XPCDistributed.XPCSystem.Session.Kind */
+    {"6dcf2c8eedce3560a6cfa006297c1d93", 0x1e2c0, 2, 1, 0x7fffffff, 7}, /* BubbleKit.BubblePath.TailStyle */
+    {"6dcf2c8eedce3560a6cfa006297c1d93", 0x1e500, 2, 0, 0x7e, 7}, /* BubbleKit.BubbleViewConfiguration.BackgroundType */
     {"6e53911e751b391fb91db731d434d08e", 0x30090, 13, 2, 0x3ffff2, 3}, /* MRContentItem.MetadataOutline */
     {"6e53911e751b391fb91db731d434d08e", 0x300e4, 5, 0, 0x7b, 7}, /* MediaFoundation.MediaRemoteCommand.Option */
+    {"6e53911e751b391fb91db731d434d08e", 0x30f9c, 2, 0, 0xfe, 3}, /* MediaFoundation.SQLDatabase.PreparedStatement.BindError */
     {"6fdd89f63f85314e813de9c3980ceed0", 0x1052e4, 2, 1, 0x7d, 7}, /* PhotosUIFoundation.ScrollBehavior.Kind */
     {"702228585f973c3abf6ebbcdabe63b36", 0x11ba48, 2, 1, 0x7d, 7}, /* PhotosUIFoundation.ScrollBehavior.Kind */
     {"7068f80ead2635fe8a3e3cf9a1404a2a", 0x4eb88, 4, 0, 0x1c, 7}, /* WeatherData.FlatBufferDecodeError */
@@ -957,19 +1253,26 @@
     {"70d7d42fc94e3d41860ad00efafea2d2", 0xa2a5c, 2, 2, 0x7fd, 3}, /* CoreAccessibility.SearchEvent.Scope */
     {"70d7d42fc94e3d41860ad00efafea2d2", 0xa404c, 2, 2, 0x3d, 7}, /* CoreAccessibility.FocusEvent.Command */
     {"7134f19383c2374188f5e79de061f47d", 0x7f9aac, 5, 1, 0x7a, 7}, /* HomeUI.CameraDashboardMosaicElement */
+    {"7134f19383c2374188f5e79de061f47d", 0x801234, 2, 0, 0x7fffffff, 7}, /* HomeUI.BaseIconView.Configuration.ViewConfiguration */
     {"729545faeeec34d8aaa85d4d83b09d20", 0x1baa50, 2, 1, 0x3d, 7}, /* AppleIDSetup.RepairCommand.Request */
     {"729545faeeec34d8aaa85d4d83b09d20", 0x1baa6c, 2, 1, 0x7fd, 3}, /* AppleIDSetup.RepairCommand.Response */
     {"729545faeeec34d8aaa85d4d83b09d20", 0x1bae9c, 4, 1, 0x7fffffff, 7}, /* AppleIDSetup.IdMSAccount.Credential */
     {"729545faeeec34d8aaa85d4d83b09d20", 0x1bd3b4, 2, 1, 0x5, 7}, /* AppleIDSetup.DiscoveryModel.State */
     {"729545faeeec34d8aaa85d4d83b09d20", 0x1bd408, 5, 1, 0x3a, 7}, /* AppleIDSetup.DiscoveryModel.PairingState */
     {"729545faeeec34d8aaa85d4d83b09d20", 0x1bef40, 7, 2, 0x7fffffff, 7}, /* AppleIDSetup.SignInModel.State */
+    {"729545faeeec34d8aaa85d4d83b09d20", 0x1bf550, 4, 2, 0x3b, 0}, /* AppleIDSetup.AnisetteCommand.Request */
+    {"729545faeeec34d8aaa85d4d83b09d20", 0x1c0670, 4, 4, 0x7fffffff, 7}, /* AppleIDSetup.RemoteRole */
     {"733cebf2faf7303790c632a0f3a7e28c", 0x5521a0, 5, 0, 0xfb, 3}, /* JetEngine.ClassicDataVaultUtilities.ClassicDataVaultCreationError */
+    {"733cebf2faf7303790c632a0f3a7e28c", 0x552604, 9, 0, 0x7fffffff, 7}, /* JetEngine.OperationCheckpoint */
     {"733cebf2faf7303790c632a0f3a7e28c", 0x5550b0, 2, 0, 0x7fe, 3}, /* JetEngine.AnyActionTypes.(private).Registry */
     {"733cebf2faf7303790c632a0f3a7e28c", 0x5560a4, 7, 1, 0x7f8, 3}, /* JetEngine.JSONError */
     {"733cebf2faf7303790c632a0f3a7e28c", 0x55725c, 3, 0, 0x7fffffff, 7}, /* JetEngine.ReloadableJSStack.(private).InitStrategy */
+    {"733cebf2faf7303790c632a0f3a7e28c", 0x557350, 2, 3, 0x3d, 3}, /* JetEngine.JetPackSigningPolicy */
+    {"733cebf2faf7303790c632a0f3a7e28c", 0x559d18, 3, 0, 0x7fffffff, 7}, /* JetEngine.Models.Menu.Child */
     {"73fb337c22ef348783a30edfaa8de7a2", 0x1dc4c, 2, 1, 0x7d, 7}, /* PermissionKit.PermissionResult */
     {"7478d7363dcc3ca389aae2697575e558", 0x32305c, 6, 0, 0x7fffffff, 7}, /* CookingKit.RecipeTimerCommand */
     {"7478d7363dcc3ca389aae2697575e558", 0x324238, 6, 0, 0x7fffffff, 7}, /* CookingKit.Measurement */
+    {"7478d7363dcc3ca389aae2697575e558", 0x326528, 5, 1, 0x7fffffff, 7}, /* CookingKit.MeasurementUnit */
     {"7478d7363dcc3ca389aae2697575e558", 0x326c34, 7, 1, 0x38, 7}, /* CookingKit.UnitConfigCommand */
     {"7478d7363dcc3ca389aae2697575e558", 0x329850, 2, 0, 0x7e, 7}, /* CookingKit.CustomizedMeasurement.Part */
     {"7478d7363dcc3ca389aae2697575e558", 0x329c74, 2, 0, 0x7fffffff, 7}, /* CookingKit.VolumeExpression */
@@ -978,18 +1281,25 @@
     {"7478d7363dcc3ca389aae2697575e558", 0x32b884, 3, 0, 0x1d, 7}, /* CookingKit.UserInteractionEvent.GroceryListIntegration */
     {"7478d7363dcc3ca389aae2697575e558", 0x32bb24, 2, 0, 0x3e, 7}, /* CookingKit.(private).TappableElement */
     {"74993e408d1034138ab92d69dc0dc209", 0x8da0, 2, 3, 0x7fd, 3}, /* FindMyStorage.DatabaseError */
+    {"753539827ba135ccbef2f5420d5387c6", 0x811f8c, 6, 0, 0x7fa, 3}, /* ConversationKit.CallScreening.State */
+    {"753539827ba135ccbef2f5420d5387c6", 0x811fc4, 4, 2, 0x3b, 7}, /* ConversationKit.CallScreening.StateTransition */
+    {"753539827ba135ccbef2f5420d5387c6", 0x814d84, 3, 8, 0x79, 7}, /* ConversationKit.InCallControlsMode */
     {"753539827ba135ccbef2f5420d5387c6", 0x814e48, 4, 1, 0x7b, 7}, /* ConversationKit.InCallControlsParticipantCellViewModel.SubtitleState */
     {"753539827ba135ccbef2f5420d5387c6", 0x815748, 4, 0, 0x7c, 7}, /* ConversationKit.LocalParticipantViewConstraintManager.(private).LocalParticipantLayoutType */
     {"753539827ba135ccbef2f5420d5387c6", 0x81b940, 5, 3, 0x7fa, 3}, /* ConversationKit.RemoteControlState */
     {"753539827ba135ccbef2f5420d5387c6", 0x81edf8, 2, 6, 0x3d, 7}, /* ConversationKit.PeoplePickerAction */
     {"753539827ba135ccbef2f5420d5387c6", 0x81fe30, 2, 0, 0x3ffe, 7}, /* ConversationKit.CaptionsPaddingModifier.Style */
+    {"753539827ba135ccbef2f5420d5387c6", 0x821180, 2, 2, 0x3d, 7}, /* ConversationKit.MultiwayViewConstraintsController.LocalParticipantState */
     {"753539827ba135ccbef2f5420d5387c6", 0x8215b8, 3, 1, 0x7fffffff, 7}, /* ConversationKit.ParticipantGridView.(private).FrozenFrameOverlayState */
     {"753539827ba135ccbef2f5420d5387c6", 0x823a48, 3, 1, 0x3c, 7}, /* ConversationKit.ButtonBackgroundStyle */
     {"753539827ba135ccbef2f5420d5387c6", 0x8266c8, 2, 0, 0x7fffffff, 7}, /* ConversationKit.BroadcastingState */
     {"753539827ba135ccbef2f5420d5387c6", 0x828f14, 3, 11, 0x7fffffff, 7}, /* ConversationKit.SessionActionNotice.NoticeType */
     {"753539827ba135ccbef2f5420d5387c6", 0x829584, 2, 0, 0x7e, 7}, /* ConversationKit.ConversationControlsRecipe.Actions */
+    {"753539827ba135ccbef2f5420d5387c6", 0x82b1c4, 3, 0, 0x7d, 7}, /* ConversationKit.VariableBlurMask */
     {"754884ff4fed38c1979504b0fede598f", 0x103b0cc, 3, 0, 0x7fffffff, 7}, /* HealthDaemon.SleepDaySummaryCacheCodec.Failure */
     {"755a635b71f236acab3943caafb90fff", 0x12a7f8, 4, 6, 0x7fb, 3}, /* RemoteCompositorServices.ChannelError */
+    {"755a635b71f236acab3943caafb90fff", 0x12c924, 2, 2, 0x7fffffff, 7}, /* RemoteCompositorServices.TimeSync.Offset.Error */
+    {"755a635b71f236acab3943caafb90fff", 0x12cc4c, 3, 0, 0x7fffffff, 7}, /* RemoteCompositorServices.RemoteCompositorClient.GPToRTChannel.Decoder.Error */
     {"75caf0cd50963c1488a805d4349c5b65", 0x48cbf0, 5, 0, 0x7fffffff, 7}, /* UnifiedMessagingKit.AssetModel.Content */
     {"75caf0cd50963c1488a805d4349c5b65", 0x48cd28, 5, 0, 0x7fffffff, 7}, /* UnifiedMessagingKit.MediaSize.Constraints */
     {"75caf0cd50963c1488a805d4349c5b65", 0x491990, 2, 1, 0x7d, 7}, /* UnifiedMessagingKit.ResponsiveArtworkLayoutCoordinator.LayoutMode */
@@ -1001,6 +1311,7 @@
     {"75caf0cd50963c1488a805d4349c5b65", 0x499e2c, 2, 0, 0x3e, 7}, /* UnifiedMessagingKitJSCore.JSClient.ClientInfoWrapper */
     {"76d42d59550537ce826769aa57484eb5", 0x32028, 2, 1, 0x7fffffff, 7}, /* AccountsUISupportShared.PasswordAccount.Known.Error */
     {"76d42d59550537ce826769aa57484eb5", 0x320ec, 2, 1, 0x7fffffff, 7}, /* AccountsUISupportShared.PasswordAccount.Unknown.Error */
+    {"76d42d59550537ce826769aa57484eb5", 0x32c50, 2, 0, 0x7fffffff, 7}, /* AccountsUISupportShared.ResolvedServerConfiguration */
     {"773436d2ce5338f8a3f0a376da9b5dba", 0xdf478, 2, 8, 0x7d, 7}, /* AppIntentSchemas.IntentSystemProtocol */
     {"773436d2ce5338f8a3f0a376da9b5dba", 0xdf494, 3, 0, 0x7fffffff, 7}, /* AppIntentSchemas.IntentSystemProtocol.CodableWrapper */
     {"773436d2ce5338f8a3f0a376da9b5dba", 0xdfb88, 2, 0, 0x7fffffff, 7}, /* AppIntentSchemas.QuerySchema.Value */
@@ -1026,11 +1337,16 @@
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x325678, 3, 1, 0x7c, 7}, /* CommunicationsUI.BackgroundStyleConfiguration */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x325774, 2, 0, 0x7e, 7}, /* CommunicationsUI.CallWaveFormView.BarForergroundStyle */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x3273c8, 2, 0, 0x3ffffe, 3}, /* CommunicationsUI.BadgeView.BadgeStyle */
+    {"7fbe33d22b1c3e7db943dff72f9320f8", 0x328374, 2, 1, 0x3d, 7}, /* CommunicationsUI.ContactAvatarTileView.Caption.Accessory */
+    {"7fbe33d22b1c3e7db943dff72f9320f8", 0x328390, 2, 2, 0x3d, 7}, /* CommunicationsUI.ContactAvatarTileView.Caption.AccessoryState */
+    {"7fbe33d22b1c3e7db943dff72f9320f8", 0x3283ac, 3, 0, 0x7d, 7}, /* CommunicationsUI.ContactAvatarTileView.Caption.ForegroundStyle */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x3289a4, 3, 0, 0x7fd, 3}, /* CommunicationsUI.ContactAvatarTileCaptionUIView.(private).AccessoryViewHolder */
+    {"7fbe33d22b1c3e7db943dff72f9320f8", 0x329444, 7, 0, 0x39, 7}, /* CommunicationsUI.BackgroundState */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x329694, 2, 0, 0x7fe, 3}, /* CommunicationsUI.ParticipantDetailsState */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x329ecc, 2, 0, 0xfe, 7}, /* CommunicationsUI.TTRRoutingSheetView.(private).TTRIssueSelection */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x32db7c, 4, 0, 0x7fc, 3}, /* CommunicationsUI.ControlsState */
     {"7fbe33d22b1c3e7db943dff72f9320f8", 0x32e0a4, 2, 1, 0x3d, 7}, /* CommunicationsUI.ButtonBackgroundStyle */
+    {"80a59eec2bd237b5907fa5f6bb4b9943", 0x16500, 6, 13, 0x1, 7}, /* AgentCanvasFoundation.Issue.Kind */
     {"80a79d226da33cb4ae610366ad49293d", 0x1ae3c, 2, 1, 0x7d, 7}, /* ManagedBackgroundAssets.DownloadPolicy.Pattern */
     {"8192b8ac623434c3855896b98081fccb", 0x3f91c, 2, 1, 0x7fd, 3}, /* FaceTimeNotificationCore.CallConfirmationHelper.Action */
     {"81e3acd7e2e1395ebd4775d21ef0419d", 0xfe0ec, 9, 0, 0x77, 7}, /* RealityIO.InputDescriptor */
@@ -1039,11 +1355,14 @@
     {"824c47c8d8e33ceebc0df96b547417b9", 0xe43464, 2, 0, 0x7fffffff, 3}, /* ChatKit.CKBalloonLayer.StrokeSublayerConfiguration */
     {"824c47c8d8e33ceebc0df96b547417b9", 0xe45b08, 2, 1, 0x7fffffff, 3}, /* ChatKit.CKMaterialPlatterView.(private).LayerState */
     {"824c47c8d8e33ceebc0df96b547417b9", 0xe46048, 2, 0, 0x3ffe, 7}, /* ChatKit.(private).EditorOverlayViewModel.SampleTranscriptContent */
+    {"824c47c8d8e33ceebc0df96b547417b9", 0xe487d0, 3, 3, 0xfc, 3}, /* ChatKit.Gallery.GalleryTapAction */
     {"824c47c8d8e33ceebc0df96b547417b9", 0xe4ea20, 3, 2, 0x7fc, 3}, /* ChatKit.SendMessageIntentError */
     {"824c47c8d8e33ceebc0df96b547417b9", 0xe514a4, 5, 0, 0x7fb, 3}, /* ChatKit.SheetType */
+    {"826b7db86e7d361c95c52dd4340eb6e0", 0x1368c, 3, 3, 0x7fc, 3}, /* ProactivePredictionFoundation.XPCError */
     {"82bf751829a73906b0b64ca259f2b001", 0x519640, 2, 3, 0x7fd, 3}, /* PasswordManagerUI.PMAccountDetailsContext */
     {"82bf751829a73906b0b64ca259f2b001", 0x51a70c, 2, 1, 0x3ffffd, 3}, /* PasswordManagerUI.(private).PMAccountsListScrollTestModel.State */
     {"82bf751829a73906b0b64ca259f2b001", 0x51be4c, 2, 1, 0x7fd, 3}, /* PasswordManagerUI.PMAppRootNavigationModel.Detail */
+    {"82bf751829a73906b0b64ca259f2b001", 0x51be68, 6, 1, 0x7f9, 3}, /* PasswordManagerUI.PMAppRootNavigationModel.Content */
     {"82bf751829a73906b0b64ca259f2b001", 0x51d628, 2, 0, 0x7fe, 3}, /* PasswordManagerUI.PMAppDetailsWindowView.Detail */
     {"82bf751829a73906b0b64ca259f2b001", 0x5230f4, 2, 0, 0x7fffffff, 7}, /* PasswordManagerUI.PMSecurityRecommendation.(private).Storage */
     {"82c8ad3ed5a63692bdfa642cf3429553", 0x15f78, 2, 0, 0x7e, 7}, /* TeaSettings.Item.RangeControlType */
@@ -1052,9 +1371,14 @@
     {"82ecbc1073ea36439dd4bc46238a2df1", 0xb296c, 6, 0, 0x7a, 7}, /* PriMLETL.DataProcessingStepConfig */
     {"82f1138040f238058126b17a1ffc7cf7", 0x129d7c, 3, 0, 0x7fffffff, 3}, /* SiriMessagesFlowTools.MessagesSchemaTypes.Destination */
     {"82f22e138f0633d09894dccf4cc45096", 0x19f60, 7, 1, 0x7fffffff, 7}, /* CoreAICommon.LogEventData */
+    {"82f82a59f1413d35bc3c566107d629d6", 0xaf478, 3, 0, 0x7fd, 3}, /* AgentCanvasModel.RichText.Run.Index */
+    {"82f82a59f1413d35bc3c566107d629d6", 0xb01d8, 3, 4, 0x7fc, 3}, /* AgentCanvasModel.RichText.Palette.Color */
     {"8340d5a8f9823f37a9af785f16d23ab0", 0xba760, 2, 2, 0x3d, 3}, /* iCloudMailAssistant.CustomRemoteContent.(private).LoadingState */
+    {"83a1fe89f439338e8a21b8b23cb0d541", 0x18ca4, 3, 0, 0x7fd, 3}, /* AppleArchive.ArchiveHeader.EntryFilterData */
     {"83b100d5778137c7bbb910b843cc47d2", 0x9f237c, 2, 0, 0x7fe, 3}, /* WorkflowKit.EntryProviderHandle */
+    {"841b2a9b608e3dd2b9647cae454bff00", 0x23f658, 2, 2, 0x7d, 7}, /* WeatherCore.NotificationSubscriptionMigrationStatus */
     {"845b78bb64f73fa7a95faf63cbd11002", 0xb498c, 2, 1, 0x7d, 7}, /* GenerativePartnerServiceUI.SignInAvailability */
+    {"845f968e84293d2d80e4fa1bbf3c7db5", 0x540724, 4, 0, 0x7fc, 3}, /* CoreML.MLTensorStorage */
     {"8574ebee05be3afc861b85e775618bfb", 0xadfdc, 3, 0, 0x7fd, 3}, /* AskToCore.AskToViewExtensionFlow */
     {"8574ebee05be3afc861b85e775618bfb", 0xae088, 2, 1, 0x7d, 7}, /* AskToCore.AskToViewExtensionResult */
     {"8574ebee05be3afc861b85e775618bfb", 0xae918, 3, 0, 0x7fd, 3}, /* AskTo.ATQuestion.TopicMetadata */
@@ -1067,24 +1391,32 @@
     {"8821f508eea73c0798db47c1e3bcd962", 0x174370, 7, 0, 0x79, 7}, /* GameServices.GameActivityDefinitionFilter */
     {"8834d8453edc3d6db36a83a75df288ee", 0x2f2ba4, 3, 0, 0xd, 7}, /* GameServicesCore.ResourceType */
     {"88ae414828523a38aea027b74e143199", 0x2948f0, 4, 0, 0x7c, 7}, /* SonicKit.NetworkReachability */
+    {"892c717866e33ac2a07201a11890ebbc", 0x1831f4, 3, 3, 0x7fc, 7}, /* OnDeviceStorageCore.ExpressionTypeCodableType */
     {"892c717866e33ac2a07201a11890ebbc", 0x18382c, 2, 2, 0x7d, 7}, /* OnDeviceStorageCore.DataSpecification.Namespace.Table.Column.Datatype */
     {"892c717866e33ac2a07201a11890ebbc", 0x184770, 2, 0, 0x7fffffff, 7}, /* OnDeviceStorageCore.Result */
     {"892c717866e33ac2a07201a11890ebbc", 0x184d70, 4, 0, 0x7fffffff, 7}, /* OnDeviceStorageCore.SchemaChanger.Operation */
     {"893f8831c79e324fab9ec9cc86595170", 0x138c74, 2, 1, 0x7fd, 3}, /* FindMyLocate.PersonChangeEvent */
+    {"89a923fc30e133cd9e6adb1a8cd07244", 0x18492c, 14, 3, 0x7f1, 3}, /* FaceTimeMessageStore.MessageStoreQuery */
     {"89a923fc30e133cd9e6adb1a8cd07244", 0x18533c, 2, 0, 0x7fe, 0}, /* FaceTimeMessageStore.SortedMessageStoreQuery */
     {"8a26a719b878395da561b9ab177fcc75", 0x263ecc, 2, 0, 0x7fffffff, 7}, /* PhotosSwiftUICore.PhotosCollectionTitleText.Spec.TitleTextSpec */
     {"8a26a719b878395da561b9ab177fcc75", 0x267a08, 2, 0, 0x7e, 7}, /* PhotosSwiftUICore.OneUpBadgeAction */
     {"8a26a719b878395da561b9ab177fcc75", 0x269ed4, 2, 1, 0x7fffffff, 3}, /* PhotosSwiftUICore.PhotosCellSpecs.BackgroundColor */
+    {"8a26a719b878395da561b9ab177fcc75", 0x26a154, 2, 0, 0x7fffffff, 7}, /* PhotosSwiftUICore.PhotosSearchStyle */
     {"8a26a719b878395da561b9ab177fcc75", 0x26bf24, 2, 0, 0x7e, 7}, /* PhotosSwiftUICore.OneUpChromeBarlessView.(private).ChromeBody.SafeAreaSpacer.Dimension */
     {"8a26a719b878395da561b9ab177fcc75", 0x26cc0c, 2, 2, 0xd, 7}, /* PhotosSwiftUICore.OneUpChromeActionsDelegateError */
     {"8a26a719b878395da561b9ab177fcc75", 0x26ccc4, 2, 1, 0x7fd, 3}, /* PhotosSwiftUICore.PhotosAsyncImagePhase */
+    {"8a26a719b878395da561b9ab177fcc75", 0x276a24, 2, 0, 0x7fffffff, 7}, /* PhotosSwiftUICore.OneUpBadgeSpec */
     {"8b15cb061c7133c59a99411ddb4c81e7", 0x3262c, 2, 3, 0xfd, 3}, /* CoreNFC.CardSession.Event */
     {"8b379757f9bf3ca9a51aaf8e859c727d", 0x47ea50, 9, 0, 0x7fffffff, 7}, /* SiriOntology.TerminalElement.Value */
     {"8b379757f9bf3ca9a51aaf8e859c727d", 0x47eae0, 3, 0, 0x7fffffff, 7}, /* SiriOntology.TerminalElement.OriginDetail */
     {"8b9185a312e43ccdb26fbf2d9f844f4e", 0x3678f8, 5, 0, 0x7fb, 3}, /* StocksUI.Tip */
     {"8b9185a312e43ccdb26fbf2d9f844f4e", 0x3693a4, 2, 0, 0x7fe, 3}, /* StocksUI.StockChartViewController.(private).Callout */
     {"8bdc73469ea03cf8a461747c5b662d2f", 0xde644, 3, 0, 0x7fffffff, 7}, /* CascadeSets.SQLiteError */
+    {"8bdc73469ea03cf8a461747c5b662d2f", 0xde87c, 4, 0, 0x7fc, 3}, /* CascadeSets.SetChange.DeviceClockTracker.Bucket.Storage */
+    {"8bdc73469ea03cf8a461747c5b662d2f", 0xded08, 2, 0, 0x7fffffff, 3}, /* CascadeSets.SetChange.SharedItemChangeProvider.Enumerator.(private).EnumerationMode */
     {"8bdc73469ea03cf8a461747c5b662d2f", 0xdf234, 2, 0, 0x7fe, 3}, /* CascadeSets.BookmarkHeaderType */
+    {"8bdc73469ea03cf8a461747c5b662d2f", 0xdf388, 3, 1, 0x7fc, 3}, /* CascadeSets.SetChange.SharedItemChangeProvider.EnumerationState */
+    {"8bdc73469ea03cf8a461747c5b662d2f", 0xdfad8, 2, 1, 0x7fd, 3}, /* CascadeSets.SetChange.ItemInstanceReader.Enumerator.(private).Phase */
     {"8bddea862ccd3676b9a49a81df17637e", 0x3e4880, 5, 0, 0x3b, 0}, /* Coherence.Peer_MergeResponse.OneOf_TaggedOneOf */
     {"8bddea862ccd3676b9a49a81df17637e", 0x3e489c, 4, 1, 0x3b, 0}, /* Coherence.Peer_MergeRequest.OneOf_TaggedOneOf */
     {"8bddea862ccd3676b9a49a81df17637e", 0x3eb62c, 10, 0, 0x7f6, 3}, /* Coherence.Proto_CRDT.OneOf_TaggedOneOf */
@@ -1095,9 +1427,13 @@
     {"8bfe706e3b0f3f2e98f8315bb3eadc4e", 0x30a24, 3, 2, 0x7c, 7}, /* DistributedTimers.DTDiagnosticsRequest */
     {"8c6a4c4c3180328bb853b3859b46b74b", 0xf56b4, 2, 0, 0x7fe, 3}, /* SiriAnalytics.MessageStoreReader.(private).Strategy */
     {"8c6a4c4c3180328bb853b3859b46b74b", 0xf62ac, 2, 0, 0x3ffffe, 3}, /* SiriAnalytics.StreamHandle */
+    {"8c6a4c4c3180328bb853b3859b46b74b", 0xf677c, 5, 2, 0x7fa, 3}, /* SiriAnalytics.TagPredicate */
     {"8cdaeb0d346b37729d92bc48a9088b62", 0x3e8468, 2, 0, 0x7fe, 3}, /* IntelligenceFlow.IntelligenceFlowActionError */
     {"8cdaeb0d346b37729d92bc48a9088b62", 0x3eae40, 2, 1, 0xd, 7}, /* IntelligenceFlow.OnDeviceTemplateDir */
     {"8cdaeb0d346b37729d92bc48a9088b62", 0x3eb08c, 3, 0, 0x3d, 7}, /* IntelligenceFlow.OnDeviceDialog.OnDeviceDialogType.Labels */
+    {"8cdaeb0d346b37729d92bc48a9088b62", 0x3f00b0, 3, 0, 0x7d, 7}, /* IntelligenceFlow.MessagePayload.ExecutorRequest */
+    {"8cdaeb0d346b37729d92bc48a9088b62", 0x3f0104, 2, 0, 0x3e, 7}, /* IntelligenceFlow.MessagePayload.ActionRequirementResolutionCategory */
+    {"8cdaeb0d346b37729d92bc48a9088b62", 0x3f12f8, 2, 0, 0x7fffffff, 7}, /* IntelligenceFlow.MessagePayload.AttendingRequest.RequestType */
     {"8cdaeb0d346b37729d92bc48a9088b62", 0x3f1704, 2, 6, 0x7b, 7}, /* IntelligenceFlow.DefaultAgentConfigurations */
     {"8cdaeb0d346b37729d92bc48a9088b62", 0x3f1a28, 4, 2, 0x7fffffff, 7}, /* IntelligenceFlow.SessionConfiguration.ParticipantSettings.SemanticPreference */
     {"8cdaeb0d346b37729d92bc48a9088b62", 0x3f1a44, 2, 0, 0x7fffffff, 7}, /* IntelligenceFlow.SessionConfiguration.RuntimeCoordinatorType */
@@ -1114,20 +1450,26 @@
     {"8df25a42510a364aae71207377a7bed5", 0x16fad8, 4, 3, 0x7fffffff, 7}, /* LNConfigurableQueryRequest.QueryType */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x56d54, 7, 3, 0x7f8, 3}, /* TeaTemplate.DimensionSizing */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x57418, 5, 2, 0x7fa, 3}, /* TeaTemplate.LayoutEdgeInsetAdjustment */
+    {"8e39b807ad6e3e93bd54e38aab976810", 0x579f8, 10, 0, 0x7f6, 3}, /* TeaTemplate.SizerResult */
+    {"8e39b807ad6e3e93bd54e38aab976810", 0x57b60, 2, 1, 0x7fd, 3}, /* TeaTemplate.CursorResizing */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x57fd0, 2, 3, 0x7fd, 3}, /* TeaTemplate.Conditional */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x5800c, 4, 0, 0x7fc, 3}, /* TeaTemplate.ConditionalList */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x5806c, 7, 0, 0x7f9, 3}, /* TeaTemplate.DimensionSizerResult */
+    {"8e39b807ad6e3e93bd54e38aab976810", 0x58274, 4, 0, 0x7fc, 3}, /* TeaTemplate.AltTextLogic */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x58738, 2, 1, 0x7fd, 3}, /* TeaTemplate.LayoutResult */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x588f4, 29, 4, 0x7e2, 0}, /* TeaTemplate.Sizing */
+    {"8e39b807ad6e3e93bd54e38aab976810", 0x58a24, 3, 0, 0x7d, 7}, /* TeaTemplate.Ratio */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x58b90, 3, 0, 0x7d, 7}, /* TeaTemplate.PositioningAdjustment */
     {"8e39b807ad6e3e93bd54e38aab976810", 0x58c1c, 2, 0, 0x1e, 7}, /* TeaTemplate.SizeAdjustSizer.Adjust */
     {"8e54efe4383837388520857e5ae4720b", 0x7ed24, 2, 1, 0x3d, 3}, /* PoirotSchematizer.OptionsContainer */
     {"8e54efe4383837388520857e5ae4720b", 0x7eecc, 2, 0, 0x7fffffff, 7}, /* PoirotSchematizer.ProtoMessageSchema.OneofContainer */
     {"8e54efe4383837388520857e5ae4720b", 0x7eee8, 2, 0, 0x7fffffff, 3}, /* PoirotSchematizer.ProtoMessageSchema.FieldContainer */
+    {"8e54efe4383837388520857e5ae4720b", 0x7f098, 2, 15, 0x7fd, 3}, /* PoirotSchematizer.TypeSchema */
     {"8e54efe4383837388520857e5ae4720b", 0x7f438, 2, 0, 0xe, 7}, /* PoirotSchematizer.SchematizedDataComposer.Container */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e5c9c, 3, 0, 0x3d, 3}, /* ToolKit.DisplayRepresentation.ResolvingRequest */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e6270, 3, 1, 0x7fc, 3}, /* ToolKit.AutomationPropertyFilter */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e6584, 2, 0, 0x7e, 7}, /* ToolKit.ModelRepresentationComponent */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e6dec, 7, 0, 0x7f9, 3}, /* ToolKit.TypeInstance */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e6e08, 8, 0, 0x7fffffff, 7}, /* ToolKit.RestrictionContext */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e7850, 5, 1, 0x7fa, 3}, /* ToolKit.CompoundToolKitPropertyFilter */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e8038, 5, 0, 0x7fb, 3}, /* ToolKit.ToolKitProtoTypeIdentifierKind */
@@ -1135,12 +1477,18 @@
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e8b98, 7, 0, 0x7f9, 3}, /* ToolKit.ToolKitProtoTypeInstanceKind */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4e8e64, 8, 0, 0x7f8, 3}, /* ToolKit.ToolKitProtoRestrictionContextKind */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4eac1c, 2, 2, 0x7fffffff, 7}, /* ToolKit.IntentSideEffect */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4eaf10, 9, 0, 0x7f7, 3}, /* ToolKit.TypedValue */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4eb230, 3, 0, 0x7fffffff, 7}, /* ToolKit.TypedValue.DeferredValue.Storage */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4ed708, 2, 0, 0x3e, 3}, /* ToolKit.TransformableAction.Type */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4ee364, 2, 0, 0x3e, 7}, /* ToolKit.ToolInvocationSummary.SummaryElement */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4eeb78, 2, 0, 0x3e, 7}, /* ToolKit.ToolSymbolIconStyle */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4eec3c, 6, 2, 0x79, 7}, /* ToolKit.ParameterRelationshipDefinition.Relation */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f0628, 2, 0, 0x3e, 7}, /* ToolKit.AssistantTypeSchemaDefinition */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f0890, 6, 0, 0x7fffffff, 7}, /* ToolKit.TypeDefinition */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f0aa0, 13, 3, 0xf2, 0}, /* ToolKit.ComparisonPredicateType.ComparisonType */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f1f08, 4, 0, 0x7fffffff, 7}, /* ToolKit.RuntimeRequirement */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f2908, 4, 3, 0x7fffffff, 7}, /* ToolKit.ToolDatabase.Error */
+    {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f29d0, 5, 0, 0x7fb, 3}, /* ToolKit.TypeIdentifier */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f35e4, 13, 3, 0x3ff2, 0}, /* ToolKit.ComparisonPredicate.Comparison */
     {"8f85d16c4b593d8c8c7c01e125a8d548", 0x4f3600, 13, 3, 0xf2, 0}, /* ToolKit.ComparisonPredicate.Comparison.Template */
     {"904711b27f8a367f853946fb8870b6b0", 0x71ad8, 2, 0, 0x7fffffff, 7}, /* AudioAnalyticsBase.DiagnosticConfig */
@@ -1156,32 +1504,44 @@
     {"91f9ebcb915c3e69b7ab817976c44178", 0x22ded8, 3, 0, 0x7fffffff, 7}, /* MapsDesign.ContentStateView.State */
     {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c3c48, 2, 0, 0x7e, 7}, /* WeatherMaps.OverlayRenderSettings.Layer */
     {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c61a8, 2, 0, 0x7fffffff, 7}, /* WeatherMaps.OverlayTileViewportManager.(private).(private).IntermediateResult */
+    {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c6600, 5, 0, 0x7fffffff, 7}, /* WeatherMaps.WeatherMapOverlayMetadata */
+    {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c696c, 2, 0, 0x7fffffff, 7}, /* WeatherMaps.WeatherMapDisplayMode */
     {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c8920, 2, 2, 0x7fffffff, 7}, /* WeatherMaps.WeatherMap.Event */
     {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c893c, 2, 2, 0x7fffffff, 7}, /* WeatherMaps.WeatherMap.Event.Overlay */
+    {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c91c8, 3, 0, 0x3ffd, 7}, /* WeatherMaps.WeatherMapAnnotationContentViewModel.FooterSection */
     {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c94b0, 3, 0, 0x7fffffff, 7}, /* WeatherMaps.RenderPipelineResource */
     {"9361ddfeb3b3305884eedcd5c3d52948", 0x1c94cc, 3, 0, 0x7fffffff, 7}, /* WeatherMaps.KeyedRenderPipelineResource */
     {"93bc2916059132be973581e6179828a7", 0xde808, 6, 0, 0x3a, 0}, /* SiriOntologyProtobuf.Google_Protobuf_Value.OneOf_Kind */
     {"93bc2916059132be973581e6179828a7", 0xdea00, 4, 0, 0x7fffffff, 7}, /* SiriOntologyProtobuf._NameMap.NameDescription */
     {"9431902f875e3099b4a3d7eff80b842b", 0x4806d0, 2, 0, 0x7fffffff, 7}, /* HomeUI2.ScrubberProxy.Action */
+    {"9431902f875e3099b4a3d7eff80b842b", 0x486fe0, 3, 0, 0x7fffffff, 7}, /* HomeUI2.FeedbackManager.FeedbackType */
     {"94f4859c234632af8ad90b8ef2123576", 0xc930, 4, 2, 0x7b, 7}, /* PreviewsServices.PreviewsService */
+    {"95112ac375933c8092fed37ff7cbd267", 0x517b9c, 3, 2, 0x7fc, 3}, /* CloudKitDaemon.CKDSessionCheck.DeviceCheck.(private).Actor.State */
+    {"955975b90620356bab383d3c9bc5e8e8", 0xc7ed0, 2, 0, 0x3e, 7}, /* JetUI.FontSource */
     {"963065feac3d3a82ae575d3d366a2894", 0x113ba0, 2, 1, 0x7d, 7}, /* SiriCalendarIntents.ParticipantDisambiguationFlowStrategy.State */
     {"979a0dc6cab23ac1ac779f368976bd7e", 0x1a01e0, 5, 0, 0x7fb, 7}, /* AccessibilitySharedSupport.AccessibilitySwitchControlAction */
     {"979a0dc6cab23ac1ac779f368976bd7e", 0x1a0464, 4, 5, 0x3ffb, 7}, /* AccessibilitySharedSupport.AccessibilitySwitchControlAction.RecipeAction */
     {"979a0dc6cab23ac1ac779f368976bd7e", 0x1a0c48, 5, 0, 0x7b, 7}, /* AccessibilitySharedSupport.AccessibilityActionRequestState */
     {"979a0dc6cab23ac1ac779f368976bd7e", 0x1a0d3c, 4, 3, 0x7fffffff, 7}, /* AccessibilitySharedSupport.AccessibilityAssistiveTouchAction */
     {"979a0dc6cab23ac1ac779f368976bd7e", 0x1a0f84, 2, 8, 0x7fffffff, 7}, /* AccessibilitySharedSupport.AccessibilityAssistiveTouchAction.GestureAction */
+    {"979a0dc6cab23ac1ac779f368976bd7e", 0x1a2308, 9, 0, 0x77, 7}, /* AccessibilitySharedSupport.AccessibilityAction */
     {"981e69b4989b3d01ae79f2dcda4342aa", 0x388f40, 2, 3, 0x3ffffd, 3}, /* SiriMessagesFlow.SendMessageShimFlow.State */
     {"981e69b4989b3d01ae79f2dcda4342aa", 0x38de3c, 2, 12, 0x7fffffff, 7}, /* SiriMessagesFlow.SendMessageUnsupportedUseCaseCheckFlowStrategy.UnsupportedReason */
     {"98db244592883a079551ce332c055941", 0x458288, 2, 2, 0x7fd, 3}, /* GameCenterUI.Achievement.Status */
     {"98db244592883a079551ce332c055941", 0x4588c0, 2, 1, 0x7d, 7}, /* GameCenterUI.ASCLockupBatchPresenter.BatchState */
     {"98db244592883a079551ce332c055941", 0x4616fc, 2, 0, 0x7fe, 3}, /* GameCenterUI.ArtworkLoader.FetchError */
+    {"9947927efaf535a581dc36e50387f33e", 0x3259404, 6, 1, 0x7fffffff, 7}, /* GeoServices._MapsFeature.Requirement */
+    {"9947927efaf535a581dc36e50387f33e", 0x325a27c, 5, 0, 0x7fffffff, 7}, /* GeoServices.MapGeometry.Region2D */
     {"9947927efaf535a581dc36e50387f33e", 0x325b3e0, 2, 1, 0x7fd, 3}, /* GeoServices.InProcessActiveTileGroupProvider.(private).UpdateSession.State */
     {"9947927efaf535a581dc36e50387f33e", 0x325dd2c, 2, 4, 0x7fffffff, 7}, /* GeoServices.NavigationWaypoint.Category */
+    {"9947927efaf535a581dc36e50387f33e", 0x325e598, 3, 0, 0x7fffffff, 7}, /* GeoServices.DirectionsService.TransportMode */
     {"9947927efaf535a581dc36e50387f33e", 0x327f5a8, 2, 0, 0x7e, 7}, /* GeoServices.MapsService.ServiceError.UserInfo */
+    {"9947927efaf535a581dc36e50387f33e", 0x327f644, 4, 28, 0x7b, 7}, /* GeoServices.MapsService.RequestKind */
     {"9947927efaf535a581dc36e50387f33e", 0x32808fc, 3, 3, 0x7fffffff, 7}, /* GeoServices.TileLoader.(private).LoadItem.StaleState */
     {"9947927efaf535a581dc36e50387f33e", 0x3280918, 3, 4, 0x7fffffff, 7}, /* GeoServices.TileLoader.(private).LoadItem.State */
     {"99aa538cd8bd313893ff0db5231421d9", 0x89044, 3, 1, 0x3ffc, 7}, /* Recount.CPUState.Transition */
     {"99aa538cd8bd313893ff0db5231421d9", 0x89060, 2, 1, 0x7fffffff, 7}, /* Recount.CPUState.State */
+    {"99aa538cd8bd313893ff0db5231421d9", 0x89470, 2, 0, 0x7fffffff, 7}, /* Recount.CountingMode.Display */
     {"99aa538cd8bd313893ff0db5231421d9", 0x89a64, 2, 0, 0x7fffffff, 7}, /* Recount.EventDictionaryError */
     {"99aa538cd8bd313893ff0db5231421d9", 0x89ec0, 3, 1, 0x7fc, 3}, /* Recount.AwimboPMIError */
     {"99aa538cd8bd313893ff0db5231421d9", 0x89ef8, 2, 1, 0x7fd, 3}, /* Recount.AwimboPMCError */
@@ -1198,10 +1558,12 @@
     {"99f0abaef56b3cacad30af4633ad119a", 0x2a6ad4, 3, 0, 0x3d, 7}, /* VisualGeneration.KeyboardEmojiGenerator.ConditioningImageAssignmentEvent */
     {"99f0abaef56b3cacad30af4633ad119a", 0x2a748c, 2, 0, 0xe, 7}, /* VisualGeneration.AppleDiffusionResourceFactory.InternalDiffusionResource */
     {"99f0abaef56b3cacad30af4633ad119a", 0x2a776c, 2, 0, 0x7fffffff, 7}, /* VisualGeneration.PipelineConfiguration.LocalConditioningInput */
+    {"99f0abaef56b3cacad30af4633ad119a", 0x2a803c, 4, 1, 0xffb, 7}, /* VisualGeneration.DiffusionBaseScheduler */
     {"99f0abaef56b3cacad30af4633ad119a", 0x2a8d94, 4, 2, 0x1ffffffb, 7}, /* VisualGeneration.RejectionReason */
     {"99f0abaef56b3cacad30af4633ad119a", 0x2a9ce8, 3, 0, 0x3fffffd, 7}, /* VisualGeneration.TextSanitizerError */
     {"99f0abaef56b3cacad30af4633ad119a", 0x2ab3b8, 9, 6, 0x7fffffff, 7}, /* ImageCompression.ImageError */
     {"9a4fe14388fb3ef4830fc0df4e8bba5f", 0xeff5c, 4, 0, 0x7fc, 3}, /* TextAnimationSupport.TextRenderLayer.(private).SegmentLayer */
+    {"9a4fe14388fb3ef4830fc0df4e8bba5f", 0xf03b8, 4, 0, 0x7fffffff, 7}, /* SwiftUI.Text.Effect.DisplayInfo.DrawOperation */
     {"9ac086aa869630808fbc5203d89269f9", 0xbe588, 2, 0, 0x3e, 3}, /* Biscuits.Biscuit_Format_Schema_Proof.OneOf_Content */
     {"9b3d809e2eab3514a27ad8ffeadd0b00", 0x47de4, 5, 1, 0x7fa, 3}, /* SESUIService.Icon.IconType */
     {"9b60fb5a8c633c3d9a46ad20c8c382ef", 0x126fc4, 5, 0, 0x7fffffff, 7}, /* SessionCore.ReplicatorParticipant.RemoteActivitySubscription.SubscriptionDifference */
@@ -1211,6 +1573,7 @@
     {"9d78ce25a2fc3ff8924bc044d184ed68", 0x12e234, 2, 0, 0x3ffe, 7}, /* _JetEngine_SwiftUI.Impressionable_StateObject.(private).ViewState */
     {"9d78ce25a2fc3ff8924bc044d184ed68", 0x12ed58, 2, 0, 0x3ffe, 7}, /* _JetEngine_SwiftUI.ImpressionableViewModifier.(private).ViewState */
     {"9d78ce25a2fc3ff8924bc044d184ed68", 0x12fdec, 2, 1, 0x7fd, 3}, /* _JetEngine_SwiftUI._MultiCacheImageMatch */
+    {"9d78ce25a2fc3ff8924bc044d184ed68", 0x130794, 6, 0, 0x7fffffff, 7}, /* _JetEngine_SwiftUI.ShelfGridLayout */
     {"9d78ce25a2fc3ff8924bc044d184ed68", 0x13391c, 2, 0, 0x7e, 7}, /* _JetEngine_SwiftUI._StateOrObservedObject */
     {"9e2751b452f53be881b8d69417c78a63", 0x1a5c88, 3, 0, 0x7d, 7}, /* CoreBrightness.DynamicSliderAdjustmentPolicy */
     {"9e2751b452f53be881b8d69417c78a63", 0x1a5e34, 2, 0, 0x7e, 7}, /* CoreBrightness.DynamicSliderRampDurationPolicy */
@@ -1231,22 +1594,32 @@
     {"a1e2d0333bb237708d1cb7ee383b00e2", 0x8638c, 2, 0, 0x7fe, 3}, /* CoreDiagnostics.XPCPatternInfoContainer */
     {"a29c1c32889b3d61b6417e7d085806df", 0x758d50, 2, 0, 0x7e, 7}, /* MusicUI.DynamicDividerDescriptor */
     {"a29c1c32889b3d61b6417e7d085806df", 0x75930c, 2, 5, 0x1fd, 7}, /* MusicUI.SectionContent.SectionContentError */
+    {"a29c1c32889b3d61b6417e7d085806df", 0x75b690, 2, 1, 0x1d, 7}, /* MusicUI.GridOrientation */
     {"a29c1c32889b3d61b6417e7d085806df", 0x75b6ac, 3, 0, 0x7d, 7}, /* MusicUI.GridItemWidth */
+    {"a29c1c32889b3d61b6417e7d085806df", 0x75c110, 2, 0, 0x7e, 7}, /* MusicUI.PlayMode */
     {"a29c1c32889b3d61b6417e7d085806df", 0x75f1f4, 4, 0, 0x3c, 7}, /* MusicUI.MusicSiriAction */
     {"a29c1c32889b3d61b6417e7d085806df", 0x762838, 4, 0, 0x7fc, 3}, /* MusicUI.PageUpdatePerformer.(private).Error */
+    {"a29c1c32889b3d61b6417e7d085806df", 0x76296c, 2, 1, 0x7fd, 3}, /* MusicUI.BootstrapState.State */
+    {"a29c1c32889b3d61b6417e7d085806df", 0x763e20, 3, 1, 0x7c, 7}, /* MusicUI.Page.Section.Presentation.CollectionPresentation */
     {"a29c1c32889b3d61b6417e7d085806df", 0x7654b0, 4, 1, 0x3ffb, 7}, /* MusicUI.TrackLockup.LayoutStyle */
     {"a29c1c32889b3d61b6417e7d085806df", 0x766a78, 2, 0, 0x3e, 3}, /* MusicUI.MusicAppDestination.SharePageDescriptor.Source */
     {"a45dd82845e737d0b4be6bf588f303e1", 0xdaec0, 4, 0, 0x7fffffff, 7}, /* InternalSwiftProtobuf._NameMap.NameDescription */
     {"a45dd82845e737d0b4be6bf588f303e1", 0xdb27c, 6, 0, 0x3a, 0}, /* InternalSwiftProtobuf.Google_Protobuf_Value.OneOf_Kind */
     {"a535b59729e83e829663c56e949ffab9", 0x32685c, 2, 0, 0x7fffffff, 7}, /* Charts.PartiallyResolvedForegroundStyle */
+    {"a535b59729e83e829663c56e949ffab9", 0x3277dc, 3, 0, 0x7fffffff, 7}, /* Charts.NoSignalSpec.Finalized.ScaleDomain */
+    {"a535b59729e83e829663c56e949ffab9", 0x3277f8, 2, 0, 0x7fffffff, 7}, /* Charts.NoSignalSpec.GenericScaleDomain */
     {"a535b59729e83e829663c56e949ffab9", 0x328174, 2, 0, 0x7fffffff, 7}, /* Charts.ClientViewContent */
     {"a535b59729e83e829663c56e949ffab9", 0x3281ac, 2, 0, 0x7fffffff, 7}, /* Charts.CollectedAxisMark */
     {"a535b59729e83e829663c56e949ffab9", 0x328e70, 2, 0, 0x3e, 7}, /* Charts.AnyPrimitiveFormat.(private).Storage */
     {"a535b59729e83e829663c56e949ffab9", 0x329e08, 2, 0, 0x7e, 7}, /* Charts.ChartScrollPosition */
     {"a535b59729e83e829663c56e949ffab9", 0x32d620, 2, 0, 0x3e, 7}, /* Charts.LegendRenderingContext.Section */
     {"a535b59729e83e829663c56e949ffab9", 0x32d7ac, 2, 0, 0x7fffffff, 7}, /* Charts.AreaSeriesKey */
+    {"a535b59729e83e829663c56e949ffab9", 0x32d8dc, 2, 0, 0x7fffffff, 7}, /* Charts.FunctionAreaPlotContent.FunctionAreaRepresentation */
     {"a535b59729e83e829663c56e949ffab9", 0x32da28, 2, 0, 0x7fffffff, 7}, /* Charts.LineSeriesKey */
+    {"a535b59729e83e829663c56e949ffab9", 0x32db58, 3, 0, 0x7fffffff, 7}, /* Charts.FunctionLinePlotContent.FunctionLineRepresentation */
     {"a535b59729e83e829663c56e949ffab9", 0x32db74, 2, 0, 0x7fe, 3}, /* Charts.FunctionPlotRepresentation */
+    {"a535b59729e83e829663c56e949ffab9", 0x32e10c, 2, 0, 0x3e, 7}, /* Charts.AnyPlottableValue.Storage */
+    {"a535b59729e83e829663c56e949ffab9", 0x32e128, 6, 0, 0x7fffffff, 7}, /* Charts.MarkPosition */
     {"a535b59729e83e829663c56e949ffab9", 0x3306e8, 3, 0, 0x7fffffff, 7}, /* Charts.(private).SelectionTracker.Scale */
     {"a535b59729e83e829663c56e949ffab9", 0x330704, 3, 0, 0x7fffffff, 7}, /* Charts.(private).AngleTracker.Scale */
     {"a535b59729e83e829663c56e949ffab9", 0x330998, 3, 0, 0x7fffffff, 7}, /* Charts.ForegroundStyleScale.(private).Range */
@@ -1259,12 +1632,18 @@
     {"a535b59729e83e829663c56e949ffab9", 0x331c48, 3, 0, 0x7fffffff, 7}, /* Charts.ModifierSymbol */
     {"a535b59729e83e829663c56e949ffab9", 0x331c64, 2, 0, 0x7fffffff, 7}, /* Charts.ModifierLineStyle */
     {"a535b59729e83e829663c56e949ffab9", 0x331c80, 3, 0, 0x7fffffff, 7}, /* Charts.ModifierForegroundStyle */
+    {"a535b59729e83e829663c56e949ffab9", 0x331d88, 8, 0, 0x38, 7}, /* Charts.ChartInternal.ScaleRange */
     {"a535b59729e83e829663c56e949ffab9", 0x332808, 2, 0, 0x7fffffff, 7}, /* Charts.SeriesKey */
     {"a535b59729e83e829663c56e949ffab9", 0x332868, 3, 0, 0x7d, 7}, /* Charts.CollectedChartContent.Effect */
+    {"a535b59729e83e829663c56e949ffab9", 0x332c7c, 2, 0, 0x3e, 7}, /* Charts.AnyPlottableValueV2.Storage */
+    {"a535b59729e83e829663c56e949ffab9", 0x332cb4, 6, 0, 0x7fffffff, 7}, /* Charts.MarkPositionV2 */
     {"a535b59729e83e829663c56e949ffab9", 0x333a08, 2, 0, 0x3e, 7}, /* Charts.TypedVectorizedProperties.SymbolSizeMapper */
+    {"a535b59729e83e829663c56e949ffab9", 0x3343e0, 2, 0, 0x7fffffff, 7}, /* Charts.SgAnnotation.Content */
+    {"a535b59729e83e829663c56e949ffab9", 0x3343fc, 14, 1, 0x7f1, 3}, /* Charts.SgNode */
     {"a535b59729e83e829663c56e949ffab9", 0x334a00, 8, 0, 0x38, 7}, /* Charts.Spec.ScaleRange */
     {"a535b59729e83e829663c56e949ffab9", 0x334a1c, 3, 0, 0x7fffffff, 7}, /* Charts.Spec.ScaleDomain */
     {"a535b59729e83e829663c56e949ffab9", 0x334a38, 2, 0, 0x7fffffff, 7}, /* Charts.Spec.GenericScaleDomain */
+    {"a535b59729e83e829663c56e949ffab9", 0x334b38, 4, 0, 0x7fffffff, 7}, /* Charts.AccessibilityDataField */
     {"a535b59729e83e829663c56e949ffab9", 0x334b54, 2, 0, 0x7fffffff, 7}, /* Charts.AccessibilityDataField.LabelKey */
     {"a535b59729e83e829663c56e949ffab9", 0x334bc4, 2, 0, 0x7fffffff, 7}, /* Charts.AccessibilityChartDataField.Value */
     {"a55389e4de5f3a17a6081f1ac9bf8391", 0x9c4f0, 4, 0, 0x3fffc, 3}, /* OmniSearchTypes.ProtoSchemaGenerator.(private).ReflectedTypeInfo */
@@ -1272,12 +1651,14 @@
     {"a57ab9b594f93ef98816ef431780bae6", 0x4bf1f4, 2, 1, 0x7fd, 3}, /* Gestures.TraceTarget */
     {"a57ab9b594f93ef98816ef431780bae6", 0x4c084c, 3, 0, 0x7d, 7}, /* Gestures.RemoteGestureUpdate */
     {"a57ab9b594f93ef98816ef431780bae6", 0x4c15bc, 4, 3, 0x7fb, 3}, /* Gestures.BinaryCodingError */
+    {"a57ab9b594f93ef98816ef431780bae6", 0x4c2ad0, 2, 4, 0x3d, 7}, /* Gestures.TraceNodePhase */
     {"a588f2a03d2738b49bad4bd385e3326d", 0x5c65c, 2, 1, 0x7fd, 3}, /* _GroupActivities_UIKit.ReactionHistoryEntryAvatarImage.ImagePhase */
     {"a6cf4f69106d34e1b106485286bc269c", 0x23bb78, 2, 0, 0x3e, 7}, /* AppSubscriptions.SheetBrandingModel */
     {"a6cf4f69106d34e1b106485286bc269c", 0x23bea4, 11, 0, 0x7f5, 3}, /* AppSubscriptions.EngagementCondition */
     {"a6cf4f69106d34e1b106485286bc269c", 0x23d82c, 2, 10, 0x7fd, 3}, /* AppSubscriptions.MessageVendorError */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2f9f7c, 7, 2, 0x78, 7}, /* ReminderKitInternal.RDUserNotificationType */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2fb2c4, 2, 9, 0x3ffffd, 3}, /* [String : Any].DeserializableValueType */
+    {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2fcaf8, 2, 0, 0x7e, 7}, /* ReminderKitInternal.REMCustomSmartListFilterDescriptor.DataDeserializationError */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2fd1d8, 4, 0, 0x7fffffff, 7}, /* ReminderKitInternal.REMTestStorePopulator.TestAccount.AccountChild */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2fd28c, 2, 0, 0x7fffffff, 7}, /* ReminderKitInternal.REMTestStorePopulator.TestGroup.GroupChild */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2fe21c, 2, 0, 0x7fe, 3}, /* ReminderKitInternal.REMListPickerDataView.Model.ListOrCustomSmartList */
@@ -1286,6 +1667,7 @@
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x2ffce8, 4, 2, 0x7b, 7}, /* ReminderKitInternal.REMRemindersListDataView.SortingStyle */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x3022bc, 3, 0, 0x7fd, 3}, /* ReminderKitInternal.REMAccountsListDataView.Model.AccountChild */
     {"a7757d03cc6f3d92a05d5dc8435cedd7", 0x3022d8, 2, 0, 0x7fe, 3}, /* ReminderKitInternal.REMAccountsListDataView.Model.GroupChild */
+    {"a7e32fa0f4723f7e92276c74be23aea2", 0x148b7c, 5, 0, 0x7fffffff, 7}, /* AuthenticationServices.ASAuthorizationUIContext.PasswordMessage */
     {"a7e32fa0f4723f7e92276c74be23aea2", 0x148ee0, 4, 0, 0x3c, 7}, /* AuthenticationServices.ASAuthorizationUIContext.IconType */
     {"a7e32fa0f4723f7e92276c74be23aea2", 0x148f50, 3, 5, 0x7c, 7}, /* AuthenticationServices.ASAuthorizationUIContext.Title */
     {"a7e32fa0f4723f7e92276c74be23aea2", 0x14938c, 2, 1, 0x7fd, 3}, /* AuthenticationServices.ASPasskeyCredentialExtensionInput */
@@ -1294,8 +1676,11 @@
     {"a8971bc151cf31f3be0de7c9e4312a28", 0x234a0, 2, 3, 0x7c, 7}, /* FindMyDeviceAccessories.LocalFindableAccessory.Action */
     {"a8ee8e7c35b238c9aca09c7e0d284fab", 0x1f87c, 2, 2, 0x7fd, 3}, /* MediaIntelligence.FaceAnalyzer.FaceAnalyzerError */
     {"a8ee8e7c35b238c9aca09c7e0d284fab", 0x1fe98, 2, 2, 0x7fd, 3}, /* MediaIntelligence.MIDataStore.MIDataStoreError */
+    {"a8fe56605a973163a11b13e21ebe8d15", 0x1e31fc, 2, 0, 0x7e, 7}, /* FoundationModels.PrivateCloudComputeLanguageModel.QuotaUsage.Status */
+    {"a8fe56605a973163a11b13e21ebe8d15", 0x1e5aec, 3, 0, 0x7fffffff, 7}, /* FoundationModels.StreamSnapshot */
     {"a8fe56605a973163a11b13e21ebe8d15", 0x1e615c, 4, 0, 0x7c, 7}, /* FoundationModels.LanguageModelExecutorGenerationChannel.ToolCalls.Action.Kind */
     {"a8fe56605a973163a11b13e21ebe8d15", 0x1e778c, 11, 1, 0x7f4, 3}, /* FoundationModels.DynamicGenerationSchema.Kind */
+    {"a8fe56605a973163a11b13e21ebe8d15", 0x1e77a8, 11, 0, 0x7f5, 3}, /* FoundationModels.JSONSchema */
     {"a8fe56605a973163a11b13e21ebe8d15", 0x1e7bec, 2, 1, 0x7d, 7}, /* FoundationModels.GenerationOptions.SamplingMode.Kind */
     {"a90642b8e5fe3bfa8444dbacb9f521fe", 0x361c7c, 5, 3, 0x7a, 7}, /* MUIMessageListSectionDataSourceChange.(private).Change */
     {"a94b856f261c35898bd8e4e40b24dcfd", 0x12cad0, 3, 0, 0x7d, 7}, /* TelephonyMessagingKit.RCSGroupChatMutationResponseNotification.Result */
@@ -1310,6 +1695,9 @@
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x323024, 3, 0, 0x3d, 3}, /* TokenGenerationCore.(private).StreamBufferEnvelope.ContentEnvelope */
     {"aa8199a2e365307594b67868b61afc32", 0x96150, 12, 0, 0x7f4, 3}, /* _RegexParser.AST.Node */
     {"aa8199a2e365307594b67868b61afc32", 0x9624c, 3, 1, 0x3ffc, 0}, /* _RegexParser.AST.AbsentFunction.Kind */
+    {"aa8199a2e365307594b67868b61afc32", 0x9637c, 4, 3, 0x7fffffff, 7}, /* _RegexParser.AST.Quantification.Amount */
+    {"aa8199a2e365307594b67868b61afc32", 0x963ec, 4, 2, 0x7b, 0}, /* _RegexParser.AST.Conditional.Condition.Kind */
+    {"aa8199a2e365307594b67868b61afc32", 0x96504, 5, 8, 0x7fffffff, 7}, /* _RegexParser.AST.GlobalMatchingOption.Kind */
     {"aa8dc803eca63a679255643b9171a2ec", 0x321a0, 4, 0, 0x7fc, 3}, /* NewsDaemon.MultiDatabaseFeedItemPool.DatabaseSource */
     {"aaae7415bda636b794ef6afc8efbd67f", 0x7be40, 7, 6, 0x18, 7}, /* TelephonyBlastDoorSupport.DataCompression.(private)._LibarchiveError */
     {"aadc87cac42b3dbb8fc22b02ae3bd571", 0x165b20, 4, 2, 0x7fffffff, 7}, /* GraphSync.APIError */
@@ -1318,35 +1706,61 @@
     {"ab4b12bfc5e03f31aecb409ca5ef08fc", 0x543508, 57, 0, 0x47, 7}, /* HomeAutomationInternal.Attribute */
     {"ab4b12bfc5e03f31aecb409ca5ef08fc", 0x543aa8, 3, 0, 0xd, 7}, /* HomeAutomationInternal.DeviceType */
     {"ab4b12bfc5e03f31aecb409ca5ef08fc", 0x54aac8, 4, 0, 0x1fc, 7}, /* HomeAutomationInternal.Outcome */
+    {"ab4b12bfc5e03f31aecb409ca5ef08fc", 0x54b4f8, 5, 0, 0x3fb, 3}, /* HomeAutomationInternal.ConfirmationType */
     {"ab4b12bfc5e03f31aecb409ca5ef08fc", 0x5500ac, 2, 1, 0x7d, 7}, /* HomeAutomationInternal.SceneOutcome */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb11264, 5, 0, 0x7fb, 3}, /* FileProviderDaemon.DocumentContent */
+    {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb12118, 11, 6, 0x7f4, 3}, /* FileProviderDaemon.VFSFileTree.ItemNotFoundReason */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb129c4, 2, 10, 0x3b, 7}, /* FileProviderDaemon.JobSQLFields */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb16094, 3, 8, 0x4, 7}, /* FileProviderDaemon.ItemReconciliationSQLFields */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb160cc, 2, 15, 0x1c, 7}, /* FileProviderDaemon.ItemReconciliationHalfSQLFields */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb1d4cc, 48, 3, 0x7cf, 0}, /* FileProviderDaemon.UserRequest */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb225a4, 3, 1, 0x7fffc, 0}, /* FileProviderDaemon.FPDDomainFPFSBackend.StartStatus */
+    {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb23470, 2, 1, 0x7fffffff, 7}, /* FileProviderDaemon.Syncability */
+    {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb235e8, 2, 0, 0x7fe, 3}, /* FileProviderDaemon.FSOrFPJob */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb24720, 2, 1, 0x7d, 7}, /* FileProviderDaemon.ItemReconciliation.(private).PropagationStatus */
     {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb24768, 2, 3, 0x7fffffff, 7}, /* FileProviderDaemon.ReconciledPropagationStatus */
+    {"abef0f37d35a3e34b3f0a91b9cb58baf", 0xb24cf0, 4, 6, 0x7fb, 3}, /* FileProviderDaemon.ReimportReason */
+    {"ac6eee12f09434f5b79a8d3bca06c231", 0x4cb638, 7, 1, 0x7fffffff, 7}, /* BiomeSQLParser.AggregationFunction.AggregationType */
+    {"accbfabe05bc3f01b6d406e1024deedd", 0x238c28, 4, 0, 0x7fffffff, 7}, /* EventKit.IntelligentScheduler.ResolvedLocation */
+    {"accbfabe05bc3f01b6d406e1024deedd", 0x238c60, 2, 0, 0x7fffffff, 7}, /* EventKit.IntelligentScheduler.LocationInput.Value */
     {"ade59080a2dc371ba3d9dbce4a0b3410", 0x107b88, 2, 0, 0x7e, 7}, /* AdPlatformsCommon.TrialBucketID */
     {"ade59080a2dc371ba3d9dbce4a0b3410", 0x10b4d4, 2, 0, 0x3e, 7}, /* AdPlatformsCommon.PolicyEligibility.IneligibleReason.BlockedReason */
     {"ade59080a2dc371ba3d9dbce4a0b3410", 0x10bdb4, 2, 0, 0x7e, 7}, /* AdPlatformsCommon.PolicyRuleEligibility.IneligibleReason */
     {"afaa4c72104e37e0949ac1b62213e0b6", 0xa7538, 4, 0, 0x7c, 7}, /* IconRendering.Icon.Fill.Contents */
+    {"afaa4c72104e37e0949ac1b62213e0b6", 0xa7930, 2, 0, 0x7e, 7}, /* IconRendering.Icon.ResolvedFill.Contents */
     {"afaa4c72104e37e0949ac1b62213e0b6", 0xa7bac, 2, 0, 0x7fffffff, 7}, /* ICRIconLayer.DisplayedIcon */
     {"afaa4c72104e37e0949ac1b62213e0b6", 0xa888c, 2, 0, 0x7fffffff, 7}, /* IconRendering.PooledTexture.(private).Contents */
+    {"b0b577bfdc163dcfb4e5b7f3e553f82d", 0x17dba8, 2, 7, 0x7d, 7}, /* SiriFindMy.Snippets.PunchoutLocation */
     {"b0b577bfdc163dcfb4e5b7f3e553f82d", 0x180400, 3, 0, 0x7fffffff, 7}, /* SiriFindMy.DeviceMappingInfo.MatchType */
+    {"b0bff79eb5e1355a99b3354c72490bfa", 0x190474, 17, 0, 0x7ef, 0}, /* SensitiveContentAnalysisUI.SensitiveContentOverlay.Kind */
     {"b0bff79eb5e1355a99b3354c72490bfa", 0x193a1c, 3, 4, 0x7fc, 3}, /* SensitiveContentAnalysisUI.Report.Error */
     {"b13c71ad8da83b498aa18a75247d513c", 0x1f6b1c, 3, 0, 0x7fffffff, 7}, /* TokenGenerationInference.TokenGenerationConfiguration.DecoderType */
+    {"b13cf38a7ef93abd8330755cc90c8f9f", 0x26e748, 2, 0, 0x7e, 7}, /* MediaCoreUI.NowPlayingViewModel.MiniPlayerSubtitle.Value.Resolved */
+    {"b13cf38a7ef93abd8330755cc90c8f9f", 0x26e764, 3, 0, 0x7d, 7}, /* MediaCoreUI.NowPlayingViewModel.MiniPlayerSubtitle.Value */
+    {"b13cf38a7ef93abd8330755cc90c8f9f", 0x26e7b8, 2, 2, 0x7d, 7}, /* MediaCoreUI.NowPlayingViewModel.EyebrowConfiguration.Value */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x270938, 2, 0, 0x7e, 7}, /* MediaCoreUI.NowPlayingHeaderItemID.Value */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x276528, 3, 0, 0x7fffffff, 7}, /* MediaCoreUI.NowPlayingButtonID.Value */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x2770d4, 2, 1, 0x7fffffff, 3}, /* MediaCoreUI.WaveformTheme.Theme */
+    {"b13cf38a7ef93abd8330755cc90c8f9f", 0x27bd88, 2, 0, 0x7e, 7}, /* MediaCoreUI.TransportButtonContent */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x27c750, 3, 0, 0x3ffffd, 3}, /* MediaCoreUI.MotionCacheDiskStorage.DiskCacheStorageError */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x27d394, 2, 0, 0x7e, 7}, /* MediaCoreUI.NowPlayingViewModel.TransitionDestination */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x27dc9c, 2, 0, 0x3ffe, 7}, /* MediaCoreUI.NowPlayingMiniPlayerAccessoryID.Value */
     {"b13cf38a7ef93abd8330755cc90c8f9f", 0x27e8a4, 2, 5, 0x7d, 7}, /* MediaCoreUI.TransportButtonKind.Value */
+    {"b177fa4efd1130ba81f1cde5d0629646", 0x2a740, 10, 22, 0x7fffffff, 7}, /* LinkPresentationStyleSheetParsing.Token */
     {"b177fa4efd1130ba81f1cde5d0629646", 0x2ab1c, 2, 0, 0x7fffffff, 7}, /* LinkPresentationStyleSheetParsing.StyleSheet.Font */
     {"b177fa4efd1130ba81f1cde5d0629646", 0x2ab70, 2, 0, 0x3e, 7}, /* LinkPresentationStyleSheetParsing.StyleSheet.Font.Size */
+    {"b177fa4efd1130ba81f1cde5d0629646", 0x2aefc, 3, 0, 0x7fffffff, 7}, /* LinkPresentationStyleSheetParsing.TokenParser.Node.ComponentValue */
+    {"b1c5d9212ca23884b928ec06c026fdd1", 0x32738, 3, 2, 0x7fc, 3}, /* _CompositorServices_SwiftUI.AppStateController.Event */
+    {"b1c5d9212ca23884b928ec06c026fdd1", 0x32754, 4, 2, 0x3ffffb, 3}, /* _CompositorServices_SwiftUI.AppStateController.State */
+    {"b2e23ad8322e374aa79b9e1b4043442f", 0xf49a4, 4, 0, 0x3c, 3}, /* HomeKitDaemonFoundation.HomeInstall.HTTPClient.Request */
+    {"b2e23ad8322e374aa79b9e1b4043442f", 0xf4ce8, 2, 1, 0x7fd, 3}, /* HomeKitDaemonFoundation.MTR._CodingPathNode */
+    {"b2e23ad8322e374aa79b9e1b4043442f", 0xf51b0, 3, 1, 0xc, 7}, /* HomeKitDaemonFoundation.MTR.ValueReference.Backing */
     {"b2e23ad8322e374aa79b9e1b4043442f", 0xf5b44, 2, 1, 0x7d, 7}, /* HomeKitDaemonFoundation.(private).PairingBridge.Event */
+    {"b2e23ad8322e374aa79b9e1b4043442f", 0xf80b4, 2, 0, 0x3fffe, 3}, /* HomeKitDaemonFoundation.MTR.(private).ValueReferencingEncoder.Reference */
+    {"b2e23ad8322e374aa79b9e1b4043442f", 0xf8328, 3, 0, 0x1d, 7}, /* HomeKitDaemonFoundation.MTR.AccessGrant */
+    {"b3cbe0d637103681887d00eaec26683c", 0x8b89c, 8, 0, 0x7f8, 3}, /* ToolRenderer.PythonTypeProxy */
     {"b427ad8455f63a2ab19055451c5d09b2", 0x4c293c, 2, 10, 0x7fd, 3}, /* ActionKit.(private).WFParameterStateToolKitConversionError */
+    {"b479c438d0ef367383c14e09929c8d90", 0x799430, 7, 0, 0x7fffffff, 7}, /* PaperKit.ShapeMarkup.Shape */
     {"b479c438d0ef367383c14e09929c8d90", 0x7a1eb4, 2, 3, 0x7fd, 3}, /* PaperKit.PaperDocument.PDFDocumentUse */
     {"b479c438d0ef367383c14e09929c8d90", 0x7a753c, 2, 0, 0x7e, 7}, /* PaperKit.ImageResize.Size */
     {"b479c438d0ef367383c14e09929c8d90", 0x7a7558, 2, 0, 0x7e, 7}, /* PaperKit.ImageResize.Crop */
@@ -1358,9 +1772,11 @@
     {"b5edd32b0af43097bf756a33ac0d6176", 0x507630, 5, 2, 0x7fa, 3}, /* SpotlightKnowledgeDaemon.CascadeSet.EnumerateChangesError */
     {"b6712d6d785f3f8d887b3af0be8664c0", 0x24bd70, 2, 0, 0x7fffffff, 7}, /* PhotosSwiftUICore.PhotosCollectionTitleText.Spec.TitleTextSpec */
     {"b6712d6d785f3f8d887b3af0be8664c0", 0x25179c, 2, 1, 0x7fffffff, 3}, /* PhotosSwiftUICore.PhotosCellSpecs.BackgroundColor */
+    {"b6712d6d785f3f8d887b3af0be8664c0", 0x251a1c, 2, 0, 0x7fffffff, 7}, /* PhotosSwiftUICore.PhotosSearchStyle */
     {"b6712d6d785f3f8d887b3af0be8664c0", 0x2537ec, 2, 0, 0x7e, 7}, /* PhotosSwiftUICore.OneUpChromeBarlessView.(private).ChromeBody.SafeAreaSpacer.Dimension */
     {"b6712d6d785f3f8d887b3af0be8664c0", 0x2544d4, 2, 2, 0xd, 7}, /* PhotosSwiftUICore.OneUpChromeActionsDelegateError */
     {"b6712d6d785f3f8d887b3af0be8664c0", 0x25458c, 2, 1, 0x7fd, 3}, /* PhotosSwiftUICore.PhotosAsyncImagePhase */
+    {"b6712d6d785f3f8d887b3af0be8664c0", 0x25e610, 2, 0, 0x7fffffff, 7}, /* PhotosSwiftUICore.OneUpBadgeSpec */
     {"b6e31184dd8931b980f2052c08b8a4e8", 0x287cf8, 8, 3, 0x7f7, 3}, /* ShaderGraph.NodePersonality */
     {"b6e31184dd8931b980f2052c08b8a4e8", 0x287f20, 2, 0, 0x7fe, 3}, /* ShaderGraph.NestedError */
     {"b6e31184dd8931b980f2052c08b8a4e8", 0x288058, 3, 0, 0x7fd, 3}, /* ShaderGraph.SGDataTypeGraph.PersonalityKind */
@@ -1368,9 +1784,16 @@
     {"b6e31184dd8931b980f2052c08b8a4e8", 0x288f2c, 5, 0, 0xb, 3}, /* ShaderGraph.ShaderModule.Instruction */
     {"b6e31184dd8931b980f2052c08b8a4e8", 0x289c8c, 4, 7, 0x1b, 0}, /* ShaderGraph.SGInternalError.ErrorType */
     {"b6e31184dd8931b980f2052c08b8a4e8", 0x28b748, 4, 3, 0xfb, 0}, /* ShaderGraph.MetalFunctionGraphError.ErrorType */
+    {"b76dd4a75abb358ea499bbf41b938404", 0xceb48, 4, 1, 0x7fb, 3}, /* FaceTimeNotificationUI.CallControlsRecipe */
+    {"b76dd4a75abb358ea499bbf41b938404", 0xcf6fc, 5, 5, 0x78, 7}, /* FaceTimeNotificationUI.CompactTrailingContent */
+    {"b76dd4a75abb358ea499bbf41b938404", 0xcfe2c, 2, 0, 0x3e, 7}, /* FaceTimeNotificationUI.MenuItem.Action */
     {"b8191016bd7634b7a863896815bcb841", 0xf7ed0, 5, 1, 0x3ffffa, 3}, /* DeviceSpecSupport.DeviceSpecError */
     {"b949281151f239dfa99bb7c4f48edbed", 0xbe96c, 3, 0, 0x7fffffff, 7}, /* CoreHapticsTools.AHAPv1.AHAPv1PatternItem */
+    {"b9beb1d744613d5aa3f9dbe5d0224bc1", 0x537bb4, 3, 1, 0x7c, 7}, /* MPCPlaybackEngineEvent.PrivateListeningMode */
     {"b9beb1d744613d5aa3f9dbe5d0224bc1", 0x539dc0, 4, 0, 0x7fffffff, 4}, /* MediaPlaybackCore.Event */
+    {"b9beb1d744613d5aa3f9dbe5d0224bc1", 0x539eac, 45, 0, 0x7fffffff, 4}, /* MediaPlaybackCore.PlayerEvent */
+    {"b9beb1d744613d5aa3f9dbe5d0224bc1", 0x539f68, 8, 0, 0x7fffffff, 7}, /* MediaPlaybackCore.SystemEvent */
+    {"b9beb1d744613d5aa3f9dbe5d0224bc1", 0x53a020, 13, 0, 0x1ffff3, 7}, /* MediaPlaybackCore.UserEvent */
     {"ba329e65b8463618add7909854fb2762", 0xab52c, 2, 1, 0x7d, 7}, /* GenerativePartnerServiceUI.SignInAvailability */
     {"ba6e02a148643fb88b45e73c553bf4c6", 0x49f50, 2, 6, 0x7fd, 3}, /* MapsUI.GEOAPConversionError */
     {"bab6e2ba328f30079798615719d655e5", 0x1c4288, 2, 0, 0x7e, 7}, /* AutoUnlockDaemon.DeviceStatusSequence.Event */
@@ -1387,9 +1810,14 @@
     {"be13d1cbbb413390afb76b565df2aa67", 0x67ad4, 3, 0, 0x3d, 7}, /* MessageSecurity.MSCMSContentTypeError */
     {"be13d1cbbb413390afb76b565df2aa67", 0x67af0, 6, 12, 0x9, 7}, /* MessageSecurity.MSCMSError */
     {"bebf6927559035a8a5390a20b70eea15", 0x2bd880, 2, 2, 0x7fd, 3}, /* FamilyCircleUI.FamilySettingsApplication.State */
+    {"bf4af840975d38f898f25c093d4225cf", 0xa7ed4, 2, 0, 0x3e, 7}, /* JetUI.FontSource */
     {"c0a95d440711394bb76d70d2454f80ac", 0x2524, 2, 0, 0x1e, 7}, /* ModelManagerExclaveInternal.ExclaveInternalOperationType */
     {"c13551884e7c3d8e9287916beac14875", 0x1f28d0, 2, 0, 0x7fe, 3}, /* UserNotificationsCore.(private).NotificationPipelineScheduler.SchedulerEntry */
+    {"c13551884e7c3d8e9287916beac14875", 0x1f5660, 8, 2, 0x7fffffff, 7}, /* UserNotificationsCore.ToolService.Request */
     {"c13551884e7c3d8e9287916beac14875", 0x1f5698, 2, 0, 0x3e, 7}, /* UserNotificationsCore.ToolService.ToolResult */
+    {"c161ed01560c32a58f7333ad78b5e171", 0x1c80c4, 5, 0, 0x7fffffff, 7}, /* MapsUI.StackLayout.StackDistributionSpecification.DistributionItem */
+    {"c161ed01560c32a58f7333ad78b5e171", 0x1c8a4c, 6, 2, 0x7fffffff, 7}, /* MapsUI.StackLayout.Distribution */
+    {"c161ed01560c32a58f7333ad78b5e171", 0x1c8a68, 3, 1, 0x7fffffff, 7}, /* MapsUI.StackLayout.Alignment */
     {"c161ed01560c32a58f7333ad78b5e171", 0x1c8ff8, 2, 6, 0x7fd, 3}, /* MapsUI.GEOAPConversionError */
     {"c1abdba4005432299d3d9457574f6629", 0x100000, 3, 35, 0x6b, 7}, /* CalendarLink.CalendarLinkError */
     {"c26e66a3806933c391205564c0fda289", 0x422d48, 2, 1, 0xd, 7}, /* ODIE.CallTable.Entry */
@@ -1397,20 +1825,31 @@
     {"c26e66a3806933c391205564c0fda289", 0x4245cc, 3, 0, 0x3ffffffd, 7}, /* ODIE.ImageView */
     {"c26e66a3806933c391205564c0fda289", 0x424e74, 4, 0, 0x1c, 0}, /* ODIE.Operand */
     {"c26e66a3806933c391205564c0fda289", 0x424e90, 12, 0, 0x7fffffff, 7}, /* ODIE._Operand */
+    {"c26e66a3806933c391205564c0fda289", 0x424eac, 6, 0, 0x7fa, 3}, /* ODIE.OperandType */
+    {"c26e66a3806933c391205564c0fda289", 0x424ec8, 10, 1, 0x7fffffff, 7}, /* ODIE._OperandType */
     {"c26e66a3806933c391205564c0fda289", 0x425a2c, 3, 0, 0x7fffffff, 7}, /* ODIE.Debugger.BreakpointLocation */
     {"c26e66a3806933c391205564c0fda289", 0x426260, 2, 0, 0x7fffffff, 7}, /* ODIE.SymbolDescriptor.NamedAttributeStorage */
+    {"c26e66a3806933c391205564c0fda289", 0x42646c, 5, 1, 0x7fa, 3}, /* ODIE.Location */
     {"c26e66a3806933c391205564c0fda289", 0x426674, 4, 1, 0x7fb, 3}, /* ODIE.Metadata.Value */
+    {"c2b608b360583f3b808ec79ac67e6c73", 0x73b778, 2, 0, 0x7fffffff, 7}, /* MediaFoundation.SQLDatabase.Migration.Error */
+    {"c2b608b360583f3b808ec79ac67e6c73", 0x73da04, 2, 1, 0xd, 7}, /* MusicKit.MusicLibrary.AddStatus */
+    {"c2b608b360583f3b808ec79ac67e6c73", 0x73f2a0, 3, 6, 0x3c, 7}, /* MusicKitInternal.MusicLibraryPlaylistViewModel.Revision.SourceAction */
     {"c2b608b360583f3b808ec79ac67e6c73", 0x73f3f4, 3, 0, 0x7fd, 3}, /* MusicKitInternal.LibraryInternalPredicateResolver.KeyPathKind */
+    {"c2b608b360583f3b808ec79ac67e6c73", 0x7411dc, 6, 0, 0x7a, 7}, /* MusicKit.Playlist.SortOrder */
+    {"c2b608b360583f3b808ec79ac67e6c73", 0x74842c, 2, 1, 0xd, 7}, /* MusicKitInternal.Presto_MusicLibrary.AddStatus */
+    {"c2e276cdf33a3303affd07b958770968", 0xc4f30, 2, 0, 0x1e, 7}, /* GenerativeModels.GenerativeModelsAvailability.InstallDecision */
     {"c3d8982616153378b4c8265ebf6dc1e3", 0x16cc40, 3, 0, 0x7fd, 3}, /* LNActionConfiguration.CodableWrapper */
     {"c3d8982616153378b4c8265ebf6dc1e3", 0x16cc68, 13, 2, 0x7f2, 3}, /* LNValueType.CodableWrapper */
     {"c3d8982616153378b4c8265ebf6dc1e3", 0x16cd2c, 15, 1, 0x7f0, 3}, /* LinkMetadata.TypeSpecificMetadataStorage */
     {"c3d8982616153378b4c8265ebf6dc1e3", 0x16ce4c, 3, 0, 0x7fd, 3}, /* LNSchemaDialogStatement.CodableWrapper */
+    {"c40ccaea3c833783ab397c27584d2fc4", 0x39a110, 7, 0, 0x7fffffff, 7}, /* PaperKit.ShapeMarkup.Shape */
     {"c40ccaea3c833783ab397c27584d2fc4", 0x39af9c, 2, 3, 0x7fd, 3}, /* PaperKit.PaperDocument.PDFDocumentUse */
     {"c40ccaea3c833783ab397c27584d2fc4", 0x39dde8, 2, 0, 0x7e, 7}, /* PaperKit.ImageResize.Size */
     {"c40ccaea3c833783ab397c27584d2fc4", 0x39de04, 2, 0, 0x7e, 7}, /* PaperKit.ImageResize.Crop */
     {"c4896272822d33ff8dcc00c1485fe293", 0x156fac, 4, 3, 0x7fb, 3}, /* TeaFoundation.JSON */
     {"c4896272822d33ff8dcc00c1485fe293", 0x1588d8, 2, 0, 0x7fe, 3}, /* TeaFoundation.CallbackStore.CallbackDefinitionContainer */
     {"c4896272822d33ff8dcc00c1485fe293", 0x159fc0, 2, 1, 0x7fd, 3}, /* TeaFoundation.(private).AuthTokenServiceError */
+    {"c4896272822d33ff8dcc00c1485fe293", 0x15a708, 7, 0, 0x7f9, 3}, /* TeaFoundation.DiagnosticAttachment */
     {"c4896272822d33ff8dcc00c1485fe293", 0x15b134, 2, 0, 0x7fe, 3}, /* TeaFoundation.TrieNode */
     {"c4896272822d33ff8dcc00c1485fe293", 0x15bed8, 2, 0, 0x3e, 3}, /* TeaFoundation.HttpResponse.Body */
     {"c5826cb02b03322caec2533ffa0488f0", 0xcb40c, 2, 0, 0x7fffffff, 7}, /* WorkflowUIServices.ParameterSummaryContent.Content */
@@ -1421,12 +1860,15 @@
     {"c5f075f3fcee3760ba2139fee27b9acf", 0x22ba4, 3, 0, 0x3fffd, 3}, /* CloudKitCode.OneFieldDecoderError */
     {"c60ca80d1a1e32d69aa9fed7622727fa", 0x117304, 2, 0, 0x7fffffff, 7}, /* UIIntelligenceSupport.IntelligenceFragmentCollector.(private).InternalContext */
     {"c60ca80d1a1e32d69aa9fed7622727fa", 0x118098, 5, 0, 0x7fffffff, 7}, /* UIIntelligenceSupport.XPCAgentMessage */
+    {"c60ca80d1a1e32d69aa9fed7622727fa", 0x118508, 20, 2, 0x3eb, 0}, /* UIIntelligenceSupport.IntelligenceElement.Content */
     {"c68accc52df73a70a943773859981250", 0x107f38, 2, 0, 0x7fffffff, 7}, /* MediaContinuityKit.AudioStreamConfiguration */
     {"c68accc52df73a70a943773859981250", 0x107fd0, 2, 0, 0x7fffffff, 7}, /* MediaContinuityKit.VideoStreamConfiguration */
     {"c68accc52df73a70a943773859981250", 0x108740, 4, 0, 0x7fc, 3}, /* MediaContinuityKit.MediaContinuitySession.Event */
     {"c68accc52df73a70a943773859981250", 0x108934, 4, 0, 0x7fc, 3}, /* MediaContinuityKit.CoexSessionManager.Events */
     {"c68accc52df73a70a943773859981250", 0x10a470, 2, 0, 0x3e, 3}, /* MediaContinuityKit.FigPWDSenderBackedProtectedDisplayKeyNegotiator.Events */
+    {"c68accc52df73a70a943773859981250", 0x10b18c, 2, 4, 0x7d, 7}, /* MediaContinuityKit.MediaContinuityUsage */
     {"c68accc52df73a70a943773859981250", 0x10b294, 3, 0, 0x3d, 3}, /* MediaContinuityKit.KeyNegotiationResponse.Status */
+    {"c68accc52df73a70a943773859981250", 0x10b358, 12, 0, 0xff4, 0}, /* MediaContinuityKit.StreamMessage */
     {"c68accc52df73a70a943773859981250", 0x10c0bc, 12, 2, 0x73, 7}, /* MediaContinuityKit.TelemetryEvent */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1000518, 2, 0, 0x7fffffff, 7}, /* VFX.Scheduler.Event */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x10005c4, 8, 2, 0x77, 7}, /* VFX.SerializationError */
@@ -1436,9 +1878,11 @@
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1006b14, 5, 0, 0x7b, 7}, /* VFX.BufferArgument */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1006c90, 2, 0, 0xe, 7}, /* VFX.ShaderParameter */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1008264, 2, 0, 0x7e, 7}, /* VFX.TextureOptions.SizeModification */
+    {"c6b4e07a482831ad95cf9832383bac5a", 0x1008314, 6, 31, 0x7f9, 3}, /* VFX.AnyType */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1008b4c, 2, 2, 0x7fffffff, 7}, /* VFX.GraphScheduling */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1008e08, 6, 9, 0x79, 7}, /* VFX.GraphError.Kind */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x10097fc, 2, 1, 0xfd, 0}, /* VFX.MappingMode.InputFilter */
+    {"c6b4e07a482831ad95cf9832383bac5a", 0x1016548, 5, 11, 0x7fa, 3}, /* VFX.TypeConstraint */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x1019724, 16, 3, 0x7ef, 0}, /* VFX.ScriptLocation */
     {"c6b4e07a482831ad95cf9832383bac5a", 0x101a13c, 2, 0, 0x3ffffe, 3}, /* VFX.ScriptKeyPathReference */
     {"c7e66fcf66bc3f2e85e7149e65f50d52", 0x48fa50, 2, 0, 0x3e, 7}, /* AgentCanvasUICore.CanvasTranscriptPresentationMode */
@@ -1450,8 +1894,10 @@
     {"c7e66fcf66bc3f2e85e7149e65f50d52", 0x49daa0, 2, 0, 0x3e, 3}, /* AgentCanvasUICore.ViewSnapshot */
     {"c7e66fcf66bc3f2e85e7149e65f50d52", 0x49dba0, 5, 5, 0x7fa, 3}, /* AgentCanvasUICore.(private).SnapshotError */
     {"c7e66fcf66bc3f2e85e7149e65f50d52", 0x4a0964, 2, 2, 0x7d, 7}, /* AgentCanvasUICore.SystemAuxiliaryProxy.SystemPresentation */
+    {"c86d7f845e7339229314d5a4e9cab482", 0x199014, 3, 0, 0xd, 7}, /* HomeAppIntents.DeviceType */
     {"c86d7f845e7339229314d5a4e9cab482", 0x1999c4, 4, 0, 0x7c, 7}, /* HomeAppIntents.PossibleValuesForAttribute */
     {"c8742c81a068387684fbdf14754fe18e", 0x299118, 2, 0, 0x7fe, 3}, /* MapKit.QuadTrie.(private).Node */
+    {"c8742c81a068387684fbdf14754fe18e", 0x29a414, 2, 3, 0xfd, 3}, /* MapKit.NavigationSessionState */
     {"c8742c81a068387684fbdf14754fe18e", 0x29a490, 3, 0, 0x7d, 7}, /* MapKit.GuidanceUpdate */
     {"c87f436caa883b4abd39b9fb16b7d6e8", 0xe59e4, 10, 0, 0x16, 7}, /* PromotedContent.DesiredPlacementType */
     {"c87f436caa883b4abd39b9fb16b7d6e8", 0xe5c18, 5, 0, 0x7fb, 3}, /* PromotedContent.PromotableContentRepresentationDTO */
@@ -1459,10 +1905,17 @@
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x23f824, 2, 0, 0x7fe, 3}, /* ShortcutsLanguage.InsertableVariable */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x23f8ec, 2, 37, 0x7fd, 3}, /* ShortcutsLanguage.ShortcutTransformationError */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x23fbd0, 2, 45, 0x7fd, 3}, /* ShortcutsLanguage.IRTransformationError */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x2400d0, 17, 0, 0x7ef, 0}, /* ShortcutsLanguage.IRValue */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x2400ec, 4, 0, 0x7fc, 3}, /* ShortcutsLanguage.IRValue.Atom */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x24022c, 2, 0, 0x1fffe, 3}, /* ShortcutsLanguage.IRValue.PersonHandleConstructor.Handle */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x240280, 2, 0, 0x7fe, 3}, /* ShortcutsLanguage.IRInterpPart */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x2402d4, 11, 0, 0x7fffffff, 3}, /* ShortcutsLanguage.IRStatement */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x240360, 3, 0, 0x3ffffffd, 3}, /* ShortcutsLanguage.IRConditionOperand */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x240398, 3, 0, 0x1ffffd, 3}, /* ShortcutsLanguage.IRCondition */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x2403d0, 14, 0, 0x7f2, 3}, /* ShortcutsLanguage.IRConditionPredicate.Operator */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x240440, 2, 0, 0x7fffffff, 3}, /* ShortcutsLanguage.IRExpression */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x240478, 5, 0, 0x7fb, 3}, /* ShortcutsLanguage.IRVariable */
+    {"c88d7cf7f4f33cedb594717867d4bd40", 0x24052c, 2, 0, 0xffffffe, 3}, /* ShortcutsLanguage.IRArgument */
     {"c88d7cf7f4f33cedb594717867d4bd40", 0x240878, 2, 0, 0x7fe, 3}, /* ShortcutsLanguage.PythonToIR.(private).(private).(private).ConcatenationElement */
     {"ca1db1c8f4c23262a3282aea60f41796", 0xd0fb4, 2, 1, 0x7d, 7}, /* SpeakerGroupSetupKit.SGSAVScheduleEvent */
     {"ca54fa202786323f8d6dbc0889b9d587", 0xecfc8, 2, 0, 0x3ffe, 7}, /* PhotosUIEdit.PhotoStyleDPad.Configuration.PhotoStyleDPadGridStyle */
@@ -1475,7 +1928,9 @@
     {"cc7741124668329e8f52791408c1791a", 0x65721c, 2, 3, 0x7fffffff, 7}, /* RealityFoundation.SampledAnimation._Proto_SkeletalAnimationOperation_v1 */
     {"cc7741124668329e8f52791408c1791a", 0x65730c, 3, 2, 0x7fffffff, 7}, /* RealityFoundation.SampledAnimation.SkeletalAnimationOperation.InternalOperation */
     {"cc7741124668329e8f52791408c1791a", 0x65c00c, 2, 1, 0xffd, 3}, /* RealityFoundation.DirectUniformsState */
+    {"cc7741124668329e8f52791408c1791a", 0x65d380, 2, 0, 0x7fffffff, 7}, /* RealityKit.MeshResource.JointInfluences.InfluenceRate */
     {"cc7741124668329e8f52791408c1791a", 0x65dcfc, 2, 1, 0xfd, 3}, /* RealityFoundation.Reverb.Kind */
+    {"cc7741124668329e8f52791408c1791a", 0x65eb70, 2, 2, 0x1fffffd, 7}, /* RealityFoundation.ShaderGraphMaterial._proto_LightingModel.Kind */
     {"cc7741124668329e8f52791408c1791a", 0x65f624, 4, 1, 0x7fffffff, 3}, /* RealityFoundation.VirtualEnvironmentProbeComponent.Source */
     {"cc7741124668329e8f52791408c1791a", 0x65fac4, 2, 0, 0x3e, 3}, /* RealityKit.TextureResource.CopySourceBuffer */
     {"cc7741124668329e8f52791408c1791a", 0x6607f0, 2, 1, 0x3ffffd, 3}, /* RealityFoundation.SystemDependency */
@@ -1484,14 +1939,20 @@
     {"cc7741124668329e8f52791408c1791a", 0x6650c8, 5, 0, 0x7fffffff, 7}, /* RealityFoundation.ImagePresentationComponent.DataSource */
     {"cc7741124668329e8f52791408c1791a", 0x666f90, 2, 3, 0x7c, 7}, /* RealityFoundation.AnimationHandoffType.HandoffType */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32363c, 2, 0, 0x7fffffff, 7}, /* Charts.PartiallyResolvedForegroundStyle */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x3245bc, 3, 0, 0x7fffffff, 7}, /* Charts.NoSignalSpec.Finalized.ScaleDomain */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x3245d8, 2, 0, 0x7fffffff, 7}, /* Charts.NoSignalSpec.GenericScaleDomain */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x324f54, 2, 0, 0x7fffffff, 7}, /* Charts.ClientViewContent */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x324f8c, 2, 0, 0x7fffffff, 7}, /* Charts.CollectedAxisMark */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x325c50, 2, 0, 0x3e, 7}, /* Charts.AnyPrimitiveFormat.(private).Storage */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x326bdc, 2, 0, 0x7e, 7}, /* Charts.ChartScrollPosition */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32a3f4, 2, 0, 0x3e, 7}, /* Charts.LegendRenderingContext.Section */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32a580, 2, 0, 0x7fffffff, 7}, /* Charts.AreaSeriesKey */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32a6b0, 2, 0, 0x7fffffff, 7}, /* Charts.FunctionAreaPlotContent.FunctionAreaRepresentation */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32a7fc, 2, 0, 0x7fffffff, 7}, /* Charts.LineSeriesKey */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32a92c, 3, 0, 0x7fffffff, 7}, /* Charts.FunctionLinePlotContent.FunctionLineRepresentation */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32a948, 2, 0, 0x7fe, 3}, /* Charts.FunctionPlotRepresentation */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32aee0, 2, 0, 0x3e, 7}, /* Charts.AnyPlottableValue.Storage */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32aefc, 6, 0, 0x7fffffff, 7}, /* Charts.MarkPosition */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32d39c, 3, 0, 0x7fffffff, 7}, /* Charts.(private).SelectionTracker.Scale */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32d3b8, 3, 0, 0x7fffffff, 7}, /* Charts.(private).AngleTracker.Scale */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32d64c, 3, 0, 0x7fffffff, 7}, /* Charts.ForegroundStyleScale.(private).Range */
@@ -1504,17 +1965,25 @@
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32e8fc, 3, 0, 0x7fffffff, 7}, /* Charts.ModifierSymbol */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32e918, 2, 0, 0x7fffffff, 7}, /* Charts.ModifierLineStyle */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32e934, 3, 0, 0x7fffffff, 7}, /* Charts.ModifierForegroundStyle */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32ea3c, 8, 0, 0x38, 7}, /* Charts.ChartInternal.ScaleRange */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32f4bc, 2, 0, 0x7fffffff, 7}, /* Charts.SeriesKey */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32f51c, 3, 0, 0x7d, 7}, /* Charts.CollectedChartContent.Effect */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32f930, 2, 0, 0x3e, 7}, /* Charts.AnyPlottableValueV2.Storage */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x32f968, 6, 0, 0x7fffffff, 7}, /* Charts.MarkPositionV2 */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x330618, 2, 0, 0x3e, 7}, /* Charts.TypedVectorizedProperties.SymbolSizeMapper */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x330ff0, 2, 0, 0x7fffffff, 7}, /* Charts.SgAnnotation.Content */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x33100c, 14, 1, 0x7f1, 3}, /* Charts.SgNode */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x331610, 8, 0, 0x38, 7}, /* Charts.Spec.ScaleRange */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x33162c, 3, 0, 0x7fffffff, 7}, /* Charts.Spec.ScaleDomain */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x331648, 2, 0, 0x7fffffff, 7}, /* Charts.Spec.GenericScaleDomain */
+    {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x331748, 4, 0, 0x7fffffff, 7}, /* Charts.AccessibilityDataField */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x331764, 2, 0, 0x7fffffff, 7}, /* Charts.AccessibilityDataField.LabelKey */
     {"cc8b2ed6e36c31f386c8ae255af6ef8b", 0x3317d4, 2, 0, 0x7fffffff, 7}, /* Charts.AccessibilityChartDataField.Value */
     {"cd1e4a2badf4338ea51177347f0745d8", 0xe5d8, 8, 0, 0x7fffffff, 7}, /* SharingCore.SFError */
     {"cda2fe81ab1c365b9eb64a086dad30c6", 0x13e2ac, 2, 9, 0x7fffffff, 7}, /* SecureMessagingAgentCore.KDSRegistrationStateMachine.RegistrationState */
     {"cde41170c1013c4cb2ca811442d78472", 0xdb872c, 3, 2, 0x7fffffff, 3}, /* Morpheus.MLXArrayIndexOperation */
+    {"cde41170c1013c4cb2ca811442d78472", 0xdb95d8, 3, 0, 0x7fd, 3}, /* Morpheus.ColumnData */
+    {"cde41170c1013c4cb2ca811442d78472", 0xdb9820, 8, 0, 0x18, 7}, /* Morpheus.ResampleFrequency */
     {"cde41170c1013c4cb2ca811442d78472", 0xdb9c34, 2, 1, 0x7d, 7}, /* Morpheus.Upsample.Mode */
     {"cde41170c1013c4cb2ca811442d78472", 0xdb9e88, 3, 1, 0x7fc, 3}, /* Morpheus.NestedItem */
     {"ce093806bb4d31be867a87ca73de0d89", 0xfe398, 5, 1, 0xa, 7}, /* SEService.JPKIXPCResponse */
@@ -1527,7 +1996,9 @@
     {"ce093806bb4d31be867a87ca73de0d89", 0x101060, 2, 0, 0x7fe, 3}, /* SEService.SEStorageManagementSheet.ProvisioningDeviceConfiguration */
     {"ce329ccec99933e1a31486900b7ef243", 0x2a4000, 6, 17, 0x7f9, 3}, /* ChronoKit.ReloadConfiguration.ReloadReason */
     {"ce8655c673f238c797a7d64da2845624", 0x17eb50, 2, 0, 0x1ffe, 7}, /* ReplicatorEngine.PersonaMonitorEvent */
+    {"d098fd915c1a3e33a3dd6031fb6ba2a1", 0x1bcd50, 2, 0, 0x7e, 7}, /* StoreKit.AppTransactionQuery.Kind */
     {"d0d64122ac1334bd89f2c3ae68c2bd7c", 0x18c78c, 2, 0, 0x7e, 7}, /* PromotedContentUI.SLPCommand */
+    {"d0e07d5b1d4b3b6ca4f4840408429972", 0x20b850, 2, 0, 0x3e, 7}, /* SiriTTSService.InternalEvent */
     {"d2c9551dfbde3d5883fddd229d7de7b4", 0x23c35c, 2, 2, 0x7fd, 3}, /* AppleMediaServicesUI.AsyncImagePhase */
     {"d2c9551dfbde3d5883fddd229d7de7b4", 0x23d268, 7, 0, 0xfffff9, 7}, /* AppleMediaServicesUI.ImageQualityTask.QualityCheck */
     {"d2c9551dfbde3d5883fddd229d7de7b4", 0x23f4f0, 2, 1, 0x7fd, 3}, /* AppleMediaServicesUI.ReviewResult */
@@ -1535,7 +2006,9 @@
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x580334, 3, 2, 0x7fc, 3}, /* VisualIntelligenceCore.VICVisualIntelligenceAnalysisResult.AnalysisFailure */
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x5829a8, 2, 1, 0x7fffffff, 7}, /* VisualIntelligenceCore.SummarizationState */
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x585690, 3, 1, 0x3c, 7}, /* VisualIntelligenceCore.BundleClassificationRuntimeError.ErrorType */
+    {"d3db96f0f13a3b3399c76ab51ce9883b", 0x58795c, 2, 0, 0x1e, 7}, /* VisualIntelligenceCore.CoordinateSystem.Space */
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x5888e8, 2, 2, 0x3d, 7}, /* VisualIntelligenceCore.AFMAnnotation */
+    {"d3db96f0f13a3b3399c76ab51ce9883b", 0x58a318, 18, 0, 0x7ee, 0}, /* VisualIntelligenceCore.CVDetection */
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x58bbcc, 3, 1, 0xc, 7}, /* VisualIntelligenceCore.ResourceManagerError */
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x58be50, 2, 0, 0x7fffffff, 7}, /* VisualIntelligenceCore.SessionContextsError */
     {"d3db96f0f13a3b3399c76ab51ce9883b", 0x58cae4, 5, 0, 0x1b, 7}, /* VisualIntelligenceCore.CVTrackedDetection.(private).HistoryEntry */
@@ -1552,19 +2025,25 @@
     {"d72277e5b8963bef88216f20848d2a29", 0x232094, 2, 1, 0x7fffffff, 7}, /* WeatherAppSupport.LocationHeaderView.Data.SecondaryLabel */
     {"d72277e5b8963bef88216f20848d2a29", 0x232164, 2, 0, 0x7fffffff, 7}, /* WeatherAppSupport.(private)._LocationHeaderViewAnchorMeasurements */
     {"d777cf6d3a023368ab7f7ed10166caad", 0x27e808, 2, 1, 0x7fd, 3}, /* RemoteUI.SwiftUIContentView.ContentLoader.State */
+    {"d797f6deb92734f2bb81879840d7be49", 0x2b6ed8, 2, 4, 0x1d, 7}, /* SiriInferenceLearning.CandidateOutcome */
     {"d797f6deb92734f2bb81879840d7be49", 0x2b7874, 2, 0, 0x1e, 7}, /* SiriInferenceLearning.EvaluatorVoteSource */
     {"d797f6deb92734f2bb81879840d7be49", 0x2bb14c, 3, 0, 0x7d, 7}, /* SiriInferenceLearning.TranscriptProtoGatedEvent.OneOf_OneofGatedEvent */
     {"d797f6deb92734f2bb81879840d7be49", 0x2c00cc, 4, 0, 0x7c, 7}, /* SiriInferenceLearning.TranscriptProtoVoiceAttribute.OneOf_OneofVoiceAttribute */
+    {"d7ab2aace81b319a936d9e048537c672", 0x542cc, 2, 1, 0x7fffffff, 7}, /* MediaIntents.AudioSearch.RankingItem */
     {"d82c68ae3857323e9aa5050960a34b38", 0xe3d34, 8, 0, 0x7f8, 3}, /* SiriMailInternal.ContactState */
     {"d82c68ae3857323e9aa5050960a34b38", 0xe4ce4, 10, 12, 0x7f5, 3}, /* SiriMailInternal.ReadMailActingFlow.State */
     {"d82c68ae3857323e9aa5050960a34b38", 0xe51fc, 3, 7, 0x7fc, 3}, /* SiriMailInternal.ReplyMessageFlow.State */
     {"d82c68ae3857323e9aa5050960a34b38", 0xe5b40, 2, 3, 0x7fd, 3}, /* SiriMailInternal.SendMailFlow.State */
     {"d83531ad42ca30648267c919de84dabb", 0x304eb8, 2, 0, 0x7fe, 3}, /* MapKit.QuadTrie.(private).Node */
+    {"d83531ad42ca30648267c919de84dabb", 0x3061b4, 2, 3, 0xfd, 3}, /* MapKit.NavigationSessionState */
     {"d83531ad42ca30648267c919de84dabb", 0x306230, 3, 0, 0x7d, 7}, /* MapKit.GuidanceUpdate */
     {"d897564e7ad5381fa1d8d4ce485718d5", 0x552bf4, 2, 0, 0x7fe, 3}, /* JetEngine.AnyActionTypes.(private).Registry */
     {"d897564e7ad5381fa1d8d4ce485718d5", 0x553b24, 7, 1, 0x7f8, 3}, /* JetEngine.JSONError */
+    {"d897564e7ad5381fa1d8d4ce485718d5", 0x557d50, 9, 0, 0x7fffffff, 7}, /* JetEngine.OperationCheckpoint */
     {"d897564e7ad5381fa1d8d4ce485718d5", 0x557d88, 5, 0, 0xfb, 3}, /* JetEngine.ClassicDataVaultUtilities.ClassicDataVaultCreationError */
+    {"d897564e7ad5381fa1d8d4ce485718d5", 0x55d4e0, 2, 3, 0x3d, 3}, /* JetEngine.JetPackSigningPolicy */
     {"d897564e7ad5381fa1d8d4ce485718d5", 0x55d620, 3, 0, 0x7fffffff, 7}, /* JetEngine.ReloadableJSStack.(private).InitStrategy */
+    {"d897564e7ad5381fa1d8d4ce485718d5", 0x55f9ac, 3, 0, 0x7fffffff, 7}, /* JetEngine.Models.Menu.Child */
     {"d8b1843a8db930668c856f79320214bb", 0x57656c, 2, 0, 0x7fe, 3}, /* SiriKitFlow.FlowTransition */
     {"d8b1843a8db930668c856f79320214bb", 0x576588, 3, 0, 0x7fd, 3}, /* SiriKitFlow.ActionGroupTransition */
     {"d8b1843a8db930668c856f79320214bb", 0x5773a4, 3, 1, 0x7fc, 3}, /* SiriKitFlow.AppResolutionFlowResult */
@@ -1594,6 +2073,7 @@
     {"d8b1843a8db930668c856f79320214bb", 0x58cb38, 4, 0, 0x7fffffff, 7}, /* SiriKitFlow.SiriKitUnsupportedValueFlow.State */
     {"d96f50f8cfd93b3cb96023898b2eb08f", 0x180db4, 2, 0, 0x7fe, 3}, /* TextInputUI.(private).TaskCacheEntry */
     {"d9e0199b49223d0c8a7d06ed7494fac6", 0x3eee2c, 2, 0, 0x3e, 7}, /* WidgetKit.ActivityEncodingVersion */
+    {"d9e0199b49223d0c8a7d06ed7494fac6", 0x3f5b28, 2, 0, 0x7fe, 3}, /* WidgetKit.WidgetArchiver.ValidationError */
     {"d9e0199b49223d0c8a7d06ed7494fac6", 0x3fa974, 3, 1, 0x3ffffc, 3}, /* WidgetKit.DynamicIslandBackground.Storage */
     {"dad94e71e1953a5fa7c345a4b3499e8a", 0x56ab84, 3, 0, 0x7d, 7}, /* IntelligenceSimulation.TranscriptProtoGatedEvent.OneOf_OneofGatedEvent */
     {"dad94e71e1953a5fa7c345a4b3499e8a", 0x56f424, 4, 0, 0x7c, 7}, /* IntelligenceSimulation.TranscriptProtoVoiceAttribute.OneOf_OneofVoiceAttribute */
@@ -1602,9 +2082,12 @@
     {"dad94e71e1953a5fa7c345a4b3499e8a", 0x572090, 7, 0, 0x7f9, 3}, /* IntelligenceSimulation.ToolKitProtoTypeInstanceKind */
     {"dad94e71e1953a5fa7c345a4b3499e8a", 0x57235c, 8, 0, 0x7f8, 3}, /* IntelligenceSimulation.ToolKitProtoRestrictionContextKind */
     {"dba6dc1b5b8e3595908cbd2d8eb054ec", 0x25e3c0, 4, 1, 0x7fffffff, 3}, /* StocksCore.StocksIntentType */
+    {"dba6dc1b5b8e3595908cbd2d8eb054ec", 0x262210, 2, 0, 0x7fffffff, 7}, /* StocksCore.Headline */
+    {"dba6dc1b5b8e3595908cbd2d8eb054ec", 0x26255c, 5, 1, 0x7a, 7}, /* StocksCore.WatchlistSortState */
     {"dbc75166d5083f59ac590fd64e4b70c5", 0x1d3100, 2, 1, 0x7fffffff, 7}, /* GameControllerSettingsUI.GCSUIBluetoothDevice.State */
     {"dbf6d2801b3f305bb5d6fa492990eb96", 0xf1a88, 9, 1, 0x76, 7}, /* MusicUnderstanding.MusicAnalysisOrchestrator.(private).AnalysisResultContainer */
     {"dbf6d2801b3f305bb5d6fa492990eb96", 0xf1d5c, 2, 0, 0x3ffffe, 3}, /* MusicUnderstanding.ChannelStateMachine.(private).State */
+    {"dc5c72cf3e823985b6a073375eec2e44", 0xbd450, 2, 0, 0x3e, 3}, /* CryptoKitPrivate.HE.SerializedCiphertext */
     {"dd2788e6fad83893b1a7ac4c4d495fba", 0x67cd44, 3, 0, 0x7d, 7}, /* IntelligenceFlowProto.TranscriptProtoGatedEvent.OneOf_OneofGatedEvent */
     {"dd2788e6fad83893b1a7ac4c4d495fba", 0x681f9c, 4, 0, 0x7c, 7}, /* IntelligenceFlowProto.TranscriptProtoVoiceAttribute.OneOf_OneofVoiceAttribute */
     {"dd2788e6fad83893b1a7ac4c4d495fba", 0x6869e0, 4, 0, 0x7c, 7}, /* IntelligenceFlowProto.VersionedTranscriptProtoRemoteVoiceAttribute.V1.OneOf_Attribute */
@@ -1618,9 +2101,12 @@
     {"ddeef43bcc5731198e54bd37c232d643", 0x139aa8, 3, 0, 0x7fffffff, 7}, /* GRDBInternal.SQLCollection.(private).Impl */
     {"ddeef43bcc5731198e54bd37c232d643", 0x139b78, 21, 2, 0x7fffffff, 7}, /* GRDBInternal.SQLExpression.(private).Impl */
     {"ddeef43bcc5731198e54bd37c232d643", 0x139c64, 6, 0, 0x7fffffff, 7}, /* GRDBInternal.SQLOrdering.(private).Impl */
+    {"ddeef43bcc5731198e54bd37c232d643", 0x139db4, 2, 0, 0x7e, 7}, /* GRDBInternal.SQLAssociationCondition */
     {"ddeef43bcc5731198e54bd37c232d643", 0x139e4c, 4, 1, 0x7fffffff, 7}, /* GRDBInternal.SQLSelection.(private).Impl */
     {"ddeef43bcc5731198e54bd37c232d643", 0x139edc, 2, 0, 0x7fffffff, 7}, /* GRDBInternal.SQLSubquery.(private).Impl */
     {"ddeef43bcc5731198e54bd37c232d643", 0x13a0d0, 2, 0, 0x3ffffe, 3}, /* GRDBInternal.SQLGenerationContext.(private).Parent */
+    {"ddf7d6a034833d4590d08d0d6917d3dc", 0x1ec68, 2, 1, 0x7fffffff, 7}, /* BubbleKit.BubblePath.TailStyle */
+    {"ddf7d6a034833d4590d08d0d6917d3dc", 0x1eea8, 2, 0, 0x7e, 7}, /* BubbleKit.BubbleViewConfiguration.BackgroundType */
     {"de02447e7758315a90cfa633cb3b99a3", 0x299cac, 2, 1, 0x7fffffff, 7}, /* SiriSetup.SiriAvailability.Status */
     {"de02447e7758315a90cfa633cb3b99a3", 0x299fc8, 2, 1, 0x3d, 7}, /* SiriSetup.GMUnavailableReason */
     {"de125fdf5e5a3295bdb68b00123bca0d", 0xc1904, 14, 1, 0x7f1, 7}, /* MediaControl.IPCServerMessage */
@@ -1628,13 +2114,16 @@
     {"dedca1ea515e3e2faab183ecc01d7ac7", 0x18a3e4, 4, 1, 0x1fb, 0}, /* NewsSubscription.PurchaseResult */
     {"dedca1ea515e3e2faab183ecc01d7ac7", 0x18a400, 2, 1, 0x7fd, 3}, /* NewsSubscription.PurchaseTransactionError */
     {"dedca1ea515e3e2faab183ecc01d7ac7", 0x18b6f0, 2, 1, 0xd, 7}, /* NewsSubscription.AppLaunchUpsellRequirementCheckResult */
+    {"dedca1ea515e3e2faab183ecc01d7ac7", 0x18c2fc, 3, 0, 0x7d, 7}, /* NewsSubscription.HideMyEmailSignupModel */
     {"df49f8f5b9d03a56ae15d6106ffe5c09", 0x1247bc, 3, 0, 0x7fffffff, 7}, /* WindowManager.WindowManagerDraggableOverlaySession.Target */
     {"df49f8f5b9d03a56ae15d6106ffe5c09", 0x1249b0, 3, 1, 0xc, 7}, /* WindowManager.WindowManagerExposeShownBy */
     {"df649c0e20ba3737acf6823cd32bdeae", 0x117e2c, 3, 1, 0x3c, 0}, /* ComputationalGraph.FeaturePreprocessingContainer.Errors */
     {"df649c0e20ba3737acf6823cd32bdeae", 0x1180e0, 2, 1, 0x7d, 7}, /* ComputationalGraph.ComputeServiceSettings.UnloadPolicy */
     {"df649c0e20ba3737acf6823cd32bdeae", 0x118a90, 2, 0, 0x3e, 7}, /* ComputationalGraph.ImageOperationType */
     {"df649c0e20ba3737acf6823cd32bdeae", 0x118b1c, 2, 0, 0x3e, 7}, /* ComputationalGraph.ScaleOperation */
+    {"df649c0e20ba3737acf6823cd32bdeae", 0x119200, 5, 0, 0x3b, 0}, /* ComputationalGraph.Com_Apple_News_Algorithms_Proto_Model_FeaturePaddingValue.OneOf_Kind */
     {"df649c0e20ba3737acf6823cd32bdeae", 0x11b0c0, 2, 0, 0x7e, 7}, /* ComputationalGraph.ImageOperationsModelContainer.(private).ImageOperationsMode */
+    {"df9831bec9d23d6d88db97d67a4856e7", 0x462d0, 34, 0, 0x5e, 7}, /* CoreHID.HIDUsage */
     {"e0343f35e80a386eb1f08bf50c0e0cab", 0x15501c, 2, 0, 0x1e, 7}, /* ModelManagerServices.ExclaveOperation */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5d6fe4, 2, 0, 0x0, 7}, /* HybridSearch.RecordType */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5d7240, 14, 0, 0x7f2, 3}, /* HybridSearch.AttributePredicate */
@@ -1642,6 +2131,7 @@
     {"e077be35873d3caa867bb54fcaed7e05", 0x5d8ae8, 2, 0, 0x7e, 7}, /* HybridSearch.DataMigrationRunResult */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5d9760, 3, 0, 0x7fffffff, 7}, /* HybridSearch.SearchType */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5dcae8, 3, 0, 0x7fffffff, 7}, /* HybridSearch.ProfileDetails */
+    {"e077be35873d3caa867bb54fcaed7e05", 0x5df4e0, 3, 0, 0x7fffffff, 7}, /* HybridSearch.WritingProfileType */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5dff58, 17, 0, 0x7ef, 0}, /* HybridSearch.(private).QueryPredicateWire */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5e1bac, 2, 3, 0x7d, 7}, /* HybridSearch.EmbeddingOutcome */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5e1c00, 2, 1, 0x7d, 7}, /* HybridSearch.EmbeddingUpdateResult */
@@ -1650,9 +2140,12 @@
     {"e15379c540323c0c92fd54e129bb00ab", 0x38dd2c, 2, 0, 0x3ffffe, 3}, /* Sharing.CombineLatestStateMachine.UpstreamThrewAction */
     {"e15379c540323c0c92fd54e129bb00ab", 0x38ddd4, 2, 0, 0x7fe, 3}, /* Sharing.CombineLatestStateMachine.CancelledAction */
     {"e15379c540323c0c92fd54e129bb00ab", 0x38fa3c, 8, 0, 0x7fffffff, 7}, /* Sharing.SFError */
+    {"e15379c540323c0c92fd54e129bb00ab", 0x3906d8, 2, 2, 0x7fffffff, 7}, /* Sharing.SFAirDrop.Progress */
     {"e15379c540323c0c92fd54e129bb00ab", 0x390f3c, 2, 2, 0x1d, 7}, /* Sharing.SFBoop.Outcome */
     {"e194b5dbc9a13297abdaa5e9d08649b5", 0x9d1eb0, 4, 30, 0x3, 7}, /* IntelligencePlatformCore.ActivityType */
     {"e194b5dbc9a13297abdaa5e9d08649b5", 0x9eac64, 3, 0, 0x1ffd, 7}, /* IntelligencePlatformCore.ViewQuery */
+    {"e194b5dbc9a13297abdaa5e9d08649b5", 0x9eccac, 12, 2, 0x7fffffff, 7}, /* IntelligencePlatformCore.ViewDatabase.(private).ViewValidationError */
+    {"e194b5dbc9a13297abdaa5e9d08649b5", 0x9eccf4, 2, 2, 0x7fffffff, 7}, /* IntelligencePlatformCore.ViewDatabase.(private).ViewMode */
     {"e20455f9da053fd1a7340ba491212a0f", 0x2b7180, 4, 0, 0x7fc, 3}, /* AgentSessionKitRuntime.OwnedFileStoreError */
     {"e20455f9da053fd1a7340ba491212a0f", 0x2b7f94, 16, 6, 0x7ef, 0}, /* AgentSessionKitRuntime.CloudKitSyncError */
     {"e248158662a037969f260ad3d6daeb63", 0x1793a24, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatDOMStackNode */
@@ -1660,7 +2153,9 @@
     {"e248158662a037969f260ad3d6daeb63", 0x17940ec, 4, 0, 0xc, 7}, /* NewsFeed.FormatOptionsNodeStatementModifier */
     {"e248158662a037969f260ad3d6daeb63", 0x1794160, 3, 0, 0x7fd, 3}, /* NewsFeed.FormatSyncImageContent */
     {"e248158662a037969f260ad3d6daeb63", 0x179441c, 7, 0, 0x7f9, 3}, /* NewsFeed.SportsEmbedConfigurationKind */
+    {"e248158662a037969f260ad3d6daeb63", 0x17947f4, 2, 0, 0x1e, 7}, /* NewsFeed.FormatGroupBinding.Float */
     {"e248158662a037969f260ad3d6daeb63", 0x1794ab0, 5, 0, 0x7b, 7}, /* NewsFeed.FormatArrangementSlot */
+    {"e248158662a037969f260ad3d6daeb63", 0x1794e08, 3, 0, 0x5, 7}, /* NewsFeed.FormatSportsEventBinding.Bool */
     {"e248158662a037969f260ad3d6daeb63", 0x1794ed0, 11, 0, 0x75, 7}, /* NewsFeed.FormatActivityItemsData */
     {"e248158662a037969f260ad3d6daeb63", 0x1795880, 5, 0, 0x7fb, 3}, /* NewsFeed.FormatVideoNodeContent */
     {"e248158662a037969f260ad3d6daeb63", 0x1795d04, 5, 3, 0x7fa, 3}, /* NewsFeed.FormatColorProcessor */
@@ -1675,84 +2170,170 @@
     {"e248158662a037969f260ad3d6daeb63", 0x1799a98, 3, 3, 0x7fc, 3}, /* NewsFeed.FormatDateTime */
     {"e248158662a037969f260ad3d6daeb63", 0x1799fa4, 2, 0, 0x7fe, 7}, /* NewsFeed.FormatOptionExpression */
     {"e248158662a037969f260ad3d6daeb63", 0x179a054, 3, 0, 0x7fffffff, 7}, /* NewsFeed.FormatFrameExpressionLogic */
+    {"e248158662a037969f260ad3d6daeb63", 0x179a324, 13, 0, 0x33, 7}, /* NewsFeed.FormatGroupBinding.Text */
     {"e248158662a037969f260ad3d6daeb63", 0x179a424, 19, 3, 0x7ec, 0}, /* NewsFeed.FeaturePromotionEligibilityItem */
+    {"e248158662a037969f260ad3d6daeb63", 0x179a914, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatStateMachineOutput */
+    {"e248158662a037969f260ad3d6daeb63", 0x179b4c8, 4, 0, 0x7fc, 3}, /* NewsFeed.FormatURL */
     {"e248158662a037969f260ad3d6daeb63", 0x179b894, 13, 1, 0x7f2, 3}, /* NewsFeed.FormatDerivedDataInstruction */
+    {"e248158662a037969f260ad3d6daeb63", 0x179c248, 3, 0, 0x7fd, 3}, /* NewsFeed.FormatProgressView */
     {"e248158662a037969f260ad3d6daeb63", 0x179d000, 2, 0, 0x7fe, 3}, /* NewsFeed.FeedCursorContainer */
     {"e248158662a037969f260ad3d6daeb63", 0x179d130, 2, 0, 0x7fffffff, 3}, /* NewsFeed.FeaturePromotionViewButtonAction */
+    {"e248158662a037969f260ad3d6daeb63", 0x179d2d0, 6, 2, 0x3f9, 7}, /* NewsFeed.FormatBindingTextExpressionLogic */
+    {"e248158662a037969f260ad3d6daeb63", 0x179d3c4, 2, 2, 0x7fd, 3}, /* NewsFeed.FormatVisibility */
     {"e248158662a037969f260ad3d6daeb63", 0x179d984, 9, 0, 0x7f7, 3}, /* NewsFeed.FeedLocation */
     {"e248158662a037969f260ad3d6daeb63", 0x179da00, 4, 0, 0x7fc, 3}, /* NewsFeed.SportsTaxonomyGraphResourceNode */
     {"e248158662a037969f260ad3d6daeb63", 0x179db70, 25, 4, 0x7e6, 0}, /* NewsFeed.FormatAdjustment */
+    {"e248158662a037969f260ad3d6daeb63", 0x179dda0, 3, 0, 0x3d, 7}, /* NewsFeed.FormatGroupBinding.URL */
     {"e248158662a037969f260ad3d6daeb63", 0x179e9f4, 4, 0, 0x7c, 7}, /* NewsFeed.FormatTemperature */
     {"e248158662a037969f260ad3d6daeb63", 0x179ec64, 16, 3, 0x7ef, 0}, /* NewsFeed.FormatDecodingError */
     {"e248158662a037969f260ad3d6daeb63", 0x179eff8, 7, 0, 0x19, 7}, /* NewsFeed.CommandShareContent */
     {"e248158662a037969f260ad3d6daeb63", 0x179f2cc, 7, 3, 0x7f8, 3}, /* NewsFeed.FormatDimensionSizingValue */
     {"e248158662a037969f260ad3d6daeb63", 0x179f5c0, 2, 1, 0x7d, 7}, /* NewsFeed.LayeredMediaViewVisibilityTracking */
+    {"e248158662a037969f260ad3d6daeb63", 0x179f63c, 6, 0, 0xa, 7}, /* NewsFeed.FormatGroupBinding.Command */
     {"e248158662a037969f260ad3d6daeb63", 0x179fbe4, 2, 0, 0x1e, 7}, /* NewsFeed.FormatPatternMode */
     {"e248158662a037969f260ad3d6daeb63", 0x17a0a0c, 2, 0, 0x3fffe, 0}, /* NewsFeed.FormatMenuTitle */
     {"e248158662a037969f260ad3d6daeb63", 0x17a0a44, 2, 2, 0x7d, 7}, /* NewsFeed.FormatNodeAccessibilityRole */
+    {"e248158662a037969f260ad3d6daeb63", 0x17a6df4, 5, 1, 0x7fa, 3}, /* NewsFeed.FormatImage */
     {"e248158662a037969f260ad3d6daeb63", 0x17a73f0, 3, 0, 0x7fffffff, 7}, /* NewsFeed.PuzzleAccessoryInputConfiguration.InputType */
     {"e248158662a037969f260ad3d6daeb63", 0x17a7d70, 2, 0, 0x7fffffff, 3}, /* NewsFeed.HGroupLayoutContext */
+    {"e248158662a037969f260ad3d6daeb63", 0x17a80f4, 5, 0, 0x3b, 7}, /* NewsFeed.FormatGroupBinding.SourceItemTip */
     {"e248158662a037969f260ad3d6daeb63", 0x17a8274, 2, 0, 0x3e, 7}, /* NewsFeed.FormatScoreMatchupFormat */
+    {"e248158662a037969f260ad3d6daeb63", 0x17a85a4, 5, 6, 0x1a, 7}, /* NewsFeed.FeaturePromotionHeadlineEligibility */
     {"e248158662a037969f260ad3d6daeb63", 0x17a862c, 24, 0, 0x7e8, 0}, /* NewsFeed.FormatMerge */
+    {"e248158662a037969f260ad3d6daeb63", 0x17a9c9c, 3, 0, 0x1, 7}, /* NewsFeed.FormatSportsEventBinding.Text */
+    {"e248158662a037969f260ad3d6daeb63", 0x17aa10c, 4, 1, 0xfb, 7}, /* NewsFeed.FeedScoringContext */
+    {"e248158662a037969f260ad3d6daeb63", 0x17aa5f4, 4, 0, 0x7c, 7}, /* NewsFeed.FormatButtonNodeBinding */
+    {"e248158662a037969f260ad3d6daeb63", 0x17aaac4, 4, 0, 0x7fc, 3}, /* NewsFeed.FormatTextNodeAlternativeLogic */
+    {"e248158662a037969f260ad3d6daeb63", 0x17ab35c, 2, 0, 0x7fffffff, 7}, /* NewsFeed.FormatImageAdjustmentBlend */
+    {"e248158662a037969f260ad3d6daeb63", 0x17abc38, 18, 0, 0x7fffffff, 7}, /* NewsFeed.FormatNodeStyle */
     {"e248158662a037969f260ad3d6daeb63", 0x17acf58, 2, 0, 0x7fe, 3}, /* NewsFeed.DebugFormatEditorBarButtonItem.(private).Property */
+    {"e248158662a037969f260ad3d6daeb63", 0x17acff4, 12, 0, 0x1f4, 7}, /* NewsFeed.FormatCommandBinding */
+    {"e248158662a037969f260ad3d6daeb63", 0x17ad528, 5, 0, 0x7fb, 3}, /* NewsFeed.FormatColorExpression */
+    {"e248158662a037969f260ad3d6daeb63", 0x17ade40, 4, 0, 0x7fc, 3}, /* NewsFeed.FormatString */
+    {"e248158662a037969f260ad3d6daeb63", 0x17aea34, 4, 0, 0x1c, 7}, /* NewsFeed.FormatWeatherBinding.Temperature */
     {"e248158662a037969f260ad3d6daeb63", 0x17aefac, 6, 0, 0x7fa, 3}, /* NewsFeed.FeedGroupDecoration */
     {"e248158662a037969f260ad3d6daeb63", 0x17af5e4, 2, 0, 0x7fffffff, 7}, /* NewsFeed.FamilyStatus */
+    {"e248158662a037969f260ad3d6daeb63", 0x17af6f0, 5, 0, 0x3b, 7}, /* NewsFeed.FormatGroupBinding.Font */
     {"e248158662a037969f260ad3d6daeb63", 0x17af880, 2, 0, 0x7e, 7}, /* NewsFeed.LayeredMediaLayer */
+    {"e248158662a037969f260ad3d6daeb63", 0x17af9a4, 10, 0, 0x7f6, 3}, /* NewsFeed.FormatContentSubgroupFilter */
     {"e248158662a037969f260ad3d6daeb63", 0x17afca4, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatGroupMaskSupplementaryLayer */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b0c68, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatVideoPlayerContent */
     {"e248158662a037969f260ad3d6daeb63", 0x17b1c38, 3, 0, 0x7fd, 3}, /* NewsFeed.FeedPluginFactoryResult */
     {"e248158662a037969f260ad3d6daeb63", 0x17b2374, 12, 0, 0x7f4, 3}, /* NewsFeed.FeedItemRendererResult */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b244c, 7, 4, 0x7f8, 3}, /* NewsFeed.FormatDebuggerScriptValue */
     {"e248158662a037969f260ad3d6daeb63", 0x17b2b18, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatAccessibilityRendererContainer */
     {"e248158662a037969f260ad3d6daeb63", 0x17b2b34, 2, 8, 0x7d, 7}, /* NewsFeed.FormatDerivedDataContextScope */
     {"e248158662a037969f260ad3d6daeb63", 0x17b2ca0, 7, 1, 0x7f8, 3}, /* NewsFeed.DebugJournalSectionDescriptor */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b30ec, 4, 0, 0x7fffffff, 7}, /* NewsFeed.FormatFill */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b34f8, 7, 0, 0x1f9, 7}, /* NewsFeed.FormatGroupBinding.Color */
     {"e248158662a037969f260ad3d6daeb63", 0x17b370c, 8, 1, 0x7f7, 3}, /* NewsFeed.FormatDecorationContent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b3a44, 3, 2, 0x7fffffff, 4}, /* NewsFeed.FormatTagBinding.Image */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b3b90, 3, 2, 0x4, 7}, /* NewsFeed.FormatSportsEventBinding.Color */
     {"e248158662a037969f260ad3d6daeb63", 0x17b52e4, 3, 0, 0x7fd, 3}, /* NewsFeed.FormatAnimationNodeAnimation */
     {"e248158662a037969f260ad3d6daeb63", 0x17b5e20, 3, 0, 0x7fd, 3}, /* NewsFeed.FormatMicaNodeContent */
     {"e248158662a037969f260ad3d6daeb63", 0x17b6054, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatSourceItem */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b6934, 3, 0, 0x7fffffff, 7}, /* NewsFeed.FeedCatalogItem */
     {"e248158662a037969f260ad3d6daeb63", 0x17b6de0, 2, 0, 0x7fffffff, 7}, /* NewsFeed.LayeredMedia.BaseLayer */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b7000, 11, 0, 0x5, 0}, /* NewsFeed.FormatImageNodeBinding */
     {"e248158662a037969f260ad3d6daeb63", 0x17b8278, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatLayeredMediaNodeContent */
     {"e248158662a037969f260ad3d6daeb63", 0x17b8838, 2, 0, 0x7fe, 3}, /* NewsFeed.FeaturePromotionViewImage.(private).Model */
     {"e248158662a037969f260ad3d6daeb63", 0x17b8a98, 2, 0, 0x1e, 7}, /* NewsFeed.FormatComputedInvalidation */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b8b94, 3, 0, 0x7d, 7}, /* NewsFeed.FormatTypeDefinition */
+    {"e248158662a037969f260ad3d6daeb63", 0x17b8d94, 16, 0, 0x7f0, 3}, /* NewsFeed.FormatOptionValue */
     {"e248158662a037969f260ad3d6daeb63", 0x17b9bf4, 8, 0, 0x7f8, 3}, /* NewsFeed.FormatBackground */
     {"e248158662a037969f260ad3d6daeb63", 0x17b9e98, 2, 0, 0x3fe, 3}, /* NewsFeed.FeedCursorReference.(private).Reference */
     {"e248158662a037969f260ad3d6daeb63", 0x17ba230, 21, 0, 0x7eb, 0}, /* NewsFeed.FormatLayoutViewContainer.View */
     {"e248158662a037969f260ad3d6daeb63", 0x17ba24c, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatDOMNode */
     {"e248158662a037969f260ad3d6daeb63", 0x17ba630, 4, 0, 0xc, 7}, /* NewsFeed.FormatFloatBinding */
+    {"e248158662a037969f260ad3d6daeb63", 0x17ba764, 6, 3, 0x1, 7}, /* NewsFeed.FormatContentSizeCategory */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bab48, 10, 2, 0x7f5, 3}, /* NewsFeed.FormatSlotTransform */
     {"e248158662a037969f260ad3d6daeb63", 0x17bb054, 4, 0, 0x7fc, 3}, /* NewsFeed.SportsTaxonomyGraphNode */
     {"e248158662a037969f260ad3d6daeb63", 0x17bb2e8, 21, 1, 0x7ea, 0}, /* NewsFeed.FormatLayoutValue */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bb5a8, 2, 2, 0x7d, 7}, /* NewsFeed.FeaturePromotionViewButtonType */
     {"e248158662a037969f260ad3d6daeb63", 0x17bbc90, 3, 0, 0x7fffffff, 3}, /* NewsFeed.FeaturePromotionViewForegroundStyle */
     {"e248158662a037969f260ad3d6daeb63", 0x17bbd58, 3, 0, 0x7d, 7}, /* NewsFeed.ChannelLocation.Location */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bc384, 6, 3, 0x7f9, 3}, /* NewsFeed.FormatTextSize */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bd0cc, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatPatternContent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bd1ec, 7, 0, 0x39, 0}, /* NewsFeed.FormatAccessibilityProperty */
     {"e248158662a037969f260ad3d6daeb63", 0x17bd30c, 2, 0, 0x7fe, 3}, /* NewsFeed.SportsStandingConcern */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bd528, 10, 0, 0x7f6, 7}, /* NewsFeed.FormatOptionsNodeStatementValue */
     {"e248158662a037969f260ad3d6daeb63", 0x17bd8e0, 3, 0, 0x7fd, 3}, /* NewsFeed.FormatWebEmbedNodeContent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17be0f4, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatContentSubgroup.ResolvedContainer */
     {"e248158662a037969f260ad3d6daeb63", 0x17be484, 4, 1, 0x7fb, 3}, /* NewsFeed.FormatMenuGroupableData */
     {"e248158662a037969f260ad3d6daeb63", 0x17be62c, 3, 1, 0x7fc, 3}, /* NewsFeed.FormatArrangementComponentCurationRule */
+    {"e248158662a037969f260ad3d6daeb63", 0x17be898, 2, 0, 0x7e, 7}, /* NewsFeed.FormatCornerRadius */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bf4c0, 2, 0, 0xfe, 3}, /* NewsFeed.FormatProgressViewNodeProgressObserver */
     {"e248158662a037969f260ad3d6daeb63", 0x17bf6f8, 12, 0, 0x7f4, 3}, /* NewsFeed.FormatDisplay.Check */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bf7fc, 3, 0, 0x3d, 7}, /* NewsFeed.FormatSportsEventBinding.Command */
+    {"e248158662a037969f260ad3d6daeb63", 0x17bfb08, 12, 0, 0x7f4, 3}, /* NewsFeed.FormatColor */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c01a4, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatAccessibilityData */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c047c, 2, 0, 0x3fffe, 3}, /* NewsFeed.FormatMenuImage */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c0cf4, 2, 0, 0x7fffffff, 7}, /* NewsFeed.FormatDirectionalGradient */
     {"e248158662a037969f260ad3d6daeb63", 0x17c1290, 5, 0, 0x7fb, 3}, /* NewsFeed.FeedServiceFetchResult */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c13e8, 10, 0, 0x7f6, 3}, /* NewsFeed.FormatTextContent */
     {"e248158662a037969f260ad3d6daeb63", 0x17c156c, 42, 0, 0x7d6, 0}, /* NewsFeed.FormatNode */
     {"e248158662a037969f260ad3d6daeb63", 0x17c18cc, 2, 1, 0x7fffffff, 7}, /* NewsFeed.FormatProgressKind */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c18e8, 2, 1, 0x7fffffff, 7}, /* NewsFeed.FormatProgressKind.Resolved */
     {"e248158662a037969f260ad3d6daeb63", 0x17c21c0, 12, 0, 0x7f4, 3}, /* NewsFeed.FeedItemLayoutAttributes */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c2f64, 19, 0, 0x7ed, 0}, /* NewsFeed.FormatDataLayoutValue */
     {"e248158662a037969f260ad3d6daeb63", 0x17c2fe4, 5, 0, 0x7fb, 3}, /* NewsFeed.FormatMenuGroupable */
     {"e248158662a037969f260ad3d6daeb63", 0x17c3514, 4, 0, 0x7c, 7}, /* NewsFeed.FeedModeState */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c36f4, 10, 0, 0x1f6, 7}, /* NewsFeed.FormatGroupBinding.Bool */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c3788, 4, 0, 0x7fc, 3}, /* NewsFeed.FormatAccessibilityContent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c3c10, 10, 1, 0x7f5, 3}, /* NewsFeed.SportsDataVisualizationEventStatus */
     {"e248158662a037969f260ad3d6daeb63", 0x17c3fe0, 2, 1, 0x7fd, 3}, /* NewsFeed.(private).WebEmbedImageViewState */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c43d4, 3, 1, 0x7fffffff, 7}, /* NewsFeed.FormatVisualEffect */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c49e4, 6, 1, 0x19, 7}, /* NewsFeed.FormatGroupBinding.DateTime */
     {"e248158662a037969f260ad3d6daeb63", 0x17c4a00, 2, 0, 0x3ffffe, 3}, /* NewsFeed.DebugFormatUploadEntryResult */
     {"e248158662a037969f260ad3d6daeb63", 0x17c5354, 2, 0, 0x7fe, 3}, /* NewsFeed.FeedNextCursor.Container */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c5530, 10, 1, 0x7f5, 3}, /* NewsFeed.FormatAsyncImageContent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c57c8, 7, 0, 0x7f9, 3}, /* NewsFeed.SportsDataVisualization */
     {"e248158662a037969f260ad3d6daeb63", 0x17c6338, 2, 0, 0x3fffe, 3}, /* NewsFeed.LayeredMediaLayerRenderable */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c64c8, 3, 1, 0x7fc, 3}, /* NewsFeed.FormatMenuItemAction */
     {"e248158662a037969f260ad3d6daeb63", 0x17c6624, 3, 0, 0x7fd, 3}, /* NewsFeed.FeaturePromotionImage */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c678c, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatIssueCoverContent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c68e4, 5, 0, 0x7b, 7}, /* NewsFeed.FormatDerivedDataBindingScope */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c6a98, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatMicaAsset */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c76f4, 5, 0, 0x3b, 7}, /* NewsFeed.FormatOptionsNodeStatementBinding */
     {"e248158662a037969f260ad3d6daeb63", 0x17c77e0, 2, 0, 0x3ffffe, 3}, /* NewsFeed.FormatLayoutViewViewportDisplayState */
+    {"e248158662a037969f260ad3d6daeb63", 0x17c8424, 4, 0, 0x4, 7}, /* NewsFeed.FormatSourceItemTipBinding */
     {"e248158662a037969f260ad3d6daeb63", 0x17c90e8, 7, 1, 0x7fffffff, 7}, /* NewsFeed.DebugJournalItem */
     {"e248158662a037969f260ad3d6daeb63", 0x17ca430, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatMicaSectionDecorationItem.Asset */
     {"e248158662a037969f260ad3d6daeb63", 0x17ca4c8, 3, 0, 0x3fffd, 3}, /* NewsFeed.FormatURLComponent */
+    {"e248158662a037969f260ad3d6daeb63", 0x17ca998, 5, 0, 0x7b, 0}, /* NewsFeed.FormatShine */
+    {"e248158662a037969f260ad3d6daeb63", 0x17ca9b4, 10, 0, 0x7fffffff, 7}, /* NewsFeed.FormatBindingExpression */
     {"e248158662a037969f260ad3d6daeb63", 0x17cadc0, 4, 16, 0x7fb, 3}, /* NewsFeed.FormatLayoutViewModel.ViewType */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cb1b8, 2, 0, 0x1fe, 3}, /* NewsFeed.FormatSlotItemTagFilter */
     {"e248158662a037969f260ad3d6daeb63", 0x17cb214, 3, 2, 0x7fffffff, 7}, /* NewsFeed.FormatDurationFormat */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cb73c, 3, 0, 0x1d, 0}, /* NewsFeed.FormatSportsEventBinding.Image */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cb84c, 11, 1, 0x7f4, 3}, /* NewsFeed.FormatButtonNodeAction */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cc088, 9, 0, 0x17, 7}, /* NewsFeed.FormatBoolBinding */
     {"e248158662a037969f260ad3d6daeb63", 0x17cc478, 2, 0, 0x3e, 7}, /* NewsFeed.FeedLayoutSolver.Errors */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cce4c, 15, 0, 0x7f1, 3}, /* NewsFeed.FormatExpression */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cdbd4, 22, 9, 0x7e9, 0}, /* NewsFeed.FormatSize */
     {"e248158662a037969f260ad3d6daeb63", 0x17cdf04, 6, 4, 0x79, 7}, /* NewsFeed.FormatDerivedDataScope */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cf920, 2, 0, 0x7fe, 3}, /* NewsFeed.FormatPuzzleEmbedNodeContent */
     {"e35754edda0e3b6da3c38e00cc5a7e9d", 0x6f6d8, 6, 1, 0x1, 7}, /* BrailleFoundation.BrailleClientBoundMessage */
+    {"e35754edda0e3b6da3c38e00cc5a7e9d", 0x6fcac, 3, 0, 0x3d, 3}, /* BrailleFoundation.BrailleDevice.ID */
     {"e35754edda0e3b6da3c38e00cc5a7e9d", 0x704ac, 2, 0, 0x1e, 7}, /* BrailleFoundation.PhysicalPressInput */
+    {"e35754edda0e3b6da3c38e00cc5a7e9d", 0x7051c, 4, 0, 0x1c, 7}, /* BrailleFoundation.VirtualBrailleDeviceResponse */
     {"e40ebedd55893ae5b52335a3df0b2491", 0xc0070, 2, 2, 0x7fffffff, 7}, /* TipsUI.LearnMoreContentViewModel.LoadingState */
     {"e42bafd6296b344bb568488141ac6cb1", 0xad1ac, 2, 0, 0x7fffffff, 7}, /* SonicFoundation.SQL.BindStrategy */
+    {"e42bafd6296b344bb568488141ac6cb1", 0xad64c, 2, 1, 0x3fffd, 3}, /* SonicFoundation.SQLDatabase.AsyncResultsIterator.(private).ResultsState */
     {"e42bafd6296b344bb568488141ac6cb1", 0xae390, 2, 8, 0x7fd, 3}, /* SonicFoundation.Device.Family */
     {"e471a212f9dd3723ab4b2f143f603fdc", 0x15e3e8, 3, 0, 0x7fffffff, 7}, /* _SonicKit_MusicKit.MediaAPIResourceRequest.Identifier.LookupIdentifier */
     {"e471a212f9dd3723ab4b2f143f603fdc", 0x15e788, 12, 0, 0x7fffffff, 7}, /* _SonicKit_MusicKit.MediaAPI.Attributes */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x15ed00, 3, 0, 0x3d, 7}, /* _SonicKit_MusicKit.MusicContent.Environment.Endpoint */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x15ef3c, 6, 0, 0x3a, 7}, /* _SonicKit_MusicKit.MusicContent.RawIdentifier */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x15f000, 6, 0, 0x3ffa, 7}, /* _SonicKit_MusicKit.MusicContent.QualifiedIdentifier */
     {"e471a212f9dd3723ab4b2f143f603fdc", 0x15f450, 2, 0, 0x6, 7}, /* _SonicKit_MusicKit.SonicNES.Section */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x160328, 4, 0, 0x7c, 7}, /* _SonicKit_MusicKit_Packages.TransitionPlanner.SongStructureEvent */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x160654, 2, 0, 0x3e, 7}, /* _SonicKit_MusicKit_Packages.TransitionPlanner.TempoCompatibility */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x160af0, 2, 0, 0x7fffffff, 7}, /* _SonicKit_MusicKit_Packages.TransitionPlanner.StylingRegionPair */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x160b68, 2, 0, 0x7e, 7}, /* _SonicKit_MusicKit_Packages.TransitionPlanner.StylingRegion */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x16142c, 2, 0, 0x7e, 7}, /* _SonicKit_MusicKit_Packages.TransitionPlanner.Criteria.OutgoingPlacement */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x161990, 2, 2, 0x3d, 7}, /* _SonicKit_MusicKit_Packages.Transition.ContinuousSchedule.AutomationCurve */
+    {"e471a212f9dd3723ab4b2f143f603fdc", 0x161e8c, 2, 0, 0x7fffffff, 7}, /* _SonicKit_MusicKit_Packages.Transition.Schedule */
     {"e48e6f7e88073b238ec42aa34bd91fc1", 0x6cf64, 6, 1, 0x7f9, 3}, /* ProactiveSummarizationClient.Section.Kind */
     {"e4ebcd37afe739a0bdbaba7da50a04d2", 0xa3a24, 5, 15, 0x7a, 7}, /* PrivateMLClientInferenceProvider.PrivateMLClientInferenceProviderError */
     {"e4ed37f95498372e923896e2b83f0bf1", 0x754dc, 5, 1, 0x7fffffff, 7}, /* CookingData.IARFMeasurementUnit */
@@ -1761,8 +2342,16 @@
     {"e5c6549c361134b7b451399a222403aa", 0x204998, 2, 0, 0x7e, 7}, /* WorkflowUI.GalleryRecordLoadingView.RecordType */
     {"e5c6549c361134b7b451399a222403aa", 0x207084, 2, 1, 0x7fffffff, 7}, /* WFWorkflow.MigratedActionSource */
     {"e5c6549c361134b7b451399a222403aa", 0x207508, 4, 0, 0x7fffffff, 7}, /* WorkflowUI.SmartShortcutPickerSelection */
+    {"e5c6549c361134b7b451399a222403aa", 0x207a60, 4, 0, 0x7fffffff, 7}, /* WorkflowUI.SmartShortcutPickerEntry.Identifier */
     {"e5c6549c361134b7b451399a222403aa", 0x207bf4, 6, 2, 0x7fffffff, 7}, /* WorkflowUI.AutomatorMigratorError */
+    {"e7c1faddee4933a7a72e73de41da7da3", 0xd1750, 3, 1, 0x7fc, 3}, /* FlowToolTypes.TypeConformance */
     {"e7c1faddee4933a7a72e73de41da7da3", 0xd3758, 2, 0, 0x7fffffff, 7}, /* FlowToolTypes.SnippetRegistryEvent */
+    {"e7f40282259c35b6a5b71a07a0ea7d88", 0xa1730, 2, 0, 0x7e, 7}, /* Accelerate.vDSP.DFTError */
+    {"e7f40282259c35b6a5b71a07a0ea7d88", 0xa19a8, 2, 0, 0x7fffffff, 7}, /* Accelerate.BNNS.SGDMomentumOptimizer.Fields */
+    {"e7f40282259c35b6a5b71a07a0ea7d88", 0xa19c4, 2, 0, 0x7fffffff, 7}, /* Accelerate.BNNS.RMSPropOptimizer.Fields */
+    {"e7f40282259c35b6a5b71a07a0ea7d88", 0xa1a94, 4, 0, 0x7fffffff, 7}, /* Accelerate.BNNS.NormalizationType */
+    {"e7f40282259c35b6a5b71a07a0ea7d88", 0xa26e4, 2, 0, 0x7fffffff, 7}, /* Accelerate.BNNS.SparseLayout */
+    {"e7f40282259c35b6a5b71a07a0ea7d88", 0xa3130, 4, 6, 0x7fffffff, 7}, /* Accelerate.BNNS.LossFunction */
     {"e86af9e592c73b38b126066c96cd6b51", 0x11e5f0, 3, 1, 0x7fc, 3}, /* FlowToolsSnippetService.SnippetServiceAttributionModel.AttributionSource */
     {"e91289b5a07034ef9cad30722592b38a", 0xd8d98, 2, 0, 0x7ffffe, 3}, /* TimeMachine.CombineLatestStateMachine.ChildTaskSuspendedAction */
     {"e91289b5a07034ef9cad30722592b38a", 0xd8e40, 2, 0, 0x7fe, 3}, /* TimeMachine.CombineLatestStateMachine.UpstreamFinishedAction */
@@ -1772,6 +2361,8 @@
     {"e91289b5a07034ef9cad30722592b38a", 0xd9890, 2, 1, 0x7fd, 3}, /* TimeMachine.MergeStateMachine.UpstreamFinishedAction */
     {"e91289b5a07034ef9cad30722592b38a", 0xd98fc, 2, 1, 0x3ffffd, 3}, /* TimeMachine.MergeStateMachine.UpstreamThrewAction */
     {"e91289b5a07034ef9cad30722592b38a", 0xd9968, 2, 1, 0x7fd, 3}, /* TimeMachine.MergeStateMachine.CancelledAction */
+    {"e9335fecdc6830bdb6b94f3f8d6267d9", 0xc50c8, 2, 0, 0x7fe, 3}, /* FindMyBluetooth.MockBehavior */
+    {"e9a61f47902f3332ab29eb0cc56bb38c", 0x5b048, 2, 1, 0x7fd, 3}, /* ServicesPlayback.CachedAsyncImagePhase */
     {"ea3ad917e51c376da89ffefac7011196", 0x1e3ca0, 6, 0, 0x7fffffff, 7}, /* ImagePlayground.GenerationRecipe_V1.Ingredient */
     {"ea3ad917e51c376da89ffefac7011196", 0x1e40d4, 6, 0, 0x7fffffff, 7}, /* ImagePlayground.GenerationRecipe_V2.Ingredient */
     {"ea3ad917e51c376da89ffefac7011196", 0x1e4508, 6, 0, 0x7fffffff, 7}, /* ImagePlayground.GenerationRecipe_V3.Ingredient */
@@ -1812,13 +2403,20 @@
     {"ee63baba045e3be8a57701fcecc4c6a0", 0x42f2c, 2, 0, 0xffffe, 7}, /* SessionPushNotifications.PushSubscription.SubscriptionType */
     {"ee882e01e0c7369f91a9d57696abf2d7", 0x10bbc4, 2, 0, 0x7e, 7}, /* StickerKit.Emoji.SkinTone */
     {"ee882e01e0c7369f91a9d57696abf2d7", 0x10bdf8, 4, 11, 0x39, 7}, /* StickerKit.BlockingSubCategory */
+    {"ee882e01e0c7369f91a9d57696abf2d7", 0x10e3a8, 2, 0, 0x7e, 7}, /* StickerKit.SearchResultItem */
     {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13de70, 2, 5, 0xfd, 3}, /* CloudAttestation.X509Policy.Error */
     {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13df98, 2, 3, 0x7fffffff, 7}, /* CloudAttestation.DarwinInitPolicy.Error */
     {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13e008, 3, 0, 0x7d, 7}, /* CloudAttestation.DeviceModePolicy.Error */
     {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13e654, 2, 3, 0x7fd, 3}, /* CloudAttestation.TransparencyPolicy.Error */
+    {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13e6a8, 2, 0, 0x7e, 7}, /* CloudAttestation.PCC.AttestationType */
+    {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13fb80, 2, 0, 0x3e, 3}, /* CloudAttestation.SEP.SealData */
     {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x13fe30, 3, 0, 0x7fffffff, 7}, /* CloudAttestation.TransparencyExtension */
     {"ee8d5ccdbcd0320f8105ac6c7d1cd69e", 0x1403c8, 2, 0, 0x3e, 3}, /* CloudAttestation.PublicKeyData */
+    {"eeb3d5596fc133469f9f5e94de266170", 0x7c6d0, 2, 0, 0x7e, 7}, /* HomeKitCore.HomesStore.CoreData.ManagedObjectChangeSet.PropertyDescription */
     {"efd0d4fc162934289e0b594bc7d3f937", 0x4059c, 2, 0, 0x7e, 7}, /* SystemBannerUI.LowBatterySystemBannerStyle */
+    {"f049bcc6097737e28fbef88836e8b408", 0x30f568, 2, 2, 0x7fffffff, 7}, /* ContactsUICore.AvatarView.Model.Provider */
+    {"f049bcc6097737e28fbef88836e8b408", 0x30f584, 3, 2, 0x7fffffff, 3}, /* ContactsUICore.AvatarView.Model.AvatarRepresentation */
+    {"f0a7d0eeb3383cb09bd2547ae84370e1", 0x10a678, 4, 2, 0xfb, 3}, /* _MusicKitInternal_SwiftUI.MusicPicker.PageID */
     {"f0b1489a3b6338d58c145398dde72aa4", 0x11f8e4, 2, 1, 0x7fd, 3}, /* ProximityAppleIDSetup.PASPickerPresentable.Representation */
     {"f0b1489a3b6338d58c145398dde72aa4", 0x121adc, 3, 0, 0x7fffffff, 7}, /* ProximityAppleIDSetup.V1Command */
     {"f0b1489a3b6338d58c145398dde72aa4", 0x121af8, 3, 0, 0x7fffffff, 7}, /* ProximityAppleIDSetup.V1Command.Request */
@@ -1831,18 +2429,28 @@
     {"f11d981e09c5313f965d5b89351c12be", 0x42e54, 2, 0, 0x7e, 7}, /* CacheExpert.PrivateOperationResult */
     {"f11d981e09c5313f965d5b89351c12be", 0x4314c, 2, 0, 0x1e, 7}, /* CacheExpert.OperationResultStorage */
     {"f1eab0a8a83937f99ec5b34f41960881", 0x281a24, 3, 0, 0x7d, 7}, /* NDFCoreShim.(private).NetworkConfigOperation */
+    {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb65324, 2, 0, 0x7fffffff, 7}, /* ImagePlaygroundInternal.TextStorage */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb667c8, 2, 0, 0x7fe, 3}, /* ImagePlaygroundInternal.NotificationManagerError */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb66820, 2, 0, 0x7fe, 3}, /* ImagePlaygroundInternal.NotificationPlatformError */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb66f88, 7, 36, 0x78, 7}, /* ImagePlaygroundInternal.ImageGeneration.Limitation */
+    {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb68c04, 4, 17, 0x37, 7}, /* ImagePlaygroundInternal.InputAnalyticsHelper.BlockingSubCategory */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb69c44, 3, 0, 0x1d, 7}, /* ImagePlaygroundInternal.VisualEffectLoader.LoadingError */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb6c1e8, 2, 0, 0x7e, 7}, /* ImagePlaygroundInternal.FacePickerCarouselViewStaticMetrics.Theme */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb6fda8, 2, 1, 0x7fd, 3}, /* ImagePlaygroundInternal.(private).QuickLookModifier.OpenState */
+    {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb711e8, 2, 5, 0x7d, 7}, /* ImagePlaygroundInternal.EffectViewModel.State */
     {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb72e68, 4, 11, 0x7b, 7}, /* ImagePlaygroundInternal.GenerateImageIntentError */
+    {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb736f4, 3, 6, 0xc, 7}, /* ImagePlaygroundInternal.GenerationState */
+    {"f2652eddf67e308eb6ef94051bb6d2d0", 0xb7420c, 2, 0, 0x7e, 7}, /* ImagePlaygroundInternal.DirectManipulationUI.SegmentationInputViewModel.InstallationViewModel */
     {"f28b14b5f27c35d5a32d5acb450a5663", 0x330dc, 2, 1, 0x7fd, 3}, /* _GroupActivities_AppKit.ReactionHistoryEntryAvatarImage.ImagePhase */
     {"f290a37da2803b7c8066f4ca8fa86207", 0x242b20, 2, 0, 0x7fe, 3}, /* RemindersAppIntents.CreateRemindersPerformingContext.IntendedList */
     {"f3810794a6343c2498a811cb89759007", 0xecbe0, 2, 6, 0x1d, 7}, /* SiriSuggestionsKit.Channel */
+    {"f38972a65ca539bd874b33d209b09d69", 0x2fd7fc, 2, 0, 0x7e, 7}, /* MediaCoreUI.NowPlayingViewModel.MiniPlayerSubtitle.Value.Resolved */
+    {"f38972a65ca539bd874b33d209b09d69", 0x2fd818, 3, 0, 0x7d, 7}, /* MediaCoreUI.NowPlayingViewModel.MiniPlayerSubtitle.Value */
+    {"f38972a65ca539bd874b33d209b09d69", 0x2fd86c, 2, 2, 0x7d, 7}, /* MediaCoreUI.NowPlayingViewModel.EyebrowConfiguration.Value */
     {"f38972a65ca539bd874b33d209b09d69", 0x2ffc84, 2, 0, 0x7e, 7}, /* MediaCoreUI.NowPlayingHeaderItemID.Value */
     {"f38972a65ca539bd874b33d209b09d69", 0x3060b0, 3, 0, 0x7fffffff, 7}, /* MediaCoreUI.NowPlayingButtonID.Value */
+    {"f38972a65ca539bd874b33d209b09d69", 0x306c5c, 2, 1, 0x7fffffff, 3}, /* MediaCoreUI.WaveformTheme.Theme */
+    {"f38972a65ca539bd874b33d209b09d69", 0x30c10c, 2, 0, 0x7e, 7}, /* MediaCoreUI.TransportButtonContent */
     {"f38972a65ca539bd874b33d209b09d69", 0x30cb68, 3, 0, 0x3ffffd, 3}, /* MediaCoreUI.MotionCacheDiskStorage.DiskCacheStorageError */
     {"f38972a65ca539bd874b33d209b09d69", 0x30dc24, 2, 0, 0x7e, 7}, /* MediaCoreUI.NowPlayingViewModel.TransitionDestination */
     {"f38972a65ca539bd874b33d209b09d69", 0x30e0c4, 2, 0, 0xffffffe, 7}, /* MediaCoreUI.(private).VideoEnablementContext */
@@ -1859,6 +2467,8 @@
     {"f4810a4dae3d33b589b8c563fc1f9222", 0x12c32b4, 5, 0, 0x7fb, 3}, /* SiriAppIntents.SingleSessionExportError */
     {"f4810a4dae3d33b589b8c563fc1f9222", 0x12c46a0, 4, 0, 0x7c, 7}, /* SiriAppIntents.TranscriptProtoVoiceAttribute.OneOf_OneofVoiceAttribute */
     {"f4810a4dae3d33b589b8c563fc1f9222", 0x12c6b2c, 3, 3, 0x7c, 7}, /* SiriAppIntents.XPCClientError */
+    {"f49965675a27344ab9969b2869337fc8", 0x2bed88, 2, 2, 0x7fffffff, 7}, /* ContactsUICore.AvatarView.Model.Provider */
+    {"f49965675a27344ab9969b2869337fc8", 0x2beda4, 3, 2, 0x7fffffff, 3}, /* ContactsUICore.AvatarView.Model.AvatarRepresentation */
     {"f54cd22dd8853ecd8fe69d653db10a54", 0xf180c, 3, 1, 0x7fc, 3}, /* AppStoreComponentsDaemonKit.BootstrapSession.(private).BootstrapState */
     {"f6c0f62e552e3c46b31c51439928f3e7", 0xb1b64, 2, 0, 0x7fe, 3}, /* PhoneSnippetUI.PhoneSnippetUIError */
     {"f8621a9dec5037bc8f5ade775f996a4e", 0x3521d4, 7, 1, 0x7f8, 3}, /* TeaUI.JSONSchema.SchemaType */
@@ -1880,8 +2490,13 @@
     {"f8621a9dec5037bc8f5ade775f996a4e", 0x35ce2c, 2, 0, 0x7fffffff, 7}, /* TeaUI.SplitViewSide */
     {"f8621a9dec5037bc8f5ade775f996a4e", 0x35eb50, 2, 1, 0x7fffffff, 7}, /* TeaUI.SectionViewControllerPresentation */
     {"f8621a9dec5037bc8f5ade775f996a4e", 0x35fd64, 2, 2, 0x3fd, 3}, /* TeaUI.BlueprintPrewarmState.State */
+    {"f8621a9dec5037bc8f5ade775f996a4e", 0x36084c, 4, 1, 0x7fb, 3}, /* TeaUI.MotionTransform.Transform */
+    {"f8621a9dec5037bc8f5ade775f996a4e", 0x360a90, 3, 2, 0x3c, 7}, /* TeaUI.BlueprintLayoutSectionFramePosition */
     {"f8621a9dec5037bc8f5ade775f996a4e", 0x360f8c, 2, 2, 0x7fd, 3}, /* TeaUI.DownloadButton.DownloadState */
     {"f8621a9dec5037bc8f5ade775f996a4e", 0x3620b4, 2, 0, 0x7e, 7}, /* TeaUI.FloatingTabBarAccessoryOption */
+    {"f8621a9dec5037bc8f5ade775f996a4e", 0x362f14, 4, 0, 0x3c, 7}, /* TeaUI.MenuGroupItem */
+    {"f8621a9dec5037bc8f5ade775f996a4e", 0x36543c, 2, 0, 0x7fffffff, 7}, /* TeaUI.ShineColor */
+    {"f8621a9dec5037bc8f5ade775f996a4e", 0x365538, 2, 0, 0x7fffffff, 7}, /* TeaUI.Gradient */
     {"f8a2e48f463a3844abb602938bca0605", 0x80520, 3, 2, 0x7fc, 3}, /* UniversalDrag.DragSurrogate_macOS.(private).DragState */
     {"f8a2e48f463a3844abb602938bca0605", 0x80544, 4, 0, 0x7fc, 3}, /* UniversalDrag.DragSurrogate_macOS.(private).MailboxMessage */
     {"f8a2e48f463a3844abb602938bca0605", 0x81334, 7, 5, 0xf8, 3}, /* UniversalDrag.DragSurrogateCoordinator.Event */
@@ -1889,25 +2504,36 @@
     {"f8a2e48f463a3844abb602938bca0605", 0x81e24, 2, 1, 0x7fd, 3}, /* UniversalDrag.DragController.(private).State */
     {"f8a2e48f463a3844abb602938bca0605", 0x82400, 2, 0, 0x3e, 3}, /* UniversalDrag.ArchiveTransferDestination.Message */
     {"f8a2e48f463a3844abb602938bca0605", 0x828b8, 5, 2, 0x7fa, 3}, /* UniversalDrag.DragForwardingCoordinator.(private).State */
+    {"f8a2e48f463a3844abb602938bca0605", 0x828d4, 3, 5, 0x3c, 3}, /* UniversalDrag.PeerDeviceEvent */
     {"f8df28d5ec613a08bd163e80dd15b7df", 0x84e44, 3, 0, 0x3d, 7}, /* AppAttestInternal.AttestationManager.AttestationFail */
     {"f9393eb63d7d3ad49f24a21d84e72a79", 0x75614, 2, 2, 0x7fd, 3}, /* AccessoryLiveActivities.AccessoryLiveActivitiesAppClient.(private).Errors */
     {"f96283b249063564a4325a9a82cd2950", 0x5eafc, 3, 0, 0x7fd, 3}, /* ChronoUIServices.ControlInstanceType */
     {"fa1542df9c2133028ef234bd4d4feb07", 0x12a614, 2, 1, 0x7fd, 3}, /* ShazamKitUI.SHArtworkViewImagePhase */
     {"fa1593c16b613732977778ca08422b00", 0xad5d8, 2, 0, 0x7e, 7}, /* LegalAndRegulatorySettingsSupport.FontSize.(private).Size */
     {"fa7fd0ad95d7375f8448d97cf3748cc8", 0x1193ef8, 2, 0, 0x3e, 3}, /* WebKit.URLSchemeTaskResult */
+    {"fa7fd0ad95d7375f8448d97cf3748cc8", 0x11946f4, 2, 0, 0x7fffffff, 7}, /* WebKit.WebPage.ExportedContentConfiguration.(private).Storage */
     {"fa9183b11cb131d38df18b6a428b0f9c", 0x961e0, 10, 0, 0x7f6, 3}, /* AppPrivateData.Expression */
     {"fa9183b11cb131d38df18b6a428b0f9c", 0x967b0, 4, 0, 0x7fc, 3}, /* AppPrivateData.SearchExpression */
     {"fa9183b11cb131d38df18b6a428b0f9c", 0x967ec, 6, 0, 0x7fa, 3}, /* AppPrivateData.SearchMatchExpression */
     {"fa9183b11cb131d38df18b6a428b0f9c", 0x96828, 4, 0, 0x7fc, 3}, /* AppPrivateData.SearchMatchPhrase */
     {"fa9183b11cb131d38df18b6a428b0f9c", 0x96a44, 7, 0, 0x19, 7}, /* AppPrivateData.Unicode61TokenizerOptions.UnicodeCategories */
+    {"fa9183b11cb131d38df18b6a428b0f9c", 0x97ef0, 3, 0, 0x3ffffd, 3}, /* AppPrivateData.PrivateZone.AccessModel */
+    {"fab3826800e431c58a0eaea02056b11a", 0x482a38, 3, 1, 0x7c, 7}, /* MPCPlaybackEngineEvent.PrivateListeningMode */
     {"fab3826800e431c58a0eaea02056b11a", 0x483e34, 4, 0, 0x7fffffff, 4}, /* MediaPlaybackCore.Event */
+    {"fab3826800e431c58a0eaea02056b11a", 0x483f20, 45, 0, 0x7fffffff, 4}, /* MediaPlaybackCore.PlayerEvent */
+    {"fab3826800e431c58a0eaea02056b11a", 0x483fdc, 8, 0, 0x7fffffff, 7}, /* MediaPlaybackCore.SystemEvent */
+    {"fab3826800e431c58a0eaea02056b11a", 0x484094, 13, 0, 0x1ffff3, 7}, /* MediaPlaybackCore.UserEvent */
     {"fb74a41c9ebb3027a6086b64a118171d", 0x346b4, 2, 1, 0x7fffffff, 7}, /* _RealityKit_SwiftUI.Model3DPhase */
+    {"fb8d0f57e9033b01babec93b6e784c73", 0x4395c, 2, 1, 0x7fffffff, 7}, /* SiriActivationFoundation.SiriAvailability.Status */
     {"fc914812357135cebde00a2b2a66fec6", 0x395fc, 2, 0, 0x7fe, 3}, /* GRPCURLSessionTransportInternal.BufferedStream._StateMachine.EnqueueProducerAction */
     {"fca3e812513f3a139ebdcea5086b7690", 0xff7d18, 3, 0, 0x7fffffff, 7}, /* PhotosUICore.LemonadeShelfDisclosureType */
     {"fca3e812513f3a139ebdcea5086b7690", 0xffea20, 2, 0, 0x7fe, 3}, /* PhotosUICore.PeopleUnifiedItem.BackingItem */
+    {"fca3e812513f3a139ebdcea5086b7690", 0x100ae8c, 16, 0, 0xf0, 3}, /* PhotosUICore.LemonadeFeatureLibrary.Shelf */
     {"fca3e812513f3a139ebdcea5086b7690", 0x100cae4, 2, 0, 0xe, 0}, /* PhotosUICore.LemonadeShelfItem.BackingItem */
     {"fca3e812513f3a139ebdcea5086b7690", 0x101095c, 3, 0, 0x7fd, 3}, /* PhotosUICore.StoryDefaultAssetCollectionAnnotator.(private).Error */
     {"fda05f9cf66e399a8c0b01e0290b1e83", 0x6ef24c, 2, 1, 0x7d, 7}, /* WeatherUI.WeatherConditionGradientModel.PresentationContext */
+    {"fda05f9cf66e399a8c0b01e0290b1e83", 0x6f62fc, 2, 0, 0x3e, 7}, /* WeatherCore.Beaufort.FormatStyle.Includes */
+    {"fe357de7a3353612a71c1e0c4282e2fe", 0x213e98, 4, 0, 0x3c, 3}, /* USDSync.SparkServiceTransport.Message */
     {"ff2948bd9cec39f1ad66386cf451bd6a", 0x143be0, 3, 3, 0x3c, 3}, /* PlatformSSOCore.POAuthenticatorResult */
     {"ff2948bd9cec39f1ad66386cf451bd6a", 0x143c50, 2, 6, 0x1d, 7}, /* PlatformSSOCore.POEventType */
     {"ff2948bd9cec39f1ad66386cf451bd6a", 0x143c6c, 4, 0, 0x7c, 7}, /* PlatformSSOCore.POHintType */

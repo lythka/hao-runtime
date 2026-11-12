@@ -556,16 +556,20 @@ image build it was generated from: on another build every lookup misses and
 the rules fall back to what they do without a row. They are regenerated per
 OS build.
 
-- `src/mpenum_gen.inc`: 1899 native spare-bit multi-payload enums with
+- `src/mpenum_gen.inc`: 2525 native spare-bit multi-payload enums with
   payload and empty case counts, the x86_64 XI count of the spare-bit
   layout, and flags (1 payload-case encodings identical on arm64 and x86_64,
-  2 empty-case ones too, 4 XIs identical).
-- `src/archdiff_gen.inc`: 36 native structs and enums whose representation
+  2 empty-case ones too, 4 XIs identical): 1442 rows 1|2|4, 987 rows 1|2,
+  91 rows 0 and 5 rows 4.
+- `src/archdiff_gen.inc`: 43 native structs and enums whose representation
   differs from the arm64 build's type of the same image and name: fields or
   case indices differ (arm64-only `Float16` cases and fields, `Swift.Float16`
   and `Swift.Float80` themselves), arm64 adds trailing cases, or the
   multi-payload layouts differ (`ComputationalGraph.Output.Errors`: a tag
   byte on x86_64, spare bits on arm64).
+
+Both are hao-research's r2 exports (6dff5fb), after its x86_64 slide-info
+v2 parser fix (r1 had 1899 and 36 rows; no r1 row changed).
 
 Rules now:
 
@@ -625,7 +629,7 @@ programs: `FiveEmpty` (Int / (Int, Int) / five empty cases: size 17, xi
 0xfd, empty cases tag 2 with index 0-4 in the first payload byte), tags in a
 `Bool`'s spare bits (`Low2`: byte 8 bit 7; `Low3E2` with two empty cases,
 bits 6-7, empty case 1 index 1), and four native types of the host whose
-26B131 rows apply (the host is 26B123; 1318 of the 1899 rows' images are the
+26B131 rows apply (the host is 26B123; 1698 of the 2525 rows' images are the
 same binaries here): `NWListener.State` (5 bytes, tags in bits 38-39, three
 empty cases), `LocalizedStringResource.BundleDescription` (bits 62-63, one
 empty case, XIs differ), AppIntents `ResizeBehavior` and `ZoomBehavior` (9
