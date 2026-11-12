@@ -1630,6 +1630,14 @@ static unsigned fp_begin_checked(tctx *t, int dbl, unsigned rn, int rm,
     for (unsigned k = 0; k < n; k++) {
         x_mov_ld(&t->b, dbl ? 8 : 4, RAX, VR(k ? (unsigned)rm : rn));
         x_alu_rr(&t->b, XADD, dbl, RAX, RAX);             /* 2*abs, sign discarded */
+        if (!high) {
+            /* 2*abs-1 admits zero by unsigned wrap, with one branch. */
+            x_alu_ri(&t->b, XSUB, dbl, RAX, 1);
+            if (dbl) { x_mov_ri(&t->b, RCX, 2*low-1); x_alu_rr(&t->b, XCMP, 1, RAX, RCX); }
+            else x_alu_ri(&t->b, XCMP, 0, RAX, (uint32_t)(2*low-1));
+            decline[k] = x_jcc32(&t->b, XCC_B);
+            continue;
+        }
         size_t zero = x_jcc32(&t->b, XCC_E);
         size_t special = 0;
         if (high) {
