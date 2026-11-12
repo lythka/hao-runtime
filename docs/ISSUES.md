@@ -256,6 +256,15 @@ the publication and witness paths are reached from SwiftUI/AttributeGraph on
 the target. `swiftlayout` section S checks the survey walk itself (a value
 with two refusing fields prints both).
 
+Laptop (26B131, MBP9,2, live swap): Weather.app, which aborted at
+`Swift.Optional<(Swift.Bool) -> ()>` under the refusing default, now passes
+`Optional<SwiftUI.Binding<Swift.Bool>>` and
+`Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>` through
+with survey lines and runs about 50 s. It then aborts in native code
+outside hao: VFX → `-[MTLIOAccelDevice newIndirectArgumentEncoderWithLayout:]`
+in the image's Metal driver. Its window has not been shown yet, so whether
+the passed-through values render correctly is still unconfirmed.
+
 Both enum rules are used by the walk only. The ownership transfers in
 `Aggregate.c` and `graph()`, which picks the types whose native witnesses a
 publication intercepts, still follow only runtime-laid-out enums.
