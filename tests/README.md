@@ -329,3 +329,8 @@ operations per loop make each instruction's helper cost measurable. Timing
 runs omit statistics; separate runs report helper groups. Loop/reset overhead
 is included. Development-host ratios are descriptive; Intel measurements decide
 performance acceptance. `N` controls iterations (default 50000).
+
+`aot/integer-mutations` builds private translator copies and verifies that
+the complete-state vector test passes unchanged and catches reversed ZIP
+half selection. `guest/jitinsns` covers all 42 allocated ZIP/UZP/TRN forms
+against native arm64 in JIT, interpreter, helpers-only and AOT.

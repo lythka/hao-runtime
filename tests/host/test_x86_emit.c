@@ -89,6 +89,7 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     {0x66, 0xD8, 0, 0, "psubusb"}, {0x66, 0xD9, 0, 0, "psubusw"}, {0x66, 0xDE, 0, 0, "pmaxub"}, {0x66, 0xDA, 0, 0, "pminub"},
     {0x66, 0xEE, 0, 0, "pmaxsw"}, {0x66, 0xEA, 0, 0, "pminsw"}, {0x66, 0xD5, 0, 0, "pmullw"}, {0x66, 0x60, 0, 0, "punpcklbw"},
     {0x66, 0x62, 0, 0, "punpckldq"}, {0x66, 0x6F, 0, 0, "movdqa"}, {0xF3, 0x7E, 0, 0, "movq"}, {0x66, 0xF6, 0, 0, "psadbw"},
+    {0x66, 0x68, 0, 0, "punpckhbw"}, {0x66, 0x69, 0, 0, "punpckhwd"}, {0x66, 0x6A, 0, 0, "punpckhdq"},
     /* vector floating point, widening, narrowing */
     {0, 0x5A, 0, 0, "cvtps2pd"}, {0x66, 0x5A, 0, 0, "cvtpd2ps"},
     {0x66, 0x59, 0, 0, "mulpd"}, {0x66, 0x58, 0, 0, "addpd"}, {0x66, 0x5C, 0, 0, "subpd"},

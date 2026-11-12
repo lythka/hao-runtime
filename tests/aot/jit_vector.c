@@ -236,6 +236,16 @@ int main(void)
     signal(SIGSEGV, on_fault);
     signal(SIGBUS, on_fault);
     for (unsigned k = 0; k < sizeof init_mem; k++) init_mem[k] = (uint8_t)rnd();
+    /* Every allocated permute, byte-distinct random states and aliases. */
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {
+            if (!(op & 3) || (!q && size == 3)) continue;
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm);
+            for (int r = 0; r < 32; r++) for (int b = 0; b < 16; b++) in.v[r].b[b] = (uint8_t)rnd();
+            uint32_t i = 0x0e000800 | q << 30 | size << 22 | op << 12 | rm << 16 | rn << 5 | rd;
+            check(i, 0, &in, false); check(i, 0, &in, true);
+        }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */

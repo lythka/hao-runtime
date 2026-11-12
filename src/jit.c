@@ -3073,6 +3073,46 @@ static bool t_simd_ext(tctx *t, uint32_t i)
     return true;
 }
 
+/* Exact byte selection for all allocated ZIP/UZP/TRN arrangements. */
+static bool t_simd_permute(tctx *t, uint32_t i)
+{
+    unsigned Q = BIT(i, 30), size = BITS(i, 23, 22), op = BITS(i, 14, 12);
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    if (!(op & 3) || (size == 3 && !Q)) return false;
+    int es = 1 << size, n = (Q ? 16 : 8) / es;
+    vld(t, 0, rn); vld(t, 1, rm);
+    if ((op & 3) == 3) {
+        static const uint8_t unpack[4] = {0x60, 0x61, 0x62, 0x6C};
+        if (op == 7 && !Q) {
+            x_sse_shift_ri(&t->b, 0x73, 3, 0, 4);
+            x_sse_shift_ri(&t->b, 0x73, 3, 1, 4);
+        }
+        P((uint8_t)(unpack[size] + (op == 7 && Q ? (size == 3 ? 1 : 8) : 0)), 0, 1);
+    } else {
+        uint8_t masks[2][16];
+        memset(masks, 0x80, sizeof masks);
+        for (int e = 0; e < n; e++) {
+            int source, lane;
+            if ((op & 3) == 1) { /* UZP */
+                int j = 2 * e + (op == 5);
+                source = j >= n; lane = j % n;
+            } else { /* TRN */
+                source = e & 1; lane = (e & ~1) + (op == 6);
+            }
+            for (int b = 0; b < es; b++) masks[source][e * es + b] = (uint8_t)(lane * es + b);
+        }
+        for (int r = 0; r < 2; r++) {
+            uint64_t lo, hi;
+            memcpy(&lo, masks[r], 8); memcpy(&hi, masks[r] + 8, 8);
+            vconst(t, 2, lo, false); vconst(t, 3, hi, false); P(0x6C, 2, 3);
+            P38(0x00, r, 2); /* pshufb */
+        }
+        P(0xEB, 0, 1);
+    }
+    vst(t, rd, 0, (int)Q);
+    return true;
+}
+
 /* The groups in a64_exec_simd's order (none of the masks overlap an
  * earlier group of that decoder). */
 static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
@@ -3089,6 +3129,7 @@ static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
         t_vfp_fma16(t, BIT(i, 23), BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, BIT(i, 30), i, pc);
         return true;
     }
+    if ((i & 0xBF208C00) == 0x0E000800) return t_simd_permute(t, i);
     if ((i & 0x9F000400) == 0x0F000000) return t_vfp_indexed(t, i, pc);
     return false;
 }
