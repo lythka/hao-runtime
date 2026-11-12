@@ -119,7 +119,7 @@ $(B)/cxxstr.o: src/cxxstr.c $(wildcard include/hao/*.h src/*.inc) $(MIN_STAMP)
 $(B)/libhaocore.a: $(CORE_O)
 	ar rcs $@ $^
 
-$(B)/oracle-native: tests/oracle/native_arm64.c tests/oracle/record.h tests/oracle/fma_cases.h
+$(B)/oracle-native: tests/oracle/native_arm64.c tests/oracle/record.h tests/oracle/fma_cases.h tests/oracle/known.h
 	@mkdir -p $(B)
 	$(CC) -arch arm64 -O1 -Wall -o $@ tests/oracle/native_arm64.c && codesign -s - -f $@
 
@@ -133,13 +133,13 @@ $(B)/oracle-atomic: tests/oracle/atomic16.c $(B)/libhaocore.a $(B)/jit.o $(B)/st
 
 # Every mode runs; the target fails if any of them reports a failure.
 ORACLE_N ?= 200000
-ORACLE_MODES ?= dp simd mem block fma
+ORACLE_MODES ?= dp simd mem block fma known
 oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	@fail=0; for m in $(ORACLE_MODES); do \
-	  $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \
-	  echo "== $$m"; $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m.txt || fail=1; \
+	  timeout -s KILL 900 $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \
+	  echo "== $$m"; timeout -s KILL 900 $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m.txt || fail=1; \
 	done; \
-	echo "== atomic"; $(B)/oracle-atomic || fail=1; \
+	echo "== atomic"; timeout -s KILL 300 $(B)/oracle-atomic || fail=1; \
 	exit $$fail
 
 # The same oracle checks with the translator itself (interpreter, JIT, x86
@@ -161,7 +161,7 @@ $(B)/asan/oracle-atomic: tests/oracle/atomic16.c $(ASAN_CORE_O)
 .PHONY: oracle-asan
 oracle-asan: $(B)/oracle-native $(B)/asan/oracle-check $(B)/asan/oracle-atomic
 	@fail=0; seed=0x$$(date +%s)$$RANDOM; echo "seed $$seed"; for m in $(ORACLE_MODES); do \
-	  $(B)/oracle-native $(B)/asan/oracle-$$m.bin $(ORACLE_ASAN_N) $$seed $$m || fail=1; \
+	  timeout -s KILL 900 $(B)/oracle-native $(B)/asan/oracle-$$m.bin $(ORACLE_ASAN_N) $$seed $$m || fail=1; \
 	  echo "== $$m (asan)"; $(ASAN_ENV) timeout -s KILL 900 $(B)/asan/oracle-check $(B)/asan/oracle-$$m.bin --show 5 \
 	    --bad $(B)/asan/oracle_bad_$$m.txt >$(B)/asan/oracle-$$m.log 2>&1 || fail=1; tail -3 $(B)/asan/oracle-$$m.log; \
 	done; \

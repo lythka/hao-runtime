@@ -32,6 +32,7 @@
  */
 #include "record.h"
 #include "fma_cases.h"
+#include "known.h"
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
 #include <setjmp.h>
@@ -372,6 +373,11 @@ int main(int argc, char **argv)
     int mode = -1;
     for (int m = 0; m < OM_NMODES; m++) if (!strcmp(argv[4], oracle_mode_name[m])) mode = m;
     if (mode < 0) { fprintf(stderr, "unknown mode %s\n", argv[4]); return 2; }
+    /* A fixed sweep makes exception coverage independent of the random-mode
+     * sample size. Operand state still comes from the requested seed. */
+    size_t nu = sizeof known_unimpl / sizeof *known_unimpl;
+    size_t nl = sizeof known_lenient / sizeof *known_lenient;
+    if (mode == OM_KNOWN) count = (long)(nu + nl) * 1024;
     FILE *out = fopen(argv[1], "wb");
     if (!out) { perror("open"); return 1; }
 
@@ -409,6 +415,12 @@ int main(int argc, char **argv)
         r.mode = (uint32_t)mode;
         if (mode == OM_BLOCK) r.n = (uint32_t)gen_block(r.code);
         else if (pacrec) r.n = 1;
+        else if (mode == OM_KNOWN) {
+            size_t k = (size_t)rec / 1024;
+            const known_enc *e = k < nu ? &known_unimpl[k] : &known_lenient[k - nu];
+            r.code[0] = ((uint32_t)rnd() & ~e->mask) | e->value;
+            r.n = 1;
+        }
         else if (mode == OM_FMA) { r.code[0] = fma_gen(&r, false); r.n = 1; }
         else {
             uint32_t insn = (uint32_t)rnd();
@@ -463,7 +475,7 @@ int main(int argc, char **argv)
         else r.in.sp = rr(2) ? (interesting() & ~15ull) : interesting();
         for (int k = 0; k < 32; k++) r.in.v[k] = (unsigned __int128)interesting() << 64 | interesting();
         r.in.nzcv = (uint32_t)(rnd() & 0xf) << 28;
-        r.in.fpcr = (mode == OM_SIMD || mode == OM_BLOCK) ? random_fpcr() : 0;
+        r.in.fpcr = (mode == OM_SIMD || mode == OM_KNOWN || mode == OM_BLOCK) ? random_fpcr() : 0;
         r.in.fpsr = rr(4) ? 0 : (uint32_t)(rnd() & 0x0800009f);
         if (mode == OM_FMA) {
             fma_gen(&r, true);

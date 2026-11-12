@@ -54,12 +54,21 @@ static int interp_code(hao_cpu *c, const oracle_rec *r)
     return -3;
 }
 
-static const char *known_match(const known_enc *t, size_t n, const oracle_rec *r)
+#define NUNIMPL (sizeof known_unimpl / sizeof *known_unimpl)
+#define NLENIENT (sizeof known_lenient / sizeof *known_lenient)
+static long unimpl_hits[2][NUNIMPL], lenient_hits[2][NLENIENT];
+
+/* Count actual tolerated outcomes, not merely encodings. Counting all
+ * matches also exposes overlapping exceptions for review. */
+static bool known_match(const known_enc *t, size_t n, const oracle_rec *r, long *hits)
 {
+    bool found = false;
     for (size_t k = 0; k < n; k++)
         for (uint32_t i = 0; i < r->n; i++)
-            if ((r->code[i] & t[k].mask) == t[k].value) return t[k].what;
-    return NULL;
+            if ((r->code[i] & t[k].mask) == t[k].value) {
+                hits[k]++; found = true; break;
+            }
+    return found;
 }
 
 /* fma records: the operands of the lanes the instruction computes, with the
@@ -184,7 +193,7 @@ int main(int argc, char **argv)
             if (r.status == 1) {          /* native SIGILL */
                 C->ill++;
                 if (st == HAO_EXIT_UNDEF || st == HAO_EXIT_UDF) { C->ill_undef++; continue; }
-                if (known_match(known_lenient, sizeof known_lenient / sizeof *known_lenient, &r)) { C->lenient_known++; continue; }
+                if (known_match(known_lenient, NLENIENT, &r, lenient_hits[pass])) { C->lenient_known++; continue; }
                 C->lenient_bad++;
                 snprintf(why, sizeof why, "native SIGILL, hao %s", st == -2 ? "faulted" : "executed it");
             } else if (r.status == 2) {   /* native fault */
@@ -195,7 +204,7 @@ int main(int argc, char **argv)
                 C->ran++;
                 if (st == -2) { C->fault++; snprintf(why, sizeof why, "hao signal %d, native ran", sig); }
                 else if (st == HAO_EXIT_UNDEF) {
-                    if (known_match(known_unimpl, sizeof known_unimpl / sizeof *known_unimpl, &r)) { C->undef_known++; continue; }
+                    if (known_match(known_unimpl, NUNIMPL, &r, unimpl_hits[pass])) { C->undef_known++; continue; }
                     C->undef_bad++;
                     snprintf(why, sizeof why, "hao UNDEF at pc+%llu, native ran", (unsigned long long)(cpu.pc - r.pc));
                 } else if (st != HAO_EXIT_NONE) {
@@ -246,6 +255,18 @@ int main(int argc, char **argv)
         printf("fma: %ld of %ld records have normal or zero operands and results >= 2^-125 in every lane;"
                " binary64 with two roundings is wrong for %ld of them\n", fma_admitted, total, fma_widened_wrong);
     long fails = 0;
+    for (int kind = 0; kind < 2; kind++) {
+        const known_enc *t = kind ? known_lenient : known_unimpl;
+        size_t n = kind ? NLENIENT : NUNIMPL;
+        for (size_t k = 0; k < n; k++) {
+            long a = kind ? lenient_hits[0][k] : unimpl_hits[0][k];
+            long b = kind ? lenient_hits[1][k] : unimpl_hits[1][k];
+            printf("known_%s %08x/%08x interp=%ld jit=%ld %s%s\n",
+                   kind ? "lenient" : "unimpl", t[k].mask, t[k].value, a, b, t[k].what,
+                   mode == OM_KNOWN && (!a || !b) ? " STALE" : "");
+            if (mode == OM_KNOWN && (!a || !b)) fails++;
+        }
+    }
     for (int pass = 0; pass < 2; pass++) {
         counts *C = &cnt[pass];
         printf("%s %-6s records %ld | native ran %ld: match %ld, mismatch %ld, hao-fault %ld, hao-undef %ld (+%ld known unimplemented)"

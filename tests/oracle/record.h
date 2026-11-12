@@ -40,8 +40,8 @@ _Static_assert(offsetof(oracle_state, nzcv) == OS_NZCV, "layout");
 _Static_assert(offsetof(oracle_state, fpcr) == OS_FPCR, "layout");
 _Static_assert(offsetof(oracle_state, v) == OS_V, "layout");
 
-enum { OM_DP, OM_SIMD, OM_MEM, OM_BLOCK, OM_PAC, OM_FMA, OM_NMODES };
-static const char *const oracle_mode_name[OM_NMODES] = {"dp", "simd", "mem", "block", "pac", "fma"};
+enum { OM_DP, OM_SIMD, OM_MEM, OM_BLOCK, OM_PAC, OM_FMA, OM_KNOWN, OM_NMODES };
+static const char *const oracle_mode_name[OM_NMODES] = {"dp", "simd", "mem", "block", "pac", "fma", "known"};
 
 typedef struct {
     uint32_t mode;

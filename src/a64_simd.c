@@ -600,26 +600,71 @@ static bool three_same_int_valid(unsigned op, unsigned U, unsigned size, unsigne
  * encodings cannot fall into integer operations sharing nearby bit fields. */
 static int simd_half_three_same(hao_cpu *c, uint32_t i)
 {
-    unsigned key = i & 0xBFE0FC00u;
+    unsigned key = i & 0xAFE0FC00u;
+    bool scalar = BIT(i, 28), pair = false;
+    if (scalar && !BIT(i, 30)) return -1;
+    if (scalar) {
+        switch (key) {
+        case 0x0E402400:
+        case 0x2E402400:
+        case 0x2EC02400:
+        case 0x0E401C00:
+        case 0x0E403C00:
+        case 0x0EC03C00:
+        case 0x2EC01400:
+        case 0x2E402C00:
+        case 0x2EC02C00:
+            break;
+        default: return -1;
+        }
+    }
     switch (key) {
-    case 0x0E400400: case 0x0EC00400: /* FMAXNM / FMINNM */
-    case 0x0E400C00: case 0x0EC00C00: /* FMLA / FMLS */
-    case 0x0E401400: case 0x0EC01400: /* FADD / FSUB */
-    case 0x2E401C00: case 0x2E403C00: /* FMUL / FDIV */
-    case 0x0E403400: case 0x0EC03400: /* FMAX / FMIN */
-    case 0x0E402400: case 0x2E402400: case 0x2EC02400: break; /* FCMEQ / FCMGE / FCMGT */
+    case 0x2E400400: key = 0x0E400400; pair = true; break;
+    case 0x2EC00400: key = 0x0EC00400; pair = true; break;
+    case 0x2E401400: key = 0x0E401400; pair = true; break;
+    case 0x2E403400: key = 0x0E403400; pair = true; break;
+    case 0x2EC03400: key = 0x0EC03400; pair = true; break;
+    default: break;
+    }
+    switch (key) {
+    case 0x0E400400:
+    case 0x0EC00400:
+    case 0x0E400C00:
+    case 0x0EC00C00:
+    case 0x0E401400:
+    case 0x0EC01400:
+    case 0x2E401C00:
+    case 0x2E403C00:
+    case 0x0E403400:
+    case 0x0EC03400:
+    case 0x0E402400:
+    case 0x2E402400:
+    case 0x2EC02400:
+    case 0x0E401C00:
+    case 0x0E403C00:
+    case 0x0EC03C00:
+    case 0x2EC01400:
+    case 0x2E402C00:
+    case 0x2EC02C00:
+        break;
     default: return -1;
     }
     unsigned Q = BIT(i, 30), rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    unsigned n = scalar ? 1 : Q ? 8 : 4;
     hao_vreg a = c->v[rn], b = c->v[rm], d = c->v[rd], r = {0};
     fpctx x = fp_ctx(c);
-    if ((key == 0x0E400C00 || key == 0x0EC00C00) &&
-        fp_vec16_muladd(&x, &d, &a, &b, Q ? 8 : 4, key == 0x0EC00C00, &r)) {
+    if (!scalar && (key == 0x0E400C00 || key == 0x0EC00C00) &&
+        fp_vec16_muladd(&x, &d, &a, &b, n, key == 0x0EC00C00, &r)) {
         vfinish(c, rd, &r, Q);
         return 0;
     }
-    for (unsigned e = 0; e < (Q ? 8u : 4u); e++) {
+    for (unsigned e = 0; e < n; e++) {
         uint64_t av = a.h[e], bv = b.h[e], v;
+        if (pair) {
+            const hao_vreg *src = e < n / 2 ? &a : &b;
+            av = src->h[2 * (e % (n / 2))];
+            bv = src->h[2 * (e % (n / 2)) + 1];
+        }
         switch (key) {
         case 0x0E400400: v = fp_maxnm(&x, 2, av, bv); break;
         case 0x0EC00400: v = fp_minnm(&x, 2, av, bv); break;
@@ -633,42 +678,102 @@ static int simd_half_three_same(hao_cpu *c, uint32_t i)
         case 0x0EC03400: v = fp_min(&x, 2, av, bv); break;
         case 0x0E402400: v = fp_cmp_eq(&x, 2, av, bv) ? 0xffff : 0; break;
         case 0x2E402400: v = fp_cmp_ge(&x, 2, av, bv) ? 0xffff : 0; break;
-        default: v = fp_cmp_gt(&x, 2, av, bv) ? 0xffff : 0; break;
+        case 0x2EC02400: v = fp_cmp_gt(&x, 2, av, bv) ? 0xffff : 0; break;
+        case 0x0E401C00: v = fp_mulx(&x, 2, av, bv); break;
+        case 0x0E403C00: v = fp_recps(&x, 2, av, bv); break;
+        case 0x0EC03C00: v = fp_rsqrts(&x, 2, av, bv); break;
+        case 0x2EC01400: v = fp_abs(fp_sub(&x, 2, av, bv), 2); break;
+        case 0x2E402C00: v = fp_cmp_ge(&x, 2, fp_abs(av, 2), fp_abs(bv, 2)) ? 0xffff : 0; break;
+        case 0x2EC02C00: v = fp_cmp_gt(&x, 2, fp_abs(av, 2), fp_abs(bv, 2)) ? 0xffff : 0; break;
+        default: return -1;
         }
         r.h[e] = (uint16_t)v;
     }
-    vfinish(c, rd, &r, Q);
+    vfinish(c, rd, &r, scalar ? 0 : Q);
     return 0;
 }
 
 static int simd_half_two_misc(hao_cpu *c, uint32_t i)
 {
-    unsigned key = i & 0xBFFFFC00u;
+    unsigned key = i & 0xAFFFFC00u;
+    bool scalar = BIT(i, 28);
+    if (scalar && !BIT(i, 30)) return -1;
     switch (key) {
-    case 0x0E79D800: case 0x2E79D800: /* SCVTF / UCVTF */
-    case 0x0EF9B800: case 0x2EF9B800: /* FCVTZS / FCVTZU */
-    case 0x0E79A800: case 0x2E79A800: /* FCVTNS / FCVTNU */
-    case 0x0EF8F800: case 0x2EF8F800: /* FABS / FNEG */
-    case 0x0EF8D800: case 0x0EF8E800: break; /* FCMEQ / FCMLT zero */
+    case 0x0EF8F800:
+    case 0x2EF8F800:
+    case 0x2EF9F800:
+    case 0x0E798800:
+    case 0x0E799800:
+    case 0x0EF98800:
+    case 0x0EF99800:
+    case 0x2E798800:
+    case 0x2EF99800:
+    case 0x2E799800:
+        if (scalar) return -1;
+        break;
+    case 0x0E79D800:
+    case 0x2E79D800:
+    case 0x0EF8D800:
+    case 0x0EF8C800:
+    case 0x2EF8C800:
+    case 0x2EF8D800:
+    case 0x0EF8E800:
+    case 0x0EF9D800:
+    case 0x2EF9D800:
+    case 0x0E79A800:
+    case 0x2E79A800:
+    case 0x0E79B800:
+    case 0x2E79B800:
+    case 0x0E79C800:
+    case 0x2E79C800:
+    case 0x0EF9A800:
+    case 0x2EF9A800:
+    case 0x0EF9B800:
+    case 0x2EF9B800:
+        break;
+    case 0x0EF9F800: if (!scalar) return -1; break; /* FRECPX */
     default: return -1;
     }
     unsigned Q = BIT(i, 30), rd = BITS(i, 4, 0), rn = BITS(i, 9, 5);
     hao_vreg a = c->v[rn], r = {0};
     fpctx x = fp_ctx(c);
-    for (unsigned e = 0; e < (Q ? 8u : 4u); e++) {
+    for (unsigned e = 0; e < (scalar ? 1u : Q ? 8u : 4u); e++) {
         uint64_t av = a.h[e], v;
         switch (key) {
-        case 0x0E79D800: case 0x2E79D800: v = fp_from_int(&x, 2, av, key == 0x0E79D800, 16, 0); break;
-        case 0x0EF9B800: case 0x2EF9B800: v = fp_to_int(&x, 2, av, FPR_Z, key == 0x2EF9B800, 16, 0); break;
-        case 0x0E79A800: case 0x2E79A800: v = fp_to_int(&x, 2, av, FPR_N, key == 0x2E79A800, 16, 0); break;
+        case 0x0E79D800: v = fp_from_int(&x, 2, av, true, 16, 0); break;
+        case 0x2E79D800: v = fp_from_int(&x, 2, av, false, 16, 0); break;
+        case 0x0EF8D800: v = fp_cmp_eq(&x, 2, av, 0) ? 0xffff : 0; break;
+        case 0x0EF8C800: v = fp_cmp_gt(&x, 2, av, 0) ? 0xffff : 0; break;
+        case 0x2EF8C800: v = fp_cmp_ge(&x, 2, av, 0) ? 0xffff : 0; break;
+        case 0x2EF8D800: v = fp_cmp_ge(&x, 2, 0, av) ? 0xffff : 0; break;
+        case 0x0EF8E800: v = fp_cmp_gt(&x, 2, 0, av) ? 0xffff : 0; break;
+        case 0x0EF9D800: v = fp_recpe(&x, 2, av); break;
+        case 0x2EF9D800: v = fp_rsqrte(&x, 2, av); break;
+        case 0x0E79A800: v = fp_to_int(&x, 2, av, FPR_N, false, 16, 0); break;
+        case 0x2E79A800: v = fp_to_int(&x, 2, av, FPR_N, true, 16, 0); break;
+        case 0x0E79B800: v = fp_to_int(&x, 2, av, FPR_M, false, 16, 0); break;
+        case 0x2E79B800: v = fp_to_int(&x, 2, av, FPR_M, true, 16, 0); break;
+        case 0x0E79C800: v = fp_to_int(&x, 2, av, FPR_A, false, 16, 0); break;
+        case 0x2E79C800: v = fp_to_int(&x, 2, av, FPR_A, true, 16, 0); break;
+        case 0x0EF9A800: v = fp_to_int(&x, 2, av, FPR_P, false, 16, 0); break;
+        case 0x2EF9A800: v = fp_to_int(&x, 2, av, FPR_P, true, 16, 0); break;
+        case 0x0EF9B800: v = fp_to_int(&x, 2, av, FPR_Z, false, 16, 0); break;
+        case 0x2EF9B800: v = fp_to_int(&x, 2, av, FPR_Z, true, 16, 0); break;
         case 0x0EF8F800: v = fp_abs(av, 2); break;
         case 0x2EF8F800: v = fp_neg(av, 2); break;
-        case 0x0EF8D800: v = fp_cmp_eq(&x, 2, av, 0) ? 0xffff : 0; break;
-        default: v = fp_cmp_gt(&x, 2, 0, av) ? 0xffff : 0; break;
+        case 0x2EF9F800: v = fp_sqrt(&x, 2, av); break;
+        case 0x0E798800: v = fp_rint(&x, 2, av, FPR_N, false); break;
+        case 0x0E799800: v = fp_rint(&x, 2, av, FPR_M, false); break;
+        case 0x0EF98800: v = fp_rint(&x, 2, av, FPR_P, false); break;
+        case 0x0EF99800: v = fp_rint(&x, 2, av, FPR_Z, false); break;
+        case 0x2E798800: v = fp_rint(&x, 2, av, FPR_A, false); break;
+        case 0x2EF99800: v = fp_rint(&x, 2, av, fp_cur(&x), false); break;
+        case 0x2E799800: v = fp_rint(&x, 2, av, fp_cur(&x), true); break;
+        default: v = fp_recpx(&x, 2, av); break;
         }
         r.h[e] = (uint16_t)v;
     }
-    vfinish(c, rd, &r, Q);
+    vfinish(c, rd, &r, scalar ? 0 : Q);
     return 0;
 }
 
@@ -1299,7 +1404,7 @@ static int simd_shift_imm(hao_cpu *c, uint32_t i, int scalar)
         return 0;
     }
     case 0x1C: case 0x1F: {  /* SCVTF/UCVTF fixed, FCVTZS/FCVTZU fixed */
-        if (es < 4 || (es == 8 && !Q && !scalar)) return -1;
+        if (es < 2 || (es == 8 && !Q && !scalar)) return -1;
         int fbits = rsh;
         fpctx x = fp_ctx(c);
         for (int e = 0; e < n; e++) {
@@ -1849,8 +1954,8 @@ int a64_exec_simd(hao_cpu *c, uint32_t i, uint64_t pc)
     if ((i & 0xFF000000) == 0xCE000000) return crypto_ce(c, i);
     if ((i & 0x9FE0FC00) == 0x0E809400) return simd_dot(c, i, 0);
     if ((i & 0x9FC0F400) == 0x0F80E000) return simd_dot(c, i, 1);
-    if ((i & 0x9F200400) == 0x0E000400 && BIT(i, 22)) return simd_half_three_same(c, i);
-    if ((i & 0x9F3E0C00) == 0x0E380800) return simd_half_two_misc(c, i);
+    if (((i & 0x9F200400) == 0x0E000400 || (i & 0xDF200400) == 0x5E000400) && BIT(i, 22)) return simd_half_three_same(c, i);
+    if ((i & 0x9F3E0C00) == 0x0E380800 || (i & 0xDF3E0C00) == 0x5E380800) return simd_half_two_misc(c, i);
     int r = -1;
     (void)pc;
     if ((i & 0x5F000000) == 0x1E000000 || (i & 0x5F000000) == 0x1F000000) {
