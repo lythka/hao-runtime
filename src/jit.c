@@ -1603,25 +1603,63 @@ static void fp_load(tctx *t, int xmm, unsigned r, int dbl)
 }
 static void fp_store(tctx *t, unsigned r, int xmm) { x_movdqu_st(&t->b, VR(r), xmm); }
 
-/*
- * Store an SSE result held in xmm0, unless it is a NaN. x86 NaN results
- * differ from A64's (the invalid-operation NaN is negative, two NaN inputs
- * propagate the first operand regardless of signalling, FPCR.DN is not
- * honoured), so a NaN result re-executes the instruction in the interpreter,
- * whose FPProcessNaNs model is the reference; the operands are still
- * untouched at that point. Rounding, FZ and the exception flags of the fast
- * path already agree: SSE runs under the guest's MXCSR (see cpu.h).
- */
-static void fp_store_checked(tctx *t, unsigned rd, int dbl, uint32_t insn, uint64_t pc)
+/* Admit scalar SSE before it can alter FPSR. Normal/zero inputs are safe
+ * for comparisons, sqrt and widening. Arithmetic also excludes magnitudes
+ * that could produce a tiny nonzero result: FZ's UFC-only rule differs from
+ * SSE's UFC|IXC. The remaining cases use the shared interpreter unchanged.
+ * This deliberately does not consult cpu->fpcr's cached FZ bit: native
+ * callees share MXCSR and may change its controls directly. */
+static unsigned fp_begin_checked(tctx *t, int dbl, unsigned rn, int rm,
+                                 uint32_t insn, size_t decline[2])
 {
     fl_clobber(t);
-    x_sse_rr(&t->b, dbl ? 0x66 : 0, 0x2E, 0, 0, 0);          /* ucomis xmm0, xmm0: PF = NaN */
+    uint64_t low = dbl ? 0x0010000000000000ull : 0x00800000u, high = 0;
+    if ((insn & 0xFF200C00) == 0x1E200800) {
+        unsigned op = BITS(insn, 15, 12);
+        if (op < 2) {  /* products/quotients in a safe exponent interval */
+            low = dbl ? 0x20B0000000000000ull : 0x26800000u;
+            high = dbl ? 0x5F30000000000000ull : 0x58800000u;
+        } else {       /* cancellation remains normal or exactly zero */
+            low = dbl ? 0x0360000000000000ull : 0x0C800000u;
+        }
+    } else if ((insn & 0xFFBFFC00) == 0x1E224000) {
+        /* FCVT S,D: no result below the minimum normal single. */
+        low = 0x3810000000000000ull;
+    }
+    unsigned n = rm < 0 ? 1 : 2;
+    for (unsigned k = 0; k < n; k++) {
+        x_mov_ld(&t->b, dbl ? 8 : 4, RAX, VR(k ? (unsigned)rm : rn));
+        x_alu_rr(&t->b, XADD, dbl, RAX, RAX);             /* 2*abs, sign discarded */
+        size_t zero = x_jcc32(&t->b, XCC_E);
+        size_t special = 0;
+        if (high) {
+            uint64_t inf = dbl ? 0xFFE0000000000000ull : 0xFF000000u;
+            if (dbl) { x_mov_ri(&t->b, RCX, inf); x_alu_rr(&t->b, XCMP, 1, RAX, RCX); }
+            else x_alu_ri(&t->b, XCMP, 0, RAX, (uint32_t)inf);
+            special = x_jcc32(&t->b, XCC_AE);           /* infinities cannot underflow */
+        }
+        if (dbl) { x_mov_ri(&t->b, RCX, 2*low); x_alu_rr(&t->b, XSUB, 1, RAX, RCX); }
+        else x_alu_ri(&t->b, XSUB, 0, RAX, (uint32_t)(2*low));
+        uint64_t span = high ? 2*(high-low) : (dbl ? ~0ull : 0xffffffffu) - 2*low;
+        if (dbl) { x_mov_ri(&t->b, RCX, span); x_alu_rr(&t->b, XCMP, 1, RAX, RCX); }
+        else x_alu_ri(&t->b, XCMP, 0, RAX, (uint32_t)span);
+        decline[k] = x_jcc32(&t->b, XCC_A);
+        x_patch32(&t->b, zero, xb_len(&t->b));
+        if (special) x_patch32(&t->b, special, xb_len(&t->b));
+    }
+    return n;
+}
+static void fp_store_checked(tctx *t, unsigned rd, int dbl, uint32_t insn, uint64_t pc,
+                             const size_t *decline, unsigned ndecline)
+{
+    x_sse_rr(&t->b, dbl ? 0x66 : 0, 0x2E, 0, 0, 0);
     size_t nan = x_jcc32(&t->b, XCC_P);
     fp_store(t, rd, 0);
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, nan, xb_len(&t->b));
+    for (unsigned k = 0; k < ndecline; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
     helper(t, insn, pc, true);
-    st_helper--;                                             /* counted as native */
+    st_helper--;
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1820,10 +1858,12 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         if (op >= 4 && op <= 7) { fp_maxmin(t, i, pc); return true; }
         if (op == 8 && !dbl) { t_scalar_indexed_mul(t, i, pc, 0, 0); return true; }
         if (op > 3) return false;
+        size_t decline[2];
+        unsigned nd = fp_begin_checked(t, dbl, rn, (int)rm, i, decline);
         fp_load(t, 0, rn, dbl);
         fp_load(t, 1, rm, dbl);
         x_sse_rr(&t->b, pfx, ops[op], 0, 0, 1);
-        fp_store_checked(t, rd, dbl, i, pc);
+        fp_store_checked(t, rd, dbl, i, pc, decline, nd);
         return true;
     }
     if ((i & 0xFF207C00) == 0x1E204000) {            /* 1-source */
@@ -1849,20 +1889,26 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
             fp_store(t, rd, 0);
             return true;
         }
-        case 3:  /* FSQRT */
+        case 3: { /* FSQRT */
+            size_t decline[2];
+            unsigned nd = fp_begin_checked(t, dbl, rn, -1, i, decline);
             fp_load(t, 0, rn, dbl);
             x_sse_rr(&t->b, pfx, 0x51, 0, 0, 0);
-            fp_store_checked(t, rd, dbl, i, pc);
+            fp_store_checked(t, rd, dbl, i, pc, decline, nd);
             return true;
-        case 4: case 5: /* FCVT to single / double */
+        }
+        case 4: case 5: { /* FCVT to single / double */
             if ((op == 4) == !dbl) return false;
+            size_t decline[2];
+            unsigned nd = fp_begin_checked(t, dbl, rn, -1, i, decline);
             fp_load(t, 0, rn, dbl);
             x_sse_rr(&t->b, pfx, 0x5A, 0, 1, 0);                  /* cvtsd2ss / cvtss2sd xmm1, xmm0 */
             x_sse_rr(&t->b, 0x66, 0xEF, 0, 0, 0);                 /* pxor xmm0 */
             if (op == 4) x_sse_rr(&t->b, 0xF3, 0x10, 0, 0, 1);    /* movss xmm0, xmm1 */
             else x_sse_rr(&t->b, 0xF2, 0x10, 0, 0, 1);            /* movsd xmm0, xmm1 */
-            fp_store_checked(t, rd, op == 5, i, pc);
+            fp_store_checked(t, rd, op == 5, i, pc, decline, nd);
             return true;
+        }
         case 8: case 9: case 10: case 11: case 12: case 14: case 15: {   /* FRINTN P M Z A X I */
             static const int mode[8] = {RI_N, RI_P, RI_M, RI_Z, RI_A, -1, RI_X, RI_I};
             t_vfp_rint(t, mode[op - 8], dbl, dbl ? 8 : 4, rd, rn, i, pc);
@@ -1872,6 +1918,8 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         }
     }
     if ((i & 0xFF20FC07) == 0x1E202000) {           /* FCMP / FCMPE (Rm or #0.0) */
+        size_t decline[2];
+        unsigned nd = fp_begin_checked(t, dbl, rn, BIT(i, 3) ? -1 : (int)rm, i, decline);
         fp_load(t, 0, rn, dbl);
         if (BIT(i, 3)) x_sse_rr(&t->b, 0x66, 0xEF, 0, 1, 1);     /* pxor xmm1 (compare with zero) */
         else fp_load(t, 1, rm, dbl);
@@ -1889,6 +1937,11 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         x_mov_st(&t->b, 8, FLAGS, RAX);
         t->in_eflags = false;
         t->dirty = false;
+        size_t done = x_jmp32(&t->b);
+        for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
+        helper(t, i, pc, true);
+        st_helper--;
+        x_patch32(&t->b, done, xb_len(&t->b));
         return true;
     }
     if ((i & 0xFF200C00) == 0x1E200C00) {            /* FCSEL */

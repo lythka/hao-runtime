@@ -496,3 +496,10 @@ half and BF16 widening fused operations and BF16 narrowing; `guest/bfdot`
 checks BF16 dots and matrix products, including preservation of exception
 flags. All compare native arm64 with interpreter, JIT, helpers and AOT,
 including aliases, exceptional inputs, rounding controls and sticky flags.
+
+The native oracle now rejects any IEEE FPSR flag difference in every mode.
+`guest/fpscalar` compares 158 forms under all sixteen RMode/FZ/DN settings;
+legacy scalar arithmetic no longer skips FZ cases. Both S/D variants,
+register/zero comparisons and the operand admission boundaries are included.
+The integrated instruction implementation has no `known_unimpl` exceptions;
+`known_lenient` continues to describe the separate reserved-encoding gaps.

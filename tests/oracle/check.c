@@ -6,7 +6,7 @@
  * Compared bit-exactly: x0-x30 (except the platform register x18), SP, NZCV,
  * FPCR, FPSR.QC, v0-v31 (NaN payloads included) and the scratch memory
  * (hash of the whole filled region). FPSR's IEEE cumulative flags are
- * counted separately (informational), except in fma records, where a flag
+ * counted separately and fail the gate; in fma records, a flag
  * difference is a mismatch. For fma records the checker also reports how many
  * have only normal or zero operands and results at or above 2^-125 (what the
  * round-to-odd path of fp_muladd admits), and for how many of those
@@ -275,7 +275,7 @@ int main(int argc, char **argv)
                mode >= 0 ? oracle_mode_name[mode] : "?", pass ? "jit" : "interp", total, C->ran, C->match, C->mismatch, C->fault,
                C->undef_bad, C->undef_known, C->ill, C->ill_undef, C->lenient_bad, C->lenient_known, C->nfault,
                C->nfault_hao_fault, C->nfault_missed, C->flagdiff);
-        fails += C->mismatch + C->fault + C->undef_bad + C->lenient_bad;
+        fails += C->mismatch + C->fault + C->undef_bad + C->lenient_bad + C->flagdiff;
     }
     return fails ? 1 : 0;
 }
