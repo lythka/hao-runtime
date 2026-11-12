@@ -2041,7 +2041,9 @@ The original full host stress workload passes 200/200 runs at 300 forks each;
 the deterministic label-table control and mutation provide the stronger
 regression check for that separate race. Intel behavior and a workaround for
 the Rosetta MAP_JIT/fork failure are not established. The gate continues to
-report a JIT stress crash as a failure.
+report a JIT stress crash as a failure. Full validation passes unit tests,
+the native and sanitizer oracles, and all 92 applicable guest/host checks;
+one unrelated expected failure and three expected platform skips remain.
 
 ## Repeated per-call work on guest -> native calls
 
