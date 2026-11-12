@@ -9,7 +9,7 @@ N=${N:-50000}
 T=${T:-120}
 mkdir -p "$OUT/aot"; chmod 700 "$OUT/aot"
 for arch in arm64 arm64e; do
-    clang -arch "$arch" -O1 -o "$OUT/bench.$arch" "$here/coverage_bench.c"
+    clang -arch "$arch" -march=armv8.5-a+fp16 -O1 -o "$OUT/bench.$arch" "$here/coverage_bench.c"
     codesign -s - -f "$OUT/bench.$arch" 2>/dev/null
 done
 timeout -s KILL "$T" "$OUT/bench.arm64" "$N" >"$OUT/native.out" 2>"$OUT/native.err"

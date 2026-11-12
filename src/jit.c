@@ -1720,8 +1720,11 @@ static void t_scalar_indexed_mul(tctx *t, uint32_t i, uint64_t pc, int dbl, int 
 enum { RI_N, RI_M, RI_P, RI_Z, RI_A, RI_X, RI_I };
 static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsigned rn, uint32_t insn, uint64_t pc);
 
+static bool t_tail_conversion(tctx *t, uint32_t i, uint64_t pc);
+
 static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
 {
+    if (t_tail_conversion(t, i, pc)) return true;
     unsigned type = BITS(i, 23, 22), rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
     if (BIT(i, 31) && (i & 0x5F20FC00) != 0x1E200000) return false;
     if (type > 1) return false;                      /* half precision: helper */
@@ -2914,6 +2917,8 @@ static void vfp_half_round(tctx *t)
     P(0x6F, 0, 3); P(0xEB, 0, 1);
 }
 
+#include "jit-conversions.inc"
+
 static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
 {
     vld(t, 8, rn); vld(t, 9, rm); vld(t, 10, rd);
@@ -3556,6 +3561,8 @@ static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
         vld(t, 0, BITS(i, 9, 5)); x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0xEE);
         P(0xD4, 0, 1); vst(t, BITS(i, 4, 0), 0, 0); return true;
     }
+
+    if (t_tail_conversion(t, i, pc)) return true;
     if ((i & 0xFFBFFC00) == 0x7E30D800) {
         t_vfp_pair_add(t, i, pc, true); return true;
     }
@@ -3621,7 +3628,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         break;
     case 0x7:
         if ((i & 0xFFC08000) == 0xCE000000) ok = t_eor3_bcax(t, i);
-        else ok = t_vfp_zero(t, i, pc) || t_simd_fpconv(t, i, pc) || t_simd(t, i, pc);
+        else ok = t_vfp_zero(t, i, pc) || t_simd_fpconv(t, i, pc) || t_tail_conversion(t, i, pc) || t_simd(t, i, pc);
         break;
     default: break;
     }

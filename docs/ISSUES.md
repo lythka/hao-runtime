@@ -71,6 +71,39 @@ whole instruction workload grows from 1,317 to 1,611 KiB. Timing acceptance
 on Intel remains separate from development-host measurements.
 
 
+## Integer and format conversion tail
+
+Cumulative static coverage reaches 99.7424% (4,689 additional sites), with
+generated code 646,110 -> 647,368 KiB. The temporary cache was removed.
+
+The translator now handles the allocated H/S/D vector and scalar integer
+conversions, explicit scalar-to-GPR rounding modes, and scalar H/S/D format
+conversions, and vector FCVTN/N2 and FCVTL/L2. Ordinary lanes use SSE conversion and exact binary16 rounding;
+results remain private until every lane succeeds. NaNs, infinities,
+subnormal inputs, unsupported FPCR controls, saturated integer results and
+unsigned 64-bit values above INT64_MAX keep the descriptor helper. GPR-to-H
+also declines magnitudes above 65536 to avoid a second rounding through D.
+
+The new complete-state cases found an older scalar D-to-S defect under FZ:
+a tiny normal input could raise IXC along with UFC, and a subnormal input
+could lose IDC. Shared integer admission and result checks now restore the
+original MXCSR before falling back, including zero, tiny and minimum-normal
+single results. The interpreter is unchanged. The interpreter does not
+implement half-vector FCVTPS/FCVTMS; those encodings remain on its existing
+UNDEF path. FZ16/AHP controls remain outside the inline contract.
+
+Focused validation: 732,770 complete-state cases with zero mismatches,
+including aliases, all sixteen RMode/FZ/DN settings, sticky FPSR, limits,
+NaNs, rounding midpoints and live NZCV; 759 native instruction hashes agree
+in JIT, interpreter, helpers-only and AOT. The expanded 138-form workload
+also agrees with native in every engine; separate N=5000 JIT and AOT runs
+show 2,080,000 -> 0 helper calls (640,000 other, 1,120,000 SIMD misc, and
+320,000 scalar FP helper calls removed). JIT workload code grows from 796
+to 1,062 KiB. The conversion-rounding mutation is caught (1,050 state mismatches);
+the unmodified control passes. Full-gate, fixed-corpus and combined
+coverage measurements are recorded with integration. Intel timings and
+application acceptance remain separate checks.
+
 ## MapKit 32-byte HFA functions in the aggregate-by-value table
 
 Maps on the target crashed (SIGSEGV writing through `rdi`) in

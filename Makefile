@@ -234,7 +234,7 @@ $(B)/test_helper_descriptor: tests/aot/helper_descriptor.c $(B)/jit.o $(B)/stubs
 
 # Only the unit build counts descriptor helper routing, including declines
 # whose result bits happen to equal the inadmissible inline attempt.
-$(B)/jit-vector.o: src/jit.c $(wildcard include/hao/*.h) $(MIN_STAMP)
+$(B)/jit-vector.o: src/jit.c $(wildcard src/*.inc include/hao/*.h) $(MIN_STAMP)
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -Da64_exec_helper=jit_vector_helper -c $< -o $@
 

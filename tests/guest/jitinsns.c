@@ -391,6 +391,145 @@ static const uint64_t fpcrs[] = {0u << 22, 1u << 22, 2u << 22, 3u << 22, 4u << 2
         *fl = x3 ^ x7;                                                                  \
         return mix(out[0], out[1]);                                                     \
     }
+VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
+VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
+VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
+VECF(t_tail_fcvtn2_4s, "fcvtn2 v2.4s,v0.2d")
+VECF(t_tail_fcvtl_4s, "fcvtl v2.4s,v0.4h")
+VECF(t_tail_fcvtl_2d, "fcvtl v2.2d,v0.2s")
+VECF(t_tail_fcvtl2_4s, "fcvtl2 v2.4s,v0.8h")
+VECF(t_tail_fcvtl2_2d, "fcvtl2 v2.2d,v0.4s")
+/* Tail conversions: every allocated arrangement and explicit rounding mode. */
+VECF(t_tail_fcvtns_2s, "fcvtns v2.2s,v0.2s")
+VECF(t_tail_fcvtns_4s, "fcvtns v2.4s,v0.4s")
+VECF(t_tail_fcvtns_2d, "fcvtns v2.2d,v0.2d")
+VECF(t_tail_fcvtns_s, "fcvtns s2,s0")
+VECF(t_tail_fcvtns_d, "fcvtns d2,d0")
+VECF(t_tail_fcvtns_4h, "fcvtns v2.4h,v0.4h")
+VECF(t_tail_fcvtns_8h, "fcvtns v2.8h,v0.8h")
+VECF(t_tail_fcvtnu_2s, "fcvtnu v2.2s,v0.2s")
+VECF(t_tail_fcvtnu_4s, "fcvtnu v2.4s,v0.4s")
+VECF(t_tail_fcvtnu_2d, "fcvtnu v2.2d,v0.2d")
+VECF(t_tail_fcvtnu_s, "fcvtnu s2,s0")
+VECF(t_tail_fcvtnu_d, "fcvtnu d2,d0")
+VECF(t_tail_fcvtnu_4h, "fcvtnu v2.4h,v0.4h")
+VECF(t_tail_fcvtnu_8h, "fcvtnu v2.8h,v0.8h")
+VECF(t_tail_fcvtps_2s, "fcvtps v2.2s,v0.2s")
+VECF(t_tail_fcvtps_4s, "fcvtps v2.4s,v0.4s")
+VECF(t_tail_fcvtps_2d, "fcvtps v2.2d,v0.2d")
+VECF(t_tail_fcvtps_s, "fcvtps s2,s0")
+VECF(t_tail_fcvtps_d, "fcvtps d2,d0")
+VECF(t_tail_fcvtpu_2s, "fcvtpu v2.2s,v0.2s")
+VECF(t_tail_fcvtpu_4s, "fcvtpu v2.4s,v0.4s")
+VECF(t_tail_fcvtpu_2d, "fcvtpu v2.2d,v0.2d")
+VECF(t_tail_fcvtpu_s, "fcvtpu s2,s0")
+VECF(t_tail_fcvtpu_d, "fcvtpu d2,d0")
+VECF(t_tail_fcvtms_2s, "fcvtms v2.2s,v0.2s")
+VECF(t_tail_fcvtms_4s, "fcvtms v2.4s,v0.4s")
+VECF(t_tail_fcvtms_2d, "fcvtms v2.2d,v0.2d")
+VECF(t_tail_fcvtms_s, "fcvtms s2,s0")
+VECF(t_tail_fcvtms_d, "fcvtms d2,d0")
+VECF(t_tail_fcvtmu_2s, "fcvtmu v2.2s,v0.2s")
+VECF(t_tail_fcvtmu_4s, "fcvtmu v2.4s,v0.4s")
+VECF(t_tail_fcvtmu_2d, "fcvtmu v2.2d,v0.2d")
+VECF(t_tail_fcvtmu_s, "fcvtmu s2,s0")
+VECF(t_tail_fcvtmu_d, "fcvtmu d2,d0")
+VECF(t_tail_fcvtas_2s, "fcvtas v2.2s,v0.2s")
+VECF(t_tail_fcvtas_4s, "fcvtas v2.4s,v0.4s")
+VECF(t_tail_fcvtas_2d, "fcvtas v2.2d,v0.2d")
+VECF(t_tail_fcvtas_s, "fcvtas s2,s0")
+VECF(t_tail_fcvtas_d, "fcvtas d2,d0")
+VECF(t_tail_fcvtau_2s, "fcvtau v2.2s,v0.2s")
+VECF(t_tail_fcvtau_4s, "fcvtau v2.4s,v0.4s")
+VECF(t_tail_fcvtau_2d, "fcvtau v2.2d,v0.2d")
+VECF(t_tail_fcvtau_s, "fcvtau s2,s0")
+VECF(t_tail_fcvtau_d, "fcvtau d2,d0")
+VECF(t_tail_fcvtzs_2s, "fcvtzs v2.2s,v0.2s")
+VECF(t_tail_fcvtzs_4s, "fcvtzs v2.4s,v0.4s")
+VECF(t_tail_fcvtzs_2d, "fcvtzs v2.2d,v0.2d")
+VECF(t_tail_fcvtzs_s, "fcvtzs s2,s0")
+VECF(t_tail_fcvtzs_d, "fcvtzs d2,d0")
+VECF(t_tail_fcvtzs_4h, "fcvtzs v2.4h,v0.4h")
+VECF(t_tail_fcvtzs_8h, "fcvtzs v2.8h,v0.8h")
+VECF(t_tail_fcvtzu_2s, "fcvtzu v2.2s,v0.2s")
+VECF(t_tail_fcvtzu_4s, "fcvtzu v2.4s,v0.4s")
+VECF(t_tail_fcvtzu_2d, "fcvtzu v2.2d,v0.2d")
+VECF(t_tail_fcvtzu_s, "fcvtzu s2,s0")
+VECF(t_tail_fcvtzu_d, "fcvtzu d2,d0")
+VECF(t_tail_fcvtzu_4h, "fcvtzu v2.4h,v0.4h")
+VECF(t_tail_fcvtzu_8h, "fcvtzu v2.8h,v0.8h")
+VECF(t_tail_scvtf_2s, "scvtf v2.2s,v0.2s")
+VECF(t_tail_scvtf_4s, "scvtf v2.4s,v0.4s")
+VECF(t_tail_scvtf_2d, "scvtf v2.2d,v0.2d")
+VECF(t_tail_scvtf_s, "scvtf s2,s0")
+VECF(t_tail_scvtf_d, "scvtf d2,d0")
+VECF(t_tail_scvtf_4h, "scvtf v2.4h,v0.4h")
+VECF(t_tail_scvtf_8h, "scvtf v2.8h,v0.8h")
+VECF(t_tail_ucvtf_2s, "ucvtf v2.2s,v0.2s")
+VECF(t_tail_ucvtf_4s, "ucvtf v2.4s,v0.4s")
+VECF(t_tail_ucvtf_2d, "ucvtf v2.2d,v0.2d")
+VECF(t_tail_ucvtf_s, "ucvtf s2,s0")
+VECF(t_tail_ucvtf_d, "ucvtf d2,d0")
+VECF(t_tail_ucvtf_4h, "ucvtf v2.4h,v0.4h")
+VECF(t_tail_ucvtf_8h, "ucvtf v2.8h,v0.8h")
+VECF(t_tail_fcvtns_ws, "fcvtns w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtns_xs, "fcvtns x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtns_wd, "fcvtns w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtns_xd, "fcvtns x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtns_wh, "fcvtns w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtns_xh, "fcvtns x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtnu_ws, "fcvtnu w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtnu_xs, "fcvtnu x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtnu_wd, "fcvtnu w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtnu_xd, "fcvtnu x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtnu_wh, "fcvtnu w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtnu_xh, "fcvtnu x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtps_ws, "fcvtps w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtps_xs, "fcvtps x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtps_wd, "fcvtps w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtps_xd, "fcvtps x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtps_wh, "fcvtps w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtps_xh, "fcvtps x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtpu_ws, "fcvtpu w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtpu_xs, "fcvtpu x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtpu_wd, "fcvtpu w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtpu_xd, "fcvtpu x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtpu_wh, "fcvtpu w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtpu_xh, "fcvtpu x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtms_ws, "fcvtms w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtms_xs, "fcvtms x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtms_wd, "fcvtms w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtms_xd, "fcvtms x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtms_wh, "fcvtms w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtms_xh, "fcvtms x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtmu_ws, "fcvtmu w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtmu_xs, "fcvtmu x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtmu_wd, "fcvtmu w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtmu_xd, "fcvtmu x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtmu_wh, "fcvtmu w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtmu_xh, "fcvtmu x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtas_ws, "fcvtas w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtas_xs, "fcvtas x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtas_wd, "fcvtas w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtas_xd, "fcvtas x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtas_wh, "fcvtas w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtas_xh, "fcvtas x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtau_ws, "fcvtau w7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtau_xs, "fcvtau x7,s0\nfmov d2,x7")
+VECF(t_tail_fcvtau_wd, "fcvtau w7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtau_xd, "fcvtau x7,d0\nfmov d2,x7")
+VECF(t_tail_fcvtau_wh, "fcvtau w7,h0\nfmov d2,x7")
+VECF(t_tail_fcvtau_xh, "fcvtau x7,h0\nfmov d2,x7")
+VECF(t_tail_fcvt_sd, "fcvt s2,d0")
+VECF(t_tail_fcvt_ds, "fcvt d2,s0")
+VECF(t_tail_fcvt_hs, "fcvt h2,s0")
+VECF(t_tail_fcvt_hd, "fcvt h2,d0")
+VECF(t_tail_fcvt_sh, "fcvt s2,h0")
+VECF(t_tail_fcvt_dh, "fcvt d2,h0")
+VECF(t_tail_scvtf_hw, "fmov x7,d0\nscvtf h2,w7")
+VECF(t_tail_scvtf_hx, "fmov x7,d0\nscvtf h2,x7")
+VECF(t_tail_ucvtf_hw, "fmov x7,d0\nucvtf h2,w7")
+VECF(t_tail_ucvtf_hx, "fmov x7,d0\nucvtf h2,x7")
 #define F4(n, mn) VECF(t_##n##4s, mn " v2.4s, v0.4s, v1.4s") VECF(t_##n##2s, mn " v2.2s, v0.2s, v1.2s")
 VECF(t_fmla4h, "fmla v2.4h,v0.4h,v1.4h")
 VECF(t_fmla8h, "fmla v2.8h,v0.8h,v1.8h")
@@ -1403,6 +1542,144 @@ int main(void)
     RF(cov_fmlss3);
     RR(cov_fmuld0);
     RR(cov_fmuld1);
+    RR(tail_fcvtns_2s);
+    RR(tail_fcvtns_4s);
+    RR(tail_fcvtns_2d);
+    RR(tail_fcvtns_s);
+    RR(tail_fcvtns_d);
+    RR(tail_fcvtns_4h);
+    RR(tail_fcvtns_8h);
+    RR(tail_fcvtnu_2s);
+    RR(tail_fcvtnu_4s);
+    RR(tail_fcvtnu_2d);
+    RR(tail_fcvtnu_s);
+    RR(tail_fcvtnu_d);
+    RR(tail_fcvtnu_4h);
+    RR(tail_fcvtnu_8h);
+    RR(tail_fcvtps_2s);
+    RR(tail_fcvtps_4s);
+    RR(tail_fcvtps_2d);
+    RR(tail_fcvtps_s);
+    RR(tail_fcvtps_d);
+    RR(tail_fcvtpu_2s);
+    RR(tail_fcvtpu_4s);
+    RR(tail_fcvtpu_2d);
+    RR(tail_fcvtpu_s);
+    RR(tail_fcvtpu_d);
+    RR(tail_fcvtms_2s);
+    RR(tail_fcvtms_4s);
+    RR(tail_fcvtms_2d);
+    RR(tail_fcvtms_s);
+    RR(tail_fcvtms_d);
+    RR(tail_fcvtmu_2s);
+    RR(tail_fcvtmu_4s);
+    RR(tail_fcvtmu_2d);
+    RR(tail_fcvtmu_s);
+    RR(tail_fcvtmu_d);
+    RR(tail_fcvtas_2s);
+    RR(tail_fcvtas_4s);
+    RR(tail_fcvtas_2d);
+    RR(tail_fcvtas_s);
+    RR(tail_fcvtas_d);
+    RR(tail_fcvtau_2s);
+    RR(tail_fcvtau_4s);
+    RR(tail_fcvtau_2d);
+    RR(tail_fcvtau_s);
+    RR(tail_fcvtau_d);
+    RR(tail_fcvtzs_2s);
+    RR(tail_fcvtzs_4s);
+    RR(tail_fcvtzs_2d);
+    RR(tail_fcvtzs_s);
+    RR(tail_fcvtzs_d);
+    RR(tail_fcvtzs_4h);
+    RR(tail_fcvtzs_8h);
+    RR(tail_fcvtzu_2s);
+    RR(tail_fcvtzu_4s);
+    RR(tail_fcvtzu_2d);
+    RR(tail_fcvtzu_s);
+    RR(tail_fcvtzu_d);
+    RR(tail_fcvtzu_4h);
+    RR(tail_fcvtzu_8h);
+    RR(tail_scvtf_2s);
+    RR(tail_scvtf_4s);
+    RR(tail_scvtf_2d);
+    RR(tail_scvtf_s);
+    RR(tail_scvtf_d);
+    RR(tail_scvtf_4h);
+    RR(tail_scvtf_8h);
+    RR(tail_ucvtf_2s);
+    RR(tail_ucvtf_4s);
+    RR(tail_ucvtf_2d);
+    RR(tail_ucvtf_s);
+    RR(tail_ucvtf_d);
+    RR(tail_ucvtf_4h);
+    RR(tail_ucvtf_8h);
+    RR(tail_fcvtns_ws);
+    RR(tail_fcvtns_xs);
+    RR(tail_fcvtns_wd);
+    RR(tail_fcvtns_xd);
+    RR(tail_fcvtns_wh);
+    RR(tail_fcvtns_xh);
+    RR(tail_fcvtnu_ws);
+    RR(tail_fcvtnu_xs);
+    RR(tail_fcvtnu_wd);
+    RR(tail_fcvtnu_xd);
+    RR(tail_fcvtnu_wh);
+    RR(tail_fcvtnu_xh);
+    RR(tail_fcvtps_ws);
+    RR(tail_fcvtps_xs);
+    RR(tail_fcvtps_wd);
+    RR(tail_fcvtps_xd);
+    RR(tail_fcvtps_wh);
+    RR(tail_fcvtps_xh);
+    RR(tail_fcvtpu_ws);
+    RR(tail_fcvtpu_xs);
+    RR(tail_fcvtpu_wd);
+    RR(tail_fcvtpu_xd);
+    RR(tail_fcvtpu_wh);
+    RR(tail_fcvtpu_xh);
+    RR(tail_fcvtms_ws);
+    RR(tail_fcvtms_xs);
+    RR(tail_fcvtms_wd);
+    RR(tail_fcvtms_xd);
+    RR(tail_fcvtms_wh);
+    RR(tail_fcvtms_xh);
+    RR(tail_fcvtmu_ws);
+    RR(tail_fcvtmu_xs);
+    RR(tail_fcvtmu_wd);
+    RR(tail_fcvtmu_xd);
+    RR(tail_fcvtmu_wh);
+    RR(tail_fcvtmu_xh);
+    RR(tail_fcvtas_ws);
+    RR(tail_fcvtas_xs);
+    RR(tail_fcvtas_wd);
+    RR(tail_fcvtas_xd);
+    RR(tail_fcvtas_wh);
+    RR(tail_fcvtas_xh);
+    RR(tail_fcvtau_ws);
+    RR(tail_fcvtau_xs);
+    RR(tail_fcvtau_wd);
+    RR(tail_fcvtau_xd);
+    RR(tail_fcvtau_wh);
+    RR(tail_fcvtau_xh);
+    RR(tail_fcvtn_4h);
+    RR(tail_fcvtn_2s);
+    RR(tail_fcvtn2_8h);
+    RR(tail_fcvtn2_4s);
+    RR(tail_fcvtl_4s);
+    RR(tail_fcvtl_2d);
+    RR(tail_fcvtl2_4s);
+    RR(tail_fcvtl2_2d);
+    RR(tail_fcvt_sd);
+    RR(tail_fcvt_ds);
+    RR(tail_fcvt_hs);
+    RR(tail_fcvt_hd);
+    RR(tail_fcvt_sh);
+    RR(tail_fcvt_dh);
+    RR(tail_scvtf_hw);
+    RR(tail_scvtf_hx);
+    RR(tail_ucvtf_hw);
+    RR(tail_ucvtf_hx);
     RFR(frintn); RFR(frintm); RFR(frintp); RFR(frintz); RFR(frinta); RFR(frintx); RFR(frinti); RR(frchain);
     R(ld1a); R(ld1b); R(ld1c); R(ld1d); R(ld1e); R(ld1f); R(st1a); R(st1b); R(st1c); R(st1d); R(st1e);
     R(ld1r0); R(ld1r1); R(ld1r2); R(ld1r3); R(ld1r4); R(ld1r5);
