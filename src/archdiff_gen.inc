@@ -14,20 +14,26 @@
     {"4d71b1560e7d3ae681fd370a0a138d63", 0x10ae728, 's'}, /* IntelligenceFlowPlannerSupport.ToolboxEmbeddingModel */
     {"5202d825ae0c38c1b271ba546d19ec1f", 0x198194, 's'}, /* PromptKit.Prompt.Component.Value */
     {"5202d825ae0c38c1b271ba546d19ec1f", 0x198af0, 's'}, /* PromptKit.Prompt.Component.Value.(private).CodingKeys */
+    {"5202d825ae0c38c1b271ba546d19ec1f", 0x198f34, 's'}, /* PromptKit.Prompt.Component.ValueKind */
     {"54f671eeb22d3f02930c2cc027116e14", 0x507a10, 's'}, /* Swift.Float16 */
     {"54f671eeb22d3f02930c2cc027116e14", 0x507a64, 's'}, /* Swift.Float80 */
     {"5ca204583b603dff9916f3ee77571e68", 0x23c5a8, 's'}, /* NeuralNetworks.AttributeValue */
     {"83163a587cc83ce0afa940ad7a9a9f26", 0xd9eec, 's'}, /* VisualUnderstanding.Vector.DataType */
     {"845f968e84293d2d80e4fa1bbf3c7db5", 0x53edec, 's'}, /* CoreML.MLSendableFeatureValue.Value */
+    {"845f968e84293d2d80e4fa1bbf3c7db5", 0x53fa1c, 's'}, /* CoreML.MLComputeFunction.Argument.Storage */
     {"a535b59729e83e829663c56e949ffab9", 0x32e390, 's'}, /* Charts._PrimitivePlottableKind.Storage */
     {"a89a9d666bba3ae5a8deed9f257a989b", 0x22f480, 's'}, /* Speech.Embedding.EmbeddingEncodingType */
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x3201b8, 's'}, /* TokenGeneration.Prompt.AttachmentContent */
+    {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x320588, 's'}, /* TokenGeneration.Prompt.Turn.Segment */
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x320e28, 's'}, /* TokenGenerationCore.PromptTemplateInfo.RichVariableBinding.Component.Content */
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x323234, 's'}, /* TokenGenerationCore.(private).PromptEnvelope.AttachmentContentEnvelope */
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x323360, 't'}, /* TokenGenerationCore.(private).PromptTemplateInfoEnvelope.RichVariableBindingEnvelope.ComponentEnvelope.ContentEnvelope */
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x324098, 't'}, /* TokenGenerationCore.(private).PromptTemplateInfoEnvelope.RichVariableBindingEnvelope.ComponentEnvelope.ContentEnvelope.CodingKeys */
     {"a99ba87d48ea3ae3b4cda197fecc6e07", 0x324204, 's'}, /* TokenGenerationCore.(private).PromptEnvelope.AttachmentContentEnvelope.CodingKeys */
     {"b13c71ad8da83b498aa18a75247d513c", 0x1f8dd0, 's'}, /* TokenGenerationInference.ProcessedImage */
+    {"b6e31184dd8931b980f2052c08b8a4e8", 0x287f58, 's'}, /* ShaderGraph.ShaderGraph.Value */
+    {"b6e31184dd8931b980f2052c08b8a4e8", 0x288d30, 's'}, /* ShaderGraph.ShaderModule.Literal */
+    {"b6e31184dd8931b980f2052c08b8a4e8", 0x288d4c, 's'}, /* ShaderGraph.ShaderModule.Literal.Name */
     {"c1169933b3a7365b9602bd630758418f", 0x85cd4, 's'}, /* VectorSearch.AnyVector */
     {"c1169933b3a7365b9602bd630758418f", 0x86428, 's'}, /* VectorSearch.VectorDatabaseDataType */
     {"c1169933b3a7365b9602bd630758418f", 0x8644c, 's'}, /* VectorSearch.VectorDatabaseDataType.(private).CodingKeys */
@@ -42,6 +48,7 @@
     {"df649c0e20ba3737acf6823cd32bdeae", 0x11ab60, 'p'}, /* ComputationalGraph.Output.Errors */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5e1b58, 's'}, /* HybridSearch.EmbeddingResult.Vector */
     {"e077be35873d3caa867bb54fcaed7e05", 0x5e1e1c, 's'}, /* HybridSearch.EmbeddingResult.Vector.(private).CodingKeys */
+    {"e248158662a037969f260ad3d6daeb63", 0x17cd560, 'p'}, /* NewsFeed.FormatGroupBinding.Image */
     {"e77015e3fbe137919d5200a85505bbf1", 0xdf7d0, 't'}, /* SpeechEngine.ContextEmbeddingResult */
     {"e77015e3fbe137919d5200a85505bbf1", 0xe1efc, 's'}, /* SpeechEngine.InnerSpeechRecognizer.RequestParams */
     {"eae9a14682cf3252b461573b346f919b", 0x13690, 's'}, /* SignalCompression.SignalSessionFormatType */
