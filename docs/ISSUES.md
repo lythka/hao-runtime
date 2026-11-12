@@ -1,5 +1,45 @@
 # Runtime issues and measured scope
 
+## JIT tail: scalar fused single and reciprocal steps
+
+Scalar FMADD/FMSUB/FNMADD/FNMSUB S now share the packed single FMA
+binary64 product, TwoSum and round-to-odd path, with independent addend
+selection and both architectural sign controls. FRECPS/FRSQRTS S/.2S/.4S
+use the same fused sum; the square-root step scales the binary64 sum by
+one half exactly before its single-precision rounding. FNMUL S negates the
+rounded product. Integer admission precedes floating arithmetic. Special
+operands (including zero times infinity), tiny results and unsupported
+controls retain the original helper with restored MXCSR and unmodified
+registers. The interpreter is unchanged.
+
+Validation: 771,142 complete-state cases, all 16 RMode/FZ/DN settings,
+register aliases, directed fused near-ties, full FPSR and live NZCV; zero
+mismatches. The 632-line native ARM instruction comparison matches JIT,
+interpreter, helpers-only and AOT. Two new mutations are caught: scalar
+addend sign (7,834 mismatches), reciprocal-square-root scaling (14,022).
+The ordinary eleven-form workload at 1,000 iterations reports 176,000 -> 0
+helper calls in both JIT and AOT (80,000 scalar, 64,000 vector and 32,000
+scalar-step calls before); its native checksums match every engine.
+
+AOT generation of the same large FP/SIMD-heavy arm64 program reports
+12,561,074 instructions: 99.5283% -> 99.6256% translated natively (12,216
+formerly untranslated sites removed), generated code
+639,290 -> 645,955 KiB. Temporary caches were removed. Static coverage is
+not executed-instruction coverage or application acceptance. Rosetta ratios
+and Intel acceptance remain pending until measurement can run without the
+parallel correctness jobs.
+
+Saved 200,000-record corpora in each of simd/block/fma/mem/dp replay with
+zero mismatches. IEEE-flag difference counts are unchanged: interpreter
+0/0/0/0/0 and JIT 4/4,981/0/0/0.
+
+The supplied complete application-run record has 32 workload starts and
+finishes computation before an offline-upload failure. Its advertised
+instruction sets contain neither SVE nor SME; those instructions remain
+UNDEF. SVE/SME was not executed in a complete run (fatal if executed), not
+measured by counters. BRK remains a deliberate trap. This evidence does not
+establish behavior on every possible application input.
+
 ## MapKit 32-byte HFA functions in the aggregate-by-value table
 
 Maps on the target crashed (SIGSEGV writing through `rdi`) in

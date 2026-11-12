@@ -30,7 +30,7 @@ for mutation in control zip-order addv-width; do
         tests/aot/jit_vector.c "$OUT/jit-$mutation.o" "$B/stubs_oracle.o" "$B/libhaocore.a" -o "$OUT/$mutation"
     codesign -s - -f "$OUT/$mutation" 2>/dev/null
     set +e
-    timeout -s KILL "$T" "$OUT/$mutation" >"$OUT/$mutation.log" 2>&1
+    HAO_VECTOR_FAIL_FAST=1 timeout -s KILL "$T" "$OUT/$mutation" >"$OUT/$mutation.log" 2>&1
     rc=$?
     set -e
     if [ "$mutation" = control ]; then

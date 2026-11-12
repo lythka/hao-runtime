@@ -21,7 +21,7 @@ mutations = {
     'half-exact': ('x_sse_rri(&t->b, 0x66, 0xC2, 6, 7, 4);                    /* half exactness: error != 0 */', 'vzero(t, 6);'),
     'half-negation': ('P(0xEF, 8, 0); } /* half FMLS negate */', 'P(0xEB, 8, 8); }'),
     'odd': ('P(0xD4, s, b);', 'P(0xEB, s, s);'),
-    'negation': ('P(0xEF, 0, 2);                                           /* negate product exactly */', 'P(0xEB, 0, 0);'),
+    'negation': ('P(0xEF, 0, 2);                                  /* negate product exactly */', 'P(0xEB, 0, 0);'),
     'index': ('idx = BIT(i, 11) << 1 | BIT(i, 21);', 'idx = BIT(i, 21) << 1 | BIT(i, 11);'),
 }
 Path(sys.argv[1], 'jit-control.c').write_text(s)
@@ -36,7 +36,7 @@ for mutation in control odd negation index half-round half-tiny half-index half-
         tests/aot/jit_vector.c "$OUT/jit-$mutation.o" "$B/stubs_oracle.o" "$B/libhaocore.a" -o "$OUT/$mutation"
     codesign -s - -f "$OUT/$mutation" 2>/dev/null
     set +e
-    timeout -s KILL "$T" "$OUT/$mutation" >"$OUT/$mutation.log" 2>&1
+    HAO_VECTOR_FAIL_FAST=1 timeout -s KILL "$T" "$OUT/$mutation" >"$OUT/$mutation.log" 2>&1
     rc=$?
     set -e
     if [ "$mutation" = control ]; then

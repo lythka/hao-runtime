@@ -104,6 +104,11 @@ static long cases, faults, undefs, fails, straddles;
  * CSEL x2, x0, x1, HI */
 static void check(uint32_t insn, uint32_t insn2, const hao_cpu *in, bool live)
 {
+    /* Mutation runs need one witnessed mismatch; the passing control and
+     * ordinary unit runs still exercise the complete corpus. */
+    static int fail_fast = -1;
+    if (fail_fast < 0) fail_fast = getenv("HAO_VECTOR_FAIL_FAST") != NULL;
+    if (fail_fast && fails) { printf("MISMATCH mutation detected after %ld failures\n", fails); exit(1); }
     static outcome a, b;
     uint32_t code[4] = {0xeb01001fu, insn, insn2, 0x9a818002u};
     int n = insn2 ? 2 : 1;
@@ -236,6 +241,24 @@ int main(void)
     signal(SIGSEGV, on_fault);
     signal(SIGBUS, on_fault);
     for (unsigned k = 0; k < sizeof init_mem; k++) init_mem[k] = (uint8_t)rnd();
+    /* Scalar fused signs/addend selection and fused reciprocal steps. */
+    static const uint32_t tail_fused[] = {0x1f000000, 0x1f008000, 0x1f200000, 0x1f208000,
+        0x1e208800, 0x0e20fc00, 0x4e20fc00, 0x0ea0fc00, 0x4ea0fc00, 0x5e20fc00, 0x5ea0fc00};
+    for (unsigned ctl = 0; ctl < 16; ctl++) for (unsigned f = 0; f < 11; f++)
+        for (unsigned k = 0; k < 160; k++) {
+            unsigned rd = reg(), rn = reg(), rm = reg(), ra = reg();
+            hao_cpu in; state(&in, rn, rm); in.fpcr = ctl << 22;
+            for (int lane = 0; lane < 4; lane++) {
+                fma_ops o = fma_case(&seed, k % FC_N);
+                in.v[ra].s[lane] = o.c; in.v[rn].s[lane] = o.a; in.v[rm].s[lane] = o.b;
+            }
+            if (!k) for (unsigned r = 0; r < 32; r++) for (int lane = 0; lane < 4; lane++) in.v[r].s[lane] = 0x3f000000;
+            uint32_t i = tail_fused[f] | rn << 5 | rm << 16 | rd | (f < 4 ? ra << 10 : 0);
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (!k && vector_helper_calls) { if (fails++ < 20) printf("MISMATCH tail fused admission %08x\n", i); }
+            }
+        }
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {
