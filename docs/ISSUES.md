@@ -90,6 +90,33 @@ already accepts some reserved permute arrangements, listed as a known
 leniency in `tests/oracle/known.h`; its behavior is unchanged here.
 Performance on Intel and application acceptance remain separate checks.
 
+## Inline floating-point pairwise sums and extrema reductions
+
+FADDP .2S/.4S/.2D and scalar S/D now select adjacent pairs with integer
+shuffles, admit every active operand before floating arithmetic, and issue
+one ADDPS/ADDPD under the guest MXCSR. Nonordinary inputs and results with
+exponent zero, one or all ones retain the original helper. This conservative
+result rule includes exact zeros; it restores the pre-attempt MXCSR before
+fallback, without committing a destination or changing live NZCV.
+
+FMAXV/FMINV/FMAXNMV/FMINNMV .4S use the architectural pairwise tree.
+Admitted zero/normal inputs share the same selection; bitwise zero handling
+retains +0 for maximum and -0 for minimum of opposite-signed zeros. NaNs,
+infinities and denormals stay with the original helper, retaining its NaN
+selection, DN/FZ and IEEE flag behavior. Scalar outputs clear all unused
+lanes, aliases load operands before writing, and no absolute addresses,
+VEX instructions, allocation or TLS are introduced. Half forms stay helpers.
+
+Validation at this change: 589,382 complete-state vector cases pass,
+including all 16 RMode/FZ/DN controls, aliases, specials, full FPSR and live
+NZCV; directed ordinary cases also assert that no helper is invoked. All
+518 lines of the extended instruction guest match native arm64 in JIT,
+interpreter, helpers-only and AOT. The encoder checks 39,723 encodings.
+A passing mutation control and a deliberately wrong FADDP pair shuffle
+produce respectively zero and 3,010 state mismatches. `make test` passes,
+including the full all-mode oracle with zero mismatches. Performance on Intel
+and application acceptance remain separate measurements.
+
 ## Inline FP16 FMLA/FMLS in translated code
 
 Vector FMLA/FMLS .4H/.8H, three-same and by element, emit an SSE2/SSE4

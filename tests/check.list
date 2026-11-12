@@ -87,3 +87,4 @@ aot/round16	180	par	make -s B="$B" "$B/test_round16" && timeout -s KILL 120 "$B/
 guest/helper-stats	180	par	tests/guest/helper_stats.sh
 guest/coverage-bench	300	par	tests/guest/coverage_bench.sh
 aot/integer-mutations	600	par	tests/aot/integer_mutations.sh
+aot/fp-coverage-mutations	600	par	tests/aot/fp_coverage_mutations.sh
