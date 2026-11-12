@@ -1531,7 +1531,7 @@ static bool t_fp_system(tctx *t, uint32_t i)
         }
         stx(t, rt, RAX, false);
     } else if (!read && !status) {
-        ldx(t, RAX, rt, 0, false); x_alu_ri(&t->b, XAND, 0, RAX, 0x07ff9f07); /* FPCR_WRITABLE */
+        ldx(t, RAX, rt, 0, false); x_alu_ri(&t->b, XAND, 0, RAX, 0x07ff9f00); /* FPCR_WRITABLE (a64_simd.c) */
         x_mov_st(&t->b, 4, xm(RBX, offsetof(hao_cpu, fpcr)), RAX);
         x_mov_ld(&t->b, 4, RCX, env); x_alu_ri(&t->b, XAND, 0, RCX, ~0xe040u);
         /* Swapped RMode in edx; retain it for the x87 control word. */
