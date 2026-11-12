@@ -2124,3 +2124,33 @@ unimplemented SIMD forms and JIT IEEE-flag differences remain separate gaps.
 Validation also passes `make check`, including `make test`, the sanitizer
 oracle and the guest/host manifest (92 passes, one expected failure and
 three expected skips).
+## Half-precision execution and exception coverage
+
+The half-precision SIMD decoder covered only part of the vector arithmetic
+set and did not dispatch scalar half SIMD forms. It now covers FMULX,
+register and zero comparisons, absolute comparisons/difference, reciprocal
+steps, pairwise arithmetic/extrema, integer conversions and rounding modes,
+estimates, square root and fixed-point conversions through shared FP helpers.
+Scalar writes clear inactive lanes. The indexed FP16 multiply/FMA execution
+paths were already implemented; their stale exceptions are removed.
+
+On identical 200,000 native SIMD records, interpreter and JIT known-UNDEF
+counts fall from 4,036 to 3,629, with zero value or QC mismatch. A directed
+comparison covers 312 half forms plus S/D FRECPX, all sixteen RMode/FZ/DN
+settings, boundary patterns and clear/preset FPSR (813,888 executions per
+engine). JIT, interpreter, helper-only and AOT match native arm64. The denormal
+FRECPX cases also correct missing interpreter IDC under FZ: exponent selection
+is unchanged, but FP unpacking must still report the flushed operand.
+
+The oracle reports actual tolerated outcomes for every known exception, for
+both engines. Its full gate includes a targeted sweep of 1,024 candidate
+encodings per exception and fails if any entry records zero tolerated outcomes.
+This removes 20 previously stale unimplemented entries and one stale leniency
+entry, alongside newly implemented forms. A broad FCMEQ mask had also matched
+unrelated scalar FP instructions; it is replaced by the precise BFCVT gap that
+the sweep exposed. Reserved-encoding execution behavior is otherwise unchanged.
+
+The translated engines run under Rosetta; Intel behavior is not measured.
+FZ16/AHP and alternate FP controls are outside this comparison. Remaining
+unimplemented instructions retain explicit exceptions; JIT IEEE-flag differences
+remain separately reported until their inline paths are corrected.

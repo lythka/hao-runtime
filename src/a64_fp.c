@@ -1173,12 +1173,14 @@ uint32_t fp_jcvt(fpctx *x, uint64_t a, bool *exact)
     return r;
 }
 
-/* FPRecpX: exponent complemented, fraction zeroed */
+/* FPRecpX: exponent complemented, fraction zeroed. Unpack still raises
+ * IDC for an S/D subnormal input flushed by FZ. */
 uint64_t fp_recpx(fpctx *x, int es, uint64_t a)
 {
     if (fp_isnan(a, es)) return nan_result(x, es, a);
     fmt f = F(es);
     uint64_t emax = (1ull << f.ebits) - 1, e = (a >> f.mbits) & emax, sign = a & signbit_of(es);
-    if (e == 0 || (x->fz && es != 2 && e == 0)) return sign | (emax - 1) << f.mbits;
+    (void)unpack(x, es, a);
+    if (e == 0) return sign | (emax - 1) << f.mbits;
     return sign | ((~e & emax) << f.mbits);
 }

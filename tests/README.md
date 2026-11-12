@@ -480,3 +480,12 @@ in each engine. The existing crypto guest also checks AES known answers.
 The installer test permits only base/AES generator identities and removes
 arbitrary altered identities; `tools/aotpayload` checks profile-aware payload
 creation, installation and cache loading.
+
+The oracle's `known` mode sweeps 1,024 candidate encodings per remaining
+`known_unimpl` and `known_lenient` entry, with native outcomes and seeded input
+state. Every checker mode reports actual tolerated outcomes per entry and
+engine; the full `known` sweep fails when an entry has zero hits in either
+engine. Partial random-mode runs report counts without demanding coverage.
+Already implemented instructions must be removed from the exception list.
+`guest/halfops` compares half arithmetic, comparisons, conversions and indexed
+forms, plus S/D FRECPX, with native results and full FPSR in all four engines.
