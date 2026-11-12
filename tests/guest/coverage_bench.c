@@ -400,6 +400,14 @@ BENCH(tail_sli1_3_63, "sli v2.2d, v0.2d, #63", single)
 BENCH(tail_addpd, "addp d2, v0.2d", single)
 
 
+
+BENCH(wide_fadd, "fadd v2.2d, v0.2d, v1.2d", double)
+BENCH(wide_fsub, "fsub v2.2d, v0.2d, v1.2d", double)
+BENCH(wide_fmul, "fmul v2.2d, v0.2d, v1.2d", double)
+BENCH(wide_fdiv, "fdiv v2.2d, v0.2d, v1.2d", double)
+BENCH(wide_sqrtd, "fsqrt v2.2d, v0.2d", double)
+BENCH(wide_sqrts, "fsqrt v2.4s, v0.4s", single)
+BENCH(wide_sqrt2s, "fsqrt v2.2s, v0.2s", single)
 /* Element-interleaved memory forms use a private 64-byte buffer. */
 #define MEMBENCH(name, insn) \
 static __attribute__((noinline)) vec name(unsigned long n) { \
@@ -823,6 +831,14 @@ int main(int argc, char **argv)
     RUN(tail_sli1_3_63);
     RUN(tail_addpd);
 
+
+    RUN(wide_fadd);
+    RUN(wide_fsub);
+    RUN(wide_fmul);
+    RUN(wide_fdiv);
+    RUN(wide_sqrtd);
+    RUN(wide_sqrts);
+    RUN(wide_sqrt2s);
     RUN(ld2_8b);
     RUN(ld2_16b);
     RUN(ld2_4h);

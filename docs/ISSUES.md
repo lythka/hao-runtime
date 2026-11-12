@@ -104,6 +104,33 @@ the unmodified control passes. Full-gate, fixed-corpus and combined
 coverage measurements are recorded with integration. Intel timings and
 application acceptance remain separate checks.
 
+## Packed double arithmetic and vector square roots
+
+Cumulative static coverage reaches 99.7956% (1,393 additional sites), with
+generated code 648,653 -> 649,079 KiB. Seven ordinary forms at 1,000
+iterations reduce JIT/AOT helper calls from 112,000 to zero. Temporary
+coverage caches were removed.
+
+FADD/FSUB/FMUL/FDIV .2D and FSQRT .2S/.4S/.2D now use packed SSE
+arithmetic after integer admission of every active operand. Nonfinite or
+tiny results restore the prior MXCSR and enter the unchanged interpreter
+helper. Exact zero results remain inline. All registers are published only
+after admission, and integer/SSE checks preserve live NZCV. Reserved .1D
+forms retain their existing undefined-instruction path.
+
+Focused validation passes 780,104 full-state cases with zero mismatches,
+covering all 16 FPCR RMode/FZ/DN combinations, register aliases, zero signs,
+NaNs, subnormals, exact tiny results and overflow. The 766-line native
+instruction test matches in JIT, interpreter, helpers-only and AOT. Seven
+new per-form timing cases agree with native in every engine and report zero
+helper calls for ordinary operands in JIT and AOT at 1,000 iterations. The
+encoder check passes 40,747 instructions including divpd/sqrtpd/sqrtps.
+The mutation suppressing result admission must be caught, including an
+exact tiny division whose helper route matters even when its bits agree.
+Integrated full gates, saved-corpus flags, representative coverage and
+uninstrumented timings are recorded separately. Intel/application
+performance acceptance remains unmeasured.
+
 ## Interleaved SIMD multiple-structure memory operations
 
 Cumulative static coverage reaches 99.7845% (5,294 additional sites), with

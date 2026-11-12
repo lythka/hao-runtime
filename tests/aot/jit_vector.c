@@ -439,6 +439,40 @@ int main(void)
                     printf("MISMATCH %08x: interleaved structure unexpectedly used helper\n", i); fails++;
                 }
             }
+    /* Double arithmetic and S/D square roots: all controls, aliases,
+     * nonfinite/tiny inputs, exact zeros, saturation boundaries and declines. */
+    static const uint32_t wide_forms[] = {0x4e60d400, 0x4ee0d400, 0x6e60dc00, 0x6e60fc00,
+                                         0x6ee1f800, 0x6ea1f800, 0x2ea1f800};
+    for (unsigned f = 0; f < 7; f++) for (unsigned control = 0; control < 16; control++)
+        for (unsigned k = 0; k < 192; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm); in.fpcr = control << 22;
+            bool dbl = f < 5;
+            for (int r = 0; r < 32; r++) {
+                if (dbl) for (int e = 0; e < 2; e++) in.v[r].d[e] = dval();
+                else for (int e = 0; e < 4; e++) in.v[r].s[e] = sval();
+            }
+            if (k < 4) {
+                for (int e = 0; e < (dbl ? 2 : 4); e++) {
+                    if (dbl) { in.v[rn].d[e] = k == 1 ? 0 : k == 2 ? 0x0010000000000000ull : 0x4010000000000000ull;
+                               in.v[rm].d[e] = k == 1 ? 0 : k == 2 ? 0x4000000000000000ull : 0x4010000000000000ull; }
+                    else { in.v[rn].s[e] = k == 1 ? 0 : k == 2 ? 1 : 0x40800000; }
+                }
+            }
+            uint32_t i = wide_forms[f] | rn << 5 | rd | (f < 4 ? rm << 16 : 0);
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k == 0 && vector_helper_calls) {
+                    if (fails++ < 20) printf("MISMATCH %08x: wide ordinary arithmetic used helper\n", i);
+                }
+                /* An exact subnormal division result requires fallback even
+                 * when no architectural bit changes after removing admission. */
+                if (k == 2 && f == 3 && rn != rm && vector_helper_calls != 1) {
+                    if (fails++ < 20) printf("MISMATCH %08x: wide tiny result bypassed helper\n", i);
+                }
+            }
+            if (k % 8 == 0) check(i, 0x4e20d400u | rd << 16 | rn << 5 | rd, &in, true);
+        }
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {

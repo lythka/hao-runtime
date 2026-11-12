@@ -94,6 +94,7 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     /* vector floating point, widening, narrowing */
     {0, 0x5A, 0, 0, "cvtps2pd"}, {0x66, 0x5A, 0, 0, "cvtpd2ps"},
     {0x66, 0x59, 0, 0, "mulpd"}, {0x66, 0x58, 0, 0, "addpd"}, {0x66, 0x5C, 0, 0, "subpd"},
+    {0x66, 0x5E, 0, 0, "divpd"}, {0x66, 0x51, 0, 0, "sqrtpd"}, {0, 0x51, 0, 0, "sqrtps"},
     {0, 0x58, 0, 0, "addps"}, {0, 0x5C, 0, 0, "subps"}, {0, 0x59, 0, 0, "mulps"}, {0, 0x5E, 0, 0, "divps"}, {0, 0x5F, 0, 0, "maxps"},
     {0, 0x5D, 0, 0, "minps"}, {0x66, 0x61, 0, 0, "punpcklwd"}, {0x66, 0x67, 0, 0, "packuswb"}, {0x66, 0x6B, 0, 0, "packssdw"},
     /* scalar max/min, FP<->integer conversions, packed single conversions */
