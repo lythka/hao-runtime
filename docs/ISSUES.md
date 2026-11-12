@@ -40,6 +40,45 @@ UNDEF. SVE/SME was not executed in a complete run (fatal if executed), not
 measured by counters. BRK remains a deliberate trap. This evidence does not
 establish behavior on every possible application input.
 
+## Exact reciprocal estimates in translated code
+
+Cumulative static coverage reaches 99.8432% (2,907 additional sites), with
+generated code 651,546 -> 652,861 KiB. Ten ordinary forms at 1,000
+iterations reduce JIT/AOT helper calls from 160,000 to zero. Temporary
+coverage caches were removed.
+
+FRECPE/FRSQRTE S/D scalar and vector forms now use the ARM estimate tables
+through integer operations. The tables are computed once from the same
+integer RecipEstimate/RecipSqrtEstimate definitions as the interpreter and
+reached through a runtime-bound CPU pointer, keeping JIT/AOT bytes position
+independent. Admitted reciprocal inputs are normal with normal results;
+square-root estimates require positive normal inputs. Zeros, subnormals,
+NaNs, infinities, negative square roots and reciprocal output-denormal
+boundaries keep the existing helper behavior and FPSR rules. The JIT stages
+all active lanes before writing Vd, including source/destination aliases.
+No interpreter semantics changed. Half estimates remain helpers.
+
+The pointer occupies the CPU structure's trailing padding at 0x408; all
+previous offsets are unchanged. AOT version 7 rejects old caches before
+execution. Release validators, installer, image-payload and extension tools
+use the new version; the 136-byte AOT header layout is unchanged.
+
+Validation passes 777,292 complete-state cases; native JIT, interpreter,
+helpers-only and AOT comparisons pass 926 output lines. Every estimate
+index, exponent parity and sign is exercised under all FPCR controls in
+the native test, with exceptional exponent boundaries and fraction bucket
+edges. Independent table-rounding and exponent-parity mutations are caught
+after a passing complete-state control. Encoder, AOT, helper-statistics,
+image-payload, 28 release-validator tests and distribution checks pass.
+Full runtime gates and cumulative coverage are recorded at integration.
+
+At 1,000 iterations the ten ordinary estimate loops eliminate 160,000 helper
+calls; native, base and changed result checksums agree. Together with the
+integer and FP-environment loops, the workload drops from 3,808,000 helper
+calls to zero and grows from 1,368 to 1,769 KiB of generated code. Intel
+performance acceptance remains separate from development-host ratios.
+
+
 ## Conditional FP comparisons and FP environment moves
 
 Cumulative static coverage reaches 99.8200% (1,650 additional sites), with

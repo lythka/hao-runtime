@@ -79,6 +79,7 @@ typedef struct hao_cpu {
     uint64_t rt_probe;       /* 0x1F8: translation-table probe stub, for a jump-cache miss (jit.c) */
     hao_vreg v[32];          /* 0x200 */
     void    *thread;         /* 0x400: owning hao_thread */
+    const uint8_t *fp_estimates; /* 0x408: exact reciprocal/rsqrt tables, runtime bound */
 } hao_cpu;
 
 #define CPU_OFF_X(n)   ((int32_t)(8 * (n)))
@@ -92,6 +93,7 @@ typedef struct hao_cpu {
 #define CPU_OFF_RT_EXIT   0x188
 #define CPU_OFF_RT_JC     0x190
 #define CPU_OFF_FCMP      0x198
+#define CPU_OFF_FP_ESTIMATES 0x408
 #define CPU_OFF_RT_PROBE  0x1F8
 #define CPU_OFF_SCRATCH0  0x158   /* host_scratch[0]: an exit's chain site (jit.c) */
 /* Translated code (and AOT blobs, which freeze it) uses these offsets;
@@ -109,6 +111,7 @@ HAO_CPU_OFF(rt_jc, CPU_OFF_RT_JC);
 HAO_CPU_OFF(fcmp_flags, CPU_OFF_FCMP);
 HAO_CPU_OFF(rt_probe, CPU_OFF_RT_PROBE);
 HAO_CPU_OFF(v, CPU_OFF_V(0));
+HAO_CPU_OFF(fp_estimates, CPU_OFF_FP_ESTIMATES);
 _Static_assert(__builtin_offsetof(hao_cpu, bridge_rsp) == 0x1D8, "cpu layout");
 _Static_assert(__builtin_offsetof(hao_cpu, native_pop) == 0x1F0, "cpu layout");
 #undef HAO_CPU_OFF

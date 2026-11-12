@@ -2233,11 +2233,13 @@ static void vnarrow(tctx *t, int oes);
 static void vst_narrow(tctx *t, unsigned rd, int Q);
 static bool t_vfp_absneg(tctx *t, uint32_t i);
 static bool t_vfp_rint_vec(tctx *t, uint32_t i, uint64_t pc);
+static bool t_vfp_estimate(tctx *t, uint32_t i, uint64_t pc, bool scalar);
 
 static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 16, 12);
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (op == 0x1d && (size & 2)) return t_vfp_estimate(t, i, pc, false);
     if (op <= 1) { /* REV64 / REV32 / REV16 */
         unsigned cont = op == 1 ? 2 : U ? 4 : 8, es = 1u << size;
         if (es >= cont || (op == 1 && U)) return false;
@@ -2662,6 +2664,57 @@ static void vfp_constants(tctx *t)
     vzero(t, 5);
     vones(t, 6); x_sse_shift_ri(&t->b, 0x72, 2, 6, 1);                                     /* 0x7fffffff */
     vones(t, 7); x_sse_shift_ri(&t->b, 0x72, 2, 7, 24); x_sse_shift_ri(&t->b, 0x72, 6, 7, 23); /* 0x7f800000 */
+}
+
+/* The ordinary estimate path is entirely integer. Admit every active
+ * operand before publishing Vd: reciprocal excludes output-denormal input
+ * exponents; reciprocal square root excludes negative and nonnormal inputs.
+ * All remaining cases retain the interpreter's NaN/zero/FZ/exception rules. */
+static bool t_vfp_estimate(tctx *t, uint32_t i, uint64_t pc, bool scalar)
+{
+    unsigned size = BITS(i, 23, 22), Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    bool root = BIT(i, 29), dbl = size & 1;
+    if (BITS(i, 16, 12) != 0x1d || !(size & 2) || (!scalar && dbl && !Q)) return false;
+    unsigned es = dbl ? 8 : 4, mbits = dbl ? 52 : 23, expmax = dbl ? 2047 : 255, bias = dbl ? 1023 : 127;
+    unsigned n = scalar ? 1 : (Q ? 16 : 8) / es;
+    size_t decline[12]; unsigned nd = 0;
+    fl_clobber(t);
+    x_mov_ld(&t->b, 8, RDI, xm(RBX, CPU_OFF_FP_ESTIMATES));
+    vzero(t, 8);
+    for (unsigned lane = 0; lane < n; lane++) {
+        x_mov_ld(&t->b, (int)es, RAX, velem(rn, (int)es, (int)lane));
+        if (root) { x_test_rr(&t->b, dbl, RAX, RAX); decline[nd++] = x_jcc32(&t->b, XCC_S); }
+        x_mov_rr(&t->b, 1, RDX, RAX); x_shift_ri(&t->b, XSHR, 1, RDX, (uint8_t)mbits);
+        x_alu_ri(&t->b, XAND, 0, RDX, expmax); decline[nd++] = x_jcc32(&t->b, XCC_E);
+        x_alu_ri(&t->b, XCMP, 0, RDX, root ? expmax : 2 * bias - 1); decline[nd++] = x_jcc32(&t->b, XCC_AE);
+        x_mov_rr(&t->b, 1, RCX, RAX); x_shift_ri(&t->b, XSHR, 1, RCX, (uint8_t)(mbits - 8));
+        x_alu_ri(&t->b, XAND, 0, RCX, 255);
+        if (root) {
+            x_alu_ri(&t->b, XOR_, 0, RCX, 256);
+            x_mov_rr(&t->b, 0, RSI, RDX); x_alu_ri(&t->b, XAND, 0, RSI, 1);
+            size_t even = x_jcc8(&t->b, XCC_E);
+            x_shift_ri(&t->b, XSHR, 0, RCX, 1); /* odd exponent: 128 | fraction[7:1] */
+            x_patch8(&t->b, even, xb_len(&t->b));
+        }
+        x_mov_ld(&t->b, 1, RCX, xmi(RDI, RCX, 1, root ? 256 : 0));
+        x_shift_ri(&t->b, XSHL, 1, RCX, (uint8_t)(mbits - 8));
+        x_mov_ri(&t->b, RSI, root ? 3 * bias - 1 : 2 * bias - 1); x_alu_rr(&t->b, XSUB, 0, RSI, RDX);
+        if (root) x_shift_ri(&t->b, XSHR, 0, RSI, 1);
+        x_shift_ri(&t->b, XSHL, 1, RSI, (uint8_t)mbits); x_alu_rr(&t->b, XOR_, 1, RCX, RSI);
+        if (!root) {
+            x_mov_ri(&t->b, RDX, 1ull << (8 * es - 1)); x_alu_rr(&t->b, XAND, 1, RAX, RDX);
+            x_alu_rr(&t->b, XOR_, 1, RCX, RAX);
+        }
+        x_sse_rr(&t->b, 0x66, 0x6E, 1, 0, RCX);
+        if (lane) x_sse_shift_ri(&t->b, 0x73, 7, 0, (uint8_t)(lane * es));
+        P(0xEB, 8, 0);
+    }
+    vst(t, rd, 8, scalar ? 0 : (int)Q);
+    size_t done = x_jmp32(&t->b);
+    for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
+    helper(t, i, pc, true); st_helper -= !t->dry;
+    x_patch32(&t->b, done, xb_len(&t->b));
+    return true;
 }
 
 /* FCCMP evaluates its condition before reading either FP operand. A
@@ -3889,6 +3942,8 @@ static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
         t_vfp_fma(t, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, 0, i, pc);
         return true;
     }
+
+    if ((i & 0xdf3e0c00) == 0x5e200800 && t_vfp_estimate(t, i, pc, true)) return true;
     if ((i & 0xFFFFFC00) == 0x5EF1B800) { /* ADDP Dd, Vn.2D */
         vld(t, 0, BITS(i, 9, 5)); x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0xEE);
         P(0xD4, 0, 1); vst(t, BITS(i, 4, 0), 0, 0); return true;
@@ -5257,8 +5312,26 @@ static int jit_state;
  * and aot_install() move cache_ptr, through cache_alloc/block_commit under
  * jit_lock.
  */
+/* Low eight estimate bits, generated once from the same integer
+ * RecipEstimate/RecipSqrtEstimate definitions as a64_fp.c. The hidden
+ * leading bit is implicit in the emitted result exponent. Publication is
+ * covered by jit_once, and translated code reaches this through hao_cpu. */
+static uint8_t fp_estimates[768];
+static void init_estimates(void)
+{
+    for (unsigned a = 256; a < 512; a++)
+        fp_estimates[a - 256] = (uint8_t)(((1u << 19) / (2 * a + 1) + 1) / 2);
+    for (unsigned a = 128; a < 512; a++) {
+        unsigned scaled = a < 256 ? 2 * a + 1 : 2 * ((a & ~1u) + 1);
+        unsigned b = 512;
+        while (scaled * (b + 1) * (b + 1) < (1u << 28)) b++;
+        fp_estimates[256 + a] = (uint8_t)((b + 1) / 2);
+    }
+}
+
 static void jit_init_once(void)
 {
+    init_estimates();
     hao_opts_init(NULL);   /* already done by the front ends; host tests call this first */
     if (hao_opt.jit_helpers_only) jit_disabled_native = 1;
     cache_code_mb = hao_opt.jit_cache_mb ? hao_opt.jit_cache_mb : CODE_MB_DEFAULT;
@@ -5371,6 +5444,7 @@ static void rt_bind(hao_cpu *c, uint64_t *jc, void *helper)
     c->rt_exit = (uint64_t)(uintptr_t)exit_stub;
     c->rt_probe = (uint64_t)(uintptr_t)probe_stub;
     init_fcmp(c);
+    c->fp_estimates = fp_estimates;
     c->rt_jc = (uint64_t)(uintptr_t)jc;
 }
 

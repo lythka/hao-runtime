@@ -121,8 +121,8 @@ for entry in aot['programs']:
         continue
     cache = out / 'root/usr/lib/hao/aot' / (entry['uuid'] + '.aot')
     with cache.open('rb') as f:
-        header = f.read(136)   # hao_aot_hdr, format v6 (include/hao/aot.h)
-    assert header[:8] == b'HAOAOT2\0' and struct.unpack_from('<II', header, 8) == (6, 136), cache
+        header = f.read(136)   # hao_aot_hdr, format v7 (include/hao/aot.h)
+    assert header[:8] == b'HAOAOT2\0' and struct.unpack_from('<II', header, 8) == (7, 136), cache
     assert struct.unpack_from('<I', header, 96)[0] == 1, 'not bound to a signed guest (cdhash): ' + str(cache)
     for path in entry['paths']:
         assert identities[path] == (entry['uuid'], struct.unpack_from('<Q', header, 56)[0]), path

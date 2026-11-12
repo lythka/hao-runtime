@@ -98,7 +98,7 @@ assert [x['paths'] for x in a['programs'] if x['uuid'] == uu[2]] == [['usr/bin/p
 for n in os.listdir(d):
     h = open(os.path.join(d, n), 'rb').read(136)
     assert h[:8] == b'HAOAOT2\0' and h[16:32].hex() == n[:32] and h[32:48].hex() == gen, n
-    assert int.from_bytes(h[8:12], 'little') == 6 and int.from_bytes(h[12:16], 'little') == 136, 'format of ' + n
+    assert int.from_bytes(h[8:12], 'little') == 7 and int.from_bytes(h[12:16], 'little') == 136, 'format of ' + n
     assert int.from_bytes(h[96:100], 'little') == 1 and not any(h[124:136]), 'code identity kind of ' + n
     assert os.path.relpath(os.path.join(d, n), p) in json.load(open(os.path.join(p, 'build.json')))['files'], 'hash of ' + n
 PY

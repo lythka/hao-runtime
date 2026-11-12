@@ -1,4 +1,4 @@
-"""patch.py IN OUT EDIT...: copy an AOT v6 cache (include/hao/aot.h) with edits.
+"""patch.py IN OUT EDIT...: copy an AOT v7 cache (include/hao/aot.h) with edits.
 
 After the edits the payload hash is recomputed (unless an edit says
 nohash), so each loader check can be tested on its own. Edits:

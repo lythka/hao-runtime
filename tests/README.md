@@ -320,7 +320,7 @@ in every engine. This exercises deterministic re-emission into the enlarged
 its control plus eight independent variants.
 
 `guest/helper-stats` checks dynamic decoder-group statistics in JIT and AOT:
-1000 each of untranslated reciprocal estimates, FABD and integer SQADD, plus
+1000 each of untranslated RBIT, FABD and integer SQADD, plus
 1000 subnormal FADD declines,
 with 1000 admitted FADDs excluded; N=0 subtracts startup calls. Without
 `--stats`, no group lines are printed.
@@ -443,3 +443,12 @@ set `HAO_VECTOR_FAIL_FAST`: after a witnessed state/admission mismatch they
 exit unsuccessfully, while every passing control still runs the entire
 corpus. This avoids spending the remainder of the corpus on a mutation
 already proved detectable. Suite-level timeouts remain bounded.
+
+`aot/estimate-mutations` checks a full passing vector-test control and detects
+independently corrupted estimate-table rounding and exponent parity. The
+complete-state cases include all table buckets, both fraction edges, aliases,
+late-lane rollback and exceptional boundaries. `guest/jitinsns` compares all
+S/D scalar/vector reciprocal estimates with native ARM over every table
+index, exponent parity, sign and FPCR control; ten benchmark loops measure
+the ordinary paths. AOT format 7 has unchanged header layout and rejects
+version 6 caches because emitted code can use the new runtime table pointer.

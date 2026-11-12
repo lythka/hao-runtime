@@ -327,6 +327,7 @@ static void test_format(void)
         CHECK(r_ != 0 && strstr(why, needle), "%s rejected (%s)", what, r_ ? why : "accepted"); } while (0)
     MUT("bad magic", f[0] ^= 1, 0, "not a hao");
     MUT("version 4", h->version = 4, 0, "format version");
+    MUT("version 6", h->version = 6, 0, "format version");
     MUT("header size", h->hdr_size = 64, 0, "header size");
     MUT("other guest uuid", h->uuid[3] ^= 1, 0, "UUID");
     MUT("header from another hao build", h->gen[15] ^= 1, 0, "another hao build");
@@ -515,8 +516,8 @@ int main(int argc, char **argv)
 {
     if (argc != 2) { fprintf(stderr, "usage: policy TMPDIR\n"); return 2; }
     CHECK(sizeof(hao_aot_hdr) == 136 && __builtin_offsetof(hao_aot_hdr, id_kind) == 96 && __builtin_offsetof(hao_aot_hdr, code_id) == 104 &&
-          __builtin_offsetof(hao_aot_hdr, nblocks) == 64 && HAO_AOT_VERSION == 6,
-          "format v6 header: 136 bytes, id_kind at 96, code_id at 104 (the tools read these offsets)");
+          __builtin_offsetof(hao_aot_hdr, nblocks) == 64 && HAO_AOT_VERSION == 7,
+          "format v7 header: 136 bytes, id_kind at 96, code_id at 104 (the tools read these offsets)");
     test_code_id();
     test_system_dirs();
     test_tiers();
