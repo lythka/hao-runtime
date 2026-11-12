@@ -703,3 +703,4 @@ tests/guest/helper_stats.c
 tests/guest/helper_stats.sh
 tests/guest/coverage_bench.c
 tests/guest/coverage_bench.sh
+tests/aot/integer_mutations.sh

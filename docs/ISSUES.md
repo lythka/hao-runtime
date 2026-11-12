@@ -40,6 +40,29 @@ blocks and 12,561,074 instructions, 98.8% translated natively. Only cache
 generation was run; this is coverage evidence, not application acceptance.
 
 
+## Inline SIMD lane permutes
+
+ZIP1/ZIP2, UZP1/UZP2 and TRN1/TRN2 translate every allocated byte,
+halfword, word and doubleword arrangement. ZIP uses unpack operations;
+UZP/TRN use constant byte-selection masks. Both operands are loaded before
+the destination is committed, including every register-alias case. A
+64-bit vector result clears the upper half. The expansion uses only
+integer SSE instructions and immediate masks, with no EFLAGS writes,
+absolute addresses, runtime allocation or new CPU requirement.
+
+The complete-state unit test passes 557,894 cases, including all 42 forms
+with random byte patterns, aliases, live NZCV and full FPSR. The native instruction guest adds all 42
+forms and agrees in JIT, interpreter, helpers-only and AOT (551 lines).
+The mutation check reverses ZIP1/ZIP2 half selection in a private source
+copy; the unchanged control must pass before the mutated test is accepted
+as detected (1,024 state mismatches). The encoder check passes 39,787
+encodings, including all unpack-high forms.
+
+Reserved size/Q combinations do not gain a translation. The interpreter
+already accepts some reserved permute arrangements, listed as a known
+leniency in `tests/oracle/known.h`; its behavior is unchanged here.
+Performance on Intel and application acceptance remain separate checks.
+
 ## Inline FP16 FMLA/FMLS in translated code
 
 Vector FMLA/FMLS .4H/.8H, three-same and by element, emit an SSE2/SSE4

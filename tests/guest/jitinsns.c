@@ -649,10 +649,95 @@ static void *worker(void *arg)
     return NULL;
 }
 
+VEC2(t_cov_zip18b, "zip1 v2.8b, v0.8b, v1.8b")
+VEC2(t_cov_zip116b, "zip1 v2.16b, v0.16b, v1.16b")
+VEC2(t_cov_zip14h, "zip1 v2.4h, v0.4h, v1.4h")
+VEC2(t_cov_zip18h, "zip1 v2.8h, v0.8h, v1.8h")
+VEC2(t_cov_zip12s, "zip1 v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_zip14s, "zip1 v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_zip12d, "zip1 v2.2d, v0.2d, v1.2d")
+VEC2(t_cov_zip28b, "zip2 v2.8b, v0.8b, v1.8b")
+VEC2(t_cov_zip216b, "zip2 v2.16b, v0.16b, v1.16b")
+VEC2(t_cov_zip24h, "zip2 v2.4h, v0.4h, v1.4h")
+VEC2(t_cov_zip28h, "zip2 v2.8h, v0.8h, v1.8h")
+VEC2(t_cov_zip22s, "zip2 v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_zip24s, "zip2 v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_zip22d, "zip2 v2.2d, v0.2d, v1.2d")
+VEC2(t_cov_uzp18b, "uzp1 v2.8b, v0.8b, v1.8b")
+VEC2(t_cov_uzp116b, "uzp1 v2.16b, v0.16b, v1.16b")
+VEC2(t_cov_uzp14h, "uzp1 v2.4h, v0.4h, v1.4h")
+VEC2(t_cov_uzp18h, "uzp1 v2.8h, v0.8h, v1.8h")
+VEC2(t_cov_uzp12s, "uzp1 v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_uzp14s, "uzp1 v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_uzp12d, "uzp1 v2.2d, v0.2d, v1.2d")
+VEC2(t_cov_uzp28b, "uzp2 v2.8b, v0.8b, v1.8b")
+VEC2(t_cov_uzp216b, "uzp2 v2.16b, v0.16b, v1.16b")
+VEC2(t_cov_uzp24h, "uzp2 v2.4h, v0.4h, v1.4h")
+VEC2(t_cov_uzp28h, "uzp2 v2.8h, v0.8h, v1.8h")
+VEC2(t_cov_uzp22s, "uzp2 v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_uzp24s, "uzp2 v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_uzp22d, "uzp2 v2.2d, v0.2d, v1.2d")
+VEC2(t_cov_trn18b, "trn1 v2.8b, v0.8b, v1.8b")
+VEC2(t_cov_trn116b, "trn1 v2.16b, v0.16b, v1.16b")
+VEC2(t_cov_trn14h, "trn1 v2.4h, v0.4h, v1.4h")
+VEC2(t_cov_trn18h, "trn1 v2.8h, v0.8h, v1.8h")
+VEC2(t_cov_trn12s, "trn1 v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_trn14s, "trn1 v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_trn12d, "trn1 v2.2d, v0.2d, v1.2d")
+VEC2(t_cov_trn28b, "trn2 v2.8b, v0.8b, v1.8b")
+VEC2(t_cov_trn216b, "trn2 v2.16b, v0.16b, v1.16b")
+VEC2(t_cov_trn24h, "trn2 v2.4h, v0.4h, v1.4h")
+VEC2(t_cov_trn28h, "trn2 v2.8h, v0.8h, v1.8h")
+VEC2(t_cov_trn22s, "trn2 v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_trn24s, "trn2 v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_trn22d, "trn2 v2.2d, v0.2d, v1.2d")
+
 #define R(n) run(#n, t_##n)
 #define RA(n) R(n##b); R(n##h); R(n##w); R(n##x)
 int main(void)
 {
+    R(cov_zip18b);
+    R(cov_zip116b);
+    R(cov_zip14h);
+    R(cov_zip18h);
+    R(cov_zip12s);
+    R(cov_zip14s);
+    R(cov_zip12d);
+    R(cov_zip28b);
+    R(cov_zip216b);
+    R(cov_zip24h);
+    R(cov_zip28h);
+    R(cov_zip22s);
+    R(cov_zip24s);
+    R(cov_zip22d);
+    R(cov_uzp18b);
+    R(cov_uzp116b);
+    R(cov_uzp14h);
+    R(cov_uzp18h);
+    R(cov_uzp12s);
+    R(cov_uzp14s);
+    R(cov_uzp12d);
+    R(cov_uzp28b);
+    R(cov_uzp216b);
+    R(cov_uzp24h);
+    R(cov_uzp28h);
+    R(cov_uzp22s);
+    R(cov_uzp24s);
+    R(cov_uzp22d);
+    R(cov_trn18b);
+    R(cov_trn116b);
+    R(cov_trn14h);
+    R(cov_trn18h);
+    R(cov_trn12s);
+    R(cov_trn14s);
+    R(cov_trn12d);
+    R(cov_trn28b);
+    R(cov_trn216b);
+    R(cov_trn24h);
+    R(cov_trn28h);
+    R(cov_trn22s);
+    R(cov_trn24s);
+    R(cov_trn22d);
     R(udiv); R(udivw); R(sdiv); R(sdivw);
     R(adc); R(adcw); R(adcs); R(adcsw); R(sbc); R(sbcw); R(sbcs); R(sbcsw); R(ngcs); R(add128);
     R(rbit); R(rbitw); R(rev16); R(rev16w); R(rev32); R(ctz);
