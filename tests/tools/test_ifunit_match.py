@@ -15,10 +15,10 @@ CACHE_UUID = '5a3da575f02e33dc9b14f663050011e6'
 BASE = 0x7ff800000000
 
 
-def cache_file(path, image_uuid):
+def cache_file(path, image_uuid, arch=b'x86_64', cpu=0x01000007):
     """a dyld shared cache with one image (a dylib with only an LC_UUID) and no subcaches"""
     b = bytearray(0x500)
-    b[0:16] = b'dyld_v1  x86_64\0'
+    b[0:16] = (b'dyld_v1' + b' ' * (15 - 7 - len(arch)) + arch + b'\0')[:16]
     struct.pack_into('<II', b, 0x10, 0x200, 1)               # mappings
     b[0x58:0x68] = bytes.fromhex(CACHE_UUID)
     struct.pack_into('<II', b, 0x1c0, 0x220, 1)              # images
@@ -26,7 +26,7 @@ def cache_file(path, image_uuid):
     struct.pack_into('<QQQI', b, 0x220, BASE + 0x400, 0, 0, 0x300)
     name = b'/usr/lib/libfixture.dylib\0'
     b[0x300:0x300 + len(name)] = name
-    struct.pack_into('<IIIIIIII', b, 0x400, 0xfeedfacf, 0x01000007, 3, 6, 1, 24, 0, 0)
+    struct.pack_into('<IIIIIIII', b, 0x400, 0xfeedfacf, cpu, 3, 6, 1, 24, 0, 0)
     struct.pack_into('<II', b, 0x420, 0x1b, 24)
     b[0x428:0x438] = bytes.fromhex(image_uuid)
     path.write_bytes(bytes(b))
@@ -74,6 +74,24 @@ class MatchTests(unittest.TestCase):
         r = self.run_match()
         self.assertEqual(r.returncode, 1)
         self.assertIn('not a valid unit for this name: library UUID differs', r.stdout)
+
+    def test_arm64e_cache_refused(self):
+        arm = self.d / 'arm'
+        arm.mkdir()
+        cache_file(arm / 'dyld_shared_cache_x86_64', LIB_UUID, arch=b'arm64e', cpu=0x0100000c)
+        unit(self.units / LIB_UUID, LIB_UUID)
+        r = self.run_match(arm)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('not an x86_64 shared cache', r.stderr)
+
+    def test_arm64_image_in_x86_64_cache_not_counted(self):
+        odd = self.d / 'odd'
+        odd.mkdir()
+        cache_file(odd / 'dyld_shared_cache_x86_64', LIB_UUID, cpu=0x0100000c)
+        unit(self.units / LIB_UUID, LIB_UUID)
+        r = self.run_match(odd)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('no image of the cache has this UUID', r.stdout)
 
     def test_not_a_cache(self):
         (self.d / 'junk').write_bytes(b'\0' * 0x400)

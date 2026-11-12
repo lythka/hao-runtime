@@ -13,8 +13,9 @@ both enforce the same rules.
   hao_ifunit.py match UNITDIR CACHE  each unit in UNITDIR (the files named by 32 hex digits, as
                                     installed in /usr/lib/hao/if) against the images of the x86_64
                                     shared cache CACHE (the file, or its directory's
-                                    dyld_shared_cache_x86_64); exit 1 if a unit names no image of it
-                                    or is not valid under its name
+                                    dyld_shared_cache_x86_64; refused unless it is an x86_64 cache,
+                                    and only x86_64 images count); exit 1 if a unit names no image
+                                    of it or is not valid under its name
 
 A unit is used only for a loaded library with its UUID, so a unit that names no image of the
 cache the target loads is never used, and that library's calls go unbound by it. The UUIDs differ
@@ -289,13 +290,16 @@ def match(unitdir, cache):
         c = hao_macho.Cache(path)
     except (OSError, ValueError) as e:
         raise Bad('%s: %s' % (path, e))
+    magic = bytes(c.files[0][:16]).split(b'\0')[0].decode('latin1')
+    if magic.split()[-1:] not in (['x86_64'], ['x86_64h']):
+        raise Bad('%s: not an x86_64 shared cache (%s)' % (path, magic.strip()))
     by_uuid = {}
     for p, _ in c.paths:
         try:
             im = c.image(p)
         except ValueError:
             continue
-        if im and im.uuid:
+        if im and im.uuid and im.cputype == hao_fat.CPU_X86_64:   # the native slices hao binds to
             by_uuid.setdefault(im.uuid.lower(), p)
     names = sorted(n for n in os.listdir(unitdir) if len(n) == 32 and all(ch in '0123456789abcdef' for ch in n))
     found, missing = {}, []
