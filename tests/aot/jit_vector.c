@@ -34,6 +34,9 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base);
  * the real descriptor helper. This also tests declines whose final half
  * result happens to be insensitive to a lost binary64 tail. */
 static unsigned vector_helper_calls;
+static bool fp_env_check;
+static bool x87_unmasked;
+static unsigned x87_seed; /* directed system-register checks only */
 int jit_vector_helper(hao_cpu *c, uint64_t descriptor, uint64_t pc)
 {
     vector_helper_calls++;
@@ -66,17 +69,26 @@ static uint8_t *mem;               /* page 0, 1: read/write; page 2: no access *
 static uint8_t init_mem[2 * PG];
 
 static sigjmp_buf jb;
-static void on_fault(int s) { (void)s; siglongjmp(jb, 1); }
+static void on_fault(int s) { if (s == SIGFPE) __asm__ volatile("fnclex"); siglongjmp(jb, 1); }
 
-typedef struct { int rc; bool faulted; hao_cpu c; uint32_t fpsr, fpcr; uint8_t m[2 * PG]; } outcome;
+typedef struct { int rc; bool faulted; hao_cpu c; uint32_t fpsr, fpcr; uint16_t x87_round; uint8_t m[2 * PG]; } outcome;
 
 static void run(outcome *o, const hao_cpu *in, const uint32_t *code, int n, uint64_t pc, bool jit)
 {
     static hao_cpu c;
+    uint16_t saved_cw = 0;
+    if (x87_unmasked) __asm__ volatile("fnstcw %0" : "=m"(saved_cw));
     c = *in;
     memcpy(mem, init_mem, sizeof init_mem);
     a64_fpcr_write(&c, in->fpcr);
     a64_fpsr_write(&c, in->fpsr);
+    if (x87_seed) {
+        uint32_t env[7];
+        __asm__ volatile("fnstenv %0" : "=m"(env));
+        env[1] = (env[1] & ~0x3fu) | x87_seed;
+        if (x87_unmasked) { env[0] &= ~1u; env[1] |= 0x8080; } /* pending unmasked invalid */
+        __asm__ volatile("fldenv %0" : : "m"(env));
+    }
     o->faulted = false;
     if (sigsetjmp(jb, 1) == 0) {
         if (jit) o->rc = hao_jit_exec_code(&c, code, n, pc);
@@ -92,7 +104,10 @@ static void run(outcome *o, const hao_cpu *in, const uint32_t *code, int n, uint
         o->faulted = true;
     o->fpsr = a64_fpsr_read(&c);
     o->fpcr = a64_fpcr_read(&c);
+    __asm__ volatile("fnstcw %0" : "=m"(o->x87_round));
+    o->x87_round &= 0x0c00;
     a64_fpsr_write(&c, 0);
+    if (x87_unmasked) __asm__ volatile("fldcw %0" : : "m"(saved_cw));
     a64_fpcr_write(&c, 0);
     o->c = c;
     memcpy(o->m, mem, sizeof o->m);
@@ -138,6 +153,7 @@ static void check(uint32_t insn, uint32_t insn2, const hao_cpu *in, bool live)
     }
     else if (!a.faulted && (a.c.pc != b.c.pc || hao_nzcv(&a.c) != hao_nzcv(&b.c))) why = "pc/nzcv";
     else if (a.fpsr != b.fpsr || a.fpcr != b.fpcr) why = "fpsr/fpcr";
+    else if (fp_env_check && a.x87_round != b.x87_round) why = "x87 rounding";
     else if (a.rc == HAO_EXIT_UNDEF && a.c.exit_insn != b.c.exit_insn) why = "exit_insn";
     cases++;
     faults += a.faulted;
@@ -434,12 +450,63 @@ static void half_arithmetic_cases(void)
     }
 }
 
+/* FNSTCW is non-waiting, whereas FLDCW can deliver a pending unmasked
+ * x87 exception. Rewriting unchanged FPCR must follow x87_rc_set's skip
+ * path; native long-double code can leave this pending state. */
+static void fpcr_pending_exception(void)
+{
+    hao_cpu warm; state(&warm, 1, 2); check(0xd503201f, 0, &warm, false);
+    x87_unmasked = true; x87_seed = 1; fp_env_check = true;
+    for (unsigned mode = 0; mode < 4; mode++) for (unsigned live = 0; live < 2; live++) {
+        hao_cpu in; state(&in, 1, 2); in.fpcr = mode << 22; in.x[17] = in.fpcr;
+        check(0xd51b4411, 0, &in, live);
+    }
+    x87_unmasked = false; x87_seed = 0; fp_env_check = false;
+}
+
+static void fp_system_tail(void)
+{
+    fp_env_check = true;
+    for (unsigned cond = 0; cond < 16; cond++) for (unsigned flags = 0; flags < 16; flags++)
+        for (unsigned dbl = 0; dbl < 2; dbl++) for (unsigned signal = 0; signal < 2; signal++)
+            for (unsigned k = 0; k < 8; k++) {
+                hao_cpu in; state(&in, 1, 2); hao_set_nzcv(&in, flags);
+                if (k < 4) { in.v[1].df[0] = k == 0 ? -0.0 : 1.0; in.v[2].df[0] = k == 1 ? -1.0 : 2.0;
+                    if (!dbl) { in.v[1].s[0] = (uint32_t[]){0x80000000,0x3f800000,0x40000000,0x40400000}[k]; in.v[2].s[0] = 0x40000000; }
+                } else {
+                    in.v[1].d[0] = dbl ? (uint64_t[]){1,0x7ff0000000000000ull,0x7ff8000000000001ull,0x7ff0000000000001ull}[k-4] :
+                        (uint32_t[]){1,0x7f800000,0x7fc00001,0x7f800001}[k-4];
+                }
+                in.fpcr = ((cond + flags + k) & 15) << 22;
+                uint32_t i = 0x1e220420u | dbl << 22 | cond << 12 | signal << 4 | ((flags + 3) & 15);
+                vector_helper_calls = 0; check(i, 0, &in, false);
+                if (k < 4 && vector_helper_calls && fails++ < 20) printf("MISMATCH FCCMP ordinary helper %08x\n", i);
+                check(i, 0, &in, true);
+            }
+    for (unsigned kind = 0; kind < 4; kind++) for (unsigned rtidx = 0; rtidx < 3; rtidx++)
+        for (unsigned k = 0; k < 128; k++) {
+            unsigned rt = (unsigned[]){0,17,31}[rtidx];
+            hao_cpu in; state(&in, 1, 2);
+            in.x[rt] = k < 32 ? 1ull << k : rnd();
+            in.fpcr = (k & 15) << 22; in.fpsr = k & 1 ? 0x0800009f : 0;
+            x87_seed = (k >> 1) & 0x3d;
+            uint32_t i = (uint32_t[]){0xd53b4400,0xd51b4400,0xd53b4420,0xd51b4420}[kind] | rt;
+            for (unsigned live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (vector_helper_calls && fails++ < 20) printf("MISMATCH FP system helper %08x\n", i);
+            }
+        }
+    x87_seed = 0;
+    fp_env_check = false;
+}
+
 int main(void)
 {
     mem = mmap(NULL, 3 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mem == MAP_FAILED || mprotect(mem + 2 * PG, PG, PROT_NONE)) return 2;
     signal(SIGSEGV, on_fault);
     signal(SIGBUS, on_fault);
+    signal(SIGFPE, on_fault);
     for (unsigned k = 0; k < sizeof init_mem; k++) init_mem[k] = (uint8_t)rnd();
     /* Scalar fused signs/addend selection and fused reciprocal steps. */
     static const uint32_t tail_fused[] = {0x1f000000, 0x1f008000, 0x1f200000, 0x1f208000,
@@ -459,6 +526,10 @@ int main(void)
                 if (!k && vector_helper_calls) { if (fails++ < 20) printf("MISMATCH tail fused admission %08x\n", i); }
             }
         }
+
+
+    fpcr_pending_exception();
+    fp_system_tail();
     integer_tail();
 
     conversion_cases();

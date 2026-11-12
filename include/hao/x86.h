@@ -163,6 +163,10 @@ size_t x_jrcxz8(xbuf *b);            /* jrcxz rel8: jump if rcx == 0, flags unto
 void x_mfence(xbuf *b);
 void x_stmxcsr(xbuf *b, xmem m);     /* MXCSR to m32 (EFLAGS untouched) */
 void x_ldmxcsr(xbuf *b, xmem m);     /* MXCSR from m32 */
+void x_fnstcw(xbuf *b, xmem m);      /* x87 control word to m16 */
+void x_fldcw(xbuf *b, xmem m);       /* x87 control word from m16 */
+void x_fnstsw(xbuf *b, xmem m);      /* x87 status word to m16 */
+void x_fnclex(xbuf *b);             /* clear x87 exception flags */
 void x_xchg_mr(xbuf *b, int size, xmem m, int r); /* implicit lock, size 1/2/4/8 */
 void x_shrd_ri(xbuf *b, int w, int dst, int src, uint8_t imm);
 

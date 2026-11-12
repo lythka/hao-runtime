@@ -249,7 +249,7 @@ $(B)/test_round16: tests/aot/round16.c $(B)/libhaocore.a
 unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap
 	timeout -s KILL 120 $(B)/test_round16
 	timeout -s KILL 90 $(B)/test_helper_descriptor
-	timeout -s KILL 120 $(B)/test_jit_vector
+	timeout -s KILL 240 $(B)/test_jit_vector
 	$(B)/test_imm_cond
 	timeout -s KILL 120 $(B)/test_gmap
 	$(B)/test_abi_layout

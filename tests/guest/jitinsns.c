@@ -1367,8 +1367,143 @@ VEC2(t_tail_ldrh_pre, "msr fpsr, xzr\nldr h2, [x4, #2]!\nmrs x2, fpsr")
 VEC2(t_tail_ldrh_reg, "msr fpsr, xzr\nldr h2, [x4, x2]\nmrs x2, fpsr")
 VEC2(t_tail_strh, "msr fpsr, xzr\nstr h0, [x4, #32]\nldr q2, [x4, #32]\nmrs x2, fpsr")
 
+/* Conditional FP compares, including false conditions with NaN operands. */
+VECF(t_tail_fccmp_s_eq, "cmp x6, #0\nfccmp s0, s1, #5, eq")
+VECF(t_tail_fccmp_s_ne, "cmp x6, #0\nfccmp s0, s1, #5, ne")
+VECF(t_tail_fccmp_s_cs, "cmp x6, #0\nfccmp s0, s1, #5, cs")
+VECF(t_tail_fccmp_s_cc, "cmp x6, #0\nfccmp s0, s1, #5, cc")
+VECF(t_tail_fccmp_s_mi, "cmp x6, #0\nfccmp s0, s1, #5, mi")
+VECF(t_tail_fccmp_s_pl, "cmp x6, #0\nfccmp s0, s1, #5, pl")
+VECF(t_tail_fccmp_s_vs, "cmp x6, #0\nfccmp s0, s1, #5, vs")
+VECF(t_tail_fccmp_s_vc, "cmp x6, #0\nfccmp s0, s1, #5, vc")
+VECF(t_tail_fccmp_s_hi, "cmp x6, #0\nfccmp s0, s1, #5, hi")
+VECF(t_tail_fccmp_s_ls, "cmp x6, #0\nfccmp s0, s1, #5, ls")
+VECF(t_tail_fccmp_s_ge, "cmp x6, #0\nfccmp s0, s1, #5, ge")
+VECF(t_tail_fccmp_s_lt, "cmp x6, #0\nfccmp s0, s1, #5, lt")
+VECF(t_tail_fccmp_s_gt, "cmp x6, #0\nfccmp s0, s1, #5, gt")
+VECF(t_tail_fccmp_s_le, "cmp x6, #0\nfccmp s0, s1, #5, le")
+VECF(t_tail_fccmp_s_al, "cmp x6, #0\nfccmp s0, s1, #5, al")
+VECF(t_tail_fccmp_s_nv, "cmp x6, #0\nfccmp s0, s1, #5, nv")
+VECF(t_tail_fccmp_d_eq, "cmp x6, #0\nfccmp d0, d1, #5, eq")
+VECF(t_tail_fccmp_d_ne, "cmp x6, #0\nfccmp d0, d1, #5, ne")
+VECF(t_tail_fccmp_d_cs, "cmp x6, #0\nfccmp d0, d1, #5, cs")
+VECF(t_tail_fccmp_d_cc, "cmp x6, #0\nfccmp d0, d1, #5, cc")
+VECF(t_tail_fccmp_d_mi, "cmp x6, #0\nfccmp d0, d1, #5, mi")
+VECF(t_tail_fccmp_d_pl, "cmp x6, #0\nfccmp d0, d1, #5, pl")
+VECF(t_tail_fccmp_d_vs, "cmp x6, #0\nfccmp d0, d1, #5, vs")
+VECF(t_tail_fccmp_d_vc, "cmp x6, #0\nfccmp d0, d1, #5, vc")
+VECF(t_tail_fccmp_d_hi, "cmp x6, #0\nfccmp d0, d1, #5, hi")
+VECF(t_tail_fccmp_d_ls, "cmp x6, #0\nfccmp d0, d1, #5, ls")
+VECF(t_tail_fccmp_d_ge, "cmp x6, #0\nfccmp d0, d1, #5, ge")
+VECF(t_tail_fccmp_d_lt, "cmp x6, #0\nfccmp d0, d1, #5, lt")
+VECF(t_tail_fccmp_d_gt, "cmp x6, #0\nfccmp d0, d1, #5, gt")
+VECF(t_tail_fccmp_d_le, "cmp x6, #0\nfccmp d0, d1, #5, le")
+VECF(t_tail_fccmp_d_al, "cmp x6, #0\nfccmp d0, d1, #5, al")
+VECF(t_tail_fccmp_d_nv, "cmp x6, #0\nfccmp d0, d1, #5, nv")
+VECF(t_tail_fccmpe_s_eq, "cmp x6, #0\nfccmpe s0, s1, #5, eq")
+VECF(t_tail_fccmpe_s_ne, "cmp x6, #0\nfccmpe s0, s1, #5, ne")
+VECF(t_tail_fccmpe_s_cs, "cmp x6, #0\nfccmpe s0, s1, #5, cs")
+VECF(t_tail_fccmpe_s_cc, "cmp x6, #0\nfccmpe s0, s1, #5, cc")
+VECF(t_tail_fccmpe_s_mi, "cmp x6, #0\nfccmpe s0, s1, #5, mi")
+VECF(t_tail_fccmpe_s_pl, "cmp x6, #0\nfccmpe s0, s1, #5, pl")
+VECF(t_tail_fccmpe_s_vs, "cmp x6, #0\nfccmpe s0, s1, #5, vs")
+VECF(t_tail_fccmpe_s_vc, "cmp x6, #0\nfccmpe s0, s1, #5, vc")
+VECF(t_tail_fccmpe_s_hi, "cmp x6, #0\nfccmpe s0, s1, #5, hi")
+VECF(t_tail_fccmpe_s_ls, "cmp x6, #0\nfccmpe s0, s1, #5, ls")
+VECF(t_tail_fccmpe_s_ge, "cmp x6, #0\nfccmpe s0, s1, #5, ge")
+VECF(t_tail_fccmpe_s_lt, "cmp x6, #0\nfccmpe s0, s1, #5, lt")
+VECF(t_tail_fccmpe_s_gt, "cmp x6, #0\nfccmpe s0, s1, #5, gt")
+VECF(t_tail_fccmpe_s_le, "cmp x6, #0\nfccmpe s0, s1, #5, le")
+VECF(t_tail_fccmpe_s_al, "cmp x6, #0\nfccmpe s0, s1, #5, al")
+VECF(t_tail_fccmpe_s_nv, "cmp x6, #0\nfccmpe s0, s1, #5, nv")
+VECF(t_tail_fccmpe_d_eq, "cmp x6, #0\nfccmpe d0, d1, #5, eq")
+VECF(t_tail_fccmpe_d_ne, "cmp x6, #0\nfccmpe d0, d1, #5, ne")
+VECF(t_tail_fccmpe_d_cs, "cmp x6, #0\nfccmpe d0, d1, #5, cs")
+VECF(t_tail_fccmpe_d_cc, "cmp x6, #0\nfccmpe d0, d1, #5, cc")
+VECF(t_tail_fccmpe_d_mi, "cmp x6, #0\nfccmpe d0, d1, #5, mi")
+VECF(t_tail_fccmpe_d_pl, "cmp x6, #0\nfccmpe d0, d1, #5, pl")
+VECF(t_tail_fccmpe_d_vs, "cmp x6, #0\nfccmpe d0, d1, #5, vs")
+VECF(t_tail_fccmpe_d_vc, "cmp x6, #0\nfccmpe d0, d1, #5, vc")
+VECF(t_tail_fccmpe_d_hi, "cmp x6, #0\nfccmpe d0, d1, #5, hi")
+VECF(t_tail_fccmpe_d_ls, "cmp x6, #0\nfccmpe d0, d1, #5, ls")
+VECF(t_tail_fccmpe_d_ge, "cmp x6, #0\nfccmpe d0, d1, #5, ge")
+VECF(t_tail_fccmpe_d_lt, "cmp x6, #0\nfccmpe d0, d1, #5, lt")
+VECF(t_tail_fccmpe_d_gt, "cmp x6, #0\nfccmpe d0, d1, #5, gt")
+VECF(t_tail_fccmpe_d_le, "cmp x6, #0\nfccmpe d0, d1, #5, le")
+VECF(t_tail_fccmpe_d_al, "cmp x6, #0\nfccmpe d0, d1, #5, al")
+VECF(t_tail_fccmpe_d_nv, "cmp x6, #0\nfccmpe d0, d1, #5, nv")
+VEC2(t_tail_fpcr, "and x2, x0, #0x3c00000\nmsr fpcr, x2\nmrs x2, fpcr\nmsr fpcr, xzr")
+VEC2(t_tail_fpsr, "mov x2, #0x9f\nmovk x2, #0x800, lsl #16\nand x2, x0, x2\nmsr fpsr, x2\nmrs x2, fpsr\nmsr fpsr, xzr")
+
 int main(void)
 {
+    R(tail_fpcr);
+    R(tail_fpsr);
+    runf("tail_fccmp_s_eq", t_tail_fccmp_s_eq);
+    runf("tail_fccmp_s_ne", t_tail_fccmp_s_ne);
+    runf("tail_fccmp_s_cs", t_tail_fccmp_s_cs);
+    runf("tail_fccmp_s_cc", t_tail_fccmp_s_cc);
+    runf("tail_fccmp_s_mi", t_tail_fccmp_s_mi);
+    runf("tail_fccmp_s_pl", t_tail_fccmp_s_pl);
+    runf("tail_fccmp_s_vs", t_tail_fccmp_s_vs);
+    runf("tail_fccmp_s_vc", t_tail_fccmp_s_vc);
+    runf("tail_fccmp_s_hi", t_tail_fccmp_s_hi);
+    runf("tail_fccmp_s_ls", t_tail_fccmp_s_ls);
+    runf("tail_fccmp_s_ge", t_tail_fccmp_s_ge);
+    runf("tail_fccmp_s_lt", t_tail_fccmp_s_lt);
+    runf("tail_fccmp_s_gt", t_tail_fccmp_s_gt);
+    runf("tail_fccmp_s_le", t_tail_fccmp_s_le);
+    runf("tail_fccmp_s_al", t_tail_fccmp_s_al);
+    runf("tail_fccmp_s_nv", t_tail_fccmp_s_nv);
+    runf("tail_fccmp_d_eq", t_tail_fccmp_d_eq);
+    runf("tail_fccmp_d_ne", t_tail_fccmp_d_ne);
+    runf("tail_fccmp_d_cs", t_tail_fccmp_d_cs);
+    runf("tail_fccmp_d_cc", t_tail_fccmp_d_cc);
+    runf("tail_fccmp_d_mi", t_tail_fccmp_d_mi);
+    runf("tail_fccmp_d_pl", t_tail_fccmp_d_pl);
+    runf("tail_fccmp_d_vs", t_tail_fccmp_d_vs);
+    runf("tail_fccmp_d_vc", t_tail_fccmp_d_vc);
+    runf("tail_fccmp_d_hi", t_tail_fccmp_d_hi);
+    runf("tail_fccmp_d_ls", t_tail_fccmp_d_ls);
+    runf("tail_fccmp_d_ge", t_tail_fccmp_d_ge);
+    runf("tail_fccmp_d_lt", t_tail_fccmp_d_lt);
+    runf("tail_fccmp_d_gt", t_tail_fccmp_d_gt);
+    runf("tail_fccmp_d_le", t_tail_fccmp_d_le);
+    runf("tail_fccmp_d_al", t_tail_fccmp_d_al);
+    runf("tail_fccmp_d_nv", t_tail_fccmp_d_nv);
+    runf("tail_fccmpe_s_eq", t_tail_fccmpe_s_eq);
+    runf("tail_fccmpe_s_ne", t_tail_fccmpe_s_ne);
+    runf("tail_fccmpe_s_cs", t_tail_fccmpe_s_cs);
+    runf("tail_fccmpe_s_cc", t_tail_fccmpe_s_cc);
+    runf("tail_fccmpe_s_mi", t_tail_fccmpe_s_mi);
+    runf("tail_fccmpe_s_pl", t_tail_fccmpe_s_pl);
+    runf("tail_fccmpe_s_vs", t_tail_fccmpe_s_vs);
+    runf("tail_fccmpe_s_vc", t_tail_fccmpe_s_vc);
+    runf("tail_fccmpe_s_hi", t_tail_fccmpe_s_hi);
+    runf("tail_fccmpe_s_ls", t_tail_fccmpe_s_ls);
+    runf("tail_fccmpe_s_ge", t_tail_fccmpe_s_ge);
+    runf("tail_fccmpe_s_lt", t_tail_fccmpe_s_lt);
+    runf("tail_fccmpe_s_gt", t_tail_fccmpe_s_gt);
+    runf("tail_fccmpe_s_le", t_tail_fccmpe_s_le);
+    runf("tail_fccmpe_s_al", t_tail_fccmpe_s_al);
+    runf("tail_fccmpe_s_nv", t_tail_fccmpe_s_nv);
+    runf("tail_fccmpe_d_eq", t_tail_fccmpe_d_eq);
+    runf("tail_fccmpe_d_ne", t_tail_fccmpe_d_ne);
+    runf("tail_fccmpe_d_cs", t_tail_fccmpe_d_cs);
+    runf("tail_fccmpe_d_cc", t_tail_fccmpe_d_cc);
+    runf("tail_fccmpe_d_mi", t_tail_fccmpe_d_mi);
+    runf("tail_fccmpe_d_pl", t_tail_fccmpe_d_pl);
+    runf("tail_fccmpe_d_vs", t_tail_fccmpe_d_vs);
+    runf("tail_fccmpe_d_vc", t_tail_fccmpe_d_vc);
+    runf("tail_fccmpe_d_hi", t_tail_fccmpe_d_hi);
+    runf("tail_fccmpe_d_ls", t_tail_fccmpe_d_ls);
+    runf("tail_fccmpe_d_ge", t_tail_fccmpe_d_ge);
+    runf("tail_fccmpe_d_lt", t_tail_fccmpe_d_lt);
+    runf("tail_fccmpe_d_gt", t_tail_fccmpe_d_gt);
+    runf("tail_fccmpe_d_le", t_tail_fccmpe_d_le);
+    runf("tail_fccmpe_d_al", t_tail_fccmpe_d_al);
+    runf("tail_fccmpe_d_nv", t_tail_fccmpe_d_nv);
+
     R(tail_saddl0_0);
     R(tail_saddl0_1);
     R(tail_saddl0_2);

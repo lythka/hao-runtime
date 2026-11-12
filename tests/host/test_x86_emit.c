@@ -291,6 +291,10 @@ int main(int argc, char **argv)
             if (a == 0) {
                 begin(); x_stmxcsr(&B, m); end("stmxcsr %s", ms("dword", m));
                 begin(); x_ldmxcsr(&B, m); end("ldmxcsr %s", ms("dword", m));
+                begin(); x_fnstcw(&B, m); end("fnstcw %s", ms("word", m));
+                begin(); x_fldcw(&B, m); end("fldcw %s", ms("word", m));
+                begin(); x_fnstsw(&B, m); end("fnstsw %s", ms("word", m));
+                begin(); x_fnclex(&B); end("fnclex");
             }
             begin(); x_lock_cmpxchg(&B, 4, m, a); end("lock cmpxchg %s, %s", ms("dword", m), r32[a]);
             begin(); x_lock_xadd(&B, 1, m, a); end("lock xadd %s, %s", ms("byte", m), r8n[a]);

@@ -446,3 +446,8 @@ void x_sse3a_rri(xbuf *b, uint8_t op, int dst, int src, uint8_t imm)
     enc_rr(b, P_66, 0, 0, (const uint8_t[]){0x0F, 0x3A, op}, 3, dst, src);
     if (b->p != start) xb_u8(b, imm);
 }
+
+void x_fnstcw(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP1(0xD9), 7, m); }
+void x_fldcw(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP1(0xD9), 5, m); }
+void x_fnstsw(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP1(0xDD), 7, m); }
+void x_fnclex(xbuf *b) { xb_u8(b, 0xDB); xb_u8(b, 0xE2); }
