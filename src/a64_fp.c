@@ -19,7 +19,8 @@
  * binary64 with one round-to-odd step (see fma32). The rest (NaNs, denormals,
  * saturating conversions, other FMA, half precision, FCVT between formats) is
  * computed exactly here.
- * Half precision ignores FZ (FZ16 is not modelled) and AHP.
+ * Half arithmetic observes FZ16, ignores FZ/AHP; FP-to-FP half conversions
+ * observe AHP and ignore FZ16. Input half flushing does not raise IDC.
  */
 #include "a64_fp.h"
 #include <string.h>
@@ -38,7 +39,7 @@ fpctx fp_ctx(hao_cpu *c)
 {
     uint32_t m = mxcsr_get();
     unsigned rc = (m >> 13) & 3;
-    fpctx x = {c, (rc == 1 || rc == 2) ? 3 - rc : rc, (m >> 15) & 1, (c->fpcr >> 25) & 1, false};
+    fpctx x = {c, (rc == 1 || rc == 2) ? 3 - rc : rc, (m >> 15) & 1, (c->fpcr >> 25) & 1, (c->fpcr >> 19) & 1, false};
     return x;
 }
 
@@ -56,7 +57,7 @@ void fp_raise(fpctx *x, unsigned f)
 
 /* ------------------------------------------------------------ formats */
 
-typedef struct { unsigned mbits, ebits; int bias; } fmt;
+typedef struct { unsigned mbits, ebits; int bias; bool ahp; } fmt;
 static fmt F(int es)
 {
     switch (es) {
@@ -113,6 +114,7 @@ static fpu unpack(fpctx *x, int es, uint64_t v)
     if (e == (1ull << f.ebits) - 1) u.cls = m ? (((m >> (f.mbits - 1)) & 1) ? C_QNAN : C_SNAN) : C_INF;
     else if (e == 0) {
         if (!m) u.cls = C_ZERO;
+        else if (es == 2 && x->fz16) u.cls = C_ZERO; /* no IDC for half inputs */
         else if (x->fz && es != 2) { u.cls = C_ZERO; fp_raise(x, FPX_IDC); }
         else { u.cls = C_NUM; u.m = m; u.e = 1 - f.bias - (int)f.mbits; }
     } else { u.cls = C_NUM; u.m = m | 1ull << f.mbits; u.e = (int)e - f.bias - (int)f.mbits; }
@@ -171,7 +173,7 @@ static uint64_t round_pack_format(fpctx *x, int es, fmt f, int sign, int e, u128
         m = 1; e -= 200; sticky = false;                   /* a nonzero tail only: far below anything */
     }
     int L = msb128(m), E = e + L;                          /* value in [2^E, 2^(E+1)) */
-    if (x->fz && (es != 2 || f.ebits == 8) && E < emin) {                    /* flush to zero before rounding */
+    if (((es == 2 && f.ebits == 5) ? x->fz16 : x->fz) && E < emin) {                    /* flush to zero before rounding */
         fp_raise(x, FPX_UFC);
         return zero_of(es, sign);
     }
@@ -201,12 +203,18 @@ static uint64_t round_pack_format(fpctx *x, int es, fmt f, int sign, int e, u128
     if (m >> p) { m >>= 1; lsb++; }                        /* carry out of a normal mantissa */
     if (m >> (p - 1)) be = lsb + (int)f.mbits + f.bias;    /* normal (including subnormal rounded up) */
     else be = 0;
+    if (f.ahp && be >= (1 << f.ebits)) {
+        /* Alternative half has no infinities. Overflow saturates with IOC,
+         * suppressing IXC even when rounding crossed the finite limit. */
+        fp_raise(x, FPX_IOC);
+        return (sign ? signbit_of(es) : 0) | 0x7fff;
+    }
     if (inexact) {
         unsigned fl = FPX_IXC;
         if (tiny) fl |= FPX_UFC;
         fp_raise(x, fl);
     }
-    if (be >= (1 << f.ebits) - 1) {                        /* overflow */
+    if (!f.ahp && be >= (1 << f.ebits) - 1) {                        /* overflow */
         fp_raise(x, FPX_OFC | FPX_IXC);
         bool to_inf = mode == RND_BF_ODD || mode == FPR_N || mode == FPR_A || (mode == FPR_P && !sign) || (mode == FPR_M && sign);
         if (to_inf) return (sign ? signbit_of(es) : 0) | (((1ull << f.ebits) - 1) << f.mbits);
@@ -868,7 +876,7 @@ uint64_t fp_recpe(fpctx *x, int es, uint64_t a)
         if (to_inf) return inf_of(es, u.sign);
         return (u.sign ? signbit_of(es) : 0) | (((1ull << f.ebits) - 2) << f.mbits) | ((1ull << f.mbits) - 1);
     }
-    if (x->fz && es != 2 && exp >= 2 * f.bias - 1) {      /* result would be denormal: flushed */
+    if ((es == 2 ? x->fz16 : x->fz) && exp >= 2 * f.bias - 1) {      /* result would be denormal: flushed */
         fp_raise(x, FPX_UFC);
         return zero_of(es, u.sign);
     }
@@ -979,11 +987,31 @@ static uint64_t convert_nan(fpctx *x, uint64_t a, int from, int to)
 }
 uint64_t fp_cvt(fpctx *x, uint64_t a, int from, int to)
 {
-    if (fp_isnan(a, from)) return convert_nan(x, a, from, to);
-    fpu u = unpack(x, from, a);
+    /* FPUnpackCV/FPRoundCV suppress FZ16. AHP applies only to these
+     * conversions, never to half arithmetic or integer conversions. */
+    fpctx cv = *x;
+    cv.fz16 = false;
+    bool alt_from = from == 2 && (x->c->fpcr & (1u << 26));
+    bool alt_to = to == 2 && (x->c->fpcr & (1u << 26));
+    int sign = (int)(a >> (from * 8 - 1)) & 1;
+    if (!alt_from && fp_isnan(a, from)) {
+        if (!alt_to) return convert_nan(&cv, a, from, to);
+        fp_raise(&cv, FPX_IOC);
+        return zero_of(to, sign);             /* includes quiet NaNs, regardless of DN */
+    }
+    fpu u = unpack(&cv, from, a);
+    if (alt_from && (a & 0x7c00) == 0x7c00) {
+        u.cls = C_NUM; u.e = 6; u.m = 0x400 | (a & 0x3ff);
+    }
     if (u.cls == C_ZERO) return zero_of(to, u.sign);
-    if (u.cls == C_INF) return inf_of(to, u.sign);
-    return round_pack(x, to, u.sign, u.e, u.m, false);
+    if (u.cls == C_INF) {
+        if (!alt_to) return inf_of(to, u.sign);
+        fp_raise(&cv, FPX_IOC);
+        return zero_of(to, u.sign) | 0x7fff;
+    }
+    fmt f = F(to);
+    f.ahp = alt_to;
+    return round_pack_format(&cv, to, f, u.sign, u.e, u.m, false, (int)cv.rmode);
 }
 uint16_t fp_bfcvt(fpctx *x, uint32_t a)
 {
@@ -1001,7 +1029,9 @@ uint16_t fp_bfcvt(fpctx *x, uint32_t a)
 uint32_t fp_widen_half(fpctx *x, uint16_t a)
 {
     if ((a & 0x7c00) == 0x7c00) return (uint32_t)(a & 0x8000) << 16 | 0x7f800000 | (uint32_t)(a & 0x3ff) << 13;
-    return (uint32_t)fp_cvt(x, a, 2, 4);
+    fpu u = unpack(x, 2, a);                  /* arithmetic: observe FZ16, ignore AHP */
+    if (u.cls == C_ZERO) return (uint32_t)zero_of(4, u.sign);
+    return (uint32_t)round_pack(x, 4, u.sign, u.e, u.m, false);
 }
 /* BF dot products use their own FP environment and integer arithmetic:
  * no speculative host operation may leak a flag into the guest environment. */

@@ -43,7 +43,7 @@ boundary, with runtime-sized values handled where the layout is proven.
 
 **Instructions**
 - SVE, SME and SM3/SM4 are treated as undefined instructions.
-- Half precision does not model FZ16 or AHP.
+- FPCR.AH, FIZ and NEP (FEAT_AFP) are not modeled.
 
 **Execution**
 - Only code in loaded guest images is translated. ARM64 code a program

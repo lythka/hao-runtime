@@ -712,9 +712,9 @@ Inline run ranges (93.3–102.7) do not overlap the C-only ranges
 (176.3–246.8). FP32 FMLA stays at 18.7–21.3 in every build. Rosetta re-translates
 the inline expansion, so its timing does not predict Intel performance.
 
-Limits: FZ16/AHP and other unsupported controls retain the existing helper;
-the interpreter does not model FZ16/AHP, so those controls are tested for
-fallback equality, not native correctness. Binary64-inexact sums and
+Limits: FZ16/AHP retain the shared helper; their native correctness is
+covered by the half-control matrix below. Other controls outside the inline
+contract also retain helpers. Binary64-inexact sums and
 nonordinary inputs retain helpers. The expansion has substantial code size:
 the normal-input timing program grows from 53 KiB to 210 KiB of translated
 code. The recovery probe covers a synchronous fault after completed
@@ -722,6 +722,55 @@ operations; every possible asynchronous interruption point is not
 exhaustively tested. The exactness admission is shown by helper routing,
 not by a result difference: no directed double-rounding value case exists
 yet. Application latency and release-image acceptance remain unmeasured.
+
+## Half-precision FZ16 and alternative-format conversions
+
+The shared FP environment omitted FZ16, and FP-to-FP conversion treated every
+half value as IEEE binary16 regardless of AHP. Half arithmetic now flushes
+subnormal inputs to signed zero under FZ16 without raising IDC. Tiny results
+flush before rounding with UFC and no added IXC. FZ independently governs
+single/double inputs and results; DN retains its NaN behavior. Comparisons,
+estimates, integer/fixed conversions and widening FMLAL/FMLSL use the same
+input rule. Arithmetic ignores AHP, including widening multiplication.
+
+FP-to-FP FCVT and vector FCVTN/FCVTL ignore FZ16 in both directions, as
+specified by FPUnpackCV/FPRoundCV. AHP makes half exponent 31 finite (maximum
+131008). Converting NaNs to alternative half returns signed zero with IOC;
+infinity and rounded overflow saturate to signed maximum with IOC, suppressing
+new IXC/OFC. Finite inexact results below overflow retain normal rounding/IXC.
+BFloat16 keeps its existing format and FZ behavior.
+
+Measured native examples (all other controls clear): half `0001 + 0000`
+becomes `0000`, FPSR=0 with FZ16; half `0400 * 3800` becomes `0000`, FPSR=UFC.
+The same operations with only FZ retain `0001` and `0200` with no flags.
+FCVT S,H of `0001` produces `33800000`, and FCVT H,S of `33800000` produces
+`0001`, with no flags whether FZ16 is clear or set. These follow Arm's
+[FPUnpack and conversion rules](https://www.scs.stanford.edu/~zyedidia/arm64/shared_pseudocode.html).
+
+`guest/halfops` now exercises all 64 RMode/FZ/DN/FZ16/AHP settings, including
+314 existing arithmetic/compare/estimate arrangements and ten conversion or
+widening cases over 24 directed patterns. `guest/fma16` runs all 42 FMLA/FMLS
+forms over the same controls. Clear and sticky FPSR, signed zeros, denormals,
+normal boundaries, infinities, signalling/quiet NaNs and AHP range boundaries
+are compared with native ARM in interpreter, JIT, helpers-only and loaded AOT.
+The expanded halfops test fails in all four engines without the FP changes
+and passes with them. Random oracle modes also generate FZ16 and AHP.
+
+JIT/AOT control guards and emitters are unchanged: cases outside their existing
+RMode/FZ/DN contract still decline to the corrected helper. `jit.o` is byte
+identical to the baseline build. FEAT_AFP (AH/FIZ/NEP), exception trapping,
+SVE/SME, SM3/SM4 and application acceptance are outside this change.
+
+Validation: `make -j8 check` passes, including `make test`, native and
+ASan/UBSan oracles, and 102 guest/host passes with one expected failure and
+three expected skips. All tested oracle IEEE-flag differences are zero.
+A separate full-output comparison under AOT loads 346 cached blocks with
+zero JIT blocks and matches native ARM.
+
+Ordinary half helper timing under Rosetta (minimum of three interleaved runs,
+200,000 iterations with 16 independent operations, native result equality):
+FMUL H 25.25 to 24.09 ns/op; FCVT S,H 8.88 to 8.75 ns/op. These include loop
+overhead and concurrent host load and are not Intel performance acceptance.
 
 ## FP16 fused multiply-add rounding
 
@@ -763,8 +812,8 @@ and three expected skips, with no unexpected failure or fork type-at crash.
 On Intel hardware (i5-3210M, 26B131, a bundled hao with JIT, seven
 interleaved runs), the median ns/FMLA .8H falls from 329 to 178 (three-same)
 and from 355 to 205 (by element); FP32 FMLA stays at 19.5 as a control.
-Application acceptance is not measured. FZ16/AHP still decline the fast path; the existing full
-interpreter path does not model those controls, and is unchanged here.
+Application acceptance is not measured. FZ16/AHP still decline the fast path;
+the shared interpreter models them as described in the half-control section.
 
 ## Nils of standard Swift types: pointer words, single inhabitants, tag bytes, Data
 

@@ -642,19 +642,56 @@ c309,
 c310,
 c311
 };
+CASE(cv0, "fcvt h0, s0")
+CASE(cv1, "fcvt h0, d0")
+CASE(cv2, "fcvt s0, h0")
+CASE(cv3, "fcvt d0, h0")
+CASE(cv4, "fcvtn v0.4h, v0.4s")
+CASE(cv5, "fcvtn2 v0.8h, v1.4s")
+CASE(cv6, "fcvtl v0.4s, v0.4h")
+CASE(cv7, "fcvtl2 v0.4s, v0.8h")
+CASE(cv8, "fmlal v0.4s, v1.4h, v1.4h")
+CASE(cv9, "fmlsl2 v0.4s, v1.4h, v1.4h")
+static uint64_t control(unsigned cr) {
+    return ((uint64_t)(cr & 15) << 22) | ((uint64_t)(cr & 16) << 15) | ((uint64_t)(cr & 32) << 21);
+}
 int main(void) {
     static const uint64_t inputs[]={0,0x800000007c00fc00ULL,0x7d017e017fff7c01ULL,
         0x000103ff04000401ULL,0x3bff3c003c013e00ULL,0x7bfffbff3555b555ULL,
         0x800183ff84008401ULL,0x0001800100028002ULL,0x4000c0004c00cc00ULL};
     for (unsigned c=0;c<sizeof cases/sizeof *cases;c++) {
-        for (unsigned cr=0;cr<16;cr++)
+        for (unsigned cr=0;cr<64;cr++)
             for (unsigned a=0;a<sizeof inputs/sizeof *inputs;a++)
                 for (unsigned b=0;b<sizeof inputs/sizeof *inputs;b++) {
                     vec x={inputs[a],~inputs[a]},y={inputs[b],~inputs[b]};
-                    uint64_t fpcr=((cr&3)<<22)|((cr&4)<<22)|((cr&8)<<22);
+                    uint64_t fpcr=control(cr);
                     cases[c](x,y,fpcr,0);cases[c](x,y,fpcr,0x0800009f);
                 }
         printf("%u %016llx\n",c,(unsigned long long)hash);
     }
+    void (*conversions[])(vec,vec,uint64_t,uint64_t) = {cv0,cv1,cv2,cv3,cv4,cv5,cv6,cv7,cv8,cv9};
+    static const uint64_t cv_inputs[] = {
+        0, 0x8000000000000000ull, 1, 0x8001800100010001ull,
+        0x03ff04007c007fffull, 0x7e007d01fc00ffffull,
+        0x7fc000007f800000ull, 0xff8000007f800001ull,
+        0x0000000100800000ull, 0x3380000033800001ull,
+        0x387fe00038800000ull, 0x477fe00047800000ull,
+        0x47ffe00047ffdfffull, 0x47fff00048000000ull,
+        0xc8000000c7ffe000ull, 0x3e70000000000000ull,
+        0x3f0ffc0000000000ull, 0x40fff00000000000ull,
+        0x40fffe0000000000ull, 0x40ffff0000000000ull,
+        0x4100000000000000ull, 0x7ff0000000000000ull,
+        0xfff8000000000000ull, 0x7ff0000000000001ull
+    };
+    for (unsigned c=0;c<sizeof conversions/sizeof *conversions;c++)
+        for (unsigned cr=0;cr<64;cr++) {
+            hash=0xcbf29ce484222325ull;
+            for (unsigned a=0;a<sizeof cv_inputs/sizeof *cv_inputs;a++) {
+                vec x={cv_inputs[a],~cv_inputs[a]}, y={~cv_inputs[a],cv_inputs[a]};
+                conversions[c](x,y,control(cr),0);
+                conversions[c](x,y,control(cr),0x0800009f);
+            }
+            printf("conversion %u control %u %016llx\n",c,cr,(unsigned long long)hash);
+        }
     return 0;
 }

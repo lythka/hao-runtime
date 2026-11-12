@@ -10,7 +10,7 @@
  * `sreg` that no field of the code names, runs the code, and stores the whole
  * output state. Modes:
  *   dp, simd, mem  one random encoding of that class; simd and block records
- *                  run under a random FPCR (rounding mode, FZ, DN)
+ *                  run under a random FPCR (rounding mode, FZ, DN, FZ16, AHP)
  *   mem            base registers point into scratch memory, some into a
  *                  read-only page (loads, LDXP/LDAXP included, must work there)
  *   block          2-8 instructions mixing flag producers, x86-flag-clobbering
@@ -225,6 +225,8 @@ static uint32_t random_fpcr(void)
     uint32_t f = rr(4) << 22;                 /* RMode */
     if (!rr(4)) f |= 1u << 24;                /* FZ */
     if (!rr(4)) f |= 1u << 25;                /* DN */
+    if (!rr(4)) f |= 1u << 19;                /* FZ16 */
+    if (!rr(4)) f |= 1u << 26;                /* AHP */
     return f;
 }
 
@@ -505,7 +507,7 @@ int main(int argc, char **argv)
         r.in.fpsr = rr(4) ? 0 : (uint32_t)(rnd() & 0x0800009f);
         if (mode == OM_FMA) {
             fma_gen(&r, true);
-            r.in.fpcr = rr(16) << 22;                        /* RMode, FZ, DN: all sixteen */
+            r.in.fpcr = random_fpcr();                       /* RMode, FZ, DN, FZ16, AHP */
             r.in.fpsr = rr(2) ? 0 : (uint32_t)(rnd() & 0x0800009f);
         }
 
