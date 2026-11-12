@@ -715,3 +715,5 @@ tests/aot/integer_mutations.sh
 tests/aot/fp_coverage_mutations.sh
 tests/aot/register_shift_mutations.sh
 src/jit-conversions.inc
+
+tests/aot/structure_mutations.sh

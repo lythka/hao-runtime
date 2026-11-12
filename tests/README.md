@@ -393,3 +393,15 @@ includes FZ input and output cases that previously lost IDC or added IXC.
 `guest/coverage-bench` adds twenty-six ordinary conversion workloads.
 `aot/fp-coverage-mutations` additionally replaces all conversion rounding
 modes with truncation and requires the complete-state test to detect it.
+
+`aot/structure-mutations` requires a passing unmodified vector test, then
+checks that incorrect interleaving and publishing load destinations before
+the final memory access each fail. The vector test covers all LD2/3/4 and
+ST2/3/4 multiple-structure arrangements, immediate/register post-index,
+wrapped register lists, SP, base/offset aliases, and every byte boundary in
+a 64-byte transfer into an inaccessible page. `guest/jitinsns` checks all
+126 arrangement/addressing combinations against native ARM in every engine;
+its signal probes additionally check recovered PC, NZCV and writeback when
+interleaved transfers fault partway, skip or resume after page repair.
+`guest/coverage-bench` includes 42 interleaved memory forms for native
+checksums, separate helper statistics and uninstrumented timings.

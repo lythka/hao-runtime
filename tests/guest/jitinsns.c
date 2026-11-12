@@ -691,6 +691,132 @@ static void runf(const char *name, fnf f)
         for (int k = 0; k < 48; k++) h = mix(h, buf[k]);                                \
         return h;                                                                       \
     }
+LDST(t_ld2_8b_n, "ld2 {v2.8b, v3.8b}, [x0]")
+LDST(t_ld2_8b_i, "ld2 {v2.8b, v3.8b}, [x0], #16")
+LDST(t_ld2_8b_r, "ld2 {v2.8b, v3.8b}, [x0], x1")
+LDST(t_ld2_16b_n, "ld2 {v2.16b, v3.16b}, [x0]")
+LDST(t_ld2_16b_i, "ld2 {v2.16b, v3.16b}, [x0], #32")
+LDST(t_ld2_16b_r, "ld2 {v2.16b, v3.16b}, [x0], x1")
+LDST(t_ld2_4h_n, "ld2 {v2.4h, v3.4h}, [x0]")
+LDST(t_ld2_4h_i, "ld2 {v2.4h, v3.4h}, [x0], #16")
+LDST(t_ld2_4h_r, "ld2 {v2.4h, v3.4h}, [x0], x1")
+LDST(t_ld2_8h_n, "ld2 {v2.8h, v3.8h}, [x0]")
+LDST(t_ld2_8h_i, "ld2 {v2.8h, v3.8h}, [x0], #32")
+LDST(t_ld2_8h_r, "ld2 {v2.8h, v3.8h}, [x0], x1")
+LDST(t_ld2_2s_n, "ld2 {v2.2s, v3.2s}, [x0]")
+LDST(t_ld2_2s_i, "ld2 {v2.2s, v3.2s}, [x0], #16")
+LDST(t_ld2_2s_r, "ld2 {v2.2s, v3.2s}, [x0], x1")
+LDST(t_ld2_4s_n, "ld2 {v2.4s, v3.4s}, [x0]")
+LDST(t_ld2_4s_i, "ld2 {v2.4s, v3.4s}, [x0], #32")
+LDST(t_ld2_4s_r, "ld2 {v2.4s, v3.4s}, [x0], x1")
+LDST(t_ld2_2d_n, "ld2 {v2.2d, v3.2d}, [x0]")
+LDST(t_ld2_2d_i, "ld2 {v2.2d, v3.2d}, [x0], #32")
+LDST(t_ld2_2d_r, "ld2 {v2.2d, v3.2d}, [x0], x1")
+LDST(t_ld3_8b_n, "ld3 {v2.8b, v3.8b, v4.8b}, [x0]")
+LDST(t_ld3_8b_i, "ld3 {v2.8b, v3.8b, v4.8b}, [x0], #24")
+LDST(t_ld3_8b_r, "ld3 {v2.8b, v3.8b, v4.8b}, [x0], x1")
+LDST(t_ld3_16b_n, "ld3 {v2.16b, v3.16b, v4.16b}, [x0]")
+LDST(t_ld3_16b_i, "ld3 {v2.16b, v3.16b, v4.16b}, [x0], #48")
+LDST(t_ld3_16b_r, "ld3 {v2.16b, v3.16b, v4.16b}, [x0], x1")
+LDST(t_ld3_4h_n, "ld3 {v2.4h, v3.4h, v4.4h}, [x0]")
+LDST(t_ld3_4h_i, "ld3 {v2.4h, v3.4h, v4.4h}, [x0], #24")
+LDST(t_ld3_4h_r, "ld3 {v2.4h, v3.4h, v4.4h}, [x0], x1")
+LDST(t_ld3_8h_n, "ld3 {v2.8h, v3.8h, v4.8h}, [x0]")
+LDST(t_ld3_8h_i, "ld3 {v2.8h, v3.8h, v4.8h}, [x0], #48")
+LDST(t_ld3_8h_r, "ld3 {v2.8h, v3.8h, v4.8h}, [x0], x1")
+LDST(t_ld3_2s_n, "ld3 {v2.2s, v3.2s, v4.2s}, [x0]")
+LDST(t_ld3_2s_i, "ld3 {v2.2s, v3.2s, v4.2s}, [x0], #24")
+LDST(t_ld3_2s_r, "ld3 {v2.2s, v3.2s, v4.2s}, [x0], x1")
+LDST(t_ld3_4s_n, "ld3 {v2.4s, v3.4s, v4.4s}, [x0]")
+LDST(t_ld3_4s_i, "ld3 {v2.4s, v3.4s, v4.4s}, [x0], #48")
+LDST(t_ld3_4s_r, "ld3 {v2.4s, v3.4s, v4.4s}, [x0], x1")
+LDST(t_ld3_2d_n, "ld3 {v2.2d, v3.2d, v4.2d}, [x0]")
+LDST(t_ld3_2d_i, "ld3 {v2.2d, v3.2d, v4.2d}, [x0], #48")
+LDST(t_ld3_2d_r, "ld3 {v2.2d, v3.2d, v4.2d}, [x0], x1")
+LDST(t_ld4_8b_n, "ld4 {v2.8b, v3.8b, v4.8b, v5.8b}, [x0]")
+LDST(t_ld4_8b_i, "ld4 {v2.8b, v3.8b, v4.8b, v5.8b}, [x0], #32")
+LDST(t_ld4_8b_r, "ld4 {v2.8b, v3.8b, v4.8b, v5.8b}, [x0], x1")
+LDST(t_ld4_16b_n, "ld4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0]")
+LDST(t_ld4_16b_i, "ld4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0], #64")
+LDST(t_ld4_16b_r, "ld4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0], x1")
+LDST(t_ld4_4h_n, "ld4 {v2.4h, v3.4h, v4.4h, v5.4h}, [x0]")
+LDST(t_ld4_4h_i, "ld4 {v2.4h, v3.4h, v4.4h, v5.4h}, [x0], #32")
+LDST(t_ld4_4h_r, "ld4 {v2.4h, v3.4h, v4.4h, v5.4h}, [x0], x1")
+LDST(t_ld4_8h_n, "ld4 {v2.8h, v3.8h, v4.8h, v5.8h}, [x0]")
+LDST(t_ld4_8h_i, "ld4 {v2.8h, v3.8h, v4.8h, v5.8h}, [x0], #64")
+LDST(t_ld4_8h_r, "ld4 {v2.8h, v3.8h, v4.8h, v5.8h}, [x0], x1")
+LDST(t_ld4_2s_n, "ld4 {v2.2s, v3.2s, v4.2s, v5.2s}, [x0]")
+LDST(t_ld4_2s_i, "ld4 {v2.2s, v3.2s, v4.2s, v5.2s}, [x0], #32")
+LDST(t_ld4_2s_r, "ld4 {v2.2s, v3.2s, v4.2s, v5.2s}, [x0], x1")
+LDST(t_ld4_4s_n, "ld4 {v2.4s, v3.4s, v4.4s, v5.4s}, [x0]")
+LDST(t_ld4_4s_i, "ld4 {v2.4s, v3.4s, v4.4s, v5.4s}, [x0], #64")
+LDST(t_ld4_4s_r, "ld4 {v2.4s, v3.4s, v4.4s, v5.4s}, [x0], x1")
+LDST(t_ld4_2d_n, "ld4 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0]")
+LDST(t_ld4_2d_i, "ld4 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0], #64")
+LDST(t_ld4_2d_r, "ld4 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0], x1")
+LDST(t_st2_8b_n, "st2 {v2.8b, v3.8b}, [x0]")
+LDST(t_st2_8b_i, "st2 {v2.8b, v3.8b}, [x0], #16")
+LDST(t_st2_8b_r, "st2 {v2.8b, v3.8b}, [x0], x1")
+LDST(t_st2_16b_n, "st2 {v2.16b, v3.16b}, [x0]")
+LDST(t_st2_16b_i, "st2 {v2.16b, v3.16b}, [x0], #32")
+LDST(t_st2_16b_r, "st2 {v2.16b, v3.16b}, [x0], x1")
+LDST(t_st2_4h_n, "st2 {v2.4h, v3.4h}, [x0]")
+LDST(t_st2_4h_i, "st2 {v2.4h, v3.4h}, [x0], #16")
+LDST(t_st2_4h_r, "st2 {v2.4h, v3.4h}, [x0], x1")
+LDST(t_st2_8h_n, "st2 {v2.8h, v3.8h}, [x0]")
+LDST(t_st2_8h_i, "st2 {v2.8h, v3.8h}, [x0], #32")
+LDST(t_st2_8h_r, "st2 {v2.8h, v3.8h}, [x0], x1")
+LDST(t_st2_2s_n, "st2 {v2.2s, v3.2s}, [x0]")
+LDST(t_st2_2s_i, "st2 {v2.2s, v3.2s}, [x0], #16")
+LDST(t_st2_2s_r, "st2 {v2.2s, v3.2s}, [x0], x1")
+LDST(t_st2_4s_n, "st2 {v2.4s, v3.4s}, [x0]")
+LDST(t_st2_4s_i, "st2 {v2.4s, v3.4s}, [x0], #32")
+LDST(t_st2_4s_r, "st2 {v2.4s, v3.4s}, [x0], x1")
+LDST(t_st2_2d_n, "st2 {v2.2d, v3.2d}, [x0]")
+LDST(t_st2_2d_i, "st2 {v2.2d, v3.2d}, [x0], #32")
+LDST(t_st2_2d_r, "st2 {v2.2d, v3.2d}, [x0], x1")
+LDST(t_st3_8b_n, "st3 {v2.8b, v3.8b, v4.8b}, [x0]")
+LDST(t_st3_8b_i, "st3 {v2.8b, v3.8b, v4.8b}, [x0], #24")
+LDST(t_st3_8b_r, "st3 {v2.8b, v3.8b, v4.8b}, [x0], x1")
+LDST(t_st3_16b_n, "st3 {v2.16b, v3.16b, v4.16b}, [x0]")
+LDST(t_st3_16b_i, "st3 {v2.16b, v3.16b, v4.16b}, [x0], #48")
+LDST(t_st3_16b_r, "st3 {v2.16b, v3.16b, v4.16b}, [x0], x1")
+LDST(t_st3_4h_n, "st3 {v2.4h, v3.4h, v4.4h}, [x0]")
+LDST(t_st3_4h_i, "st3 {v2.4h, v3.4h, v4.4h}, [x0], #24")
+LDST(t_st3_4h_r, "st3 {v2.4h, v3.4h, v4.4h}, [x0], x1")
+LDST(t_st3_8h_n, "st3 {v2.8h, v3.8h, v4.8h}, [x0]")
+LDST(t_st3_8h_i, "st3 {v2.8h, v3.8h, v4.8h}, [x0], #48")
+LDST(t_st3_8h_r, "st3 {v2.8h, v3.8h, v4.8h}, [x0], x1")
+LDST(t_st3_2s_n, "st3 {v2.2s, v3.2s, v4.2s}, [x0]")
+LDST(t_st3_2s_i, "st3 {v2.2s, v3.2s, v4.2s}, [x0], #24")
+LDST(t_st3_2s_r, "st3 {v2.2s, v3.2s, v4.2s}, [x0], x1")
+LDST(t_st3_4s_n, "st3 {v2.4s, v3.4s, v4.4s}, [x0]")
+LDST(t_st3_4s_i, "st3 {v2.4s, v3.4s, v4.4s}, [x0], #48")
+LDST(t_st3_4s_r, "st3 {v2.4s, v3.4s, v4.4s}, [x0], x1")
+LDST(t_st3_2d_n, "st3 {v2.2d, v3.2d, v4.2d}, [x0]")
+LDST(t_st3_2d_i, "st3 {v2.2d, v3.2d, v4.2d}, [x0], #48")
+LDST(t_st3_2d_r, "st3 {v2.2d, v3.2d, v4.2d}, [x0], x1")
+LDST(t_st4_8b_n, "st4 {v2.8b, v3.8b, v4.8b, v5.8b}, [x0]")
+LDST(t_st4_8b_i, "st4 {v2.8b, v3.8b, v4.8b, v5.8b}, [x0], #32")
+LDST(t_st4_8b_r, "st4 {v2.8b, v3.8b, v4.8b, v5.8b}, [x0], x1")
+LDST(t_st4_16b_n, "st4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0]")
+LDST(t_st4_16b_i, "st4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0], #64")
+LDST(t_st4_16b_r, "st4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x0], x1")
+LDST(t_st4_4h_n, "st4 {v2.4h, v3.4h, v4.4h, v5.4h}, [x0]")
+LDST(t_st4_4h_i, "st4 {v2.4h, v3.4h, v4.4h, v5.4h}, [x0], #32")
+LDST(t_st4_4h_r, "st4 {v2.4h, v3.4h, v4.4h, v5.4h}, [x0], x1")
+LDST(t_st4_8h_n, "st4 {v2.8h, v3.8h, v4.8h, v5.8h}, [x0]")
+LDST(t_st4_8h_i, "st4 {v2.8h, v3.8h, v4.8h, v5.8h}, [x0], #64")
+LDST(t_st4_8h_r, "st4 {v2.8h, v3.8h, v4.8h, v5.8h}, [x0], x1")
+LDST(t_st4_2s_n, "st4 {v2.2s, v3.2s, v4.2s, v5.2s}, [x0]")
+LDST(t_st4_2s_i, "st4 {v2.2s, v3.2s, v4.2s, v5.2s}, [x0], #32")
+LDST(t_st4_2s_r, "st4 {v2.2s, v3.2s, v4.2s, v5.2s}, [x0], x1")
+LDST(t_st4_4s_n, "st4 {v2.4s, v3.4s, v4.4s, v5.4s}, [x0]")
+LDST(t_st4_4s_i, "st4 {v2.4s, v3.4s, v4.4s, v5.4s}, [x0], #64")
+LDST(t_st4_4s_r, "st4 {v2.4s, v3.4s, v4.4s, v5.4s}, [x0], x1")
+LDST(t_st4_2d_n, "st4 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0]")
+LDST(t_st4_2d_i, "st4 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0], #64")
+LDST(t_st4_2d_r, "st4 {v2.2d, v3.2d, v4.2d, v5.2d}, [x0], x1")
 LDST(t_ld1a, "ld1 {v2.16b}, [x0]")
 LDST(t_ld1b, "ld1 {v2.8b, v3.8b}, [x0], #16")
 LDST(t_ld1c, "ld1 {v2.4s, v3.4s, v4.4s}, [x0], x1")
@@ -727,6 +853,7 @@ LDST(t_ld1sp, "mov x9, sp\nsub sp, sp, #128\nst1 {v2.16b, v3.16b, v4.16b, v5.16b
  * whether it skips the load (pc + 4) or repairs the page and returns to it. */
 static volatile uint64_t sg_pc, sg_seen_pc, sg_seen_nzcv, sg_seen_x0, sg_flip, sg_count, sg_repair;
 static uint64_t *sg_page;
+static volatile uint64_t sg_seen_x2;
 static void sg_fault(int sig, siginfo_t *si, void *ctx)
 {
     (void)sig; (void)si;
@@ -735,6 +862,7 @@ static void sg_fault(int sig, siginfo_t *si, void *ctx)
     sg_seen_pc = pc - sg_pc;
     sg_seen_nzcv = SS(uc).__cpsr >> 28;
     sg_seen_x0 = SS(uc).__x[0];
+    sg_seen_x2 = SS(uc).__x[2];
     sg_count++;
     SS(uc).__cpsr ^= (uint32_t)sg_flip << 28;
     if (sg_repair) mprotect(sg_page, 16384, PROT_READ | PROT_WRITE);
@@ -763,6 +891,36 @@ NOINL static uint64_t sg_probe_v(uint64_t a, uint64_t b, uint64_t *p, uint64_t *
     *fl = x4;
     return mix(x3, (uint64_t)((uint8_t *)x2 - (uint8_t *)p));
 }
+/* Interleaved structures fault after earlier elements have been accessed.
+ * Native ARM may leave destination vectors UNKNOWN on an abort; skip cases
+ * therefore check PC/NZCV/base, and repaired cases also check all results. */
+#define SG_STRUCTURE(name, insn) \
+NOINL static uint64_t name(uint64_t *p, uint64_t *fl) \
+{ \
+    uint64_t out[8]; \
+    register uint64_t x0 __asm__("x0") = 3, x1 __asm__("x1") = 7; \
+    register uint64_t *x2 __asm__("x2") = p; \
+    register uint64_t x3 __asm__("x3") = 0, x4 __asm__("x4") = 0; \
+    register volatile uint64_t *x5 __asm__("x5") = &sg_pc; \
+    register uint64_t *x6 __asm__("x6") = out; \
+    __asm__ volatile("movi v2.16b, #2\nmovi v3.16b, #3\nmovi v4.16b, #4\nmovi v5.16b, #5\n" \
+                     "adr x9, 1f\nstr x9, [x5]\ncmp x0, x1\n1: " insn "\nmrs x4, nzcv\n" \
+                     "stp q2, q3, [x6]\nstp q4, q5, [x6, #32]" \
+                     : "+r"(x3), "+r"(x4), "+r"(x2) : "r"(x0), "r"(x1), "r"(x5), "r"(x6) \
+                     : "cc", "memory", "x9", "v2", "v3", "v4", "v5"); \
+    *fl = x4; \
+    uint64_t h = mix(x3, (uint64_t)((uint8_t *)x2 - (uint8_t *)p)); \
+    h = mix(h, sg_seen_x2 - (uint64_t)(uintptr_t)p); \
+    if (sg_repair) for (int k = 0; k < 8; k++) h = mix(h, out[k]); \
+    return h; \
+}
+SG_STRUCTURE(sg_ld2, "ld2 {v2.2d, v3.2d}, [x2], #32")
+SG_STRUCTURE(sg_ld3, "ld3 {v2.8h, v3.8h, v4.8h}, [x2], x1")
+SG_STRUCTURE(sg_ld4, "ld4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x2], #64")
+SG_STRUCTURE(sg_st2, "st2 {v2.2d, v3.2d}, [x2], #32")
+SG_STRUCTURE(sg_st3, "st3 {v2.8h, v3.8h, v4.8h}, [x2], x1")
+SG_STRUCTURE(sg_st4, "st4 {v2.16b, v3.16b, v4.16b, v5.16b}, [x2], #64")
+
 static void sigctx(void)
 {
     struct sigaction sa;
@@ -797,6 +955,24 @@ static void sigctx(void)
             }
         printf("%-10s %016llx\n", repair ? "sigv-repair" : "sigv-skip", (unsigned long long)h);
     }
+    munmap(sg_page, 16384);
+    uint8_t *pages = mmap(NULL, 32768, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    sg_page = (uint64_t *)(pages + 16384);
+    uint64_t (*probes[])(uint64_t *, uint64_t *) = {sg_ld2, sg_ld3, sg_ld4, sg_st2, sg_st3, sg_st4};
+    for (unsigned kind = 0; kind < 6; kind++) for (unsigned repair = 0; repair < 2; repair++) {
+        uint64_t h = 0;
+        for (unsigned offset = 1; offset <= 24; offset++) {
+            mprotect(sg_page, 16384, PROT_READ | PROT_WRITE);
+            for (unsigned b = 0; b < 32768; b++) pages[b] = (uint8_t)(b * 13 + offset);
+            mprotect(sg_page, 16384, PROT_NONE);
+            sg_repair = repair; sg_flip = offset & 15;
+            uint64_t fl, r = probes[kind]((uint64_t *)(pages + 16384 - offset), &fl);
+            h = mix(mix(mix(mix(mix(h, r), fl), sg_seen_pc), sg_seen_nzcv), sg_count);
+            if (repair) for (int b = -64; b < 64; b++) h = mix(h, pages[16384 + b]);
+        }
+        printf("sigstr-%u-%u %016llx\n", kind, repair, (unsigned long long)h);
+    }
+    munmap(pages, 32768);
     signal(SIGSEGV, SIG_DFL);
     signal(SIGBUS, SIG_DFL);
 }
@@ -1684,6 +1860,132 @@ int main(void)
     R(ld1a); R(ld1b); R(ld1c); R(ld1d); R(ld1e); R(ld1f); R(st1a); R(st1b); R(st1c); R(st1d); R(st1e);
     R(ld1r0); R(ld1r1); R(ld1r2); R(ld1r3); R(ld1r4); R(ld1r5);
     R(ld1l0); R(ld1l1); R(ld1l2); R(ld1l3); R(st1l0); R(st1l1); R(st1l2); R(st1l3); R(ld1sp);
+    R(ld2_8b_n);
+    R(ld2_8b_i);
+    R(ld2_8b_r);
+    R(ld2_16b_n);
+    R(ld2_16b_i);
+    R(ld2_16b_r);
+    R(ld2_4h_n);
+    R(ld2_4h_i);
+    R(ld2_4h_r);
+    R(ld2_8h_n);
+    R(ld2_8h_i);
+    R(ld2_8h_r);
+    R(ld2_2s_n);
+    R(ld2_2s_i);
+    R(ld2_2s_r);
+    R(ld2_4s_n);
+    R(ld2_4s_i);
+    R(ld2_4s_r);
+    R(ld2_2d_n);
+    R(ld2_2d_i);
+    R(ld2_2d_r);
+    R(ld3_8b_n);
+    R(ld3_8b_i);
+    R(ld3_8b_r);
+    R(ld3_16b_n);
+    R(ld3_16b_i);
+    R(ld3_16b_r);
+    R(ld3_4h_n);
+    R(ld3_4h_i);
+    R(ld3_4h_r);
+    R(ld3_8h_n);
+    R(ld3_8h_i);
+    R(ld3_8h_r);
+    R(ld3_2s_n);
+    R(ld3_2s_i);
+    R(ld3_2s_r);
+    R(ld3_4s_n);
+    R(ld3_4s_i);
+    R(ld3_4s_r);
+    R(ld3_2d_n);
+    R(ld3_2d_i);
+    R(ld3_2d_r);
+    R(ld4_8b_n);
+    R(ld4_8b_i);
+    R(ld4_8b_r);
+    R(ld4_16b_n);
+    R(ld4_16b_i);
+    R(ld4_16b_r);
+    R(ld4_4h_n);
+    R(ld4_4h_i);
+    R(ld4_4h_r);
+    R(ld4_8h_n);
+    R(ld4_8h_i);
+    R(ld4_8h_r);
+    R(ld4_2s_n);
+    R(ld4_2s_i);
+    R(ld4_2s_r);
+    R(ld4_4s_n);
+    R(ld4_4s_i);
+    R(ld4_4s_r);
+    R(ld4_2d_n);
+    R(ld4_2d_i);
+    R(ld4_2d_r);
+    R(st2_8b_n);
+    R(st2_8b_i);
+    R(st2_8b_r);
+    R(st2_16b_n);
+    R(st2_16b_i);
+    R(st2_16b_r);
+    R(st2_4h_n);
+    R(st2_4h_i);
+    R(st2_4h_r);
+    R(st2_8h_n);
+    R(st2_8h_i);
+    R(st2_8h_r);
+    R(st2_2s_n);
+    R(st2_2s_i);
+    R(st2_2s_r);
+    R(st2_4s_n);
+    R(st2_4s_i);
+    R(st2_4s_r);
+    R(st2_2d_n);
+    R(st2_2d_i);
+    R(st2_2d_r);
+    R(st3_8b_n);
+    R(st3_8b_i);
+    R(st3_8b_r);
+    R(st3_16b_n);
+    R(st3_16b_i);
+    R(st3_16b_r);
+    R(st3_4h_n);
+    R(st3_4h_i);
+    R(st3_4h_r);
+    R(st3_8h_n);
+    R(st3_8h_i);
+    R(st3_8h_r);
+    R(st3_2s_n);
+    R(st3_2s_i);
+    R(st3_2s_r);
+    R(st3_4s_n);
+    R(st3_4s_i);
+    R(st3_4s_r);
+    R(st3_2d_n);
+    R(st3_2d_i);
+    R(st3_2d_r);
+    R(st4_8b_n);
+    R(st4_8b_i);
+    R(st4_8b_r);
+    R(st4_16b_n);
+    R(st4_16b_i);
+    R(st4_16b_r);
+    R(st4_4h_n);
+    R(st4_4h_i);
+    R(st4_4h_r);
+    R(st4_8h_n);
+    R(st4_8h_i);
+    R(st4_8h_r);
+    R(st4_2s_n);
+    R(st4_2s_i);
+    R(st4_2s_r);
+    R(st4_4s_n);
+    R(st4_4s_i);
+    R(st4_4s_r);
+    R(st4_2d_n);
+    R(st4_2d_i);
+    R(st4_2d_r);
     sigctx();
     pthread_t th[NT];
     for (uintptr_t k = 0; k < NT; k++) pthread_create(&th[k], NULL, worker, (void *)k);
