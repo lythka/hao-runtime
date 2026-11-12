@@ -10,6 +10,7 @@
 #define collect_witness_patches hao_sv_collect_witness_patches
 #define collect_inline_patches hao_sv_collect_inline_patches
 #define discover_enum_case hao_sv_discover_enum_case
+#define discover_fixed_enum_case hao_sv_discover_fixed_enum_case
 #define common_leaf_value hao_sv_common_leaf_value
 #define common_byte_optional_case hao_sv_common_byte_optional_case
 #define copy_enum_empty hao_sv_copy_enum_empty

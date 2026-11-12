@@ -624,6 +624,8 @@ tests/host/sigpolicy.c
 tests/host/sigpolicy.sh
 tests/host/sigpolicyguest.c
 tests/host/sigpolicyhelper.c
+tests/host/swiftlayout.sh
+tests/host/swiftlayout.swift
 tests/host/swiftvalue.sh
 tests/host/swiftvalue.swift
 tests/host/test_x86_emit.c
