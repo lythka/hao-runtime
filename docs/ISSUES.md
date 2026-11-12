@@ -2102,3 +2102,25 @@ where FNSTCW cannot. Nine focused state cases retain the pending invalid
 flag and cover all four unchanged rounding modes with live/dead NZCV.
 This Rosetta host preserves the flag but does not deliver the exception
 even for FWAIT; actual Intel exception delivery remains untested.
+
+## Saturating register shifts
+
+The integer three-same decoder admitted SQSHL/UQSHL and SQRSHL/UQRSHL,
+including their scalar forms, but the execution switch had no cases for them.
+They now share signed-low-byte shift decoding and right-shift rounding with
+SSHL/USHL, and check left-shift saturation before shifting. This handles
+counts outside the lane width without undefined C shifts and preserves
+sticky FPSR.QC. Eight unimplemented-encoding exceptions are removed.
+
+On the same 200,000 native SIMD records, interpreter and JIT known-UNDEF
+counts fall from 4,036 to 3,553, with no value or QC mismatch. The directed
+native comparison covers all 44 arrangements, both distinct and aliased
+shift operands, all 256 low-byte counts, eleven boundary patterns and clear
+or preset FPSR (495,616 executions per engine). JIT, interpreter, helper-only
+and AOT outputs agree with native arm64. The translated engines were run
+under Rosetta; Intel execution and performance are not measured. Other
+unimplemented SIMD forms and JIT IEEE-flag differences remain separate gaps.
+
+Validation also passes `make check`, including `make test`, the sanitizer
+oracle and the guest/host manifest (92 passes, one expected failure and
+three expected skips).
