@@ -95,3 +95,6 @@ aot/structure-mutations	600	par	tests/aot/structure_mutations.sh
 aot/wide-fp-mutations	600	par	tests/aot/wide_fp_mutations.sh
 
 aot/estimate-mutations	600	par	tests/aot/estimate_mutations.sh
+
+aot/aes-mutations	600	par	tests/aot/aes_mutations.sh
+aot/aes-profile	120	par	tests/aot/aes_profile.sh

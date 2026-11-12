@@ -86,6 +86,8 @@ modes=$(stat -f %Lp "$A" 2>/dev/null; for f in "$A"/*; do stat -f %Lp "$f"; done
 python3 - "$P" "$GEN" "$U1" "$U2" "$U3" <<'PY' && pass "A build.json aot and aot.json: 4 programs, 3 files, 3 caches, libhao $GEN, no skips or failures; every header names its guest and this libhao" || bad "A build.json aot"
 import json, os, sys
 p, gen, *uu = sys.argv[1:]
+aes_gen = bytearray.fromhex(gen); aes_gen[15] ^= 1
+gen_profiles = {gen, aes_gen.hex()}
 b = json.load(open(os.path.join(p, 'build.json')))['aot']
 a = json.load(open(os.path.join(p, 'aot.json')))
 assert b == a['summary'], 'build.json aot differs from aot.json summary'
@@ -97,7 +99,7 @@ assert sorted(x['uuid'] for x in a['programs']) == sorted(uu), a['programs']
 assert [x['paths'] for x in a['programs'] if x['uuid'] == uu[2]] == [['usr/bin/prog', 'usr/sbin/prog2']], 'hard link'
 for n in os.listdir(d):
     h = open(os.path.join(d, n), 'rb').read(136)
-    assert h[:8] == b'HAOAOT2\0' and h[16:32].hex() == n[:32] and h[32:48].hex() == gen, n
+    assert h[:8] == b'HAOAOT2\0' and h[16:32].hex() == n[:32] and h[32:48].hex() in gen_profiles, n
     assert int.from_bytes(h[8:12], 'little') == 7 and int.from_bytes(h[12:16], 'little') == 136, 'format of ' + n
     assert int.from_bytes(h[96:100], 'little') == 1 and not any(h[124:136]), 'code identity kind of ' + n
     assert os.path.relpath(os.path.join(d, n), p) in json.load(open(os.path.join(p, 'build.json')))['files'], 'hash of ' + n

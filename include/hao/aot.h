@@ -61,7 +61,7 @@ typedef struct {
     char magic[8];                               /*   0 */
     uint32_t version, hdr_size;                  /*   8, 12 */
     uint8_t uuid[16];                            /*  16: guest LC_UUID */
-    uint8_t gen[16];                             /*  32: LC_UUID of the libhao that generated the code */
+    uint8_t gen[16];                             /*  32: libhao LC_UUID, last byte XOR 1 for the AES-NI profile */
     uint64_t vmsize;                             /*  48: guest image vmsize */
     uint64_t guest_id;                           /*  56: hao_aot_guest_id() of the guest slice */
     uint32_t nblocks, nlinks;                    /*  64, 68 */

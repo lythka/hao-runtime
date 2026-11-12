@@ -20,6 +20,7 @@
  */
 #include "hao/runtime.h"
 #include <errno.h>
+#include <cpuid.h>
 #include "hao/x86.h"
 #include "hao/a64_cond.h"
 #include <stdio.h>
@@ -151,6 +152,16 @@ static uint64_t st_sites, st_sites_unaligned, st_link_skips;   /* chainable exit
 static uint64_t st_fused;             /* instructions folded into the one before them (constant chains) */
 static uint64_t st_fl_exits, st_fl_unsaved;   /* direct exits reached with NZCV in EFLAGS / of those, left unsaved */
 static int jit_disabled_native;       /* HAO_JIT_HELPERS_ONLY=1: every insn via helper */
+
+/* Optional translation features are immutable for the lifetime of a process,
+ * including fault recovery and AOT re-emission. AES is outside x86-64-v2. */
+static bool jit_aes;
+static pthread_once_t jit_cpu_once = PTHREAD_ONCE_INIT;
+static void jit_cpu_init(void)
+{
+    unsigned a, b, c, d;
+    jit_aes = __get_cpuid(1, &a, &b, &c, &d) && (c & bit_AES);
+}
 
 /* ------------------------------------------------------------ tables */
 
@@ -1959,8 +1970,8 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
 
 /* EOR3 / BCAX (FEAT_SHA3; 1100 1110 00 op Rm 0 Ra Rn Rd): obfuscated code
  * runs EOR3 through its hot loops, so the two bitwise forms are native;
- * PXOR/PANDN leave EFLAGS alone. The rest of the class (AES, SHA*, RAX1,
- * XAR) runs in the interpreter helper. */
+ * PXOR/PANDN leave EFLAGS alone. SHA*, RAX1 and XAR retain their helper;
+ * the separate AES class uses t_aes when CPUID advertises AES-NI. */
 static bool t_eor3_bcax(tctx *t, uint32_t i)
 {
     unsigned rm = BITS(i, 20, 16), ra = BITS(i, 14, 10), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
@@ -2016,6 +2027,28 @@ static const uint8_t pcmpeq[3] = {0x74, 0x75, 0x76}, pcmpgt[3] = {0x64, 0x65, 0x
 /* The x86-64-v2 forms (SSSE3, SSE4.1, SSE4.2), which hao requires of the
  * CPU (src/main.c refuses to start without them); never VEX. */
 #define P38(op, dst, src) x_sse38_rr(&t->b, op, dst, src)
+/* ARM's AddRoundKey precedes SubBytes/ShiftRows. x86's last-round
+ * instructions put it afterwards, so XOR first and pass a zero round key.
+ * AESMC cancels InvSubBytes/InvShiftRows with AESENC's forward transforms,
+ * leaving exactly MixColumns. No instruction changes EFLAGS or FPSR. */
+static bool t_aes(tctx *t, uint32_t i)
+{
+    unsigned size = BITS(i, 23, 22), op = BITS(i, 16, 12), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (!jit_aes || size || op < 4 || op > 7) return false;
+    if (op < 6) {
+        vld(t, 0, rd); vld(t, 1, rn); P(0xEF, 0, 1);          /* ARM AddRoundKey */
+        vzero(t, 1); P38(op == 4 ? 0xDD : 0xDF, 0, 1);       /* aesenclast / aesdeclast */
+    } else {
+        vld(t, 0, rn);
+        if (op == 7) P38(0xDB, 0, 0);                         /* aesimc */
+        else {
+            vzero(t, 1); P38(0xDF, 0, 1); P38(0xDC, 0, 1);  /* aesdeclast, aesenc: MixColumns */
+        }
+    }
+    vst(t, rd, 0, 1);
+    return true;
+}
+
 /* lane compares in every size: pcmpeqq (SSE4.1), pcmpgtq (SSE4.2) */
 static void vcmpeq(tctx *t, unsigned size, int d, int s) { if (size == 3) P38(0x29, d, s); else P(pcmpeq[size], d, s); }
 static void vcmpgt(tctx *t, unsigned size, int d, int s) { if (size == 3) P38(0x37, d, s); else P(pcmpgt[size], d, s); }
@@ -3849,6 +3882,8 @@ static bool t_simd_integer_indexed(tctx *t, uint32_t i)
 static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
 {
     if ((i & 0x9F200C00) == 0x0E200000) return t_simd_three_diff(t, i);
+
+    if ((i & 0xFF3E0C00) == 0x4E280800) return t_aes(t, i);
     if ((i & 0x9F200400) == 0x0E200400) return BITS(i, 15, 11) >= 0x18 ? t_vfp_three_same(t, i, pc) : t_simd_three_same(t, i);
     if ((i & 0xBFBFFC00) == 0x2EA1F800) {                     /* FSQRT .2S/.4S/.2D */
         bool dbl = BIT(i, 22); int Q = BIT(i, 30);
@@ -4304,7 +4339,11 @@ static void block_successors(const uint32_t *insns, int n, uint64_t pc, uint64_t
 
 /* The build identity: LC_UUID of the image holding this code (libhao.dylib
  * for both hao and the embedded stubs). ld64 derives it from the content,
- * so every changed build rejects every older cache. */
+ * so every changed build rejects every older cache. Bit zero of its last
+ * byte additionally names the AES translation profile. Only the base UUID
+ * and this explicit XOR-derived identity are accepted by packaging tools;
+ * the runtime requires its own exact profile, so optional AES instructions
+ * can never load on a CPU lacking AES-NI. */
 static uint8_t gen_uuid[16];
 static bool gen_ok;
 static pthread_once_t gen_once = PTHREAD_ONCE_INIT;
@@ -4322,6 +4361,8 @@ static void gen_init(void)
             memcpy(gen_uuid, ((const struct uuid_command *)lc)->uuid, 16);
             static const uint8_t zero[16];
             gen_ok = memcmp(gen_uuid, zero, 16) != 0;
+            pthread_once(&jit_cpu_once, jit_cpu_init);
+            gen_uuid[15] ^= jit_aes ? 1 : 0;
             return;
         }
         p += lc->cmdsize;
@@ -5333,6 +5374,7 @@ static void jit_init_once(void)
 {
     init_estimates();
     hao_opts_init(NULL);   /* already done by the front ends; host tests call this first */
+    pthread_once(&jit_cpu_once, jit_cpu_init);
     if (hao_opt.jit_helpers_only) jit_disabled_native = 1;
     cache_code_mb = hao_opt.jit_cache_mb ? hao_opt.jit_cache_mb : CODE_MB_DEFAULT;
     if (cache_code_mb > 1024) cache_code_mb = 1024;   /* chained links are rel32 */

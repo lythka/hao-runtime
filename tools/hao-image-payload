@@ -329,6 +329,10 @@ def macho_uuid(path):
 
 
 gen = macho_uuid(libhao)
+# Exactly the baseline and AES-NI profiles (jit.c gen_init), never arbitrary UUIDs.
+aes_gen = bytearray.fromhex(gen)
+aes_gen[15] ^= 1
+gen_profiles = {gen, aes_gen.hex()}
 if alist:
     want = []
     for l in open(alist):
@@ -388,7 +392,7 @@ def one(p):
         # hao_aot_hdr (include/hao/aot.h): 136 bytes, nblocks at 64, the kind of code identity at 96
         h = open(name, 'rb').read(136) if os.path.isfile(name) else b''
         nblocks = struct.unpack_from('<I', h, 64)[0] if len(h) == 136 else -1
-        if len(h) != 136 or h[:8] != b'HAOAOT2\0' or struct.unpack_from('<II', h, 8) != (7, 136) or h[16:32].hex() != m[3] or h[32:48].hex() != gen:
+        if len(h) != 136 or h[:8] != b'HAOAOT2\0' or struct.unpack_from('<II', h, 8) != (7, 136) or h[16:32].hex() != m[3] or h[32:48].hex() not in gen_profiles:
             p.update(status='error', why='%s: not a v7 cache of this guest and this libhao' % name)
         elif struct.unpack_from('<I', h, 96)[0] != 1:
             # bound to a code hash, not a cdhash: hao takes no such cache from /usr/lib/hao/aot
