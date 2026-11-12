@@ -56,6 +56,9 @@ uint64_t fp_muladd(fpctx *x, int es, uint64_t addend, uint64_t a, uint64_t b);  
  * False leaves output and the complete FP environment unchanged. */
 bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
                     const hao_vreg *b, int lanes, bool subtract, hao_vreg *out);
+/* Finite binary64 -> binary16, modes FPR_N/P/M/Z, flags ORed in FPSR bit
+ * positions. No FP environment access. FZ16/AHP are outside this contract. */
+uint16_t fp_round16_exact(uint64_t v, unsigned mode, unsigned *flags);
 /* Single vector fused arithmetic (2 or 4 lanes): the exact binary64 product,
  * its sum with the addend rounded to odd, and one conversion to single under
  * the guest's MXCSR. Admits normal and zero inputs whose results are not tiny

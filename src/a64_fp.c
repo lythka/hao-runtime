@@ -218,6 +218,42 @@ static uint64_t round_pack(fpctx *x, int es, int sign, int e, u128 m, bool stick
 {
     return round_pack_mode(x, es, sign, e, m, sticky, (int)x->rmode);
 }
+
+/* One rounding of a finite binary64 value to binary16. The vector FMA
+ * caller supplies exact normal/zero doubles and excludes FZ16/AHP. Work
+ * on bits only: in particular, FZ does not flush a half result. Flags are
+ * accumulated separately so a vector needs only one fp_raise. */
+uint16_t fp_round16_exact(uint64_t v, unsigned mode, unsigned *flags)
+{
+    unsigned sign = (unsigned)(v >> 63), exp = (unsigned)(v >> 52) & 2047;
+    uint64_t mag = v & 0x7fffffffffffffffull, q, rem, half;
+    if (!mag) return (uint16_t)(sign << 15);
+    bool tiny = exp < 1009;
+    if (exp >= 1039) goto overflow;
+    if (!tiny) {
+        q = (mag >> 42) - (1008u << 10);
+        rem = mag & ((1ull << 42) - 1);
+        half = 1ull << 41;
+    } else if (exp >= 998) {
+        unsigned shift = 1051 - exp;  /* 43..53: result quantum is 2^-24 */
+        uint64_t mantissa = (mag & ((1ull << 52) - 1)) | 1ull << 52;
+        q = mantissa >> shift;
+        rem = mantissa & ((1ull << shift) - 1);
+        half = 1ull << (shift - 1);
+    } else {
+        q = 0; rem = 1; half = 2;    /* nonzero, below half the minimum subnormal */
+    }
+    bool up = mode == FPR_N ? rem > half || (rem == half && (q & 1)) :
+              mode == FPR_P ? rem && !sign : mode == FPR_M ? rem && sign : false;
+    q += up;
+    if (rem) *flags |= FPX_IXC | (tiny ? FPX_UFC : 0);
+    if (q >= 0x7c00) goto overflow;
+    return (uint16_t)(sign << 15 | q);
+overflow:
+    *flags |= FPX_OFC | FPX_IXC;
+    return (uint16_t)(sign << 15 | (mode == FPR_N || (mode == FPR_P && !sign) ||
+                                  (mode == FPR_M && sign) ? 0x7c00 : 0x7bff));
+}
 static uint64_t repack(fpctx *x, int es, fpu u)   /* an exactly representable value (FZ applies) */
 {
     if (u.cls == C_ZERO) return zero_of(es, u.sign);
@@ -580,7 +616,9 @@ bool fp_vec16_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
         memcpy(sum + k, &p, sizeof p);
     }
     hao_vreg r = {0};
-    for (int k = 0; k < lanes; k++) r.h[k] = (uint16_t)fp_cvt(x, sum[k], 8, 2);
+    unsigned flags = 0;
+    for (int k = 0; k < lanes; k++) r.h[k] = fp_round16_exact(sum[k], x->rmode, &flags);
+    fp_raise(x, flags);
     *out = r;
     return true;
 }

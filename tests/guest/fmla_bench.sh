@@ -1,5 +1,5 @@
 #!/bin/sh
-# FMLA .4S three-same/by-element timing and native checksum, JIT and AOT.
+# FMLA .4S/.8H three-same/by-element timing and native checksum, JIT and AOT.
 # OUT=dir HAO=build/hao [N=250000] [T=60] tests/guest/fmla_bench.sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -10,7 +10,7 @@ T=${T:-60}
 N=${N:-250000}
 mkdir -p "$OUT"
 for a in arm64 arm64e; do
-    clang -arch "$a" -O1 -o "$OUT/bench.$a" "$here/fmla_bench.c"
+    clang -arch "$a" -march=armv8.5-a+fp16 -O1 -o "$OUT/bench.$a" "$here/fmla_bench.c"
     codesign -s - -f "$OUT/bench.$a" 2>/dev/null
 done
 timeout -s KILL "$T" "$OUT/bench.arm64" "$N" >"$OUT/native.out" 2>"$OUT/native.err"
@@ -21,8 +21,11 @@ for mode in jit aot; do
     jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
     aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
     esac
-    timeout -s KILL "$T" "$@" --stats "$OUT/bench.arm64e" "$N" >"$OUT/$mode.out" 2>"$OUT/$mode.err"
+    timeout -s KILL "$T" "$@" "$OUT/bench.arm64e" "$N" >"$OUT/$mode.out" 2>"$OUT/$mode.err"
     cmp "$OUT/native.out" "$OUT/$mode.out"
     echo "$mode"
     cat "$OUT/$mode.err"
+    timeout -s KILL "$T" "$@" --stats "$OUT/bench.arm64e" "$N" >"$OUT/$mode.stats.out" 2>"$OUT/$mode.stats.err"
+    cmp "$OUT/native.out" "$OUT/$mode.stats.out"
+    grep '^hao-jit:' "$OUT/$mode.stats.err"
 done

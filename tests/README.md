@@ -179,7 +179,7 @@ step, FMLS negation or indexed lane decode broken; each must produce a
 vector differential mismatch. `guest/fma32` and `guest/jitinsns` compare
 native arm64 with JIT, interpreter, helpers-only and AOT, including these
 forms. `guest/fmla-bench` checks native result equality and reports ns/FMLA
-for three-same and by-element .4S, JIT/AOT; timings are informational,
+for three-same and by-element .4S/.8H, JIT/AOT; timings are informational,
 with no machine-dependent performance threshold.
 `--stats` reports executed interpreter-helper calls as `helper_calls`,
 separately from `helper` (translated helper sites). Dynamic counting is
@@ -289,3 +289,15 @@ short arithmetic blocks surrounding an XPACI helper. It prints timing
 without counters, then collects `--stats` separately. Default N=100000;
 `N=100000000 ENGINES='jit aot'` makes longer measurement runs. The result
 checksum must match native; timings have no pass/fail threshold.
+
+`aot/round16` (also in `make unit`) compares the specialized finite
+binary64-to-binary16 rounding with the unchanged general converter: all
+31,744 finite positive half intervals, endpoints and adjacent double values,
+midpoints and their adjacent doubles, both signs and all four rounding
+modes, plus random finite binary64 values (2,577,664 cases). It checks full
+FPSR with clear/preset sticky flags and that the converter itself leaves the
+FP environment unchanged. This exhausts boundary classes, not all doubles
+inside each interval. `guest/fma16` checks 42 vector fused forms, including
+all indexed lanes and aliases, against native arm64 in JIT, interpreter,
+helpers-only and AOT, under the 16 RMode/FZ/DN settings. FZ16/AHP behavior is
+outside this native comparison: the existing interpreter does not model it.
