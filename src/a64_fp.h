@@ -16,6 +16,7 @@ typedef struct {
     hao_cpu *c;
     unsigned rmode;   /* FPCR.RMode: 0 RN, 1 RP, 2 RM, 3 RZ */
     bool fz, dn;
+    bool no_exceptions; /* BFDOT/BFMMLA never change cumulative flags. */
 } fpctx;
 
 /* rounding selectors for fp_rint/fp_to_int: the four FPCR modes plus ties-away */
@@ -86,8 +87,12 @@ bool fp_cmp_gt(fpctx *x, int es, uint64_t a, uint64_t b);
 
 /* conversions */
 uint64_t fp_cvt(fpctx *x, uint64_t a, int from, int to);                        /* FCVT */
+uint32_t fp_bfdot(fpctx *x, uint32_t acc, uint32_t a, uint32_t b);
+uint16_t fp_bfcvt(fpctx *x, uint32_t a);
+uint32_t fp_widen_half(fpctx *x, uint16_t a);
 uint64_t fp_cvt_odd(fpctx *x, uint64_t a);                                      /* FCVTXN d -> s */
 uint64_t fp_rint(fpctx *x, int es, uint64_t a, int mode, bool exact);           /* FRINT* */
+uint64_t fp_rint_range(fpctx *x, int es, uint64_t a, int mode, int bits);
 uint64_t fp_to_int(fpctx *x, int es, uint64_t a, int mode, bool uns, int bits, int fbits);   /* FCVT*S/U */
 uint64_t fp_from_int(fpctx *x, int es, uint64_t v, bool sgn, int bits, int fbits);          /* SCVTF/UCVTF */
 uint32_t fp_jcvt(fpctx *x, uint64_t a, bool *exact);                            /* FJCVTZS */

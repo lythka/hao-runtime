@@ -489,3 +489,10 @@ engine. Partial random-mode runs report counts without demanding coverage.
 Already implemented instructions must be removed from the exception list.
 `guest/halfops` compares half arithmetic, comparisons, conversions and indexed
 forms, plus S/D FRECPX, with native results and full FPSR in all four engines.
+`guest/extramisc` checks signed/unsigned saturating unary and accumulating
+operations, bounded FP rounding and half reductions; `guest/i8mm` checks
+mixed-sign dots and integer matrix multiplication. `guest/widenfp` checks
+half and BF16 widening fused operations and BF16 narrowing; `guest/bfdot`
+checks BF16 dots and matrix products, including preservation of exception
+flags. All compare native arm64 with interpreter, JIT, helpers and AOT,
+including aliases, exceptional inputs, rounding controls and sticky flags.

@@ -105,3 +105,8 @@ guest/satshift	900	par	tests/guest/satshift.sh
 guest/halfops	900	par	tests/guest/halfops.sh
 guest/satmul	300	par	tests/guest/satmul.sh
 guest/complex	900	par	tests/guest/complex.sh
+
+guest/extramisc	300	par	tests/guest/extramisc.sh
+guest/i8mm	300	par	tests/guest/i8mm.sh
+guest/widenfp	300	par	tests/guest/widenfp.sh
+guest/bfdot	300	par	tests/guest/bfdot.sh

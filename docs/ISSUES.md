@@ -2192,3 +2192,33 @@ behavior remains outside the existing interpreter contract and this comparison.
 The full runtime check passes with these complex operations enabled: native
 oracle, sanitizer oracle, unit tests and 92 guest/host checks; one existing
 known failure and three platform skips remain.
+
+### Remaining SIMD widening, dot, unary and reduction forms
+
+Missing decoder groups rejected valid saturating unary operations, mixed-sign
+integer dot/matrix products, half reductions, bounded FP rounding, half
+widening fused arithmetic and BF16 arithmetic. They now use shared interpreter
+semantics in every engine. Saturating arithmetic uses wide intermediates and
+sets sticky QC; bounded rounding checks the rounded integer before raising
+IXC, returning integer indefinite and IOC on invalid input. Half widening
+preserves signaling NaNs until the fused operation chooses its result. BF16
+narrowing rounds once to its own format. BF16 dots use integer arithmetic,
+round-to-odd with infinity on overflow, mandatory flushing and default NaNs,
+and leave cumulative exception flags untouched.
+
+Native comparisons cover 141 unary/reduction/rounding forms (4,336,032
+executions per engine), 45 integer dot/matrix forms (1,383,840), 183 widening
+and narrowing forms (6,769,536), and 33 BF16 dot/matrix forms (2,441,472).
+Interpreter, JIT, forced helpers and AOT agree on full output vectors and
+FPSR, with aliases, exceptional operands, all four rounding modes, FZ, DN
+and initially clear or sticky flags. Each group aborts as undefined on the
+previous interpreter. These are Rosetta runtime comparisons against native
+arm64 on one processor; Intel execution is unmeasured. FZ16, AHP, alternative
+FP behavior and exception traps remain outside the supported environment.
+The native processor does not retain FPCR.EBF; extended BF16 rounding is not
+established by these comparisons.
+
+On the same saved 200,000-record SIMD oracle corpus, these groups reduce
+known-unimplemented records from 4,036 to 3,236, with zero value/QC
+mismatches and zero interpreter IEEE-flag differences. Other decoder groups
+remain independently unimplemented on this branch.
