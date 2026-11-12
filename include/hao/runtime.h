@@ -306,7 +306,7 @@ bool hao_varsniff_native_imp(uint64_t fn, int *ngp, int *nfp);
 /* the varsniff bridge for a native variadic fn: fmt = index of the format among the ngp fixed arguments
  * (-1: none), fkind = its SDK family ('p', 'C', ...; 0: typed only as a guest-image constant); returns
  * whether the variadic slots were typed */
-bool hao_varsniff_call(struct hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow, int fmt, char fkind);
+bool hao_varsniff_call(struct hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow, int fmt, char fkind, char family);
 /* the prologue verdict of a native ObjC IMP, kept per IMP (lock-free reads); decode false in a guest
  * signal handler; *fresh when this call decoded a variadic one */
 bool hao_varsniff_imp(uint64_t imp, bool decode, int *ngp, int *nfp, bool *fresh);

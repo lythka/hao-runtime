@@ -674,23 +674,27 @@ NumVersion conversion, not a modifier. `%m` takes one integer, `%H` takes a
 pointer and two integers, and `%N` takes nothing. `%e %f %g %E %F %G` take
 doubles.
 
-When the family is only assumed, a `%a`/`%A` slot without `L` now goes by its
-value. An x86_64 user pointer is below 2^47, which read as a double is zero or
-a positive subnormal, and no other double is. Those values go to a GPR and
-everything else to an XMM register. Zero is both NULL and 0.0. It counts as an
-address when the conversion has a `#` flag or a precision, the forms CoreUtils
-needs, and as a double otherwise. Formats with an SDK attribute are typed as
-before. `tests/guest/varsniff.sh` now checks printf `%a` (zero, precision,
-`#`, `%A`) and CoreUtils `SNPrintF` (`%.6a`, `%.4a`, `%##a`, a NULL `%.6a`
-followed by integer, string and double slots) against native arm64. Before
-the fix the CoreUtils case crashed in `PrintFCoreVAList` under the JIT and
-`--interp`.
+A `%a`/`%A` slot of a function without an SDK format attribute is typed by
+that function's formatter family, from `src/fmtfamily_gen.inc` (generated
+from the x86_64 code: which formatter the function's arguments reach, to a
+fixpoint; checked against every SDK-attributed function, none wrong):
+CoreUtils' PrintF takes a pointer, printf and CFString formats a double. A
+function the table does not list is assumed to be printf. An earlier rule
+typed such a slot by its value (a user pointer reads as zero or a positive
+subnormal double); no rule of that kind can tell a NULL pointer from 0.0 or
+an address from a subnormal, and it misrouted both a bare `%a` of NULL to
+CoreUtils and a subnormal to printf. Formats with an SDK attribute are typed
+as before. `tests/guest/varsniff.sh` checks printf `%a` (zero, precision,
+`#`, `%A`, the smallest subnormal and the minimum normal) and CoreUtils
+`SNPrintF` (`%.6a`, `%.4a`, `%##a`, a NULL `%.6a` and a bare `%a` of NULL,
+each followed by integer, string and double slots) against native arm64.
 
 Remaining limitations:
 
-- printf `%#a` or `%.Na` of exactly 0.0, or `%a` of a positive subnormal,
-  in an unattributed variadic followed by slots of the other class: those
-  later slots read one register off.
+- A CoreUtils-family function the table misses (not exported, a family
+  reached only through a format string such as CoreUtils' `%V`, a va_list
+  passed on the stack) is typed as printf: its `%a` pointer goes to an XMM
+  register and later slots read one register off.
 - CoreUtils conversions outside printf's set (`%m`, `%H`, `%N`, `%{...}`,
   `%v`) still make the typer give up, and every slot then goes to a GPR. A
   real `%f` in such a format prints a wrong value but cannot crash. CoreUtils'
