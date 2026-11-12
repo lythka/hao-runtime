@@ -9,6 +9,8 @@
 #    enum with an empty case and an Optional of such an enum (its nil encodings differ) stay refused.
 # C. a multi-payload enum with a trailing tag byte equal to the case index is walked by layout; two empty
 #    cases, a size or xi that does not match and a tag byte past the cases stay refused.
+# F. a function value other than a block, under any number of Optionals, has identical nils on both and
+#    is walked with no patch; a block's XIs differ (k against 2k).
 # D. a value of fewer than 8 bytes (a single-payload or spare-bit enum, a struct of them, an Optional of
 #    one, Optional<Bool>) is walked with no patch.
 # Every measured line must be equal on both architectures except the listed keys, the contract lines must
@@ -42,6 +44,7 @@ comm -3 "$OUT/arm64.keyed" "$OUT/x86_64.keyed" | sed 's/^[[:space:]]*//; s/ | .*
     echo "X Content 0"; echo "X SwiftUI.Content 0"
     for c in 1 3 5 7 9 11 13 15; do echo "C Seventeen#$c z"; done
     echo "V SpareNested.b(outerNil)"; echo "V TextNil.two(outerNil)"
+    echo "X BAction 1"; echo "X BAction 2"
 } | sort -u >"$OUT/differ.expected"
 if ! cmp -s "$OUT/differ" "$OUT/differ.expected"; then
     echo "FAIL arm64/x86_64 differences other than expected:"; diff "$OUT/differ.expected" "$OUT/differ" | sed 's/^/    /'; fail=1
@@ -83,6 +86,18 @@ L Kind size=1 stride=1 flags=0x200000 xi=0xfc
 L Flags size=2 stride=2 flags=0x200000 xi=0x3ffc
 L Small size=6 stride=6 flags=0x1 xi=0x3ffc
 L Optional<Kind> size=1 stride=1 flags=0x200000 xi=0xfb
+L Action size=16 stride=16 flags=0x10007 xi=0x7fffffff
+L Optional<Action> size=16 stride=16 flags=0x210007 xi=0x7ffffffe
+L Optional<Optional<Action>> size=16 stride=16 flags=0x210007 xi=0x7ffffffd
+L CAction size=8 stride=8 flags=0x7 xi=0x7fffffff
+L BAction size=8 stride=8 flags=0x10007 xi=0x7fffffff
+X Action 0 $z $a5
+X Action 1 0000000000000001 $a5
+X Action 2 0000000000000002 $a5
+X CAction 0 $z
+X CAction 1 0000000000000001
+X CAction 2 0000000000000002
+X BAction 0 $z
 EOF
 )
 arm=$(cat <<EOF
@@ -91,6 +106,7 @@ X Array<Entry> 2 0000000000000002
 X Array<Box> 1 0000000000000001
 X Array<Any> 1 0000000000000001
 X Sparkline 1 0000000000000001 $a5 $a5 $a5 $a5 $a5 $a5 $a5 a5
+X BAction 1 0000000000000001
 L Content size=16 stride=16 flags=0x210007 xi=0x3ffe
 L SwiftUI.Content size=16 stride=16 flags=0x210007 xi=0x3ffe
 X Content 0 f000000000000007 f000000000000007
@@ -105,6 +121,7 @@ X Array<Entry> 2 0000000000000004
 X Array<Box> 1 0000000000000002
 X Array<Any> 1 0000000000000002
 X Sparkline 1 0000000000000002 $a5 $a5 $a5 $a5 $a5 $a5 $a5 a5
+X BAction 1 0000000000000002
 L Content size=16 stride=16 flags=0x210007 xi=0x3ffffe
 L SwiftUI.Content size=16 stride=16 flags=0x210007 xi=0x3ffffe
 X Content 0 ff00000000000007 ff00000000000007
@@ -180,6 +197,14 @@ W Small walk 0
 W Optional<Kind> nil walk 0
 W Optional<Bool> nil walk 0
 W Optional<Bool> some walk 0
+W Optional<Action> nil walk 0
+W Optional<Action> some walk 0
+W Optional<Optional<Action>> outer nil walk 0
+W Optional<Optional<Action>> inner nil walk 0
+W Optional<CAction> nil walk 0
+W Optional<Optional<CAction>> outer nil walk 0
+W Row nils walk 0
+W Row some walk 0
 EOF
 grep '^W ' "$OUT/x86_64" >"$OUT/walk" || true
 if ! cmp -s "$OUT/walk.expected" "$OUT/walk"; then

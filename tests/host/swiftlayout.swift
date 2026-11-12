@@ -9,6 +9,8 @@ import SwiftUI   // loaded only to resolve SwiftUI.ContainerBackgroundValue.Cont
 //    its words and that has no empty case (a 17-case enum and Optional of such an enum stay refused).
 // C: a multi-payload enum with a trailing tag byte (size = largest payload + 1, xi = 256 - cases,
 //    at most one empty case); two empty cases, a mismatching size or xi, a bad tag stay refused.
+// F: a function value other than a block (Swift closure, thin, C) has the same nils on both
+//    architectures under any number of Optionals (XI k = code word k); a block's differ (k against 2k).
 // D: a value of fewer than 8 bytes holds no pointer word, so nothing in it is patched, whatever its
 //    enum layout (spare bits of a payload, extra inhabitants of a payload enum, an Optional of one).
 // Lines: L layout, X extra inhabitant k written into 0xa5 storage, C case injected into zeroed (z) or
@@ -43,6 +45,10 @@ enum TextNil { case one(String); case two(NSObject??, String); case none }   // 
 enum Kind { case clear, cloudy(Trend), snow }                 // single payload, the payload's inhabitants
 enum Flags { case a(Bool), b(Bool), c(Bool, Bool), none }    // multi-payload, tag in Bool's spare bits
 struct Small { var kind: Kind; var flags: Flags; var count: Int16 }
+typealias Action = (Bool) -> ()
+typealias CAction = @convention(c) (Bool) -> ()
+typealias BAction = @convention(block) (Bool) -> ()
+struct Row { var title: String; var action: Action?; var tap: CAction? }
 
 typealias StoreTag = @convention(c) (UnsafeMutableRawPointer, UInt32, UInt32, UnsafeRawPointer) -> Void
 typealias GetTag = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> UInt32
@@ -285,3 +291,21 @@ walk("Small", Small(kind: .cloudy(.up), flags: .b(true), count: 7))
 walk("Optional<Kind> nil", Kind?.none)
 walk("Optional<Bool> nil", Bool?.none)
 walk("Optional<Bool> some", Bool?.some(true))
+
+// F. Functions.
+for (label, t) in [("Action", Action.self), ("Optional<Action>", Action?.self), ("Optional<Optional<Action>>", Action??.self),
+                   ("CAction", CAction.self), ("BAction", BAction.self), ("Row", Row.self)] as [(String, Any.Type)] { layout(label, t) }
+inhabitants("Action", Action.self)
+inhabitants("CAction", CAction.self)
+inhabitants("BAction", BAction.self)
+var taps = 0
+let action: Action = { taps += $0 ? 1 : 0 }
+let tap: CAction = { _ in }
+walk("Optional<Action> nil", Action?.none)
+walk("Optional<Action> some", Action?.some(action))
+walk("Optional<Optional<Action>> outer nil", Action??.none)
+walk("Optional<Optional<Action>> inner nil", Action??.some(nil))
+walk("Optional<CAction> nil", CAction?.none)
+walk("Optional<Optional<CAction>> outer nil", CAction??.none)
+walk("Row nils", Row(title: "Cupertino", action: nil, tap: nil))
+walk("Row some", Row(title: "Cupertino", action: action, tap: tap))

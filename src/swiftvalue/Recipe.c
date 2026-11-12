@@ -212,6 +212,36 @@ int initialize_empty(void *destination, const void *source, const void *type, in
     return 1;
 }
 
+/* A function value other than a block, under any number of Optionals
+ * (Metadata.h TargetFunctionTypeMetadata: convention in flags bits 16-23,
+ * Swift 0, block 1, thin 2, C 3). Measured in native arm64 and x86_64
+ * programs: a Swift closure is a code word and a context word (16 bytes), a
+ * thin or C function one code word, xi 0x7fffffff, and XI k is the code word
+ * k on both, context untouched; each Optional consumes the next. So no nil in
+ * such a value differs and nothing in it is patched; the context and its
+ * captures are a separate heap object. A block is an ObjC reference: its XI k
+ * is k on arm64 and 2k on x86_64, and it stays with the reference rules. */
+static int function_value(reflection *r, const void *type)
+{
+    uint64_t size = vwt(type)->size;
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uintptr_t kind = r->kind(type);
+        if (v->size != size || (v->flags & 255) != 7) return 0;
+        if (kind == 0x302) {
+            uint64_t flags; memcpy(&flags,(const char *)type + 8,8);
+            unsigned convention = (unsigned)(flags >> 16) & 0xff;
+            if (convention == 1 || convention > 3) return 0;
+            return v->extra == 0x7fffffff && v->stride == size &&
+                   size == (convention ? 8u : 16u);
+        }
+        if (kind != 0x202 || m[1] != r->optional) return 0;
+        type = m[2];
+    }
+    return 0;
+}
+
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth);
 static int collect_inner(reflection *r, const void *type, const unsigned char *value,
@@ -225,6 +255,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
      * holds no pointer, so no nil in it has a pointer extra inhabitant and
      * the case it is in cannot hide one: there is nothing to patch. */
     if (v->size < 8) return 1;
+    if ((kind == 0x302 || kind == 0x202) && function_value(r,type)) return 1;
     if (type == r->string) {
         empty_plan shape;
         if (!selected(r,type,&shape,0)) return 0;
