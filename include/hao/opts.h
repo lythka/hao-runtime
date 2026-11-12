@@ -26,7 +26,9 @@ typedef struct {
          sigreturn_user,         /* HAO_SIGRETURN_USER: resume in user space under Rosetta too (tests; signals.c) */
          no_probe,               /* HAO_NO_PROBE: no fault-tolerant reads; blocks.c reads candidates through Mach (signals.c) */
          code_alias,             /* HAO_CODE_ALIAS: hao reads guest code from an alias, the guest's text pages poisoned (code.c) */
-         libval_user;            /* HAO_LIBVAL_USER: library validation's signer checks in user space, as on an x86_64 kernel (tests; libval.c) */
+         libval_user,            /* HAO_LIBVAL_USER: library validation's signer checks in user space, as on an x86_64 kernel (tests; libval.c) */
+         swift_value_survey;     /* HAO_SWIFT_VALUE_SURVEY: a refused Swift value is walked to the end and every refusing
+                                    type is printed before the abort (printing only; swiftvalue/Recipe.c) */
     char cache[1024];           /* HAO_CACHE ("" = unset) */
     char guest_root[1024];      /* HAO_GUEST_ROOT ("" = unset) */
     char if_dir[1024];          /* HAO_IF_DIR: interface units (hao/bridge.h) instead of /usr/lib/hao/if ("" = unset) */
@@ -47,7 +49,8 @@ extern hao_opts_t hao_opt;
  *
  * Boot arguments are set by root and apply in every tier, so only these are
  * read: in every process hao_nx_stats=1, hao_crash_trace=1,
- * hao_bridge_stats=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1;
+ * hao_bridge_stats=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1,
+ * hao_swift_value_survey=1;
  * in PID 1 also hao=FLAGS (v, V, i, s) and hao_verbose=N. No boot argument
  * turns a check off (there is no hao_no_libval and no hao=u). A build with
  * HAO_TEST_SWITCHES defined also reads the bring-up knobs that change

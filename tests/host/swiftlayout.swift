@@ -11,6 +11,8 @@ import SwiftUI   // loaded only to resolve SwiftUI.ContainerBackgroundValue.Cont
 //    at most one empty case); two empty cases, a mismatching size or xi, a bad tag stay refused.
 // F: a function value other than a block (Swift closure, thin, C) has the same nils on both
 //    architectures under any number of Optionals (XI k = code word k); a block's differ (k against 2k).
+// G: a Clang-imported enum is its integer, native metadata or guest, and holds no nil.
+// S: survey mode walks a refused value to the end and prints every refusing type (x86_64 stderr).
 // D: a value of fewer than 8 bytes holds no pointer word, so nothing in it is patched, whatever its
 //    enum layout (spare bits of a payload, extra inhabitants of a payload enum, an Optional of one).
 // Lines: L layout, X extra inhabitant k written into 0xa5 storage, C case injected into zeroed (z) or
@@ -49,6 +51,11 @@ typealias Action = (Bool) -> ()
 typealias CAction = @convention(c) (Bool) -> ()
 typealias BAction = @convention(block) (Bool) -> ()
 struct Row { var title: String; var action: Action?; var tap: CAction? }
+struct Button { var label: String; var action: @MainActor () -> () }          // a closure, not optional
+struct Handlers { var edit: ((inout [Int]) -> ())?; var items: (() -> [NSObject])?; var open: ((URL) -> Bool?)?
+                  var send: (@Sendable (NSObject) async throws -> ())? }
+struct Oriented { var orientation: ComparisonResult?; var style: NSLineBreakMode; var count: Int }
+struct TwoRefused { var a: Seventeen; var b: TwoEmpty; var c: String }
 
 typealias StoreTag = @convention(c) (UnsafeMutableRawPointer, UInt32, UInt32, UnsafeRawPointer) -> Void
 typealias GetTag = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> UInt32
@@ -120,6 +127,7 @@ func value<T>(_ label: String, _ v: T) {
 typealias Walk = @convention(c) (UnsafeRawPointer, UnsafeRawPointer, UnsafeMutableRawPointer, UInt32,
                                  UnsafeMutablePointer<UnsafeRawPointer?>) -> Int32
 var walker: Walk? = nil
+var surveyor: Walk? = nil
 let patches = UnsafeMutableRawPointer.allocate(byteCount: 64 * 32, alignment: 8)
 func name(_ m: UnsafeRawPointer) -> String { String(describing: unsafeBitCast(m, to: Any.Type.self)) }
 func walkRaw(_ label: String, _ type: UnsafeRawPointer, _ p: UnsafeRawPointer) {
@@ -158,6 +166,7 @@ if CommandLine.arguments.count > 1 {
     guard let lib = dlopen(CommandLine.arguments[1], RTLD_NOW),
           let sym = dlsym(lib, "hao_sv_collect_empty_patches_detail") else { print("no libhao walker"); exit(2) }
     walker = unsafeBitCast(sym, to: Walk.self)
+    if let s = dlsym(lib, "hao_sv_collect_survey_patches") { surveyor = unsafeBitCast(s, to: Walk.self) }
 }
 
 // A. The Array buffer word, every Element kind; a struct's XIs from it; Optional<S>.none writes only it.
@@ -309,3 +318,30 @@ walk("Optional<CAction> nil", CAction?.none)
 walk("Optional<Optional<CAction>> outer nil", CAction??.none)
 walk("Row nils", Row(title: "Cupertino", action: nil, tap: nil))
 walk("Row some", Row(title: "Cupertino", action: action, tap: tap))
+walk("Button", Button(label: "Add", action: {}))
+walk("Handlers nils", Handlers(edit: nil, items: nil, open: nil, send: nil))
+walk("Handlers some", Handlers(edit: { $0.append(1) }, items: { [] }, open: { _ in nil }, send: { _ in }))
+walk("Optional<Optional<Handlers>> outer nil", Handlers??.none)
+walk("Optional<Optional<Handlers>> inner nil", Handlers??.some(nil))
+walk("Optional<Optional<Handlers>> some", Handlers??.some(Handlers(edit: nil, items: { [] }, open: nil, send: nil)))
+
+// G. Imported C enums.
+layout("ComparisonResult", ComparisonResult.self)
+layout("Optional<ComparisonResult>", ComparisonResult?.self)
+walk("ComparisonResult", ComparisonResult.orderedDescending)
+walk("Optional<ComparisonResult> nil", ComparisonResult?.none)
+walk("Optional<ComparisonResult> some", ComparisonResult?.some(.orderedSame))
+walk("Oriented", Oriented(orientation: .orderedAscending, style: .byTruncatingTail, count: 3))
+walk("Oriented nil", Oriented(orientation: nil, style: .byClipping, count: 0))
+
+// S. Survey mode: two refusing fields of one value.
+do {
+    var v = TwoRefused(a: .c1(Box(1)), b: .one("x"), c: "y")
+    withUnsafeBytes(of: &v) { p in
+        guard let survey = surveyor else { return }
+        var unresolved: UnsafeRawPointer? = nil
+        let n = survey(meta(TwoRefused.self), p.baseAddress!, patches, 64, &unresolved)
+        print("W TwoRefused survey \(n < 0 ? "refused \(unresolved.map(name) ?? "?")" : "walk \(n)")")
+        fflush(stdout)
+    }
+}

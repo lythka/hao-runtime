@@ -530,16 +530,17 @@ static bool compact_strong_enum(const void *m, const void *value, const char *de
     return ((tag_fn *)slots[11])(value,m) < 6;
 }
 
-/* A Clang-imported enum defined in the guest has the guest integer layout.
- * Foreign metadata initialization plus __C identifies the compiler's C enum
- * strategy; exact canonical integer witnesses prove POD width/alignment. No
- * foreign frozen nominal declaration is inferred from native reflection. */
-static bool guest_c_integer_enum(const void *type)
+/* A Clang-imported enum is an integer: foreign metadata initialization plus
+ * __C identifies the compiler's C enum strategy, and exact canonical integer
+ * witnesses prove POD width/alignment and no extra inhabitants. It holds no
+ * pointer word, so no nil can hide in it, whichever side's metadata
+ * describes it (a guest's own or a native framework's). No foreign frozen
+ * nominal declaration is inferred from native reflection. */
+static bool c_integer_enum(const void *type)
 {
-#ifdef HAO_SWIFT_VALUE_RUNTIME
     const void *const *m = type;
     const char *desc = m[1];
-    if ((uintptr_t)m[0] != 0x201 || !desc || !hao_image_for_addr((uintptr_t)desc) ||
+    if ((uintptr_t)m[0] != 0x201 || !desc ||
         (u32(desc) & 0x3009f) != 0x20012 || u32(desc + 16) || u32(desc + 20)) return false;
     const char *parent = relative(desc + 4);
     if (!parent || ((uintptr_t)parent & 1) || (u32(parent) & 31)) return false;
@@ -552,9 +553,6 @@ static bool guest_c_integer_enum(const void *type)
         if (integer && v == vwt(integer) && v->size == (1u << i) &&
             v->stride == v->size && v->flags == v->size - 1 && !v->extra) return true;
     }
-#else
-    (void)type;
-#endif
     return false;
 }
 
@@ -687,7 +685,7 @@ int common_leaf_value(const void *type, const void *value)
     const witnesses *v = vwt(type);
     if (v->flags & 0x01900000) return 0;
     const void *const *m = type;
-    if (k == 0x201 && guest_c_integer_enum(type)) return 1;
+    if (k == 0x201 && c_integer_enum(type)) return 1;
     if (k == 0x202 && m[1] == dlsym(RTLD_DEFAULT,"$sSqMn")) {
         const witnesses *payload = vwt(m[2]);
         if (v->size == 16 && v->stride == 16 && (v->flags & ~0x2000000u) == 0x210007 &&

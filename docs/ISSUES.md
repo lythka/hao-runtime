@@ -220,6 +220,27 @@ Rules as implemented:
   it is excluded. Before, every `Optional` of a closure was refused, for
   example `Optional<(Bool) -> ()>` in a SwiftUI value, which ended the
   process. `swiftlayout` section F: 8 walks refused before, all pass.
+  An `Optional` of a struct or tuple whose extra inhabitants come from such
+  a function (the first field with the most, down to the function's code
+  word, each step checked against the value witness tables) has the same
+  nil on both too: the code word equal to the inhabitants its payload
+  already consumed (`function_xi_word`). Covers closure fields of every
+  kind measured (`@MainActor`, `inout` parameters, generic and `Optional`
+  results, `@Sendable async throws`).
+- G (`Common.c` `c_integer_enum`): a Clang-imported enum (`__C`, foreign
+  metadata, the witnesses of `Int8`/`Int16`/`Int32`/`Int`) is its integer.
+  It has no extra inhabitants and holds no pointer word. This rule was
+  limited to guest-defined descriptors, so a native framework's imported
+  enum (`ComparisonResult`, `NSLineBreakMode`, a `UIInterfaceOrientation?`
+  from native metadata) was refused. `swiftlayout` section G: 5 walks
+  refused before.
+
+Survey mode: with `HAO_SWIFT_VALUE_SURVEY=1` (environment, honoured in guarded
+processes such as entitled apps, or boot argument `hao_swift_value_survey=1`)
+a refused value is walked to the end. Every innermost refusing type is printed
+(`Swift value survey: refused at offset N depth D: metadata=... type=...`)
+before the usual refusal line and abort. Printing only: the verdict is
+unchanged. `swiftlayout` section S checks a value with two refusing fields.
 
 Both enum rules are used by the walk only. The ownership transfers in
 `Aggregate.c` and `graph()`, which picks the types whose native witnesses a
