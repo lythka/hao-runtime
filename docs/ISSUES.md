@@ -2171,3 +2171,24 @@ patterns in each source and clear/preset FPSR (87,024 executions per engine).
 JIT, interpreter, helper-only and AOT outputs agree. Translated execution was
 under Rosetta; Intel execution and performance remain unmeasured. Other missing
 instruction groups and pre-existing JIT IEEE-flag differences remain separate.
+## Complex floating-point instructions
+
+FCADD and FCMLA had no interpreter execution path. Vector H/S/D FCADD and
+FCMLA, and indexed H/S FCMLA, now select adjacent real/imaginary pairs,
+apply each encoded rotation before floating-point NaN processing and use the
+shared add or fused multiply-add semantics. Reserved sizes, indexed lane
+ranges and Q combinations remain undefined. All source registers are read
+before the destination is written.
+
+On the same 200,000 native SIMD records, interpreter and JIT known-UNDEF
+counts fall from 4,036 to 3,364 without a value or QC mismatch. Directed native
+comparisons cover 114 arrangements, rotations, indexed pairs and aliases,
+fifteen boundary patterns in each source, all sixteen RMode/FZ/DN settings
+and clear/preset FPSR (820,800 executions per engine). JIT, interpreter,
+helper-only and AOT outputs agree with native arm64. These use interpreter
+helpers; inline translation and Intel performance are not measured. FZ16/AHP
+behavior remains outside the existing interpreter contract and this comparison.
+
+The full runtime check passes with these complex operations enabled: native
+oracle, sanitizer oracle, unit tests and 92 guest/host checks; one existing
+known failure and three platform skips remain.
