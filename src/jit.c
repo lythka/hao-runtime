@@ -3,6 +3,7 @@
  *
  * Execution model
  *   rbx      = hao_cpu * (guest registers live in memory: x[n] at [rbx+8n])
+ *   r12      = per-thread jump-cache base, fixed for one entry
  *   rax..r11 = scratch
  *   EFLAGS   = guest NZCV while `fl.in_eflags` (N=SF Z=ZF V=OF, C = NOT CF)
  *   [rbx+FLAGS] = canonical NZCV (the LAHF/SETO image of hao/cpu.h) when not dirty
@@ -460,10 +461,9 @@ static void exit_indirect(tctx *t)
      *   probe stub stores to the same slot.
      */
     x_mov_st(&t->b, 8, xm(RBX, CPU_OFF_PC), RAX);
-    x_mov_ld(&t->b, 8, RCX, xm(RBX, CPU_OFF_RT_JC));
     x_mov_rr(&t->b, 0, RDX, RAX);
     x_alu_ri(&t->b, XAND, 0, RDX, (int32_t)((HAO_JIT_JC_SLOTS - 1) << 2));
-    x_mov_ld(&t->b, 8, RCX, xmi(RCX, RDX, 2, 0));
+    x_mov_ld(&t->b, 8, RCX, xmi(R12, RDX, 2, 0));
     x_alu_rm(&t->b, XCMP, 1, RAX, xm(RCX, 0));
     size_t miss = x_jcc8(&t->b, XCC_NE);
     x_jmp_m(&t->b, xm(RCX, 8));
@@ -4081,6 +4081,11 @@ static void build_stubs(void)
     x_push_r(&b, RBP); x_push_r(&b, RBX); x_push_r(&b, R12); x_push_r(&b, R13); x_push_r(&b, R14); x_push_r(&b, R15);
     x_alu_ri(&b, XSUB, 1, RSP, 8);     /* alignment; translated code keeps the MXCSR there (MXCSR_SLOT) */
     x_mov_rr(&b, 1, RBX, RDI);
+    /* rt_bind has installed this entry's per-thread cache. Its mapping
+     * outlives every chain; helpers preserve r12 by the host ABI. Nested
+     * entries (callbacks/signals) save and restore it here. Guest integer
+     * and vector registers stay in hao_cpu; recovery needs no new locations. */
+    x_mov_ld(&b, 8, R12, xm(RBX, CPU_OFF_RT_JC));
     x_jmp_r(&b, RSI);
     while (xb_len(&b) & 15) x_int3(&b);
     exit_stub = b.p;

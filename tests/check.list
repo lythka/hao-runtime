@@ -81,3 +81,4 @@ guest/jitinsns	300	par	tests/guest/jitinsns.sh
 guest/fpscalar	600	par	tests/guest/fpscalar.sh
 aot/fmla-mutations	300	par	tests/aot/fmla_mutations.sh
 guest/fmla-bench	300	par	tests/guest/fmla_bench.sh
+guest/state-bench	300	par	tests/guest/state_bench.sh

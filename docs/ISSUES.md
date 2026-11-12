@@ -1,5 +1,74 @@
 # Runtime issues and measured scope
 
+## Per-entry jump-cache base in translated code
+
+Each translated indirect branch previously loaded `cpu.rt_jc`, then its
+selected cache slot, then the entry PC and code. The cache mapping is
+per-thread and stable for the lifetime of an entry and its chained blocks.
+The entry stub now loads its base into host R12, which was already saved
+and restored by that stub; the hot branch reads the slot directly through
+R12. This removes one dependent memory load per BR/BLR/RET. The slot's
+full-PC comparison, miss probe, PC store and publication rules are unchanged.
+Helpers preserve R12 by the host ABI. Nested callback/signal entries save
+and restore it, and a new dispatcher entry binds and reloads its own cache.
+No guest integer/vector register is moved out of `hao_cpu`, no new fault
+recovery location is introduced, and AOT code uses the same entry contract.
+
+`state_bench` covers two alternating return sites with compact and
+8-KiB-spaced table targets, BR tail dispatch, a single return site, and
+short arithmetic blocks around XPACI. The helper loop has ordinary guest
+register loads/stores around the call, not a full CPU-state flush. Native
+arm64 and JIT/interpreter/helpers-only/AOT results agree. Separate `--stats`
+runs count eight startup helper calls in the call/return workloads and
+N+8 in the XPACI workload, both before and after. The host dispatcher is
+not entered per hot call: its block count stays at the startup-scale count
+while the iteration count grows.
+
+Two-second, 1-ms `sample` captures on Rosetta put 1,016/1,463 main-thread
+samples before and 1,041/1,483 after in `jit_helper` and its callees for the
+short helper loop. Call/return samples stay in generated Rosetta code;
+those addresses do not identify individual hao x86 state moves. AOT
+inspection confirms the repeated cache-base load and the existing
+per-instruction register stores. Guest-register copying and C dispatch
+have not been removed. Cross-block guest-register caching and reduced
+helper state materialization are not implemented: the profiles did not
+establish a benefit that justified new signal/fault recovery rules.
+
+Performance is provisional. Repeated Rosetta measurements vary materially
+between processes, including the helper loop whose hot path this change
+does not alter. The results do not establish either a general speedup or
+a regression. The implementation is retained for review on the strength
+of the completed correctness checks; further performance validation is
+needed. Alternative cache-base and helper-pointer register sequences were
+also measured, without a reliable basis for selecting them.
+
+
+One measurement set after the test workload stopped: median ns/iteration,
+seven interleaved runs, 100 million iterations per pattern, without
+`--stats`. These are observations, not acceptance thresholds or established
+performance effects.
+
+| Pattern | JIT before -> after | AOT before -> after |
+| --- | --- | --- |
+| BLR, two return sites | 5.799 -> 5.675 | 5.957 -> 5.834 |
+| BLR, spaced targets | 5.784 -> 5.803 | 5.971 -> 5.562 |
+| BR tail dispatch | 5.163 -> 5.675 | 5.683 -> 5.706 |
+| XPACI helper blocks | 9.945 -> 9.603 | 10.114 -> 9.709 |
+| BLR, one return site | 5.783 -> 4.941 | 4.814 -> 5.466 |
+
+For example, the seven baseline single-return AOT observations range
+from 4.389 to 7.586 ns; the candidate ranges from 5.266 to 5.715 ns.
+Uncontrolled host/Rosetta effects prevent interpreting the median
+difference alone as a regression.
+
+Validation includes the full all-mode oracle and sanitizer oracle,
+`make check`, native equality in all five benchmark patterns, and
+`signals.sh`, `uresume.sh`, `threads.sh`, `fullcache.sh`, `chain.sh` and
+`jitlock.sh`. The manifest reports 76 passed, one expected failure and
+three expected skips, with no unexpected failures or fork type-at crash.
+Intel hardware, application frame latency and release-image
+acceptance remain outside this measured scope.
+
 ## Inline FP32 FMLA/FMLS in translated code
 
 Vector FMLA/FMLS .2S/.4S, three-same and by element, now emit the
