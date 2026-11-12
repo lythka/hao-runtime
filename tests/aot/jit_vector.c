@@ -312,6 +312,37 @@ int main(void)
                 }
             }
         }
+    /* Scalar indexed single multiply/fused forms and double multiply:
+     * all lane indices and controls, high Vm, aliases and directed FMA tails.
+     * Unused NaN lanes must not send ordinary scalar arithmetic to a helper. */
+    for (unsigned control = 0; control < 16; control++)
+        for (unsigned form = 0; form < 4; form++) for (unsigned idx = 0; idx < (form == 3 ? 2u : 4u); idx++)
+            for (unsigned k = 0; k < 96; k++) {
+                unsigned rd = k < 2 ? 0 : reg(), rn = k < 2 ? 1 : (k & 1 ? rd : reg());
+                unsigned rm = k < 2 ? 17 : (k & 2 ? rn : reg());
+                hao_cpu in; state(&in, rn, rm); in.fpcr = control << 22;
+                if (form == 3) {
+                    in.v[rn].d[0] = dval(); in.v[rm].d[idx] = dval();
+                } else {
+                    fma_ops f = fma_case(&seed, k % FC_N);
+                    in.v[rn].s[0] = f.a; in.v[rm].s[idx] = f.b; in.v[rd].s[0] = f.c;
+                }
+                if (k < 2) {
+                    for (int e = 0; e < 4; e++) {
+                        in.v[rn].s[e] = 0x7f800001u; in.v[rm].s[e] = 0x7f800001u; in.v[rd].s[e] = 0x7f800001u;
+                    }
+                    if (form == 3) { in.v[rn].d[0] = 0x4000000000000000ull; in.v[rm].d[idx] = 0x4008000000000000ull; }
+                    else { in.v[rn].s[0] = 0x40000000; in.v[rm].s[idx] = 0x40400000; in.v[rd].s[0] = 0x40800000; }
+                }
+                unsigned op = form == 1 ? 1 : form == 2 ? 5 : 9;
+                uint32_t i = 0x5f000000 | (form == 3 ? 3u : 2u) << 22 | op << 12 | rm << 16 | rn << 5 | rd;
+                i |= (form == 3 ? idx : idx >> 1) << 11 | (form == 3 ? 0 : (idx & 1) << 21);
+                vector_helper_calls = 0;
+                check(i, 0, &in, false); check(i, 0, &in, true);
+                if (k < 2 && vector_helper_calls) {
+                    printf("MISMATCH %08x scalar indexed ordinary path called helper\n", i); fails++;
+                }
+            }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */
