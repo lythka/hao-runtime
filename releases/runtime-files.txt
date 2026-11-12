@@ -162,6 +162,7 @@ src/a64_simd.c
 src/abi.c
 src/aggspi_gen.inc
 src/aot_policy.c
+src/archdiff_gen.inc
 src/async_contract.c
 src/blocks.c
 src/bridge.c
@@ -192,6 +193,7 @@ src/libm.c
 src/libval.c
 src/macho.c
 src/main.c
+src/mpenum_gen.inc
 src/narrowret_gen.inc
 src/native_bundle_identity.c
 src/near_map.h
@@ -224,6 +226,8 @@ src/swiftvalue/NativeLeaf.h
 src/swiftvalue/Prefix.h
 src/swiftvalue/Recipe.c
 src/swiftvalue/Recipe.h
+src/swiftvalue/Tables.c
+src/swiftvalue/Tables.h
 src/syscall.c
 src/sysreg.c
 src/thunks.c
@@ -553,6 +557,8 @@ tests/guest/stacks.c
 tests/guest/stubself.c
 tests/guest/stubself.sh
 tests/guest/stubswap.c
+tests/guest/svarchdiff.sh
+tests/guest/svarchdiff.swift
 tests/guest/svconformance.sh
 tests/guest/svconformance.swift
 tests/guest/swift-associated-native.swift

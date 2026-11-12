@@ -14,6 +14,7 @@
 #include "swiftvalue/Aggregate.h"
 #include "swiftvalue/Common.h"
 #include "swiftvalue/NativeLeaf.h"
+#include "swiftvalue/Tables.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -56,6 +57,7 @@ void hao_swift_value_fork_child(void)
     lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     witness_setup_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     hao_sv_native_leaf_fork_child();
+    tables_fork_child();
 }
 typedef struct { const char *text; uintptr_t length; } type_name;
 static type_name name_of(const void *type)
@@ -585,6 +587,8 @@ static int guest_layout(const void *type)
     if (hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return 1;   /* the guest's own struct */
     return native_frozen(type);                       /* a native one: only if its module froze it */
 }
+/* For the walk (Tables.h): a listed type guest code lays out is a frozen one. */
+int native_frozen_type(const void *type) { return native_frozen(type); }
 
 /* A nil the witness made: the guest's encoding, extra inhabitant
  * consumed - 1 as the value consumed - 1 (arm64), where guest code can read

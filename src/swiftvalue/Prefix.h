@@ -18,4 +18,14 @@
 #define take_enum_empty hao_sv_take_enum_empty
 #define destroy_enum_empty hao_sv_destroy_enum_empty
 #define enum_payloads hao_sv_enum_payloads
+#define enum_inline_payloads hao_sv_enum_inline_payloads
+#define discover_fixed_enum_case_row hao_sv_discover_fixed_enum_case_row
+#define mpenum_lookup hao_sv_mpenum_lookup
+#define archdiff_lookup hao_sv_archdiff_lookup
+#define mpenum_type hao_sv_mpenum_type
+#define archdiff_type hao_sv_archdiff_type
+#define tables_fork_child hao_sv_tables_fork_child
+#define holds_archdiff_memo hao_sv_holds_archdiff_memo
+#define holds_archdiff_remember hao_sv_holds_archdiff_remember
+#define native_frozen_type hao_sv_native_frozen_type
 #endif

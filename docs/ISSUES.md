@@ -534,6 +534,180 @@ and from 355 to 205 (by element); FP32 FMLA stays at 19.5 as a control.
 Application acceptance is not measured. FZ16/AHP still decline the fast path; the existing full
 interpreter path does not model those controls, and is unchanged here.
 
+## Multi-payload enum rules from generated tables, and guest spare-bit enums
+
+The Swift value walk (`src/swiftvalue/Recipe.c` `collect`, `Enum.c`
+`discover_fixed_enum_case`) refused compiler-laid-out multi-payload enums
+with several empty cases behind an extra tag byte (rule C allowed one), with
+spare-bit tags outside bits 60-63 of a word or with any empty case (rule B),
+and every guest-defined spare-bit enum (rule B needs native witnesses). A
+refusal at publication ends the process; on a guest call of a native
+generic witness it leaves the value unconverted, so an outer nil beside the
+enum reaches the native witness in the arm64 encoding (`swift_retain(0x1)`).
+Rule B also admitted an enum whose payload layout differs by architecture as
+long as its x86_64 tags lay in bits 60-63, and every rule admitted a frozen
+native type declared differently on arm64 inside a guest-laid-out value.
+
+Two generated tables for macOS 27.2.1 (26B131, from hao-research; stamp in
+`include/hao/gen_stamp.h`, format 1) are looked up by the defining image's
+LC_UUID and the type descriptor's offset from its mach header
+(`src/swiftvalue/Tables.c`, a per-descriptor cache). A row matches only the
+image build it was generated from: on another build every lookup misses and
+the rules fall back to what they do without a row. They are regenerated per
+OS build.
+
+- `src/mpenum_gen.inc`: 1899 native spare-bit multi-payload enums with
+  payload and empty case counts, the x86_64 XI count of the spare-bit
+  layout, and flags (1 payload-case encodings identical on arm64 and x86_64,
+  2 empty-case ones too, 4 XIs identical).
+- `src/archdiff_gen.inc`: 36 native structs and enums whose representation
+  differs from the arm64 build's type of the same image and name: fields or
+  case indices differ (arm64-only `Float16` cases and fields, `Swift.Float16`
+  and `Swift.Float80` themselves), arm64 adds trailing cases, or the
+  multi-payload layouts differ (`ComputationalGraph.Output.Errors`: a tag
+  byte on x86_64, spare bits on arm64).
+
+Rules now:
+
+- Declared differently (`Recipe.c` `holds_archdiff`, checked first for every
+  type the walk meets and in `selected()`): a listed type counts only where
+  guest code can lay its bytes out, that is when its module froze it
+  (`frozenstruct_gen.inc`, by qualified name). No listed type is defined in
+  a guest image (the rows are x86_64 images'), and per hao-research's
+  reachability check of 26B131 no guest image or application references any
+  of them except `Swift.Float16` and `Swift.Float80`, the two frozen ones.
+  A resilient listed type is held by guest code only through its native
+  witnesses, its bytes are x86_64 throughout, and it is walked by its native
+  layout as before. A value whose type is a frozen listed type, or holds
+  one inline where guest code lays it out (struct fields, tuple elements,
+  Optional payloads, an enum's inline payload cases, at most 16 levels and
+  64 fields a level), is refused under every rule, rule D included. The
+  search and the walk stop at a native struct or enum its module did not
+  freeze (`native_opaque`): inside one everything is native-laid-out. So a
+  guest container refuses where it would descend into such a field, and
+  also for an inactive Optional payload or enum case it does not walk.
+- C, any number of empty cases (layout only, guest types too): size =
+  largest payload + 1 and xi = 256 - (payload cases + empty-case tags), where
+  the empty cases take one tag when the payload area has 32 bits or more and
+  ceil(empty / 2^bits) tags otherwise; at most 256 tags. A tag byte below the
+  payload cases is walked as before. A tag byte for empty cases is admitted
+  with nothing to walk when its empty case, (tag - payload cases) * 2^bits +
+  the index in the payload's first (at most 4) bytes, is below the empty
+  case count. Any other tag byte, size or xi is refused.
+- B by table (native witnesses only): with a row for the type whose XI count
+  is the live one, flags 1 and 2 admit the type wherever its tag bits lie and
+  whatever its empty cases (size up to 128 bytes, any alignment; stride at
+  least size). A row without flag 1 or 2, or with other case counts, refuses
+  it even where the bit-60-63 test passes. A row with another XI count is
+  ignored (the type's payloads are not loadable and it has a tag byte).
+  The mechanics are B's: tag bits are the union of the native injections of
+  each payload case and of empty case 0 (index 0, so only its tag) into
+  zeroed storage, each read back with the native `getEnumTag`; the live
+  case is the native `getEnumTag`; an empty case has nothing to walk; a
+  payload is walked in a copy with the tag bits cleared, and a patch over a
+  tag bit refuses. Without a row, B is unchanged.
+- Guest spare-bit enums (`Enum.c` `guest_spare_bit_case`, no witness run):
+  for an enum whose descriptor lies in a guest image, the common spare-bit
+  mask comes from that image's `__swift5_mpenum` record. From the mask and
+  the case counts the arm64 layout follows as IRGen computes it
+  (GenEnum.cpp: empty-case tags as for C over the non-spare bits; tag bits
+  all spare bits or the highest ones; empty case index in the non-spare bits
+  from the lowest; XIs 2^spare bits - tags, at most 0x7fffffff). It is used
+  only when the enum has no extra tag byte (size = largest payload) and the
+  predicted XI count equals the live value witness table's. The case is
+  gathered from the value's tag bits; a tag past the cases (an XI) or an
+  empty index past the cases is refused, an empty case has nothing to walk,
+  a payload case's payload is walked in a copy with the tag bits cleared.
+  A tag that also needs extra tag bits is refused.
+
+`tests/host/swiftlayout.sh` (section E) measures in native arm64 and x86_64
+programs: `FiveEmpty` (Int / (Int, Int) / five empty cases: size 17, xi
+0xfd, empty cases tag 2 with index 0-4 in the first payload byte), tags in a
+`Bool`'s spare bits (`Low2`: byte 8 bit 7; `Low3E2` with two empty cases,
+bits 6-7, empty case 1 index 1), and four native types of the host whose
+26B131 rows apply (the host is 26B123; 1318 of the 1899 rows' images are the
+same binaries here): `NWListener.State` (5 bytes, tags in bits 38-39, three
+empty cases), `LocalizedStringResource.BundleDescription` (bits 62-63, one
+empty case, XIs differ), AppIntents `ResizeBehavior` and `ZoomBehavior` (9
+bytes, tags in an `Optional<Double>`'s tag byte). Every injected case of
+each is the same on both architectures. Over the x86_64 values, 22 of the
+94 walk verdicts of sections A-E changed: the C enums with two and five
+empty cases (11 values, refused before), the AppIntents and
+BundleDescription values (8, refused before; `NWListener.State` was already
+walked by rule D), and the frozen listed `Swift.Float16` (0 bytes on
+x86_64; walked before by rule D, alone, in a tuple and as an `Optional`
+nil). The resilient listed `ComputationalGraph.Output.Errors` (with a
+`String` payload) and `Feature.DataType` (1 byte) are walked as before by
+rules C and D, also in a tuple, and `Float16` inside a native struct the
+module did not freeze is walked. 18 fixed-enum cases with explicit rows (the exported
+`hao_sv_discover_fixed_enum_case_row`) show: a row without flag 1, or with
+flag 4 or 1 only, refuses the 16-byte enum rule B admits without one; flags
+1|2 admit spare-bit enums with an empty case and Bool-byte tags that rule B
+refuses; a row of another XI count is ignored; the 17-case enum (whose
+measured cases differ, so its true row has flags 0) stays refused. 18 table
+lookups check rows by UUID and offset, including the flags-0 FontParser
+`GlyphMap` row and the first and last rows, and the script checks both
+tables are sorted. Still refused: a bad tag, an empty index past the cases,
+xi - 1.
+
+`tests/guest/optwitness.sh` now also copies, assigns and drops tuples of
+guest enums and a `C??` through the native tuple witnesses: a String-payload
+tag-byte enum with two empty cases and an Int-payload one with five (rule
+C), and spare-bit enums decoded from the guest record (class-reference
+tags in bits 62-63 with an empty case, tags in a `Bool`'s spare bits with
+two empty cases, and a 17-case enum whose arm64 tag uses bit 2). Before the
+change JIT, `--interp` and AOT all crashed in `swift_retain(0x1)`; with only
+the guest-record rule removed they still crash at the spare-bit enums; now
+all 162 lines equal native arm64.
+
+`tests/guest/svarchdiff.sh` (new) calls the walker from an arm64e guest:
+a guest struct with a `Float16` field and an `NSObject??`, `Float16` itself
+and an `Optional` nil of the struct are refused (the previous libhao walked
+the first two), the same struct with an `Int16` field is walked with one
+patch. Its inline-compiled `Float16` values equal native arm64.
+
+`Swift.Float16` under hao, apart from the walk: libswiftCore's x86_64
+`Float16` metadata has size 0 (no stored field), and guest code binds its
+uses of the type to that native metadata. Inline arithmetic and the guest's
+own struct layouts (size 2, offsets as on arm64) are right; anything that
+goes through the native metadata is not. Under JIT and `--interp`, generic
+`MemoryLayout<Float16>.size` is 0, a `Float16` printed through its native
+description prints `Float16()`, and a generic copy through the native
+witnesses copies nothing (`copied(1.5)` returned 2.25, a stale value).
+The walk refusal does not cause this and does not fix it; the walk of a
+guest struct holding `Float16` would itself be sound (the field holds no
+pointer and the struct's offsets are the guest's). Not addressed here.
+
+Remaining limitations:
+- The tables describe 26B131. On another build a native type finds no row:
+  B falls back to the bit-60-63 rule, and a type declared differently by
+  architecture there is not refused.
+- A listed type counts as guest-laid-out only when frozen; a resilient one
+  is trusted to reach guest code only through native witnesses (true of
+  every listed type on 26B131 by hao-research's reachability check, not
+  checked at run time). They are measured on this host's
+  26B123 runtimes for the images that are the same binaries, not on the
+  target system or Intel hardware.
+- A native C enum (no table: layout only) whose payload layout differs by
+  architecture is walked by its x86_64 layout; that is right while guest
+  code holds it only through native witnesses (`Output.Errors` on 26B131).
+  `archdiff_gen.inc` lists the declaring types; the walk finds containers of
+  a frozen one by containment.
+- Unpaired native spare-bit enums (no row) keep rule B; their XIs and
+  `Optional`s are still refused, and Optional nils of spare-bit enums whose
+  XIs differ are not translated.
+- Guest spare-bit enums: the layout is IRGen's as modelled, checked only
+  through the XI count, the size and these test enums; a layout that needs
+  spare bits and extra tag bits, and a generic (runtime-laid-out) guest enum
+  without a record, stay refused.
+- An outer nil inside a guest enum's payload (`b(C, C??)`, either guest
+  rule) is patched to the native encoding for a native tuple witness, which
+  then hands the enum to the guest enum's own arm64 witnesses: the copy
+  crashes (also before this change, for a guest tag-byte enum). Not covered
+  by a test.
+- The containment search for listed types stops at 16 levels and 64 fields;
+  what lies beyond is not searched.
+
 ## Per-entry jump-cache base in translated code
 
 Each translated indirect branch previously loaded `cpu.rt_jc`, then its
@@ -829,7 +1003,10 @@ Remaining limitations:
   that needs a bit outside 60-63 and an enum over 128 bytes are refused.
   The tag-bit patch refusal is not exercised: the payload words that held a
   nil in the measured enums had no spare bits, so no tag landed in them.
-- C: only one empty case was measured, and more are refused.
+  (Changed since: table rows, guest records; see "Multi-payload enum rules
+  from generated tables" above.)
+- C: only one empty case was measured, and more are refused. (Changed
+  since: any number; same section.)
 
 ## Table lookups, EXT, integer multiplies and round-to-integral in translated code
 

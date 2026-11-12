@@ -6,6 +6,7 @@
 #include "Recipe.h"
 #include "Common.h"
 #include "Enum.h"
+#include "hao/macho.h"
 #include <dlfcn.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -45,7 +46,9 @@ typedef struct {
                                                 it rejects ends the XI path (collect_inline_patches) */
     unsigned surveyed;  /* survey mode: refusing types printed so far (collect) */
     int survey;
+    unsigned opaque;    /* collect: native opaque types (native_opaque) the walk is inside */
 } reflection;
+static int guest_laid_listed(const void *type);
 
 static const witnesses *vwt(const void *type)
 {
@@ -81,7 +84,7 @@ static int receiver_empty_bits(const void *type, const empty_plan *plan, uint64_
  * of any live payload and must not be used to copy one. */
 static int selected(reflection *r, const void *type, empty_plan *out, unsigned depth)
 {
-    if (depth > 16) return 0;
+    if (depth > 16 || guest_laid_listed(type)) return 0;   /* declared differently on arm64 */
     uintptr_t kind = r->kind(type);
     if (kind != 0x200 && kind != 0x202 && kind != 0x301 && kind != 0x305 &&
         ((kind != 0x303 && kind != 0) || !r->existentials)) return 0;
@@ -292,6 +295,64 @@ static int function_xi_word(reflection *r, const void *type, uint64_t *offset)
     return 0;
 }
 
+/* A type declared differently on arm64 (Tables.h archdiff_type,
+ * src/archdiff_gen.inc) whose bytes guest code lays out: one its module
+ * froze (frozenstruct_gen.inc), whose layout is compiled into guest code.
+ * A resilient listed type is held by guest code only through its native
+ * witnesses, so its bytes are x86_64 throughout and its native layout is the
+ * right one to walk; its row is ignored. (No listed type is defined in a
+ * guest image: the rows are x86_64 images'.) */
+static int guest_laid_listed(const void *type)
+{
+    return archdiff_type(type) && native_frozen_type(type);
+}
+
+/* A native struct or enum its module did not freeze: guest code holds it
+ * only through native witnesses, so nothing inline in it is guest-laid-out. */
+static int native_opaque(reflection *r, const void *type)
+{
+    uintptr_t kind = r->kind(type);
+    const void *const *m = type;
+    if ((kind != 0x200 && kind != 0x201) || !m[1] || type == r->string || m[1] == r->array ||
+        hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return 0;
+    return !native_frozen_type(type);
+}
+
+/* Whether TYPE is, or holds inline where guest code lays it out, a listed
+ * frozen type: through struct fields, tuple elements, Optional payloads and
+ * an enum's inline payload cases, stopping at a native opaque type. Such a
+ * type's size and so its enclosing layouts can differ too, also where the
+ * walk does not descend (an inactive Optional payload, an enum's inactive
+ * cases). The search is bounded at 16 levels and 64 fields a level; what
+ * lies beyond is not searched. */
+static int holds_archdiff(reflection *r, const void *type, unsigned depth)
+{
+    if (guest_laid_listed(type)) return 1;
+    uintptr_t kind = r->kind(type);
+    const void *const *m = type;
+    if (depth > 16 || (kind != 0x200 && kind != 0x201 && kind != 0x202 && kind != 0x301) ||
+        type == r->string || (kind == 0x200 && m[1] == r->array) || native_opaque(r, type)) return 0;
+    int memo = holds_archdiff_memo(type);
+    if (memo >= 0) return memo;
+    int listed = 0;
+    if (kind == 0x202) listed = holds_archdiff(r, m[2], depth + 1);
+    else if (kind == 0x201) {
+        const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
+        int n = enum_inline_payloads(type, payloads);
+        for (int i = 0; i < n && !listed; ++i) listed = holds_archdiff(r, payloads[i], depth + 1);
+    } else {
+        intptr_t count = r->count(type);
+        for (intptr_t i = 0; count <= 64 && i < count && !listed; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type, i, &info);
+            if (info.free_name) info.free_name(info.name);
+            if (child) listed = holds_archdiff(r, child, depth + 1);
+        }
+    }
+    holds_archdiff_remember(type, listed);
+    return listed;
+}
+
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth);
 static int collect_inner(reflection *r, const void *type, const unsigned char *value,
@@ -301,6 +362,11 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     uintptr_t kind = r->kind(type);
     const witnesses *v = vwt(type);
     if (v->size > 4096) return 0;
+    /* A type declared differently on arm64 that guest code lays out, or one
+     * that holds such a type inline, has no representation both sides read
+     * alike: refused under every rule below, the one for small values
+     * included. Inside a native opaque type everything is native-laid-out. */
+    if (!r->opaque && holds_archdiff(r, type, 0)) return 0;
     /* A patch rewrites a whole pointer word. A value of fewer than 8 bytes
      * holds no pointer, so no nil in it has a pointer extra inhabitant and
      * the case it is in cannot hide one: there is nothing to patch. */
@@ -440,8 +506,11 @@ static void survey(reflection *r, const void *type, uint64_t base, unsigned dept
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
 {
+    int opaque = !r->opaque && native_opaque(r,type);
+    r->opaque += (unsigned)opaque;
     unsigned before = r->surveyed;
     int ok = collect_inner(r,type,value,base,out,capacity,used,depth);
+    r->opaque -= (unsigned)opaque;
     if (r->survey && (!ok || r->surveyed != before)) {
         if (!ok && r->surveyed == before) {
             if (!r->unresolved) r->unresolved = type;
