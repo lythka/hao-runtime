@@ -332,5 +332,7 @@ performance acceptance. `N` controls iterations (default 50000).
 
 `aot/integer-mutations` builds private translator copies and verifies that
 the complete-state vector test passes unchanged and catches reversed ZIP
-half selection. `guest/jitinsns` covers all 42 allocated ZIP/UZP/TRN forms
-against native arm64 in JIT, interpreter, helpers-only and AOT.
+half selection and an ADDV reduction at the wrong lane width.
+`guest/jitinsns` covers all 42 allocated ZIP/UZP/TRN forms, the five ADDV
+arrangements and all 24 signed/unsigned pairwise-long arrangements against
+native arm64 in JIT, interpreter, helpers-only and AOT.

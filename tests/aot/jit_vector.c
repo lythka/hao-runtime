@@ -246,6 +246,16 @@ int main(void)
             uint32_t i = 0x0e000800 | q << 30 | size << 22 | op << 12 | rm << 16 | rn << 5 | rd;
             check(i, 0, &in, false); check(i, 0, &in, true);
         }
+    for (unsigned q = 0; q < 2; q++) for (unsigned sz = 0; sz < 3; sz++)
+        for (unsigned form = 0; form < 5; form++) for (unsigned k = 0; k < 128; k++) {
+            if (form == 0 && sz == 2 && !q) continue;
+            unsigned rd = reg(), rn = k & 1 ? rd : reg();
+            hao_cpu in; state(&in, rn, rn);
+            in.v[rn].d[0] = rnd(); in.v[rn].d[1] = rnd();
+            uint32_t i = form == 0 ? 0x0e31b800 : 0x0e202800 | ((form - 1) & 1) << 29 | (form >= 3 ? 0x4000 : 0);
+            i |= q << 30 | sz << 22 | rn << 5 | rd;
+            check(i, 0, &in, false); check(i, 0, &in, true);
+        }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */
