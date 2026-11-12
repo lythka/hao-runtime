@@ -343,6 +343,20 @@ int main(void)
                     printf("MISMATCH %08x scalar indexed ordinary path called helper\n", i); fails++;
                 }
             }
+    static const uint32_t zero_forms[] = {0x0ea0c800, 0x2ea0c800, 0x0ea0d800, 0x2ea0d800, 0x0ea0e800};
+    for (unsigned control = 0; control < 16; control++) for (unsigned f = 0; f < 5; f++)
+        for (unsigned q = 0; q < 2; q++) for (unsigned k = 0; k < 128; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg();
+            hao_cpu in; state(&in, rn, rn); in.fpcr = control << 22;
+            if (k < 2) for (int e = 0; e < 4; e++) in.v[rn].s[e] = k ? 1 : (e & 1 ? 0x80000000 : 0);
+            uint32_t i = zero_forms[f] | q << 30 | rn << 5 | rd;
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k < 2 && vector_helper_calls != k) {
+                    if (fails++ < 20) printf("MISMATCH zero comparison admission %08x: %u helper calls\n", i, vector_helper_calls);
+                }
+            }
+        }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */

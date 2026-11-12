@@ -1653,7 +1653,7 @@ static void fp_to_int_z(tctx *t, uint32_t i, uint64_t pc)
 }
 
 /*
- * Packed single conversions and the compare with zero (.4S and .2S; a .2S
+ * Packed single conversions (.4S and .2S; a .2S
  * operand is loaded with its upper half zero, which every path below maps to
  * zero and no exception):
  *   SCVTF      CVTDQ2PS: one rounding per lane in the MXCSR mode, PE for IXC.
@@ -1662,11 +1662,8 @@ static void fp_to_int_z(tctx *t, uint32_t i, uint64_t pc)
  *              or out of range (IE; A64 raises IOC and saturates) or the
  *              true minimum: the helper redoes the instruction and raises
  *              the same flags again.
- *   FCMGT #0   for lanes that are neither NaN nor denormal, x > 0 is the
- *              signed integer comparison of the bits with zero; no FP
- *              instruction runs, so nothing is raised.
- * FCVTZS and FCMGT first send every operand with a denormal lane to the
- * helper (FZ flushes it and raises IDC), FCMGT every NaN too (IOC). The lane
+ * FCVTZS first sends every operand with a denormal lane to the
+ * helper (FZ flushes it and raises IDC). The lane
  * test 2|x| - 1 < 2^24 also catches the minimum normal number, which the
  * helper handles as exactly.
  */
@@ -1675,8 +1672,8 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
 #define PI(op, d, s_) x_sse_rr(&t->b, 0x66, op, 0, d, s_)
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5);
     uint32_t key = i & 0xBFFFFC00;
-    enum { SCVTF = 0x0E21D800, UCVTF = 0x2E21D800, FCVTZS = 0x0EA1B800, FCMGT0 = 0x0EA0C800 };
-    if (key != SCVTF && key != UCVTF && key != FCVTZS && key != FCMGT0) return false;
+    enum { SCVTF = 0x0E21D800, UCVTF = 0x2E21D800, FCVTZS = 0x0EA1B800 };
+    if (key != SCVTF && key != UCVTF && key != FCVTZS) return false;
     size_t slow[2];
     int nslow = 0;
     if (key != SCVTF) fl_clobber(t);
@@ -1695,27 +1692,15 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
         x_sse_shift_ri(&t->b, 0x72, 2, 1, 24);                 /* psrld: zero for a tiny lane */
         PI(0xEF, 3, 3);                                         /* pxor xmm3: zero */
         PI(0x76, 1, 3);                                         /* pcmpeqd xmm1, xmm3 */
-        if (key == FCMGT0) {
-            PI(0x6F, 4, 0);
-            x_sse_shift_ri(&t->b, 0x72, 6, 4, 1);              /* pslld 1 */
-            x_sse_shift_ri(&t->b, 0x72, 2, 4, 1);              /* psrld 1: |x| */
-            x_sse_shift_ri(&t->b, 0x72, 6, 2, 24);
-            x_sse_shift_ri(&t->b, 0x72, 2, 2, 1);              /* xmm2 = 0x7f800000 */
-            PI(0x66, 4, 2);                                     /* pcmpgtd: NaN lanes */
-            PI(0xEB, 1, 4);                                     /* por */
-        }
         PI(0xD7, RAX, 1);                                       /* pmovmskb eax, xmm1 */
         x_test_rr(&t->b, 0, RAX, RAX);
         slow[nslow++] = x_jcc32(&t->b, XCC_NE);
-        if (key == FCMGT0) PI(0x66, 0, 3);                      /* pcmpgtd xmm0, zero */
-        else {
-            x_sse_rr(&t->b, 0xF3, 0x5B, 0, 0, 0);              /* cvttps2dq xmm0, xmm0 */
-            x_sse_shift_ri(&t->b, 0x72, 6, 2, 31);             /* xmm2 = 0x80000000 */
-            PI(0x76, 2, 0);
-            PI(0xD7, RAX, 2);
-            x_test_rr(&t->b, 0, RAX, RAX);
-            slow[nslow++] = x_jcc32(&t->b, XCC_NE);
-        }
+        x_sse_rr(&t->b, 0xF3, 0x5B, 0, 0, 0);                  /* cvttps2dq xmm0, xmm0 */
+        x_sse_shift_ri(&t->b, 0x72, 6, 2, 31);                   /* xmm2 = 0x80000000 */
+        PI(0x76, 2, 0);
+        PI(0xD7, RAX, 2);
+        x_test_rr(&t->b, 0, RAX, RAX);
+        slow[nslow++] = x_jcc32(&t->b, XCC_NE);
     }
     fp_store(t, rd, 0);
     if (nslow) {
@@ -2957,6 +2942,33 @@ static bool t_vfp_reduce(tctx *t, uint32_t i, uint64_t pc)
     return true;
 }
 
+/* Comparisons with zero: integer admission before CMPPS, including all
+ * signed-zero cases. Special lanes retain the interpreter's NaN/IDC rules. */
+static bool t_vfp_zero(tctx *t, uint32_t i, uint64_t pc)
+{
+    unsigned key = i & 0xBFFFFC00, Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    int pred, swap;
+    switch (key) {
+    case 0x0EA0C800: pred = 1; swap = 1; break; /* FCMGT */
+    case 0x2EA0C800: pred = 2; swap = 1; break; /* FCMGE */
+    case 0x0EA0D800: pred = 0; swap = 0; break; /* FCMEQ */
+    case 0x2EA0D800: pred = 2; swap = 0; break; /* FCMLE */
+    case 0x0EA0E800: pred = 1; swap = 0; break; /* FCMLT */
+    default: return false;
+    }
+    if (Q) vld(t, 0, rn); else x_movq_ld(&t->b, 0, VR(rn));
+    vfp_constants(t); vzero(t, 4); vfp_special(t, 0);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    if (swap) { vzero(t, 1); x_sse_rri(&t->b, 0, 0xC2, 1, 0, (uint8_t)pred); }
+    else { P(0x6F, 1, 0); x_sse_rri(&t->b, 0, 0xC2, 1, 5, (uint8_t)pred); }
+    vst(t, rd, 1, (int)Q);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, decline, xb_len(&t->b)); helper_keep_flags(t, i, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
+    return true;
+}
+
 /* three-same, floating point: the single-precision forms of t_vfp32 */
 static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
 {
@@ -3429,7 +3441,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         break;
     case 0x7:
         if ((i & 0xFFC08000) == 0xCE000000) ok = t_eor3_bcax(t, i);
-        else ok = t_simd_fpconv(t, i, pc) || t_simd(t, i, pc);
+        else ok = t_vfp_zero(t, i, pc) || t_simd_fpconv(t, i, pc) || t_simd(t, i, pc);
         break;
     default: break;
     }
