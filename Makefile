@@ -196,7 +196,7 @@ bridgetest: $(B)/test_bridge
 
 # Code cache and thunk areas: AOT load vs translation, signature thunks,
 # cache exhaustion (tests/host/jitlock.c).
-jitlocktest: $(B)/libhao.dylib
+jitlocktest: $(B)/libhao.dylib $(B)/hao
 	OUT=$(abspath $(B))/jitlock LIB=$(B) tests/host/jitlock.sh
 
 # hao's growable maps (src/gmap.c): capacity, lock-free reads while they grow, fork.
@@ -233,7 +233,7 @@ $(B)/test_helper_descriptor: tests/aot/helper_descriptor.c $(B)/jit.o $(B)/stubs
 	codesign -s - -f $@
 
 # Translated vector FP, shifts and structure loads/stores against the interpreter.
-$(B)/test_jit_vector: tests/aot/jit_vector.c $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
+$(B)/test_jit_vector: tests/aot/jit_vector.c tests/oracle/fma_cases.h $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	codesign -s - -f $@
 

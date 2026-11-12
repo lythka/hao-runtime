@@ -1,5 +1,69 @@
 # Runtime issues and measured scope
 
+## Inline FP32 FMLA/FMLS in translated code
+
+Vector FMLA/FMLS .2S/.4S, three-same and by element, now emit the
+`fp_vec32_muladd` fast path in `src/jit.c`. Integer admission precedes FP
+arithmetic for every active lane. Exact binary64 products, an RN sum,
+TwoSum error recovery and an integer round-to-odd step precede one
+`cvtpd2ps` per pair under guest rounding/FZ. FMLS flips the multiplicand
+sign exactly. The indexed single form uses H:L for the lane and M:Rm for
+V0..V31; half precision's restricted Vm encoding is not reused for S.
+A .2S result clears the upper half. Nonordinary operands, unsupported
+FPCR controls and tiny/zero results retain the existing helper descriptor
+and restore the pre-attempt FP environment. Scalar, half and double fused
+forms remain helpers. No VEX/AVX instructions or absolute addresses are
+emitted; integer branches preserve live NZCV and deterministic re-emission.
+
+The common RN path saves MXCSR but does not reload it; other rounding
+modes use the second word of the entry stub's eight-byte slot for RN and
+restore guest RC before conversion. The block, oracle scratch and PC
+recovery buffers have a common 128 KiB allowance: a maximum 96-instruction
+block of these expansions exceeded the previous 64 KiB oracle scratch.
+`--stats` adds `helper_calls` for executed interpreter-helper calls, enabled
+only when statistics are requested; `helper` remains a translation count.
+
+Validation: the vector unit test checks 303,682 complete-state cases,
+including all 16 FPCR settings, full FPSR, directed near-ties, aliases,
+every indexed lane, high Vm and maximum-sized blocks. Independent mutations
+of the odd step, product negation and H:L decode produce 11,078, 46,930 and
+37,404 mismatches respectively. The encoder check covers 39,307 encodings.
+`fma32.sh` (226 output lines) and extended `jitinsns.sh` (489 lines) compare
+native arm64 with JIT, interpreter, helpers-only and AOT. The million-record
+fma/simd/block corpora replay with zero mismatches and unchanged IEEE-flag
+difference counts versus 2207f5e: interpreter 0/0/0, JIT 0/53/24,592.
+The nonzero counts are existing differences, not new fused-operation
+exceptions. Full runtime gates include the all-mode oracle, sanitizer
+oracle, unit, AOT, guest, host and packaging checks.
+
+Median ns/FMLA on Rosetta, seven interleaved runs per variant, sixteen
+million instructions per form per run, without `--stats`:
+
+| Form | JIT before -> after | AOT before -> after |
+| --- | --- | --- |
+| Three-same .4S | 23.385 -> 13.123 | 23.228 -> 13.153 |
+| By-element .4S | 25.071 -> 13.128 | 24.999 -> 13.047 |
+
+Both runs use the same normal inputs and produce the native arm64 checksum.
+The final runtime gate passes with only the documented skips and expected
+failure; no `test_fork` type-at crash was observed. A fresh parallel build
+exposed a test dependency race (`jitlocktest` started before `hao` existed);
+its Makefile prerequisite now includes the executable.
+
+The normal-input benchmark executes sixteen fused operations per loop.
+Separate `--stats` runs of four million operations per form report
+8,000,000 -> 0 executed helper calls for both JIT and AOT (the baseline
+was instrumented with the same counter only). JIT translated helper sites
+fall from 64 to 0; AOT execution has no JIT-site counts. The benchmark's
+translated code grows from 6 KiB to 48 KiB, including fallback paths.
+
+Limits: the arithmetic is still a multi-instruction SSE2 expansion, with
+substantial code size and a helper for cancellation, tiny values and
+special operands. Measurements are on the Apple silicon development host
+running hao under Rosetta, not on Ivy Bridge. Instruction-cache effects
+in larger applications and application/release-image acceptance are not
+established by these microbenchmarks or runtime gates.
+
 ## Swift values with an Array-supplied nil, spare-bit enum tags or an extra tag byte
 
 The Swift value walk (`src/swiftvalue/Recipe.c` `selected`/`collect`, run

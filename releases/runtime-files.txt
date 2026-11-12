@@ -690,3 +690,6 @@ tools/stub_identity_gate.py
 tools/value-contracts/README.md
 tools/value-contracts/optional-data-26A428.json
 tools/value-contracts/optional-data-26B131.json
+tests/aot/fmla_mutations.sh
+tests/guest/fmla_bench.c
+tests/guest/fmla_bench.sh

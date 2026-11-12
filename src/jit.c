@@ -45,12 +45,12 @@
 static inline int64_t sext(uint64_t v, int bits) { return (int64_t)(v << (64 - bits)) >> (64 - bits); }
 
 #define MAX_BLOCK_INSNS 96
-#define MAX_BLOCK_BYTES (64u << 10)   /* room a block needs before it is emitted */
+#define MAX_BLOCK_BYTES (128u << 10)  /* includes 96 inline FP32 fused operations */
 #define CODE_MB_DEFAULT 256           /* translated-code space; HAO_JIT_CACHE_MB (1..1024) overrides */
 #define THUNK_AREA ((size_t)THUNK_SLOTS * 32)   /* 32-byte plain thunks */
 #define SIG_SLOT 64
 #define SIG_AREA (4u << 20)           /* 64-byte signature thunks: 65536 */
-#define SCRATCH_SIZE (64u << 10)      /* hao_jit_exec_code (oracle) */
+#define SCRATCH_SIZE MAX_BLOCK_BYTES /* hao_jit_exec_code (oracle) */
 #define TABLE_MIN_BITS 12              /* first translation table: 4096 slots, 64 KB */
 #define TABLE_BITS 22                  /* largest: large per-image AOT maps retain all entries */
 #define TABLE_SIZE (1u << TABLE_BITS)
@@ -95,6 +95,7 @@ static tentry jc_none;
 static uint64_t table_epoch = 1;
 static int (*jit_enter)(hao_cpu *, void *code);
 static uint64_t st_blocks, st_insns, st_native, st_helper, st_links, st_bytes, st_aot_blocks;
+static uint64_t st_helper_calls;      /* dynamic calls, only with --stats */
 static uint64_t st_sites, st_sites_unaligned, st_link_skips;   /* chainable exits emitted / not 4-aligned; links refused */
 static uint64_t st_fused;             /* instructions folded into the one before them (constant chains) */
 static uint64_t st_fl_exits, st_fl_unsaved;   /* direct exits reached with NZCV in EFLAGS / of those, left unsaved */
@@ -2421,11 +2422,115 @@ static void t_vfp32(tctx *t, int op, unsigned rd, unsigned rn, unsigned rm, int 
     t->vfp_consts = true;
 }
 
+/* fma32_odd (a64_fp.c), two low single lanes -> two doubles in s.
+ * a/b/c are destroyed; e is scratch. All inputs have passed integer
+ * admission and MXCSR is RN. The product is exact; TwoSum recovers the
+ * sum's error, then the integer step rounds to odd without double rounding. */
+static void vfp_fma_odd(tctx *t, int a, int b, int c, int s, int e)
+{
+    x_sse_rr(&t->b, 0, 0x5A, 0, a, a);                          /* cvtps2pd */
+    x_sse_rr(&t->b, 0, 0x5A, 0, b, b);
+    x_sse_rr(&t->b, 0, 0x5A, 0, c, c);
+    P(0x59, a, b);                                               /* exact product */
+    P(0x6F, s, a); P(0x58, s, c);                               /* RN sum */
+    P(0x6F, b, s); P(0x5C, b, a);                               /* c' */
+    P(0x6F, e, s); P(0x5C, e, b);                               /* p' */
+    P(0x5C, a, e); P(0x5C, c, b); P(0x58, a, c);               /* error */
+    vzero(t, c); P(0x6F, e, a);
+    x_sse_rri(&t->b, 0x66, 0xC2, a, c, 4);                      /* error != 0 */
+    P(0x6F, b, s); P(0xEF, b, e);
+    x_sse_shift_ri(&t->b, 0x72, 4, b, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, b, b, 0xF5);                   /* signs differ */
+    vones(t, e); x_sse_shift_ri(&t->b, 0x73, 2, e, 63);
+    P(0xEB, b, e);                                               /* -1 or +1 */
+    P(0x6F, c, s); x_sse_shift_ri(&t->b, 0x73, 6, c, 63);
+    x_sse_shift_ri(&t->b, 0x72, 4, c, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, c, c, 0xF5);                   /* sum odd */
+    P(0xDF, c, a); P(0xDB, b, c); P(0xD4, s, b);               /* round to odd */
+}
+
+/* fp_vec32_muladd's admission, arithmetic and rollback, with no EFLAGS
+ * writes or absolute addresses. xmm5-7 retain vfp_constants; xmm10-12
+ * hold the upper input pair while xmm0/1/8 compute the lower one. */
+static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
+{
+    vld(t, 0, rn); vld(t, 1, rm); vld(t, 8, rd);
+    if (idx >= 0) x_sse_rri(&t->b, 0x66, 0x70, 1, 1, (uint8_t)(0x55 * idx));
+    if (!Q) {
+        x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
+        x_sse_rr(&t->b, 0xF3, 0x7E, 0, 1, 1);
+        x_sse_rr(&t->b, 0xF3, 0x7E, 0, 8, 8);
+    }
+    if (!t->vfp_prev) vfp_constants(t);
+    vzero(t, 4);
+    vfp_special(t, 0); vfp_special(t, 1); vfp_special(t, 8);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    /* The same FPCR contract as the helper, including future/unsupported
+     * controls. SSE integer masks leave live guest NZCV untouched. */
+    x_movd_ld(&t->b, 2, xm(RBX, offsetof(hao_cpu, fpcr)));
+    x_mov_ri(&t->b, RAX, 0x03c00000);
+    x_sse_rr(&t->b, 0x66, 0x6E, 0, 3, RAX);
+    P(0xDF, 3, 2);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 3, RCX);
+    size_t control = jrcxnz32(t);
+    if (sub) {
+        vones(t, 2); x_sse_shift_ri(&t->b, 0x72, 6, 2, 31);
+        P(0xEF, 0, 2);                                           /* negate product exactly */
+    }
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    x_movd_ld(&t->b, 2, MXCSR_SLOT);
+    x_mov_ri(&t->b, RAX, 0x6000);
+    x_sse_rr(&t->b, 0x66, 0x6E, 0, 3, RAX);
+    P(0xDB, 3, 2);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 3, RCX);                    /* guest RC, kept through TwoSum */
+    size_t nearest = x_jrcxz8(&t->b);
+    P(0xDF, 3, 2);
+    x_movd_st(&t->b, xm(RSP, 4), 3);
+    x_ldmxcsr(&t->b, xm(RSP, 4));                                 /* RN for both pairs */
+    x_patch8(&t->b, nearest, xb_len(&t->b));
+    if (Q) {
+        P(0x6F, 10, 0); P(0x6D, 10, 10);
+        P(0x6F, 11, 1); P(0x6D, 11, 11);
+        P(0x6F, 12, 8); P(0x6D, 12, 12);
+    }
+    vfp_fma_odd(t, 0, 1, 8, 9, 4);
+    if (Q) vfp_fma_odd(t, 10, 11, 12, 13, 4);
+    /* In RN, retain PE from an inexact sum (the conversion raises it too).
+     * Otherwise restore guest RC before converting, as fma32 does. */
+    nearest = x_jrcxz8(&t->b);
+    x_ldmxcsr(&t->b, MXCSR_SLOT);
+    x_patch8(&t->b, nearest, xb_len(&t->b));
+    P(0x5A, 9, 9);                                               /* cvtpd2ps, guest RC/FZ */
+    if (Q) { P(0x5A, 13, 13); P(0x6C, 9, 13); }
+    /* Decline exponents 0 and 1 (including zero); overflow is admitted.
+     * .2S checks only the active pair and cvtpd2ps clears the upper half. */
+    vones(t, 2); x_sse_shift_ri(&t->b, 0x72, 2, 2, 25); x_sse_shift_ri(&t->b, 0x72, 6, 2, 24);
+    P(0xDB, 2, 9); P(0x76, 2, 5);
+    if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 2, 2);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 2);
+    size_t restore = jrcxnz32(t);
+    vst(t, rd, 9, Q);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, restore, xb_len(&t->b));
+    x_ldmxcsr(&t->b, MXCSR_SLOT);
+    x_patch32(&t->b, decline, xb_len(&t->b));
+    x_patch32(&t->b, control, xb_len(&t->b));
+    helper_keep_flags(t, insn, pc);
+    vfp_constants(t);
+    x_patch32(&t->b, done, xb_len(&t->b));
+    t->vfp_consts = true;
+}
+
 /* three-same, floating point: the single-precision forms of t_vfp32 */
 static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 11);
     if (size & 1) return false;                                  /* double precision: helper */
+    if (!U && op == 0x19) {
+        t_vfp_fma(t, size >> 1, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, (int)Q, i, pc);
+        return true;
+    }
     int o;
     switch (U << 6 | (size >> 1) << 5 | (op & 7)) {
     case 0x02: o = VFP_ADD; break;
@@ -2465,13 +2570,16 @@ static bool t_simd_indexed_int(tctx *t, uint32_t i)
     return true;
 }
 
-/* FMUL (by element), single precision: 0 Q 0 01111 10 L M Rm 1001 H 0 Rn Rd */
+/* FMUL/FMLA/FMLS by element, single precision. H:L selects S[0..3];
+ * M extends Rm to V0..V31 (only half precision restricts Vm to V0..V15). */
 static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
 {
     if (t_simd_indexed_int(t, i)) return true;
-    if (BIT(i, 29) || BITS(i, 23, 22) != 2 || BITS(i, 15, 12) != 9) return false;
+    unsigned op = BITS(i, 15, 12);
+    if (BIT(i, 29) || BITS(i, 23, 22) != 2 || (op != 9 && op != 1 && op != 5)) return false;
     unsigned rm = BITS(i, 20, 16), idx = BIT(i, 11) << 1 | BIT(i, 21);
-    t_vfp32(t, VFP_MUL, BITS(i, 4, 0), BITS(i, 9, 5), rm, (int)idx, (int)BIT(i, 30), i, pc);
+    if (op == 9) t_vfp32(t, VFP_MUL, BITS(i, 4, 0), BITS(i, 9, 5), rm, (int)idx, (int)BIT(i, 30), i, pc);
+    else t_vfp_fma(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), rm, (int)idx, (int)BIT(i, 30), i, pc);
     return true;
 }
 
@@ -2970,7 +3078,7 @@ static void *translate(uint64_t pc)
  * re-emitting the block: emission is deterministic and its length does not
  * depend on where the bytes go. Async-signal-safe: no locks, no allocation;
  * one locate at a time (a concurrent one reports false). */
-static uint8_t loc_buf[128 * 1024];
+static uint8_t loc_buf[MAX_BLOCK_BYTES];
 static int loc_busy;
 
 bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
@@ -4138,6 +4246,7 @@ static void init_fcmp(hao_cpu *c)
 static int jit_helper(hao_cpu *c, uint64_t descriptor, uint64_t pc)
 {
     c->host_scratch[HAO_SCRATCH_HELPER] = pc;
+    if (hao_opt.stats) __atomic_fetch_add(&st_helper_calls, 1, __ATOMIC_RELAXED);
     int r = a64_exec_helper(c, descriptor, pc);
     c->host_scratch[HAO_SCRATCH_HELPER] = 0;
     return r;
@@ -4266,14 +4375,15 @@ void hao_jit_stats(void)
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
             " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu"
-            " flag_exits=%llu flag_exits_unsaved=%llu\n",
+            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
             (unsigned long long)st_sites_unaligned, (unsigned long long)st_link_skips,
             __atomic_load_n(&table_used, __ATOMIC_RELAXED), table ? table->mask + 1 : 0, (unsigned long long)(st_table_bytes >> 10),
             (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
-            (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved);
+            (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved,
+            (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED));
 }
 
 /* Oracle support: run code[0..n) placed at guest address `base` from its

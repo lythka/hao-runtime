@@ -90,6 +90,8 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     {0x66, 0xEE, 0, 0, "pmaxsw"}, {0x66, 0xEA, 0, 0, "pminsw"}, {0x66, 0xD5, 0, 0, "pmullw"}, {0x66, 0x60, 0, 0, "punpcklbw"},
     {0x66, 0x62, 0, 0, "punpckldq"}, {0x66, 0x6F, 0, 0, "movdqa"}, {0xF3, 0x7E, 0, 0, "movq"}, {0x66, 0xF6, 0, 0, "psadbw"},
     /* vector floating point, widening, narrowing */
+    {0, 0x5A, 0, 0, "cvtps2pd"}, {0x66, 0x5A, 0, 0, "cvtpd2ps"},
+    {0x66, 0x59, 0, 0, "mulpd"}, {0x66, 0x58, 0, 0, "addpd"}, {0x66, 0x5C, 0, 0, "subpd"},
     {0, 0x58, 0, 0, "addps"}, {0, 0x5C, 0, 0, "subps"}, {0, 0x59, 0, 0, "mulps"}, {0, 0x5F, 0, 0, "maxps"},
     {0, 0x5D, 0, 0, "minps"}, {0x66, 0x61, 0, 0, "punpcklwd"}, {0x66, 0x67, 0, 0, "packuswb"}, {0x66, 0x6B, 0, 0, "packssdw"},
     /* scalar max/min, FP<->integer conversions, packed single conversions */
@@ -212,6 +214,7 @@ int main(int argc, char **argv)
             begin(); x_sse_shift_ri(&B, sh[k].op, sh[k].digit, a, (uint8_t)(k + 1)); end("%s xmm%d, %u", sh[k].mn, a, k + 1);
         }
         for (int c = 0; c < 16; c += 5) {
+            begin(); x_sse_rri(&B, 0x66, 0xC2, a, c, 4); end("cmpneqpd %s, %s", xmmn(a), xmmn(c));
             begin(); x_sse_rri(&B, 0xF2, 0x70, a, c, 0); end("pshuflw %s, %s, 0", xmmn(a), xmmn(c));
             begin(); x_sse_rri(&B, 0x66, 0x70, a, c, 0xEE); end("pshufd %s, %s, 238", xmmn(a), xmmn(c));
             static const uint8_t shuf[] = {0x00, 0x08, 0x55, 0xAA, 0xF5, 0xFF};

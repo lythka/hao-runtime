@@ -392,12 +392,21 @@ static const uint64_t fpcrs[] = {0, 3u << 22, 1u << 24, 1u << 25, 2u << 22 | 3u 
         return mix(out[0], out[1]);                                                     \
     }
 #define F4(n, mn) VECF(t_##n##4s, mn " v2.4s, v0.4s, v1.4s") VECF(t_##n##2s, mn " v2.2s, v0.2s, v1.2s")
+F4(fmla, "fmla") F4(fmls, "fmls")
 F4(fadd, "fadd") F4(fsub, "fsub") F4(fmul, "fmul") F4(fmax, "fmax") F4(fmin, "fmin") F4(fmaxnm, "fmaxnm")
 F4(fminnm, "fminnm") F4(fcmeq, "fcmeq") F4(fcmge, "fcmge") F4(fcmgt, "fcmgt")
 VECF(t_fmule0, "fmul v2.4s, v0.4s, v1.s[0]")
 VECF(t_fmule1, "fmul v2.4s, v0.4s, v17.s[3]")
 VECF(t_fmule2, "fmul v2.2s, v1.2s, v0.s[1]")
 VECF(t_fmule3, "fmul v2.2s, v0.2s, v17.s[2]")
+VECF(t_fmlae0, "fmla v2.4s, v0.4s, v17.s[0]")
+VECF(t_fmlae1, "fmla v2.4s, v0.4s, v17.s[1]")
+VECF(t_fmlae2, "fmla v2.2s, v0.2s, v17.s[2]")
+VECF(t_fmlae3, "fmla v2.2s, v0.2s, v17.s[3]")
+VECF(t_fmlse0, "fmls v2.4s, v0.4s, v17.s[0]")
+VECF(t_fmlse1, "fmls v2.4s, v0.4s, v17.s[1]")
+VECF(t_fmlse2, "fmls v2.2s, v0.2s, v17.s[2]")
+VECF(t_fmlse3, "fmls v2.2s, v0.2s, v17.s[3]")
 VECF(t_fchain, "fmul v2.4s, v0.4s, v1.4s\nfadd v2.4s, v2.4s, v0.4s\nfsub v2.4s, v2.4s, v1.4s\nfmax v2.4s, v2.4s, v1.4s")
 VECF(t_fadd2d, "fadd v2.2d, v0.2d, v1.2d")
 /* round to integral: vector .4S/.2S/.2D and scalar S/D */
@@ -665,6 +674,8 @@ int main(void)
     R(fabs0); R(fabs1); R(fabs2); R(fneg0); R(fneg1); R(fneg2);
 #define RF(n) runf(#n, t_##n)
 #define RF4(n) RF(n##4s); RF(n##2s)
+    RF4(fmla); RF4(fmls);
+    RF(fmlae0); RF(fmlae1); RF(fmlae2); RF(fmlae3); RF(fmlse0); RF(fmlse1); RF(fmlse2); RF(fmlse3);
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);
     RF(fmule0); RF(fmule1); RF(fmule2); RF(fmule3); RF(fchain); RF(fadd2d);
 #define RR(n) runr(#n, t_##n)

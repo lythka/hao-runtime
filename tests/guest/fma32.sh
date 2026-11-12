@@ -3,7 +3,7 @@
 # FMLS and FMADD-family form on near-tie, cancelling, overflowing, tiny and
 # special operands under each FPCR rounding/FZ/DN setting) for arm64e (guest)
 # and arm64 (reference). Run arm64 natively and arm64e under hao with the
-# JIT, with --interp and from an AOT cache; each hao run must print exactly
+# JIT, with --interp, helpers-only and from an AOT cache; each run prints
 # the result and FPSR hashes native arm64 prints. Exit status 0 only if
 # every run matches.
 #   OUT=dir HAO=build/hao [T=60] tests/guest/fma32.sh
@@ -27,9 +27,10 @@ rc=$?
 echo "native   rc=$rc lines=$(wc -l <"$OUT/native.out" | tr -d ' ')"
 fail=0
 [ $rc = 0 ] || fail=1
-for mode in jit interp aot; do
+for mode in jit interp helpers aot; do
     case $mode in
     jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
+    helpers) set -- env HAO_NO_AOT=1 HAO_JIT_HELPERS_ONLY=1 "$HAO" ;;
     interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
     aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
     esac
