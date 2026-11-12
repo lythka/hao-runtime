@@ -57,16 +57,67 @@ void hao_swift_value_fork_child(void)
     witness_setup_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     hao_sv_native_leaf_fork_child();
 }
+typedef struct { const char *text; uintptr_t length; } type_name;
+static type_name name_of(const void *type)
+{
+    typedef type_name SWIFT name_fn(const void *, bool);
+    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
+    type_name n = type && name ? name(type,true) : (type_name){"?",1};
+    if (n.length > 4096) n.length = 4096;
+    return n;
+}
 static void refuse(const void *type, const char *why)
 {
     hao_diag_prefix(HAO_DIAG);
-    typedef struct { const char *text; uintptr_t length; } type_name;
-    typedef type_name SWIFT name_fn(const void *, bool);
-    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
-    type_name n = name ? name(type,true) : (type_name){"?",1};
+    type_name n = name_of(type);
     fprintf(HAO_DIAG,"Swift value boundary refused: %s (metadata=%p size=%llu flags=%#x type=%.*s)\n",
-        why,type,(unsigned long long)vwt(type)->size,vwt(type)->flags,(int)(n.length > 4096 ? 4096 : n.length),n.text);
+        why,type,(unsigned long long)vwt(type)->size,vwt(type)->flags,(int)n.length,n.text);
     abort();
+}
+
+/* What a value the walk cannot certify does. By default it passes through
+ * unpatched: the native code gets the guest's bytes as they are (a nil in
+ * the guest's encoding can then misbehave later, so a crash after a survey
+ * line is read with that in mind), and the first time a (type, reason)
+ * pair occurs in the process hao prints the value's innermost refusing
+ * types, the schema of the value and one line naming the root type and the
+ * guest caller, all under the stable prefix "Swift value survey:". With
+ * HAO_SWIFT_VALUE_STRICT (tests) it is refused: printed, then abort. */
+#define SEEN_LIMIT 1024
+static struct { const void *type; const char *why; } seen[SEEN_LIMIT];
+static unsigned nseen;
+static bool first_report(const void *type, const char *why)
+{
+    bool first = true, full = false;
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < nseen && first; ++i) first = seen[i].type != type || seen[i].why != why;
+    if (first) {
+        if (nseen < SEEN_LIMIT) { seen[nseen].type = type; seen[nseen].why = why; nseen++; full = nseen == SEEN_LIMIT; }
+        else first = false;
+    }
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    if (full) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG,"Swift value survey: %u types reported; later ones are not\n",SEEN_LIMIT); }
+    return first;
+}
+/* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
+ * walk refused it, ROOT the type of the activation, LR and PC the guest call. */
+static void decline(const void *type, const char *why, const void *walked, const void *value,
+                    const void *root, uint64_t lr, uint64_t pc)
+{
+    bool strict = hao_opt.swift_value_strict;
+    if (!strict && !first_report(type,why)) return;
+    if (walked && value) {
+        empty_patch scratch[64];
+        const void *unresolved;
+        (void)collect_survey_patches(walked,value,scratch,64,&unresolved);
+        hao_swift_schema_dump(HAO_DIAG,walked,root,type,lr,pc);
+    }
+    if (strict) refuse(type,why);
+    type_name n = name_of(type), r = name_of(root);
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG,"Swift value survey: passed through unpatched: %s (metadata=%p size=%llu flags=%#x xi=%#x type=%.*s) "
+        "root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,vwt(type)->flags,vwt(type)->extra,
+        (int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
 }
 static bool graph(builder *b, const void *type, unsigned depth)
 {
@@ -200,32 +251,28 @@ static bool handle(hao_thread *t, const entry *e)
     if (!destroy && !transfer) return false;
     /* A buffer witness has a different storage ABI. Refuse aliases before
      * reading any value bytes, including when the later walk has no nil. */
+    const void *root = t->swift_values->plan->type;
+#define DECLINE(type,why,walked,value) do { decline(type,why,walked,value,root,c->x[30],e->pc); return false; } while (0)
     if ((e->slots & (1u << 0)) || (destroy && (transfer || e->slots != (1u << 1))))
-        refuse(e->type,"unsupported buffer or ambiguous witness ABI");
+        DECLINE(e->type,"unsupported buffer or ambiguous witness ABI",NULL,NULL);
     void *source = (void *)(uintptr_t)c->x[destroy ? 0 : 1];
     void *destination = (void *)(uintptr_t)c->x[0];
-    if (!source) refuse(e->type,"null value storage");
+    if (!source) DECLINE(e->type,"null value storage",NULL,NULL);
     empty_patch patches[64];
     const void *unresolved;
     int count = collect_empty_patches_detail(e->type,source,patches,64,&unresolved);
-    if (count < 0) {
-        hao_swift_schema_dump(HAO_DIAG,e->type,t->swift_values->plan->type,unresolved,c->x[30],e->pc);
-        refuse(unresolved,"unresolved active representation");
-    }
+    if (count < 0) DECLINE(unresolved,"unresolved active representation",e->type,source);
     bool foreign = false;
     for (int i = 0; i < count; ++i) foreign |= patches[i].bits != patches[i].receiver_bits;
     bool assignment = (e->slots & ((1u << 3) | (1u << 5))) != 0;
     if (assignment) {
         empty_patch old[64];
         int n = collect_empty_patches_detail(e->type,destination,old,64,&unresolved);
-        if (n < 0) {
-            hao_swift_schema_dump(HAO_DIAG,e->type,t->swift_values->plan->type,unresolved,c->x[30],e->pc);
-            refuse(unresolved,"unresolved assignment destination");
-        }
+        if (n < 0) DECLINE(unresolved,"unresolved assignment destination",e->type,destination);
         for (int i = 0; i < n; ++i) foreign |= old[i].bits != old[i].receiver_bits;
     }
     if (!foreign) return false;
-    if (assignment || (!destroy && (e->slots & ~transfers))) refuse(e->type,"unsupported assignment or ownership alias");
+    if (assignment || (!destroy && (e->slots & ~transfers))) DECLINE(e->type,"unsupported assignment or ownership alias",NULL,NULL);
     empty_plan empty;
     bool nil = discover_empty_plan(e->type,&empty);
     if (nil) {
@@ -234,7 +281,7 @@ static bool handle(hao_thread *t, const entry *e)
     }
     if (!destroy) {
         uintptr_t d = (uintptr_t)destination, s = (uintptr_t)source;
-        if (!d || (d >= s ? d - s : s - d) < vwt(e->type)->size) refuse(e->type,"overlapping initialization");
+        if (!d || (d >= s ? d - s : s - d) < vwt(e->type)->size) DECLINE(e->type,"overlapping initialization",NULL,NULL);
     }
     if (nil) {
         if (!destroy) memcpy(destination,source,(size_t)vwt(e->type)->size);
@@ -242,13 +289,13 @@ static bool handle(hao_thread *t, const entry *e)
         const void *storage = enum_storage(e->type);
         enum_case_plan active;
         unsigned slot = destroy ? 1 : e->slots == (1u << 2) ? 2 : e->slots == (1u << 4) ? 4 : 0;
-        if (!slot) refuse(e->type,"ambiguous payload ownership");
+        if (!slot) DECLINE(e->type,"ambiguous payload ownership",NULL,NULL);
         if (storage && discover_enum_case(storage,source,&active)) {
             if (!active.payload || !native_function((uint64_t)(uintptr_t)vwt(active.payload)->fn[slot]))
-                refuse(e->type,"non-native payload ownership");
+                DECLINE(e->type,"non-native payload ownership",NULL,NULL);
             int done = destroy ? destroy_enum_empty(source,storage) : slot == 2 ?
                 copy_enum_empty(destination,source,storage,1) : take_enum_empty(destination,source,storage,1);
-            if (!done) refuse(e->type,"active payload ownership unavailable");
+            if (!done) DECLINE(e->type,"active payload ownership unavailable",NULL,NULL);
         } else {
             /* Ordinary BB structs/tuples can borrow their complete storage.
              * The full active walk above supplies the live-field contract. */
@@ -256,11 +303,11 @@ static bool handle(hao_thread *t, const entry *e)
             uintptr_t k = kind(e->type);
             const witnesses *v = vwt(e->type);
             if ((k != 0x200 && k != 0x301) || (v->flags & 0x01900000))
-                refuse(e->type,"non-borrowable aggregate ownership");
+                DECLINE(e->type,"non-borrowable aggregate ownership",NULL,NULL);
             void *scratch = NULL;
             size_t alignment = (v->flags & 255) + 1;
             if (alignment < sizeof(void *)) alignment = sizeof(void *);
-            if (posix_memalign(&scratch,alignment,(size_t)v->size)) refuse(e->type,"scratch allocation");
+            if (posix_memalign(&scratch,alignment,(size_t)v->size)) DECLINE(e->type,"scratch allocation",NULL,NULL);
             memcpy(scratch,source,(size_t)v->size);
             for (int i = 0; i < count; ++i) {
                 uint64_t bits = patches[i].receiver_bits;
@@ -281,6 +328,7 @@ static bool handle(hao_thread *t, const entry *e)
         destroy ? 1 : e->slots == (1u << 4) ? 4 : 2,e->type,count);
     return true;
 }
+#undef DECLINE
 bool hao_swift_value_native(hao_thread *t, uint64_t pc)
 {
     hao_swift_value_scope *scope = t->swift_values;
@@ -310,8 +358,10 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
     int count = collect_empty_patches_detail(scope->plan->type,scope->output,patches,64,&unresolved);
     t->cpu = saved;
     if (count < 0) {
-        hao_swift_schema_dump(HAO_DIAG,scope->plan->type,scope->plan->type,unresolved,saved.x[30],0);
-        refuse(unresolved,"result publication has unresolved active representation");
+        decline(unresolved,"result publication has unresolved active representation",scope->plan->type,scope->output,
+                scope->plan->type,saved.x[30],0);
+        t->swift_values = scope->previous;   /* published as the guest wrote it */
+        return;
     }
     unsigned changed = 0;
     for (int i = 0; i < count; ++i) {

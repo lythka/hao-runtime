@@ -235,12 +235,26 @@ Rules as implemented:
   from native metadata) was refused. `swiftlayout` section G: 5 walks
   refused before.
 
-Survey mode: with `HAO_SWIFT_VALUE_SURVEY=1` (environment, honoured in guarded
-processes such as entitled apps, or boot argument `hao_swift_value_survey=1`)
-a refused value is walked to the end. Every innermost refusing type is printed
-(`Swift value survey: refused at offset N depth D: metadata=... type=...`)
-before the usual refusal line and abort. Printing only: the verdict is
-unchanged. `swiftlayout` section S checks a value with two refusing fields.
+Refusal policy (`swiftvalue.c` `decline`): a value the walk cannot certify,
+and the ownership cases it cannot carry out, pass through unpatched by
+default. The native witness runs on the guest's bytes, and a published result
+stays as the guest wrote it. The first time a (type, reason) pair occurs in a
+process, hao prints three things under the stable prefix `Swift value
+survey:`: the value's innermost refusing types (`refused at offset N depth D:
+... type=...`, from a second walk in survey mode), the schema of the value,
+and one `passed through unpatched: REASON (... type=...) root=... guest lr=...
+pc=...` line. Up to 1024 pairs are reported per process. This is the owner's
+choice: refusing by default hides what ARM apps send.
+
+The cost is that a nil in the guest's encoding inside such a value can make
+native code misbehave or crash later, away from the boundary. Read a crash
+after a survey line with that in mind. `HAO_SWIFT_VALUE_STRICT=1` (open tier
+only, no boot argument; for tests) restores the refusal: the same lines, then
+the `Swift value boundary refused:` line and abort. An activation lifetime
+mismatch, an internal invariant, still aborts. Not covered by a guest test:
+the publication and witness paths are reached from SwiftUI/AttributeGraph on
+the target. `swiftlayout` section S checks the survey walk itself (a value
+with two refusing fields prints both).
 
 Both enum rules are used by the walk only. The ownership transfers in
 `Aggregate.c` and `graph()`, which picks the types whose native witnesses a
