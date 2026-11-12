@@ -699,3 +699,7 @@ tests/aot/round16.c
 tests/oracle/fma16_cases.h
 tests/guest/fma16.c
 tests/guest/fma16.sh
+tests/guest/helper_stats.c
+tests/guest/helper_stats.sh
+tests/guest/coverage_bench.c
+tests/guest/coverage_bench.sh

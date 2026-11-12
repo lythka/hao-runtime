@@ -316,3 +316,16 @@ block and checks the recovered guest PC and live NZCV against native execution
 in every engine. This exercises deterministic re-emission into the enlarged
 256 KiB recovery buffer. The mutation manifest timeout is 600 seconds for
 its control plus eight independent variants.
+
+`guest/helper-stats` checks dynamic decoder-group statistics in JIT and AOT:
+1000 each of untranslated reciprocal estimates, FABD and integer ADDP, plus
+1000 subnormal FADD declines,
+with 1000 admitted FADDs excluded; N=0 subtracts startup calls. Without
+`--stats`, no group lines are printed.
+
+`guest/coverage-bench` compares a 35-form SIMD workload with native arm64 in
+JIT, interpreter, helpers-only and AOT. Constant ordinary operands and sixteen
+operations per loop make each instruction's helper cost measurable. Timing
+runs omit statistics; separate runs report helper groups. Loop/reset overhead
+is included. Development-host ratios are descriptive; Intel measurements decide
+performance acceptance. `N` controls iterations (default 50000).
