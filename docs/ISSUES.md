@@ -1,5 +1,621 @@
 # Runtime issues and measured scope
 
+## JIT tail: integrated coverage and acceptance
+
+Nine instruction groups remove 40,921 of 59,250 previously untranslated
+static sites in a large FP/SIMD-heavy arm64 program. Coverage rises from
+99.5283% to 99.8541% across the same 12,561,074 instructions; generated
+code grows 13,558 KiB (2.1%). This falls short of the approximate 99.94%
+target. Double fused arithmetic remains on the interpreter pending a
+measured Intel speed advantage. The occupied reference laptop was not used.
+Rosetta timing observations are informational, never an acceptance criterion
+for retaining these changes.
+
+Each row is cumulative static coverage after that group. Helper counts are
+separate ordinary-input workloads, before -> after in both JIT and AOT;
+they are not application execution frequencies. Conversion and half rows
+use 5,000 iterations, the others 1,000, with 16 test operations per form
+per iteration. The FPSR-read form clears FPSR before each read, accounting
+for its extra system-register helper call.
+
+| Group | Remaining sites | Native coverage | Code KiB | Helper calls before -> after |
+| --- | ---: | ---: | ---: | ---: |
+| Base | 59,250 | 99.5283% | 639,290 | — |
+| 1. Scalar single fused and reciprocal steps | 47,034 | 99.6256% | 645,955 | 176,000 -> 0 |
+| 2. Integer widening, narrowing and misc | 37,049 | 99.7050% | 646,110 | 3,504,000 -> 0 |
+| 3. Conversions | 32,360 | 99.7424% | 647,368 | 2,080,000 -> 0 |
+| 4. Multiple-structure memory | 27,066 | 99.7845% | 648,653 | 672,000 -> 0 |
+| 5. Packed double and vector square roots | 25,673 | 99.7956% | 649,079 | 112,000 -> 0 |
+| 6. Half arithmetic and extrema | 24,258 | 99.8069% | 651,281 | 2,960,000 -> 0 |
+| 7. Conditional FP comparisons and FP state | 22,608 | 99.8200% | 651,546 | 144,000 -> 0 |
+| 9. Reciprocal estimates | 19,701 | 99.8432% | 652,861 | 160,000 -> 0 |
+| 10. AES | 18,329 | 99.8541% | 652,848 | 64,000 -> 0 |
+
+The combined ordinary-input workload has 476 forms (364 added here). At
+1,000 iterations, native ARM, base JIT/AOT and final JIT/AOT checksums all
+agree. Instrumented helper calls fall from 5,840,000 to zero in both
+engines; all baseline calls are classified as untranslated. The baseline
+descriptor breakdown is three-different 1,344,000; indexed-vector
+1,024,000; simd-misc 944,000; shift-immediate and load-store 672,000 each;
+other 448,000; fp-scalar 320,000; integer-simd 144,000; fp-vector 112,000;
+branch-system 80,000; crypto 64,000; fdiv 16,000. The final workload emits
+no helper-group lines. Its JIT code grows 1,431 -> 4,482 KiB and AOT code
+1,455 -> 4,506 KiB. These statistics runs contain no timing calls.
+
+Combined complete-state validation passes 934,115 cases with zero
+mismatches. Replay of the same five saved 200,000-record corpora used at
+base has zero mismatches; IEEE-flag difference counts remain exactly
+interpreter 0/0/0/0/0 and JIT 4/4,981/0/0/0 for simd/block/fma/mem/dp.
+
+The final `make check` returns zero: 89 manifest passes, no unexpected
+failures, one known failure (`guest/xinhab`) and three expected skips. It
+includes `make test`, all five oracle modes and their sanitizer runs,
+mutation controls and detection, packaging, cache-profile and guest checks.
+The 1,265-line native instruction comparison agrees with JIT, interpreter,
+helpers-only and AOT; the encoder check passes 41,847 instructions.
+Cumulative groups 1–7 plus 9 also pass their full gate (87 manifest passes).
+Earlier isolated attempts encountered expanded-control timeouts and
+resource/logging failures; the final run uses the completed test harness
+and passes those checks without changing any footprint budget. The
+standard footprint test measures Objective-C overhead at 1,771 KiB for JIT
+and 1,727 KiB for AOT against 2,048 KiB. Five additional paired baseline/
+final samples all pass that budget (JIT medians 1,923/1,903 KiB); the earlier
+excess was in allocator and page-table categories, with load causality not
+established. Intel timing and application/release-image acceptance remain
+separate and unmeasured.
+
+The exact residual inventory is below. Its 8,552 intentional BRK/SVE/SME
+exclusions imply a 99.9319% ceiling if all other sites were translated; the
+brief's approximate 99.94% target underestimated SVE/SME by 1,325 sites.
+The 3,781 smaller omitted sites are still implementation work, not claimed
+to be impossible. Each individual ranked arrangement is below 0.3% of
+the original tail (largest: SDOT.4S, 173 sites), though combined families
+can exceed that share. Named families are not completely closed: indexed
+SMULL/SMLAL, indexed double FMUL and scaled conversions remain among them.
+
+| Remaining family | Sites | Reason / work still required |
+| --- | ---: | --- |
+| BRK | 3,477 | Deliberate trap; excluded. |
+| SVE/SME | 5,075 | Unsupported and not advertised; complete-run evidence below, not counters. |
+| Double fused | 5,996 | Retained helper; exact baseline implementation needs an Intel speed win. |
+| Integer high/rounded narrowing | 1,079 | Needs high-half arithmetic, rounding and destination-half preservation. |
+| SHA and PMULL | 588 | Outside AES scope; dedicated algorithms or another CPU feature/cache profile. |
+| Integer dot/matrix products | 358 | Needs grouped byte products and index mapping; includes 80 SMMLA sites that remain UNDEF. |
+| Integer reductions | 277 | Needs widening/minmax trees and scalar result clearing. |
+| Indexed widening multiply | 240 | Needs H/L/M and register-bank decoding, source-half and accumulator alias tests. |
+| Integer absolute differences | 230 | Needs signed/unsigned comparison before subtraction and widening/accumulation tests. |
+| FP absolute difference | 198 | Needs subtraction-then-absolute special-value and FPSR handling. |
+| Vector ADDP | 123 | Needs adjacent-pair packing from both source vectors. |
+| Indexed double FMUL | 102 | Needs broadcast, admission and alias coverage. |
+| Double vector comparisons | 86 | Needs unordered comparison and IOC/IDC handling. |
+| Integer saturating add/sub | 77 | Needs exact clamps and sticky QC for active lanes. |
+| Scaled fixed-point conversions | 77 | Needs fbits-aware rounding, saturation and exception checks. |
+| Other scalar/count/reversal integers | 76 | Missing CLZ/RBIT/scalar comparison/add emitters and clearing tests. |
+| Integer halving add | 63 | Needs widened intermediate and correct rounding before narrowing. |
+| Other register shifts | 59 | Needs count-byte, oversized-count and rounding handling. |
+| Saturating shifts/narrowing | 58 | Needs rounding/saturation ordering, width bounds and QC. |
+| Single-lane/replicate structures | 58 | Outside multiple-structure scope; different decoding and partial-fault tests. |
+| Half scalar move/compare | 12 | Needs half transfer/upper clearing and NaN comparison rules. |
+| Double FNMUL | 12 | Needs post-multiply sign handling and special-value admission. |
+| Double numeric min/max | 8 | Needs NaN preference and signed-zero selection. |
+
+SMMLA is a pre-existing interpreter/capability gap; implementing its 80
+sites would change the interpreter contract and is outside this JIT-only
+change. No execution count is inferred for that family from static data.
+
+The following sections record each group's admission bounds, focused
+validation and remaining semantic limits. Static coverage counts a site as
+translated even when exceptional operands can decline to its helper.
+Temporary coverage caches were removed after every measurement.
+
+## JIT tail: informational Rosetta ratios
+
+These measurements are observations, not acceptance criteria. The baseline
+is f893fdd and the candidate contains all nine groups above. Seven
+interleaved repetitions per build and engine use 250,000 iterations, with
+16 repeated test operations per iteration (four million per form). Loop,
+reset, result-transfer and entry costs are included; the FPSR-read form
+clears FPSR before each read. All 476 forms in all 28 uninstrumented runs
+match native ARM checksums. Statistics were collected separately. Timing
+started after correctness jobs finished; source and runtime hashes stayed
+unchanged, and temporary AOT caches were removed.
+
+Each value is candidate median divided by baseline median. The 364 new
+forms range from 0.0061 to 0.9859 in JIT and 0.0058 to 0.9693 in AOT in
+this run. Among the 112 prior control forms, 84 JIT and 39 AOT medians are
+above one; their overall ranges are 0.8821–1.0724 and 0.9203–1.0579.
+Those observations do not decide whether a change is kept and do not
+establish application speedups or Intel performance.
+
+The nearest-to-one new observations also illustrate the spread: FCVT H
+from D in JIT has median ratio 0.9859, with baseline samples normalized
+to its baseline median spanning 0.9731–1.1091 and candidate samples
+0.8793–1.0311. FCVT H from S in AOT has ratio 0.9693, with normalized
+ranges 0.9541–1.1475 and 0.8630–1.0324. The ranges overlap.
+
+Group numbers match the coverage table; `prior` identifies existing
+controls. Form names identify the exact operations in
+[coverage_bench.c](../tests/guest/coverage_bench.c).
+
+| Group | Form | JIT ratio | AOT ratio |
+| --- | --- | ---: | ---: |
+| 1 | `tail_fmadd` | 0.6972 | 0.6628 |
+| 1 | `tail_fmsub` | 0.6654 | 0.6448 |
+| 1 | `tail_fnmadd` | 0.6503 | 0.6223 |
+| 1 | `tail_fnmsub` | 0.6565 | 0.6309 |
+| 1 | `tail_fnmul` | 0.2890 | 0.2817 |
+| 1 | `tail_frecpss` | 0.4752 | 0.4573 |
+| 1 | `tail_frecps2s` | 0.2684 | 0.2584 |
+| 1 | `tail_frecps4s` | 0.1533 | 0.1487 |
+| 1 | `tail_frsqrtss` | 0.3048 | 0.2937 |
+| 1 | `tail_frsqrts2s` | 0.1995 | 0.1940 |
+| 1 | `tail_frsqrts4s` | 0.1146 | 0.1129 |
+| 2 | `tail_saddl0_0` | 0.0218 | 0.0179 |
+| 2 | `tail_saddl0_1` | 0.0228 | 0.0181 |
+| 2 | `tail_saddl0_2` | 0.0128 | 0.0116 |
+| 2 | `tail_saddl1_0` | 0.0307 | 0.0281 |
+| 2 | `tail_saddl1_1` | 0.0306 | 0.0278 |
+| 2 | `tail_saddl1_2` | 0.0194 | 0.0179 |
+| 2 | `tail_uaddl0_0` | 0.0201 | 0.0176 |
+| 2 | `tail_uaddl0_1` | 0.0212 | 0.0194 |
+| 2 | `tail_uaddl0_2` | 0.0126 | 0.0115 |
+| 2 | `tail_uaddl1_0` | 0.0298 | 0.0274 |
+| 2 | `tail_uaddl1_1` | 0.0306 | 0.0277 |
+| 2 | `tail_uaddl1_2` | 0.0195 | 0.0175 |
+| 2 | `tail_saddw0_0` | 0.0205 | 0.0179 |
+| 2 | `tail_saddw0_1` | 0.0212 | 0.0186 |
+| 2 | `tail_saddw0_2` | 0.0122 | 0.0115 |
+| 2 | `tail_saddw1_0` | 0.0207 | 0.0181 |
+| 2 | `tail_saddw1_1` | 0.0215 | 0.0199 |
+| 2 | `tail_saddw1_2` | 0.0125 | 0.0113 |
+| 2 | `tail_uaddw0_0` | 0.0202 | 0.0183 |
+| 2 | `tail_uaddw0_1` | 0.0205 | 0.0180 |
+| 2 | `tail_uaddw0_2` | 0.0125 | 0.0116 |
+| 2 | `tail_uaddw1_0` | 0.0207 | 0.0186 |
+| 2 | `tail_uaddw1_1` | 0.0202 | 0.0185 |
+| 2 | `tail_uaddw1_2` | 0.0121 | 0.0113 |
+| 2 | `tail_ssubl0_0` | 0.0204 | 0.0183 |
+| 2 | `tail_ssubl0_1` | 0.0196 | 0.0177 |
+| 2 | `tail_ssubl0_2` | 0.0129 | 0.0125 |
+| 2 | `tail_ssubl1_0` | 0.0299 | 0.0284 |
+| 2 | `tail_ssubl1_1` | 0.0285 | 0.0282 |
+| 2 | `tail_ssubl1_2` | 0.0188 | 0.0180 |
+| 2 | `tail_usubl0_0` | 0.0192 | 0.0188 |
+| 2 | `tail_usubl0_1` | 0.0193 | 0.0174 |
+| 2 | `tail_usubl0_2` | 0.0124 | 0.0117 |
+| 2 | `tail_usubl1_0` | 0.0297 | 0.0277 |
+| 2 | `tail_usubl1_1` | 0.0298 | 0.0262 |
+| 2 | `tail_usubl1_2` | 0.0188 | 0.0176 |
+| 2 | `tail_ssubw0_0` | 0.0209 | 0.0185 |
+| 2 | `tail_ssubw0_1` | 0.0216 | 0.0183 |
+| 2 | `tail_ssubw0_2` | 0.0123 | 0.0112 |
+| 2 | `tail_ssubw1_0` | 0.0209 | 0.0194 |
+| 2 | `tail_ssubw1_1` | 0.0204 | 0.0179 |
+| 2 | `tail_ssubw1_2` | 0.0126 | 0.0117 |
+| 2 | `tail_usubw0_0` | 0.0206 | 0.0183 |
+| 2 | `tail_usubw0_1` | 0.0195 | 0.0180 |
+| 2 | `tail_usubw0_2` | 0.0124 | 0.0119 |
+| 2 | `tail_usubw1_0` | 0.0212 | 0.0183 |
+| 2 | `tail_usubw1_1` | 0.0184 | 0.0175 |
+| 2 | `tail_usubw1_2` | 0.0122 | 0.0115 |
+| 2 | `tail_smull0_0` | 0.0202 | 0.0186 |
+| 2 | `tail_smull0_1` | 0.0201 | 0.0190 |
+| 2 | `tail_smull0_2` | 0.0197 | 0.0173 |
+| 2 | `tail_smull1_0` | 0.0289 | 0.0280 |
+| 2 | `tail_smull1_1` | 0.0299 | 0.0292 |
+| 2 | `tail_smull1_2` | 0.0261 | 0.0259 |
+| 2 | `tail_umull0_0` | 0.0204 | 0.0179 |
+| 2 | `tail_umull0_1` | 0.0207 | 0.0185 |
+| 2 | `tail_umull0_2` | 0.0191 | 0.0175 |
+| 2 | `tail_umull1_0` | 0.0292 | 0.0279 |
+| 2 | `tail_umull1_1` | 0.0292 | 0.0290 |
+| 2 | `tail_umull1_2` | 0.0261 | 0.0234 |
+| 2 | `tail_smlal0_0` | 0.0572 | 0.0545 |
+| 2 | `tail_smlal0_1` | 0.0566 | 0.0573 |
+| 2 | `tail_smlal0_2` | 0.0362 | 0.0338 |
+| 2 | `tail_smlal1_0` | 0.0511 | 0.0531 |
+| 2 | `tail_smlal1_1` | 0.0534 | 0.0507 |
+| 2 | `tail_smlal1_2` | 0.0336 | 0.0277 |
+| 2 | `tail_umlal0_0` | 0.0546 | 0.0534 |
+| 2 | `tail_umlal0_1` | 0.0561 | 0.0571 |
+| 2 | `tail_umlal0_2` | 0.0354 | 0.0344 |
+| 2 | `tail_umlal1_0` | 0.0557 | 0.0505 |
+| 2 | `tail_umlal1_1` | 0.0563 | 0.0541 |
+| 2 | `tail_umlal1_2` | 0.0301 | 0.0293 |
+| 2 | `tail_smlsl0_0` | 0.0571 | 0.0591 |
+| 2 | `tail_smlsl0_1` | 0.0575 | 0.0562 |
+| 2 | `tail_smlsl0_2` | 0.0387 | 0.0356 |
+| 2 | `tail_smlsl1_0` | 0.0540 | 0.0538 |
+| 2 | `tail_smlsl1_1` | 0.0537 | 0.0504 |
+| 2 | `tail_smlsl1_2` | 0.0326 | 0.0304 |
+| 2 | `tail_umlsl0_0` | 0.0583 | 0.0559 |
+| 2 | `tail_umlsl0_1` | 0.0551 | 0.0574 |
+| 2 | `tail_umlsl0_2` | 0.0375 | 0.0351 |
+| 2 | `tail_umlsl1_0` | 0.0516 | 0.0518 |
+| 2 | `tail_umlsl1_1` | 0.0551 | 0.0520 |
+| 2 | `tail_umlsl1_2` | 0.0319 | 0.0311 |
+| 2 | `tail_sqxtn0_0` | 0.1529 | 0.1475 |
+| 2 | `tail_sqxtn0_1` | 0.1826 | 0.1907 |
+| 2 | `tail_sqxtn0_2` | 0.2216 | 0.2289 |
+| 2 | `tail_sqxtn1_0` | 0.1531 | 0.1508 |
+| 2 | `tail_sqxtn1_1` | 0.1855 | 0.1927 |
+| 2 | `tail_sqxtn1_2` | 0.2185 | 0.2201 |
+| 2 | `tail_uqxtn0_0` | 0.1560 | 0.1591 |
+| 2 | `tail_uqxtn0_1` | 0.2102 | 0.2117 |
+| 2 | `tail_uqxtn0_2` | 0.2395 | 0.2472 |
+| 2 | `tail_uqxtn1_0` | 0.1635 | 0.1566 |
+| 2 | `tail_uqxtn1_1` | 0.2017 | 0.2139 |
+| 2 | `tail_uqxtn1_2` | 0.2322 | 0.2428 |
+| 2 | `tail_sqxtun0_0` | 0.1549 | 0.1592 |
+| 2 | `tail_sqxtun0_1` | 0.2077 | 0.2168 |
+| 2 | `tail_sqxtun0_2` | 0.2371 | 0.2406 |
+| 2 | `tail_sqxtun1_0` | 0.1544 | 0.1592 |
+| 2 | `tail_sqxtun1_1` | 0.2016 | 0.2109 |
+| 2 | `tail_sqxtun1_2` | 0.2299 | 0.2418 |
+| 2 | `tail_shll0_0` | 0.0139 | 0.0122 |
+| 2 | `tail_shll0_1` | 0.0164 | 0.0149 |
+| 2 | `tail_shll0_2` | 0.0171 | 0.0153 |
+| 2 | `tail_shll1_0` | 0.0150 | 0.0131 |
+| 2 | `tail_shll1_1` | 0.0177 | 0.0158 |
+| 2 | `tail_shll1_2` | 0.0198 | 0.0163 |
+| 2 | `tail_sri0_0_1` | 0.0484 | 0.0491 |
+| 2 | `tail_sri0_0_4` | 0.0497 | 0.0496 |
+| 2 | `tail_sri0_0_8` | 0.0541 | 0.0543 |
+| 2 | `tail_sli0_0_0` | 0.1694 | 0.1788 |
+| 2 | `tail_sli0_0_4` | 0.0453 | 0.0459 |
+| 2 | `tail_sli0_0_7` | 0.0463 | 0.0450 |
+| 2 | `tail_rev160_0` | 0.0332 | 0.0302 |
+| 2 | `tail_rev320_0` | 0.0313 | 0.0297 |
+| 2 | `tail_rev640_0` | 0.0314 | 0.0293 |
+| 2 | `tail_sri0_1_1` | 0.0549 | 0.0593 |
+| 2 | `tail_sri0_1_8` | 0.0562 | 0.0594 |
+| 2 | `tail_sri0_1_16` | 0.0582 | 0.0603 |
+| 2 | `tail_sli0_1_0` | 0.2156 | 0.2102 |
+| 2 | `tail_sli0_1_8` | 0.0583 | 0.0547 |
+| 2 | `tail_sli0_1_15` | 0.0576 | 0.0571 |
+| 2 | `tail_rev320_1` | 0.0397 | 0.0357 |
+| 2 | `tail_rev640_1` | 0.0371 | 0.0382 |
+| 2 | `tail_sqdmulh0_1` | 0.0971 | 0.0953 |
+| 2 | `tail_sqdmulh0_1_0` | 0.1098 | 0.1019 |
+| 2 | `tail_sqdmulh0_1_1` | 0.1066 | 0.1081 |
+| 2 | `tail_sqdmulh0_1_2` | 0.1051 | 0.0983 |
+| 2 | `tail_sqdmulh0_1_3` | 0.1040 | 0.1057 |
+| 2 | `tail_sqdmulh0_1_4` | 0.1101 | 0.1140 |
+| 2 | `tail_sqdmulh0_1_5` | 0.1138 | 0.1108 |
+| 2 | `tail_sqdmulh0_1_6` | 0.1099 | 0.1166 |
+| 2 | `tail_sqdmulh0_1_7` | 0.1116 | 0.1126 |
+| 2 | `tail_sqrdmulh0_1` | 0.0986 | 0.0948 |
+| 2 | `tail_sqrdmulh0_1_0` | 0.1067 | 0.1094 |
+| 2 | `tail_sqrdmulh0_1_1` | 0.1100 | 0.1113 |
+| 2 | `tail_sqrdmulh0_1_2` | 0.1082 | 0.1109 |
+| 2 | `tail_sqrdmulh0_1_3` | 0.1075 | 0.1129 |
+| 2 | `tail_sqrdmulh0_1_4` | 0.1120 | 0.1181 |
+| 2 | `tail_sqrdmulh0_1_5` | 0.1132 | 0.1168 |
+| 2 | `tail_sqrdmulh0_1_6` | 0.1128 | 0.1224 |
+| 2 | `tail_sqrdmulh0_1_7` | 0.1147 | 0.1186 |
+| 2 | `tail_sri0_2_1` | 0.0611 | 0.0661 |
+| 2 | `tail_sri0_2_16` | 0.0625 | 0.0659 |
+| 2 | `tail_sri0_2_32` | 0.0586 | 0.0634 |
+| 2 | `tail_sli0_2_0` | 0.2442 | 0.2529 |
+| 2 | `tail_sli0_2_16` | 0.0663 | 0.0670 |
+| 2 | `tail_sli0_2_31` | 0.0650 | 0.0664 |
+| 2 | `tail_rev640_2` | 0.0390 | 0.0433 |
+| 2 | `tail_sqdmulh0_2` | 0.0711 | 0.0697 |
+| 2 | `tail_sqdmulh0_2_0` | 0.0856 | 0.0845 |
+| 2 | `tail_sqdmulh0_2_1` | 0.0863 | 0.0866 |
+| 2 | `tail_sqdmulh0_2_2` | 0.0852 | 0.0888 |
+| 2 | `tail_sqdmulh0_2_3` | 0.0867 | 0.0883 |
+| 2 | `tail_sqrdmulh0_2` | 0.0801 | 0.0787 |
+| 2 | `tail_sqrdmulh0_2_0` | 0.0980 | 0.0965 |
+| 2 | `tail_sqrdmulh0_2_1` | 0.0944 | 0.0971 |
+| 2 | `tail_sqrdmulh0_2_2` | 0.0959 | 0.0982 |
+| 2 | `tail_sqrdmulh0_2_3` | 0.0952 | 0.0956 |
+| 2 | `tail_sri1_0_1` | 0.0319 | 0.0337 |
+| 2 | `tail_sri1_0_4` | 0.0330 | 0.0338 |
+| 2 | `tail_sri1_0_8` | 0.0345 | 0.0381 |
+| 2 | `tail_sli1_0_0` | 0.1000 | 0.1094 |
+| 2 | `tail_sli1_0_4` | 0.0270 | 0.0306 |
+| 2 | `tail_sli1_0_7` | 0.0297 | 0.0304 |
+| 2 | `tail_rev161_0` | 0.0228 | 0.0228 |
+| 2 | `tail_rev321_0` | 0.0216 | 0.0241 |
+| 2 | `tail_rev641_0` | 0.0220 | 0.0224 |
+| 2 | `tail_sri1_1_1` | 0.0389 | 0.0472 |
+| 2 | `tail_sri1_1_8` | 0.0420 | 0.0482 |
+| 2 | `tail_sri1_1_16` | 0.0448 | 0.0492 |
+| 2 | `tail_sli1_1_0` | 0.1500 | 0.1521 |
+| 2 | `tail_sli1_1_8` | 0.0357 | 0.0438 |
+| 2 | `tail_sli1_1_15` | 0.0411 | 0.0418 |
+| 2 | `tail_rev321_1` | 0.0301 | 0.0313 |
+| 2 | `tail_rev641_1` | 0.0300 | 0.0314 |
+| 2 | `tail_sqdmulh1_1` | 0.0858 | 0.0866 |
+| 2 | `tail_sqdmulh1_1_0` | 0.0947 | 0.0980 |
+| 2 | `tail_sqdmulh1_1_1` | 0.0950 | 0.0993 |
+| 2 | `tail_sqdmulh1_1_2` | 0.0962 | 0.0987 |
+| 2 | `tail_sqdmulh1_1_3` | 0.0962 | 0.0973 |
+| 2 | `tail_sqdmulh1_1_4` | 0.0993 | 0.1036 |
+| 2 | `tail_sqdmulh1_1_5` | 0.0991 | 0.1042 |
+| 2 | `tail_sqdmulh1_1_6` | 0.0983 | 0.1041 |
+| 2 | `tail_sqdmulh1_1_7` | 0.1008 | 0.1008 |
+| 2 | `tail_sqrdmulh1_1` | 0.0875 | 0.0901 |
+| 2 | `tail_sqrdmulh1_1_0` | 0.0963 | 0.0999 |
+| 2 | `tail_sqrdmulh1_1_1` | 0.0988 | 0.1005 |
+| 2 | `tail_sqrdmulh1_1_2` | 0.0971 | 0.1012 |
+| 2 | `tail_sqrdmulh1_1_3` | 0.0975 | 0.1039 |
+| 2 | `tail_sqrdmulh1_1_4` | 0.1041 | 0.1050 |
+| 2 | `tail_sqrdmulh1_1_5` | 0.1042 | 0.1091 |
+| 2 | `tail_sqrdmulh1_1_6` | 0.1041 | 0.1060 |
+| 2 | `tail_sqrdmulh1_1_7` | 0.1018 | 0.1088 |
+| 2 | `tail_sri1_2_1` | 0.0477 | 0.0563 |
+| 2 | `tail_sri1_2_16` | 0.0482 | 0.0565 |
+| 2 | `tail_sri1_2_32` | 0.0467 | 0.0519 |
+| 2 | `tail_sli1_2_0` | 0.1825 | 0.1894 |
+| 2 | `tail_sli1_2_16` | 0.0529 | 0.0541 |
+| 2 | `tail_sli1_2_31` | 0.0519 | 0.0559 |
+| 2 | `tail_rev641_2` | 0.0336 | 0.0343 |
+| 2 | `tail_sqdmulh1_2` | 0.0461 | 0.0495 |
+| 2 | `tail_sqdmulh1_2_0` | 0.0648 | 0.0672 |
+| 2 | `tail_sqdmulh1_2_1` | 0.0659 | 0.0673 |
+| 2 | `tail_sqdmulh1_2_2` | 0.0654 | 0.0673 |
+| 2 | `tail_sqdmulh1_2_3` | 0.0658 | 0.0672 |
+| 2 | `tail_sqrdmulh1_2` | 0.0533 | 0.0560 |
+| 2 | `tail_sqrdmulh1_2_0` | 0.0755 | 0.0768 |
+| 2 | `tail_sqrdmulh1_2_1` | 0.0751 | 0.0792 |
+| 2 | `tail_sqrdmulh1_2_2` | 0.0760 | 0.0787 |
+| 2 | `tail_sqrdmulh1_2_3` | 0.0750 | 0.0763 |
+| 2 | `tail_sri1_3_1` | 0.0517 | 0.0576 |
+| 2 | `tail_sri1_3_32` | 0.0523 | 0.0604 |
+| 2 | `tail_sri1_3_64` | 0.0459 | 0.0591 |
+| 2 | `tail_sli1_3_0` | 0.2077 | 0.2232 |
+| 2 | `tail_sli1_3_32` | 0.0596 | 0.0579 |
+| 2 | `tail_sli1_3_63` | 0.0594 | 0.0622 |
+| 2 | `tail_addpd` | 0.0245 | 0.0232 |
+| 3 | `tail_fcvtn_4h` | 0.5054 | 0.4988 |
+| 3 | `tail_fcvtn_2s` | 0.1944 | 0.1873 |
+| 3 | `tail_fcvtn2_8h` | 0.5105 | 0.4941 |
+| 3 | `tail_fcvtn2_4s` | 0.1929 | 0.1870 |
+| 3 | `tail_fcvtl_4s` | 0.1981 | 0.1905 |
+| 3 | `tail_fcvtl_2d` | 0.1966 | 0.1871 |
+| 3 | `tail_fcvtl2_4s` | 0.1983 | 0.1934 |
+| 3 | `tail_fcvtl2_2d` | 0.1929 | 0.1934 |
+| 3 | `tail_fcvtzu_4s` | 0.2395 | 0.2451 |
+| 3 | `tail_fcvtns_4s` | 0.2302 | 0.2454 |
+| 3 | `tail_fcvtps_4s` | 0.2414 | 0.2498 |
+| 3 | `tail_fcvtms_4s` | 0.2422 | 0.2359 |
+| 3 | `tail_scvtf_s` | 0.3385 | 0.3366 |
+| 3 | `tail_scvtf_d` | 0.3433 | 0.3368 |
+| 3 | `tail_scvtf_2d` | 0.2718 | 0.2644 |
+| 3 | `tail_scvtf_8h` | 0.3516 | 0.3383 |
+| 3 | `tail_ucvtf_s` | 0.3506 | 0.3403 |
+| 3 | `tail_ucvtf_d` | 0.3531 | 0.3428 |
+| 3 | `tail_ucvtf_2d` | 0.2823 | 0.2726 |
+| 3 | `tail_ucvtf_8h` | 0.3622 | 0.3547 |
+| 3 | `tail_fcvtzu_8h` | 0.3866 | 0.3639 |
+| 3 | `tail_fcvtns_8h` | 0.3215 | 0.3333 |
+| 3 | `tail_fcvt_hs` | 0.9788 | 0.9693 |
+| 3 | `tail_fcvt_hd` | 0.9859 | 0.9627 |
+| 3 | `tail_fcvt_sh` | 0.2551 | 0.2541 |
+| 3 | `tail_fcvt_dh` | 0.2498 | 0.2470 |
+| 4 | `ld2_8b` | 0.2520 | 0.2559 |
+| 4 | `ld2_16b` | 0.3544 | 0.3424 |
+| 4 | `ld2_4h` | 0.1512 | 0.1537 |
+| 4 | `ld2_8h` | 0.2330 | 0.2404 |
+| 4 | `ld2_2s` | 0.0672 | 0.0710 |
+| 4 | `ld2_4s` | 0.1094 | 0.1085 |
+| 4 | `ld2_2d` | 0.0503 | 0.0509 |
+| 4 | `ld3_8b` | 0.3251 | 0.3293 |
+| 4 | `ld3_16b` | 0.4520 | 0.4414 |
+| 4 | `ld3_4h` | 0.2027 | 0.2100 |
+| 4 | `ld3_8h` | 0.3154 | 0.3239 |
+| 4 | `ld3_2s` | 0.0890 | 0.0943 |
+| 4 | `ld3_4s` | 0.1442 | 0.1509 |
+| 4 | `ld3_2d` | 0.0686 | 0.0768 |
+| 4 | `ld4_8b` | 0.3772 | 0.3927 |
+| 4 | `ld4_16b` | 0.4871 | 0.4835 |
+| 4 | `ld4_4h` | 0.2434 | 0.2552 |
+| 4 | `ld4_8h` | 0.3634 | 0.3800 |
+| 4 | `ld4_2s` | 0.1029 | 0.1074 |
+| 4 | `ld4_4s` | 0.1543 | 0.1666 |
+| 4 | `ld4_2d` | 0.0812 | 0.0905 |
+| 4 | `st2_8b` | 0.0726 | 0.0816 |
+| 4 | `st2_16b` | 0.0865 | 0.0918 |
+| 4 | `st2_4h` | 0.0607 | 0.0675 |
+| 4 | `st2_8h` | 0.0737 | 0.0807 |
+| 4 | `st2_2s` | 0.0646 | 0.0666 |
+| 4 | `st2_4s` | 0.0642 | 0.0703 |
+| 4 | `st2_2d` | 0.0568 | 0.0642 |
+| 4 | `st3_8b` | 0.0886 | 0.0955 |
+| 4 | `st3_16b` | 0.1013 | 0.1084 |
+| 4 | `st3_4h` | 0.0739 | 0.0756 |
+| 4 | `st3_8h` | 0.0854 | 0.0871 |
+| 4 | `st3_2s` | 0.0758 | 0.0866 |
+| 4 | `st3_4s` | 0.0823 | 0.0885 |
+| 4 | `st3_2d` | 0.0661 | 0.0753 |
+| 4 | `st4_8b` | 0.0952 | 0.0995 |
+| 4 | `st4_16b` | 0.0990 | 0.1046 |
+| 4 | `st4_4h` | 0.0777 | 0.0810 |
+| 4 | `st4_8h` | 0.1060 | 0.0979 |
+| 4 | `st4_2s` | 0.0776 | 0.0836 |
+| 4 | `st4_4s` | 0.0892 | 0.0937 |
+| 4 | `st4_2d` | 0.0698 | 0.0767 |
+| 5 | `wide_fadd` | 0.1614 | 0.1679 |
+| 5 | `wide_fsub` | 0.1640 | 0.1659 |
+| 5 | `wide_fmul` | 0.1679 | 0.1727 |
+| 5 | `wide_fdiv` | 0.1630 | 0.1587 |
+| 5 | `wide_sqrtd` | 0.2609 | 0.2549 |
+| 5 | `wide_sqrts` | 0.2045 | 0.1993 |
+| 5 | `wide_sqrt2s` | 0.2795 | 0.2724 |
+| 6 | `tail_fmul_4h` | 0.2849 | 0.2733 |
+| 6 | `tail_fmul_8h` | 0.2910 | 0.2842 |
+| 6 | `tail_fmul_h` | 0.6480 | 0.5852 |
+| 6 | `tail_fadd_4h` | 0.2627 | 0.2554 |
+| 6 | `tail_fadd_8h` | 0.2651 | 0.2565 |
+| 6 | `tail_fadd_h` | 0.6201 | 0.6214 |
+| 6 | `tail_fsub_4h` | 0.2670 | 0.2566 |
+| 6 | `tail_fsub_8h` | 0.2663 | 0.2605 |
+| 6 | `tail_fsub_h` | 0.6448 | 0.6274 |
+| 6 | `tail_fmax_4h` | 0.0294 | 0.0277 |
+| 6 | `tail_fmax_8h` | 0.0152 | 0.0143 |
+| 6 | `tail_fmax_h` | 0.0837 | 0.0808 |
+| 6 | `tail_fmin_4h` | 0.0299 | 0.0275 |
+| 6 | `tail_fmin_8h` | 0.0153 | 0.0141 |
+| 6 | `tail_fmin_h` | 0.0853 | 0.0731 |
+| 6 | `tail_fmaxnm_4h` | 0.0276 | 0.0250 |
+| 6 | `tail_fmaxnm_8h` | 0.0138 | 0.0127 |
+| 6 | `tail_fmaxnm_h` | 0.0797 | 0.0770 |
+| 6 | `tail_fminnm_4h` | 0.0274 | 0.0254 |
+| 6 | `tail_fminnm_8h` | 0.0134 | 0.0129 |
+| 6 | `tail_fminnm_h` | 0.0793 | 0.0757 |
+| 6 | `tail_fmul_4h_e0` | 0.2646 | 0.2536 |
+| 6 | `tail_fmul_8h_e0` | 0.2747 | 0.2650 |
+| 6 | `tail_fmul_4h_e1` | 0.2777 | 0.2586 |
+| 6 | `tail_fmul_8h_e1` | 0.2810 | 0.2679 |
+| 6 | `tail_fmul_4h_e2` | 0.2764 | 0.2593 |
+| 6 | `tail_fmul_8h_e2` | 0.2771 | 0.2680 |
+| 6 | `tail_fmul_4h_e3` | 0.2701 | 0.2597 |
+| 6 | `tail_fmul_8h_e3` | 0.2768 | 0.2661 |
+| 6 | `tail_fmul_4h_e4` | 0.2653 | 0.2569 |
+| 6 | `tail_fmul_8h_e4` | 0.2770 | 0.2655 |
+| 6 | `tail_fmul_4h_e5` | 0.2763 | 0.2618 |
+| 6 | `tail_fmul_8h_e5` | 0.2770 | 0.2748 |
+| 6 | `tail_fmul_4h_e6` | 0.2739 | 0.2691 |
+| 6 | `tail_fmul_8h_e6` | 0.2770 | 0.2696 |
+| 6 | `tail_fmul_4h_e7` | 0.2678 | 0.2637 |
+| 6 | `tail_fmul_8h_e7` | 0.2746 | 0.2707 |
+| 7 | `tail_fccmp_s` | 0.1583 | 0.1828 |
+| 7 | `tail_fccmpe_s` | 0.1543 | 0.1831 |
+| 7 | `tail_fccmp_d` | 0.1548 | 0.1861 |
+| 7 | `tail_fccmpe_d` | 0.1603 | 0.1822 |
+| 7 | `tail_mrs_fpcr` | 0.7642 | 0.7766 |
+| 7 | `tail_msr_fpcr` | 0.8067 | 0.8339 |
+| 7 | `tail_mrs_fpsr` | 0.7473 | 0.7747 |
+| 7 | `tail_msr_fpsr` | 0.7831 | 0.7938 |
+| 9 | `tail_frecpe_2s` | 0.0613 | 0.0639 |
+| 9 | `tail_frecpe_4s` | 0.0827 | 0.0894 |
+| 9 | `tail_frecpe_2d` | 0.0557 | 0.0578 |
+| 9 | `tail_frecpe_s` | 0.0433 | 0.0436 |
+| 9 | `tail_frecpe_d` | 0.0417 | 0.0428 |
+| 9 | `tail_frsqrte_2s` | 0.0077 | 0.0076 |
+| 9 | `tail_frsqrte_4s` | 0.0083 | 0.0083 |
+| 9 | `tail_frsqrte_2d` | 0.0072 | 0.0071 |
+| 9 | `tail_frsqrte_s` | 0.0061 | 0.0058 |
+| 9 | `tail_frsqrte_d` | 0.0061 | 0.0058 |
+| 10 | `tail_aese` | 0.1049 | 0.1122 |
+| 10 | `tail_aesd` | 0.1093 | 0.1118 |
+| 10 | `tail_aesmc` | 0.0357 | 0.0341 |
+| 10 | `tail_aesimc` | 0.0175 | 0.0159 |
+| prior | `zip1_8b` | 0.9848 | 0.9978 |
+| prior | `zip1_16b` | 1.0224 | 0.9888 |
+| prior | `zip1_4h` | 0.9825 | 1.0579 |
+| prior | `zip1_8h` | 1.0039 | 0.9327 |
+| prior | `zip1_2s` | 0.9497 | 0.9742 |
+| prior | `zip1_4s` | 1.0128 | 0.9977 |
+| prior | `zip1_2d` | 1.0315 | 0.9654 |
+| prior | `zip2_8b` | 1.0137 | 0.9760 |
+| prior | `zip2_16b` | 1.0318 | 0.9618 |
+| prior | `zip2_4h` | 1.0160 | 0.9754 |
+| prior | `zip2_8h` | 0.9951 | 1.0034 |
+| prior | `zip2_2s` | 0.9972 | 1.0000 |
+| prior | `zip2_4s` | 0.9844 | 1.0339 |
+| prior | `zip2_2d` | 1.0241 | 1.0102 |
+| prior | `uzp1_8b` | 0.9940 | 0.9572 |
+| prior | `uzp1_16b` | 0.9951 | 1.0236 |
+| prior | `uzp1_4h` | 0.9785 | 0.9233 |
+| prior | `uzp1_8h` | 1.0143 | 1.0278 |
+| prior | `uzp1_2s` | 1.0648 | 0.9313 |
+| prior | `uzp1_4s` | 1.0129 | 1.0242 |
+| prior | `uzp1_2d` | 1.0026 | 0.9585 |
+| prior | `uzp2_8b` | 0.9735 | 1.0295 |
+| prior | `uzp2_16b` | 1.0406 | 0.9576 |
+| prior | `uzp2_4h` | 1.0600 | 1.0161 |
+| prior | `uzp2_8h` | 1.0347 | 0.9485 |
+| prior | `uzp2_2s` | 1.0089 | 1.0516 |
+| prior | `uzp2_4s` | 0.9768 | 0.9542 |
+| prior | `uzp2_2d` | 1.0019 | 1.0111 |
+| prior | `trn1_8b` | 1.0333 | 0.9641 |
+| prior | `trn1_16b` | 1.0022 | 0.9954 |
+| prior | `trn1_4h` | 1.0156 | 0.9946 |
+| prior | `trn1_8h` | 0.9787 | 0.9988 |
+| prior | `trn1_2s` | 0.9994 | 0.9744 |
+| prior | `trn1_4s` | 1.0426 | 0.9726 |
+| prior | `trn1_2d` | 1.0724 | 0.9708 |
+| prior | `trn2_8b` | 1.0255 | 1.0020 |
+| prior | `trn2_16b` | 0.9851 | 1.0106 |
+| prior | `trn2_4h` | 0.9929 | 1.0034 |
+| prior | `trn2_8h` | 1.0289 | 0.9994 |
+| prior | `trn2_2s` | 1.0498 | 0.9679 |
+| prior | `trn2_4s` | 1.0150 | 1.0126 |
+| prior | `trn2_2d` | 1.0126 | 0.9713 |
+| prior | `addv_8b` | 1.0263 | 1.0061 |
+| prior | `addv_16b` | 1.0112 | 0.9941 |
+| prior | `addv_4h` | 1.0076 | 0.9757 |
+| prior | `addv_8h` | 1.0157 | 0.9755 |
+| prior | `addv_4s` | 1.0215 | 0.9671 |
+| prior | `uaddlp_4h` | 1.0120 | 1.0026 |
+| prior | `uaddlp_8h` | 1.0018 | 1.0408 |
+| prior | `uaddlp_2s` | 1.0212 | 0.9883 |
+| prior | `uaddlp_4s` | 0.9694 | 1.0000 |
+| prior | `uaddlp_1d` | 1.0331 | 0.9812 |
+| prior | `uaddlp_2d` | 0.9977 | 0.9203 |
+| prior | `saddlp_4h` | 1.0049 | 0.9805 |
+| prior | `saddlp_8h` | 1.0176 | 1.0233 |
+| prior | `saddlp_2s` | 1.0232 | 0.9740 |
+| prior | `saddlp_4s` | 1.0176 | 0.9923 |
+| prior | `saddlp_1d` | 1.0180 | 1.0026 |
+| prior | `saddlp_2d` | 1.0216 | 0.9996 |
+| prior | `uadalp_4h` | 1.0141 | 0.9973 |
+| prior | `uadalp_8h` | 1.0143 | 0.9750 |
+| prior | `uadalp_2s` | 1.0321 | 0.9807 |
+| prior | `uadalp_4s` | 1.0169 | 1.0275 |
+| prior | `uadalp_1d` | 1.0156 | 0.9915 |
+| prior | `uadalp_2d` | 1.0159 | 1.0107 |
+| prior | `sadalp_4h` | 1.0038 | 0.9773 |
+| prior | `sadalp_8h` | 1.0059 | 0.9713 |
+| prior | `sadalp_2s` | 1.0262 | 1.0013 |
+| prior | `sadalp_4s` | 1.0034 | 0.9993 |
+| prior | `sadalp_1d` | 0.8821 | 1.0050 |
+| prior | `sadalp_2d` | 1.0052 | 0.9874 |
+| prior | `faddp_4s` | 1.0074 | 0.9856 |
+| prior | `faddp_2s` | 1.0171 | 0.9828 |
+| prior | `faddp_s` | 1.0167 | 1.0008 |
+| prior | `faddp_2d` | 1.0102 | 0.9956 |
+| prior | `faddp_d` | 1.0126 | 1.0071 |
+| prior | `fmaxv_4s` | 1.0037 | 1.0012 |
+| prior | `fminv_4s` | 1.0098 | 0.9955 |
+| prior | `fmaxnmv_4s` | 1.0182 | 0.9969 |
+| prior | `fminnmv_4s` | 1.0177 | 0.9843 |
+| prior | `fdiv_2s` | 1.0117 | 0.9976 |
+| prior | `fdiv_4s` | 0.9952 | 1.0091 |
+| prior | `fcmeq_zero_2s` | 1.0259 | 0.9995 |
+| prior | `fcmeq_zero_4s` | 1.0381 | 1.0005 |
+| prior | `fcmge_zero_2s` | 1.0006 | 0.9831 |
+| prior | `fcmge_zero_4s` | 1.0092 | 0.9963 |
+| prior | `fcmgt_zero_2s` | 1.0078 | 1.0226 |
+| prior | `fcmgt_zero_4s` | 1.0277 | 0.9992 |
+| prior | `fcmle_zero_2s` | 0.9874 | 0.9812 |
+| prior | `fcmle_zero_4s` | 1.0007 | 1.0018 |
+| prior | `fcmlt_zero_2s` | 1.0068 | 0.9925 |
+| prior | `fcmlt_zero_4s` | 1.0031 | 0.9717 |
+| prior | `ushl_2s` | 1.0279 | 0.9993 |
+| prior | `ushl_4s` | 1.0117 | 1.0003 |
+| prior | `ushl_2d` | 1.0231 | 1.0085 |
+| prior | `sshl_2s` | 0.9978 | 0.9986 |
+| prior | `sshl_4s` | 1.0089 | 0.9980 |
+| prior | `sshl_2d` | 1.0014 | 1.0064 |
+| prior | `fmul_s0` | 0.9941 | 1.0007 |
+| prior | `fmul_s1` | 0.9984 | 0.9962 |
+| prior | `fmul_s2` | 0.9889 | 0.9945 |
+| prior | `fmul_s3` | 0.9971 | 1.0263 |
+| prior | `fmla_s0` | 1.0070 | 1.0118 |
+| prior | `fmla_s1` | 0.9958 | 1.0008 |
+| prior | `fmla_s2` | 0.9968 | 0.9985 |
+| prior | `fmla_s3` | 1.0019 | 0.9930 |
+| prior | `fmls_s0` | 1.0035 | 0.9979 |
+| prior | `fmls_s1` | 1.0066 | 0.9962 |
+| prior | `fmls_s2` | 1.0053 | 1.0067 |
+| prior | `fmls_s3` | 0.9983 | 0.9987 |
+| prior | `fmul_d0` | 1.0149 | 0.9980 |
+| prior | `fmul_d1` | 1.0054 | 0.9990 |
+
 ## JIT tail: scalar fused single and reciprocal steps
 
 Scalar FMADD/FMSUB/FNMADD/FNMSUB S now share the packed single FMA
@@ -25,9 +641,8 @@ AOT generation of the same large FP/SIMD-heavy arm64 program reports
 12,561,074 instructions: 99.5283% -> 99.6256% translated natively (12,216
 formerly untranslated sites removed), generated code
 639,290 -> 645,955 KiB. Temporary caches were removed. Static coverage is
-not executed-instruction coverage or application acceptance. Rosetta ratios
-and Intel acceptance remain pending until measurement can run without the
-parallel correctness jobs.
+not executed-instruction coverage or application acceptance. Informational
+Rosetta ratios are recorded above; Intel testing remains deferred.
 
 Saved 200,000-record corpora in each of simd/block/fma/mem/dp replay with
 zero mismatches. IEEE-flag difference counts are unchanged: interpreter
@@ -39,6 +654,17 @@ instruction sets contain neither SVE nor SME; those instructions remain
 UNDEF. SVE/SME was not executed in a complete run (fatal if executed), not
 measured by counters. BRK remains a deliberate trap. This evidence does not
 establish behavior on every possible application input.
+
+## Release validation of optional AES cache profiles
+
+Release validation now accepts exactly the runtime UUID and its AES-profile
+variant (last byte XOR 1) in AOT cache headers, matching the image-payload
+and installation tools. Previously it rejected valid AES-profile caches as
+belonging to another runtime. Package dependencies still require the exact,
+unmodified runtime UUID; runtime loading still requires the current CPU's
+exact profile. Synthetic release preflight tests accept both valid header
+profiles and reject unrelated UUID edits and a profile UUID substituted for
+the runtime dependency. The 30 focused release tests pass.
 
 ## Exact reciprocal estimates in translated code
 
@@ -209,6 +835,42 @@ the unmodified control passes. Full-gate, fixed-corpus and combined
 coverage measurements are recorded with integration. Intel timings and
 application acceptance remain separate checks.
 
+## Optional AES-NI translation and AOT CPU binding
+
+Cumulative static coverage reaches 99.8541% (1,372 additional sites), with
+generated code 652,861 -> 652,848 KiB. Four ordinary forms at 1,000
+iterations reduce JIT/AOT helper calls from 64,000 to zero. Temporary
+coverage caches were removed.
+
+AESE/AESD/AESMC/AESIMC now translate with AES-NI only when CPUID leaf 1
+advertises it. The feature choice is captured once for translation, AOT
+and fault recovery. The baseline build remains x86-64-v2. ARM's initial
+AddRoundKey is applied before x86's last-round transform with a zero key;
+AESMC cancels the inverse byte/row transforms before a forward mixed round.
+All forms preserve NZCV and FPSR and support source/destination aliases.
+
+The generator identity is the runtime image UUID with its last byte XOR 1
+for the AES profile. Runtime cache validation requires the exact current
+profile, rejecting an AES cache on a CPU without AES-NI. Packaging accepts
+only the two explicitly derived identities for the installed runtime; all
+other altered identities remain stale. Profiles are conservatively distinct
+even when a particular guest contains no AES instructions.
+
+Focused validation passes 786,248 complete-state cases, including reserved
+size/opcode neighbours, and 774 native comparison lines in JIT, interpreter,
+helpers-only and AOT. The crypto guest's 687 lines and five known answers
+match native in JIT, interpreter and AOT. The encoder check passes 41,003
+instructions. A private CPUID-off test verifies eight helper/state cases,
+matching-cache acceptance, cross-profile cache rejection and identical
+instruction bytes for JIT/AOT/recovery emission without executing forced
+AES instructions. The installer's 16 tests pass, including removal of
+arbitrarily modified generator identities, and the full AOT payload test
+passes. Four isolated ordinary AES loops at 1,000 iterations remove
+64,000 helper calls in both JIT and AOT; JIT workload code shrinks from
+12 to 11 KiB. Baseline and candidate outputs equal native. Full gates,
+representative coverage and uninstrumented timings are recorded at integration. Intel/application acceptance is
+separate; CPUs lacking AES-NI retain the interpreter path.
+
 ## Packed double arithmetic and vector square roots
 
 Cumulative static coverage reaches 99.7956% (1,393 additional sites), with
@@ -230,8 +892,8 @@ instruction test matches in JIT, interpreter, helpers-only and AOT. Seven
 new per-form timing cases agree with native in every engine and report zero
 helper calls for ordinary operands in JIT and AOT at 1,000 iterations. The
 encoder check passes 40,747 instructions including divpd/sqrtpd/sqrtps.
-The mutation suppressing result admission must be caught, including an
-exact tiny division whose helper route matters even when its bits agree.
+The mutation suppressing result admission is caught, including an exact
+tiny division whose helper route matters even when its bits agree.
 Integrated full gates, saved-corpus flags, representative coverage and
 uninstrumented timings are recorded separately. Intel/application
 performance acceptance remains unmeasured.

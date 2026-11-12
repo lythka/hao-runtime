@@ -438,6 +438,11 @@ BENCH(tail_addpd, "addp d2, v0.2d", single)
 
 
 
+
+BENCH(tail_aese, "aese v2.16b, v0.16b", single)
+BENCH(tail_aesd, "aesd v2.16b, v0.16b", single)
+BENCH(tail_aesmc, "aesmc v2.16b, v0.16b", single)
+BENCH(tail_aesimc, "aesimc v2.16b, v0.16b", single)
 BENCH(wide_fadd, "fadd v2.2d, v0.2d, v1.2d", double)
 BENCH(wide_fsub, "fsub v2.2d, v0.2d, v1.2d", double)
 BENCH(wide_fmul, "fmul v2.2d, v0.2d, v1.2d", double)
@@ -927,6 +932,11 @@ int main(int argc, char **argv)
     RUN(tail_addpd);
 
 
+
+    RUN(tail_aese);
+    RUN(tail_aesd);
+    RUN(tail_aesmc);
+    RUN(tail_aesimc);
     RUN(wide_fadd);
     RUN(wide_fsub);
     RUN(wide_fmul);

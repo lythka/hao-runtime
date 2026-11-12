@@ -216,12 +216,17 @@ def macho_uuid(path):
 
 def check_aot_caches(system, errors):
     """The caches in usr/lib/hao/aot (include/hao/aot.h: magic, version 7, the
-    guest UUID at 16, the generating libhao's at 32 and the kind of code
+    guest UUID at 16, the generating libhao/CPU profile at 32 and the kind of code
     identity at 96, in a 136-byte header): keep those of the installed libhao
     that are bound to a signed guest's cdhash (kind 1; hao serves no other
     kind from a system directory), remove the rest; returns a record."""
     d = os.path.join(system, AOT_DIRS[0])
     gen = macho_uuid(os.path.join(system, "usr/lib/hao/libhao.dylib"))
+    gen_profiles = set()
+    if gen is not None:
+        aes_gen = bytearray.fromhex(gen)
+        aes_gen[15] ^= 1
+        gen_profiles = {gen, aes_gen.hex()}  # jit.c's only two CPU profiles
     rec = {"libhao_uuid": gen, "caches": 0, "bytes": 0, "removed_stale": []}
     if not os.path.isdir(d) or os.path.islink(d):
         return rec
@@ -235,7 +240,7 @@ def check_aot_caches(system, errors):
             h = fh.read(136)
         if len(h) == 136 and h[:8] == b"HAOAOT2\0" and int.from_bytes(h[8:12], "little") == 7 and \
                 int.from_bytes(h[12:16], "little") == 136 and int.from_bytes(h[96:100], "little") == 1 and \
-                h[16:32].hex() == name[:32] and gen is not None and h[32:48].hex() == gen:
+                h[16:32].hex() == name[:32] and gen is not None and h[32:48].hex() in gen_profiles:
             rec["caches"] += 1
             rec["bytes"] += os.path.getsize(f)
         else:

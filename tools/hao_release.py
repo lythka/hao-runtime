@@ -276,12 +276,16 @@ def validate(bundle, target=None):
         async_provider = async_identity(read_json(files[ASYNC_DESCRIPTOR]['object']), files[ASYNC_LIBRARY]['object'], t)
     require(packages['compatibility'].get('async_provider') == async_provider, 'async provider component identity mismatch')
     require(packages['aot']['runtime_uuid'] == runtime_uuid, 'AOT runtime dependency mismatch')
+    # Cache headers bind one of jit.c's two exact CPU profiles; the package
+    # dependency above still names the unmodified runtime UUID.
+    aes_uuid = bytearray.fromhex(runtime_uuid); aes_uuid[15] ^= 1
+    aot_generators = {runtime_uuid, aes_uuid.hex()}
     bindings = packages['aot']['guests']
     require(set(bindings) == set(packages['aot']['files']), 'AOT guest inventory mismatch')
     for name, binding in bindings.items():
         identity = binding['header']
         require(PurePosixPath(name).name == identity['uuid'] + '.aot', 'AOT filename/UUID mismatch')
-        require(identity['runtime_uuid'] == runtime_uuid and identity['uuid'] == binding['uuid']
+        require(identity['runtime_uuid'] in aot_generators and identity['uuid'] == binding['uuid']
                 and identity['guest_id'] == binding['guest_id'], 'AOT guest/runtime identity mismatch')
         # usr/lib/hao/aot is a system cache directory: the runtime serves only caches bound to a signed guest's cdhash from it
         require(identity.get('id_kind') == AOT_ID_CDHASH and isinstance(identity.get('code_id'), str)

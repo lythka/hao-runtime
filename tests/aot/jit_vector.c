@@ -635,6 +635,17 @@ int main(void)
         }
 
     half_arithmetic_cases();
+
+    /* Every AES round/column transform, high registers and aliases.
+     * Size/op neighbours must remain undefined. */
+    for (unsigned op = 3; op <= 8; op++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned k = 0; k < 128; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg();
+            hao_cpu in; state(&in, rn, rn);
+            for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16; e++) in.v[r].b[e] = (uint8_t)rnd();
+            uint32_t i = 0x4e280800u | op << 12 | size << 22 | rn << 5 | rd;
+            check(i, 0, &in, false); check(i, 0, &in, true);
+        }
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {

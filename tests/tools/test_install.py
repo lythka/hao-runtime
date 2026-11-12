@@ -87,6 +87,31 @@ class InstallPaths(unittest.TestCase):
         rc, out = self.run_install()
         self.assertEqual(rc, 0, out)
 
+    def test_aot_cpu_profiles(self):
+        """Only base/AES generator identities survive installation."""
+        version = next(int(line.split()[-1]) for line in
+                       (TOOLS.parent / 'include/hao/aot.h').read_text().splitlines()
+                       if line.startswith('#define HAO_AOT_VERSION '))
+        cache = self.payload / 'root/usr/lib/hao/aot'
+        cache.mkdir()
+        names = []
+        for i, (byte, flip) in enumerate(((15, 0), (15, 1), (15, 2), (15, 128), (0, 1))):
+            guest = bytes.fromhex(f'{i + 10:032x}')
+            h = bytearray(136); h[:8] = b'HAOAOT2\0'
+            struct.pack_into('<II', h, 8, version, 136)
+            h[16:32] = guest; h[32:48] = bytes.fromhex('1' * 32)
+            h[32 + byte] ^= flip
+            struct.pack_into('<I', h, 96, 1)
+            name = guest.hex() + '.aot'; names.append(name)
+            (cache / name).write_bytes(h)
+        rc, out = self.run_install()
+        self.assertEqual(rc, 0, out)
+        installed = self.system / 'usr/lib/hao/aot'
+        self.assertEqual(sorted(p.name for p in installed.iterdir()), names[:2])
+        record = json.loads((self.system / 'usr/lib/hao/install.json').read_text())['aot_caches']
+        self.assertEqual(record['caches'], 2)
+        self.assertEqual(record['removed_stale'], names[2:])
+
     def test_manifest_names_are_relative(self):
         other = self.outside / 'prog'
         other.write_bytes(self.guest)

@@ -640,6 +640,14 @@ VECF(t_cov_fmlss1, "fmls s2, s0, v17.s[1]")
 VECF(t_cov_fmlss2, "fmls s2, s0, v17.s[2]")
 VECF(t_cov_fmlss3, "fmls s2, s0, v17.s[3]")
 VECF(t_cov_fmuld0, "fmul d2, d0, v17.d[0]")
+VECF(t_tail_aese, "aese v2.16b, v0.16b")
+VECF(t_tail_aese_alias, "aese v2.16b, v2.16b")
+VECF(t_tail_aesd, "aesd v2.16b, v0.16b")
+VECF(t_tail_aesd_alias, "aesd v2.16b, v2.16b")
+VECF(t_tail_aesmc, "aesmc v2.16b, v0.16b")
+VECF(t_tail_aesmc_alias, "aesmc v2.16b, v2.16b")
+VECF(t_tail_aesimc, "aesimc v2.16b, v0.16b")
+VECF(t_tail_aesimc_alias, "aesimc v2.16b, v2.16b")
 VECF(t_wide_fadd, "fadd v2.2d, v0.2d, v1.2d")
 VECF(t_wide_fsub, "fsub v2.2d, v0.2d, v1.2d")
 VECF(t_wide_fmul, "fmul v2.2d, v0.2d, v1.2d")
@@ -1939,6 +1947,10 @@ int main(void)
     RF(cov_fmlss1);
     RF(cov_fmlss2);
     RF(cov_fmlss3);
+    RF(tail_aese); RF(tail_aese_alias);
+    RF(tail_aesd); RF(tail_aesd_alias);
+    RF(tail_aesmc); RF(tail_aesmc_alias);
+    RF(tail_aesimc); RF(tail_aesimc_alias);
     RR(wide_fadd);
     RR(wide_fsub);
     RR(wide_fmul);

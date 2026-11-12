@@ -452,3 +452,17 @@ S/D scalar/vector reciprocal estimates with native ARM over every table
 index, exponent parity, sign and FPCR control; ten benchmark loops measure
 the ordinary paths. AOT format 7 has unchanged header layout and rejects
 version 6 caches because emitted code can use the new runtime table pointer.
+
+`aot/aes-profile` masks AES out of a private CPUID wrapper and checks that
+all four AES instructions (including aliases) use the helper with complete
+architectural state preserved. It validates a matching synthetic cache,
+rejects its AES-profile identity on the CPU without AES, and compares
+translation bytes across normal, AOT and fault-recovery emission modes.
+It never executes AES after forcing its feature bit. `aot/aes-mutations`
+requires a passing control and detects an omitted ARM AddRoundKey. The
+vector differential test covers all four AES forms and reserved size/opcode
+neighbours; `jitinsns` adds native comparisons for separate/aliased sources
+in each engine. The existing crypto guest also checks AES known answers.
+The installer test permits only base/AES generator identities and removes
+arbitrary altered identities; `tools/aotpayload` checks profile-aware payload
+creation, installation and cache loading.

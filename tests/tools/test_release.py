@@ -170,6 +170,26 @@ class ReleaseTests(unittest.TestCase):
         self.save()
         with self.assertRaisesRegex(r.Invalid, 'guest/runtime identity mismatch'): r.validate(self.bundle)
 
+    def test_aot_cpu_generator_profiles(self):
+        for byte, flip in ((15, 0), (15, 1), (15, 2), (15, 128), (0, 1)):
+            data = bytearray(self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16)))
+            data[32 + byte] ^= flip
+            self.add(self.aot_name, data)
+            self.packages['aot']['guests'][self.aot_name]['header'] = r.aot_identity(self.generated / self.aot_name)
+            self.save()
+            if byte == 15 and flip in (0, 1):
+                self.assertEqual(self.preflight()['aot_caches'], 1)
+            else:
+                with self.assertRaisesRegex(r.Invalid, 'guest/runtime identity mismatch'):
+                    self.preflight()
+
+    def test_aot_profile_does_not_change_runtime_dependency(self):
+        aes_uuid = bytearray.fromhex(self.packages['runtime']['runtime_uuid']); aes_uuid[15] ^= 1
+        self.packages['aot']['runtime_uuid'] = aes_uuid.hex()
+        self.save()
+        with self.assertRaisesRegex(r.Invalid, 'AOT runtime dependency mismatch'):
+            self.preflight()
+
     def rebind_aot(self, **changes):
         self.add(self.aot_name, self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16), **changes))
         self.packages['aot']['guests'][self.aot_name]['header'] = r.aot_identity(self.generated / self.aot_name)

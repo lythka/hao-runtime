@@ -185,8 +185,9 @@ void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm);
 void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int xmm, uint8_t imm);
 /* The 66 0F 38 xx (SSSE3/SSE4.1/SSE4.2: pshufb, pabs*, pmulld, pmin/pmax*,
  * pcmpeqq, pcmpgtq) and 66 0F 3A xx ib (palignr, round*) forms, register to
- * register; dst is the ModRM reg field. All of them are in the x86-64-v2
- * profile hao requires (src/main.c); none is VEX-encoded. */
+ * register; dst is the ModRM reg field. The optional AES opcodes also use
+ * the 0F 38 form and require CPUID admission by the caller. Other emitted
+ * forms are in the x86-64-v2 profile; none is VEX-encoded. */
 void x_sse38_rr(xbuf *b, uint8_t op, int dst, int src);
 void x_sse3a_rri(xbuf *b, uint8_t op, int dst, int src, uint8_t imm);
 

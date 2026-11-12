@@ -720,3 +720,7 @@ tests/aot/structure_mutations.sh
 tests/aot/wide_fp_mutations.sh
 
 tests/aot/estimate_mutations.sh
+
+tests/aot/aes_mutations.sh
+tests/aot/aes_profile.c
+tests/aot/aes_profile.sh
