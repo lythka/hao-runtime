@@ -221,6 +221,10 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     uintptr_t kind = r->kind(type);
     const witnesses *v = vwt(type);
     if (v->size > 4096) return 0;
+    /* A patch rewrites a whole pointer word. A value of fewer than 8 bytes
+     * holds no pointer, so no nil in it has a pointer extra inhabitant and
+     * the case it is in cannot hide one: there is nothing to patch. */
+    if (v->size < 8) return 1;
     if (type == r->string) {
         empty_plan shape;
         if (!selected(r,type,&shape,0)) return 0;

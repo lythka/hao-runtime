@@ -9,6 +9,8 @@
 #    enum with an empty case and an Optional of such an enum (its nil encodings differ) stay refused.
 # C. a multi-payload enum with a trailing tag byte equal to the case index is walked by layout; two empty
 #    cases, a size or xi that does not match and a tag byte past the cases stay refused.
+# D. a value of fewer than 8 bytes (a single-payload or spare-bit enum, a struct of them, an Optional of
+#    one, Optional<Bool>) is walked with no patch.
 # Every measured line must be equal on both architectures except the listed keys, the contract lines must
 # hold on each, and the walk lines must be exactly the expected ones.
 #   OUT=dir [LIB=build] tests/host/swiftlayout.sh   (Apple silicon host: the arm64 program runs natively)
@@ -77,6 +79,10 @@ X SecondaryText 1 $a5 $a5 $a5 $a5 fe
 L TwoEmpty size=33 stride=40 flags=0x2230007 xi=0xfd
 C TwoEmpty#3 f 0000000000000001 $z $z $z 02 back=3
 L TextNil size=25 stride=32 flags=0x2230007 xi=0xfd
+L Kind size=1 stride=1 flags=0x200000 xi=0xfc
+L Flags size=2 stride=2 flags=0x200000 xi=0x3ffc
+L Small size=6 stride=6 flags=0x1 xi=0x3ffc
+L Optional<Kind> size=1 stride=1 flags=0x200000 xi=0xfb
 EOF
 )
 arm=$(cat <<EOF
@@ -164,6 +170,16 @@ W Optional<SecondaryText> nil (stays refused) refused Optional<SecondaryText>
 W SecondaryText size+1 (stays refused) refused SecondaryText
 W SecondaryText xi-1 (stays refused) refused SecondaryText
 W SecondaryText tag 3 (stays refused) refused SecondaryText
+W Kind.clear walk 0
+W Kind.cloudy walk 0
+W Kind.snow walk 0
+W Flags.a walk 0
+W Flags.c walk 0
+W Flags.none walk 0
+W Small walk 0
+W Optional<Kind> nil walk 0
+W Optional<Bool> nil walk 0
+W Optional<Bool> some walk 0
 EOF
 grep '^W ' "$OUT/x86_64" >"$OUT/walk" || true
 if ! cmp -s "$OUT/walk.expected" "$OUT/walk"; then
