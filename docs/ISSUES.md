@@ -104,6 +104,40 @@ the unmodified control passes. Full-gate, fixed-corpus and combined
 coverage measurements are recorded with integration. Intel timings and
 application acceptance remain separate checks.
 
+## Interleaved SIMD multiple-structure memory operations
+
+Cumulative static coverage reaches 99.7845% (5,294 additional sites), with
+generated code 647,368 -> 648,653 KiB. The ordinary 42-form workload at
+1,000 iterations drops 672,000 load/store helper calls to zero in JIT/AOT.
+Temporary coverage caches were removed.
+
+LD2/LD3/LD4 and ST2/ST3/ST4 previously always entered the interpreter.
+They now translate every allocated 64/128-bit arrangement, with no offset
+or immediate/register post-index, including wrapped register lists and SP.
+The generated element accesses follow the interpreter's order. Loads keep
+all destinations temporary until the last successful read; stores publish
+each element as accessed. Base writeback occurs only after success. No
+EFLAGS-changing instruction occurs while NZCV is live.
+
+Focused validation passes 734,408 complete-state cases with zero mismatches,
+including every byte boundary in a 64-byte interleaved transfer. The native
+instruction comparison passes 759 lines in JIT, interpreter, helpers-only
+and AOT, including partial-fault PC/NZCV/writeback recovery with skipped and
+repaired faults. All 42 memory forms in the timing/statistics guest agree
+with native in every engine; a 1,000-iteration run reports zero helper
+calls in JIT and AOT. The encoder check passes 40,555 instructions. Full
+gates and representative coverage/timing measurements are recorded with
+the integrated change.
+
+Native ARM may leave destination vector contents UNKNOWN on a data abort,
+so the native skip tests compare PC, NZCV and base writeback; complete-state
+fault tests establish the interpreter's stronger destination guarantee.
+Interleaved stores with multi-byte elements conservatively decline any
+transfer crossing a 4 KiB boundary before the first store, preserving the
+interpreter's memcpy partial-store behavior exactly. Byte stores remain
+inline. Single-structure LD2/3/4 lane and replicate forms remain helpers.
+Application and Intel performance acceptance remain separate checks.
+
 ## MapKit 32-byte HFA functions in the aggregate-by-value table
 
 Maps on the target crashed (SIGSEGV writing through `rdi`) in

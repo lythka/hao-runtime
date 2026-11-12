@@ -124,6 +124,9 @@ static void check(uint32_t insn, uint32_t insn2, const hao_cpu *in, bool live)
     else if (memcmp(a.c.x, b.c.x, sizeof a.c.x)) why = "x";
     else if (memcmp(a.c.v, b.c.v, sizeof a.c.v)) why = "v";
     else if (memcmp(a.m, b.m, 2 * PG - 16)) why = "memory";
+    else if ((insn & 0xbf000000u) == 0x0c000000u &&
+             (((insn >> 12) & 15) == 0 || ((insn >> 12) & 15) == 4 || ((insn >> 12) & 15) == 8) &&
+             memcmp(a.m, b.m, sizeof a.m)) why = "memory"; /* interleaved: exact partial writes */
     else if (memcmp(a.m + 2 * PG - 16, b.m + 2 * PG - 16, 16)) {
         /* A register store that straddles the inaccessible page: translated
          * code's single move stores nothing, the interpreter's memcpy may
@@ -415,6 +418,27 @@ int main(void)
     integer_tail();
 
     conversion_cases();
+
+    /* Interleaved structures: every arrangement, post-index form, wrapped
+     * register lists and every possible partial-access boundary. Loads must
+     * publish no vector until the complete transfer has succeeded. */
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned regs = 2; regs <= 4; regs++) for (unsigned load = 0; load < 2; load++)
+            for (unsigned post = 0; post < 3; post++) for (unsigned k = 0; k < 68; k++) {
+                unsigned rn = k & 1 ? 31 : 7, rt = k & 2 ? 31 : 3;
+                unsigned opc = regs == 2 ? 8 : regs == 3 ? 4 : 0;
+                unsigned rm = post == 2 ? (k & 4 ? rn : 6) : post ? 31 : 0;
+                uint32_t i = 0x0c000000u | q << 30 | (post != 0) << 23 | load << 22 |
+                             rm << 16 | opc << 12 | size << 10 | rn << 5 | rt;
+                hao_cpu in; state(&in, rn, rn);
+                in.x[6] = (uint64_t)(int64_t)(k - 32);
+                in.x[rn] = (uint64_t)(uintptr_t)(mem + (k < 65 ? 2 * PG - k : PG + k));
+                unsigned before = vector_helper_calls;
+                check(i, 0, &in, false); check(i, 0, &in, true);
+                if ((q || size != 3) && (load || size == 0 || k >= 65) && vector_helper_calls != before) {
+                    printf("MISMATCH %08x: interleaved structure unexpectedly used helper\n", i); fails++;
+                }
+            }
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {
@@ -613,16 +637,17 @@ int main(void)
             }
     /* A maximum-length block must fit the emitter's scratch/cache budget,
      * including both pairs of the largest fused translation. */
-    for (unsigned form = 0; form < 6; form++) {
+    for (unsigned form = 0; form < 8; form++) {
         hao_cpu in;
         state(&in, 1, 2);
         for (unsigned r = 0; r < 3; r++)
             for (unsigned lane = 0; lane < 4; lane++) in.v[r].f[lane] = 0.25f;
         if (form >= 2) for (unsigned r = 0; r < 3; r++)
             for (unsigned l = 0; l < 8; l++) in.v[r].h[l] = 0x3400;
+        if (form >= 6) in.x[7] = (uint64_t)(uintptr_t)(mem + PG);
         uint32_t code[98];
         code[0] = 0xeb01001fu;
-        for (unsigned k = 1; k <= 96; k++) code[k] = (uint32_t[]){0x4e22cc20u, 0x4fa21820u, 0x4e420c20u, 0x4f321820u, 0x4ec20c20u, 0x4f325820u}[form];
+        for (unsigned k = 1; k <= 96; k++) code[k] = (uint32_t[]){0x4e22cc20u, 0x4fa21820u, 0x4e420c20u, 0x4f321820u, 0x4ec20c20u, 0x4f325820u, 0x4c4000e0u, 0x4c0000e0u}[form];
         if (form >= 2) code[0] = code[1]; /* first block: 96 half expansions */
         code[97] = 0x9a818002u;
         static outcome a, b;
@@ -630,8 +655,9 @@ int main(void)
         run(&b, &in, code, 98, 0x7400000000ull, true);
         if (a.faulted || b.faulted || a.rc != b.rc || a.c.pc != b.c.pc ||
             memcmp(a.c.x, b.c.x, sizeof a.c.x) || memcmp(a.c.v, b.c.v, sizeof a.c.v) ||
-            hao_nzcv(&a.c) != hao_nzcv(&b.c) || a.fpsr != b.fpsr || a.fpcr != b.fpcr) {
-            printf("MISMATCH maximum FMLA block form %u: rc %d/%d\n", form, a.rc, b.rc);
+            hao_nzcv(&a.c) != hao_nzcv(&b.c) || a.fpsr != b.fpsr || a.fpcr != b.fpcr ||
+            memcmp(a.m, b.m, sizeof a.m)) {
+            printf("MISMATCH maximum vector block form %u: rc %d/%d\n", form, a.rc, b.rc);
             fails++;
         }
         cases++;

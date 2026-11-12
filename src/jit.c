@@ -3299,33 +3299,69 @@ static bool t_vfp_rint_vec(tctx *t, uint32_t i, uint64_t pc)
 }
 
 /*
- * Advanced SIMD structure loads and stores without interleaving: LD1/ST1
- * of one to four consecutive registers, LD1R, LD1/ST1 of one lane; no
+ * Advanced SIMD structure loads and stores: LD1-ST4 multiple structures,
+ * LD1R, LD1/ST1 of one lane; no
  * offset, or post-indexed by the transfer size (Rm = 31) or by Xm. As in
  * the interpreter (a64_ldst_simd), registers are transferred one at a time
  * in order and the base is written back after the last access, so a fault
  * part way leaves the earlier registers loaded (or stored) and Xn unchanged;
- * accesses are the plain unaligned moves of t_ldst_reg. LD2-LD4/ST2-ST4 and
- * the reserved encodings stay with the helper.
+ * accesses are the plain unaligned moves of t_ldst_reg. Interleaved loads
+ * instead commit every destination only after all element reads succeed,
+ * matching the interpreter's temporary vectors. Interleaved stores write
+ * in element-major order. Reserved encodings stay with the helper.
  */
-static bool t_ldst_simd(tctx *t, uint32_t i)
+static bool t_ldst_simd(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), L = BIT(i, 22), post = BIT(i, 23), rm = BITS(i, 20, 16), rn = BITS(i, 9, 5), rt = BITS(i, 4, 0);
     unsigned size = BITS(i, 11, 10);
     int32_t total;
+    size_t store_decline = SIZE_MAX;
     if (!post && rm) return false;
     if (!BIT(i, 24)) {                                           /* multiple structures */
-        int regs, bytes = Q ? 16 : 8;
+        int regs, interleave = 0, bytes = Q ? 16 : 8;
         if (BIT(i, 21)) return false;
         switch (BITS(i, 15, 12)) {
         case 0x7: regs = 1; break;
         case 0xA: regs = 2; break;
         case 0x6: regs = 3; break;
         case 0x2: regs = 4; break;
-        default: return false;                                   /* LD2-LD4 / ST2-ST4, unallocated */
+        case 0x8: regs = 2; interleave = 1; break;
+        case 0x4: regs = 3; interleave = 1; break;
+        case 0x0: regs = 4; interleave = 1; break;
+        default: return false;                                   /* unallocated */
         }
+        if (interleave && size == 3 && !Q) return false;          /* .1D reserved */
         ldx(t, RAX, rn, 1, true);
-        for (int r = 0; r < regs; r++) {
+        if (interleave) {
+            int es = 1 << size;
+            if (!L && es > 1) {
+                /* Preserve memcpy's partial writes for elements crossing a
+                 * protection boundary. Every supported VM page is a multiple
+                 * of 4 KiB: decline a crossing transfer before any store. */
+                x_sse_rr(&t->b, 0x66, 0x6E, 1, 0, RAX);
+                vconst(t, 1, 4095, false); P(0xDB, 0, 1);
+                vconst(t, 1, (uint64_t)(4096 - regs * bytes), false);
+                P(0x66, 0, 1);                                  /* offset > 4096 - total */
+                x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 0);
+                store_decline = jrcxnz32(t);
+                ldx(t, RAX, rn, 1, true);                        /* vconst used RAX */
+            }
+            if (L) for (int r = 0; r < regs; r++) vzero(t, r);
+            for (int e = 0; e < bytes / es; e++)
+                for (int r = 0; r < regs; r++) {
+                    xmem m = xm(RAX, (e * regs + r) * es);
+                    if (L) {
+                        x_mov_ld(&t->b, es, RCX, m);
+                        x_sse_rr(&t->b, 0x66, 0x6E, 1, 8, RCX); /* movq xmm8, rcx */
+                        if (e) x_sse_shift_ri(&t->b, 0x73, 7, 8, (uint8_t)(e * es));
+                        P(0xEB, r, 8);                          /* accumulate without publishing */
+                    } else {
+                        x_mov_ld(&t->b, es, RCX, velem((rt + (unsigned)r) & 31, es, e));
+                        x_mov_st(&t->b, es, m, RCX);
+                    }
+                }
+            if (L) for (int r = 0; r < regs; r++) x_movdqu_st(&t->b, VR((rt + (unsigned)r) & 31), r);
+        } else for (int r = 0; r < regs; r++) {
             xmem m = xm(RAX, r * bytes), v = VR((rt + (unsigned)r) & 31);
             if (L) {
                 if (Q) x_movdqu_ld(&t->b, 0, m); else x_movq_ld(&t->b, 0, m);
@@ -3370,6 +3406,12 @@ static bool t_ldst_simd(tctx *t, uint32_t i)
         if (rm == 31) x_lea(&t->b, 1, RAX, xm(RAX, total));
         else { x_mov_ld(&t->b, 8, RCX, XR(rm)); x_lea(&t->b, 1, RAX, xmi(RAX, RCX, 1, 0)); }
         stx(t, rn, RAX, true);
+    }
+    if (store_decline != SIZE_MAX) {
+        size_t done = x_jmp32(&t->b);
+        x_patch32(&t->b, store_decline, xb_len(&t->b));
+        helper_keep_flags(t, i, pc);
+        x_patch32(&t->b, done, xb_len(&t->b));
     }
     return true;
 }
@@ -3617,7 +3659,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         else if ((i & 0x3A000000) == 0x28000000) ok = t_ldst_pair(t, i);
         else if ((i & 0x3B000000) == 0x18000000) ok = t_ldr_lit(t, i, pc);
         else if ((i & 0x3F000000) == 0x08000000) ok = t_ordered(t, i);
-        else if ((i & 0xBE000000) == 0x0C000000) ok = t_ldst_simd(t, i);
+        else if ((i & 0xBE000000) == 0x0C000000) ok = t_ldst_simd(t, i, pc);
         break;
     case 0xA: case 0xB:
         if ((i & 0xFFC00000) == 0xD5000000) ok = t_system(t, i);

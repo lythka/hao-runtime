@@ -399,6 +399,63 @@ BENCH(tail_sli1_3_32, "sli v2.2d, v0.2d, #32", single)
 BENCH(tail_sli1_3_63, "sli v2.2d, v0.2d, #63", single)
 BENCH(tail_addpd, "addp d2, v0.2d", single)
 
+
+/* Element-interleaved memory forms use a private 64-byte buffer. */
+#define MEMBENCH(name, insn) \
+static __attribute__((noinline)) vec name(unsigned long n) { \
+    uint64_t data[8] = {1,2,3,4,5,6,7,8}; \
+    vec out; \
+    __asm__ volatile("movi v2.16b, #2\nmovi v3.16b, #3\nmovi v4.16b, #4\nmovi v5.16b, #5\n" \
+        "1:\n.rept 16\n" insn "\n.endr\n" \
+        "subs %[n], %[n], #1\nb.ne 1b\nstr q2, [%[out]]\n" \
+        : [n] "+&r"(n) : [p] "r"(data), [out] "r"(&out) \
+        : "v2", "v3", "v4", "v5", "cc", "memory"); \
+    out.lo ^= data[0] ^ data[2] ^ data[4] ^ data[6]; \
+    out.hi ^= data[1] ^ data[3] ^ data[5] ^ data[7]; \
+    return out; \
+}
+MEMBENCH(ld2_8b, "ld2 {v2.8b, v3.8b}, [%[p]]")
+MEMBENCH(ld2_16b, "ld2 {v2.16b, v3.16b}, [%[p]]")
+MEMBENCH(ld2_4h, "ld2 {v2.4h, v3.4h}, [%[p]]")
+MEMBENCH(ld2_8h, "ld2 {v2.8h, v3.8h}, [%[p]]")
+MEMBENCH(ld2_2s, "ld2 {v2.2s, v3.2s}, [%[p]]")
+MEMBENCH(ld2_4s, "ld2 {v2.4s, v3.4s}, [%[p]]")
+MEMBENCH(ld2_2d, "ld2 {v2.2d, v3.2d}, [%[p]]")
+MEMBENCH(ld3_8b, "ld3 {v2.8b, v3.8b, v4.8b}, [%[p]]")
+MEMBENCH(ld3_16b, "ld3 {v2.16b, v3.16b, v4.16b}, [%[p]]")
+MEMBENCH(ld3_4h, "ld3 {v2.4h, v3.4h, v4.4h}, [%[p]]")
+MEMBENCH(ld3_8h, "ld3 {v2.8h, v3.8h, v4.8h}, [%[p]]")
+MEMBENCH(ld3_2s, "ld3 {v2.2s, v3.2s, v4.2s}, [%[p]]")
+MEMBENCH(ld3_4s, "ld3 {v2.4s, v3.4s, v4.4s}, [%[p]]")
+MEMBENCH(ld3_2d, "ld3 {v2.2d, v3.2d, v4.2d}, [%[p]]")
+MEMBENCH(ld4_8b, "ld4 {v2.8b, v3.8b, v4.8b, v5.8b}, [%[p]]")
+MEMBENCH(ld4_16b, "ld4 {v2.16b, v3.16b, v4.16b, v5.16b}, [%[p]]")
+MEMBENCH(ld4_4h, "ld4 {v2.4h, v3.4h, v4.4h, v5.4h}, [%[p]]")
+MEMBENCH(ld4_8h, "ld4 {v2.8h, v3.8h, v4.8h, v5.8h}, [%[p]]")
+MEMBENCH(ld4_2s, "ld4 {v2.2s, v3.2s, v4.2s, v5.2s}, [%[p]]")
+MEMBENCH(ld4_4s, "ld4 {v2.4s, v3.4s, v4.4s, v5.4s}, [%[p]]")
+MEMBENCH(ld4_2d, "ld4 {v2.2d, v3.2d, v4.2d, v5.2d}, [%[p]]")
+MEMBENCH(st2_8b, "st2 {v2.8b, v3.8b}, [%[p]]")
+MEMBENCH(st2_16b, "st2 {v2.16b, v3.16b}, [%[p]]")
+MEMBENCH(st2_4h, "st2 {v2.4h, v3.4h}, [%[p]]")
+MEMBENCH(st2_8h, "st2 {v2.8h, v3.8h}, [%[p]]")
+MEMBENCH(st2_2s, "st2 {v2.2s, v3.2s}, [%[p]]")
+MEMBENCH(st2_4s, "st2 {v2.4s, v3.4s}, [%[p]]")
+MEMBENCH(st2_2d, "st2 {v2.2d, v3.2d}, [%[p]]")
+MEMBENCH(st3_8b, "st3 {v2.8b, v3.8b, v4.8b}, [%[p]]")
+MEMBENCH(st3_16b, "st3 {v2.16b, v3.16b, v4.16b}, [%[p]]")
+MEMBENCH(st3_4h, "st3 {v2.4h, v3.4h, v4.4h}, [%[p]]")
+MEMBENCH(st3_8h, "st3 {v2.8h, v3.8h, v4.8h}, [%[p]]")
+MEMBENCH(st3_2s, "st3 {v2.2s, v3.2s, v4.2s}, [%[p]]")
+MEMBENCH(st3_4s, "st3 {v2.4s, v3.4s, v4.4s}, [%[p]]")
+MEMBENCH(st3_2d, "st3 {v2.2d, v3.2d, v4.2d}, [%[p]]")
+MEMBENCH(st4_8b, "st4 {v2.8b, v3.8b, v4.8b, v5.8b}, [%[p]]")
+MEMBENCH(st4_16b, "st4 {v2.16b, v3.16b, v4.16b, v5.16b}, [%[p]]")
+MEMBENCH(st4_4h, "st4 {v2.4h, v3.4h, v4.4h, v5.4h}, [%[p]]")
+MEMBENCH(st4_8h, "st4 {v2.8h, v3.8h, v4.8h, v5.8h}, [%[p]]")
+MEMBENCH(st4_2s, "st4 {v2.2s, v3.2s, v4.2s, v5.2s}, [%[p]]")
+MEMBENCH(st4_4s, "st4 {v2.4s, v3.4s, v4.4s, v5.4s}, [%[p]]")
+MEMBENCH(st4_2d, "st4 {v2.2d, v3.2d, v4.2d, v5.2d}, [%[p]]")
 int main(int argc, char **argv)
 {
     unsigned long n = argc > 1 ? strtoul(argv[1], 0, 0) : 50000;
@@ -765,5 +822,48 @@ int main(int argc, char **argv)
     RUN(tail_sli1_3_32);
     RUN(tail_sli1_3_63);
     RUN(tail_addpd);
+
+    RUN(ld2_8b);
+    RUN(ld2_16b);
+    RUN(ld2_4h);
+    RUN(ld2_8h);
+    RUN(ld2_2s);
+    RUN(ld2_4s);
+    RUN(ld2_2d);
+    RUN(ld3_8b);
+    RUN(ld3_16b);
+    RUN(ld3_4h);
+    RUN(ld3_8h);
+    RUN(ld3_2s);
+    RUN(ld3_4s);
+    RUN(ld3_2d);
+    RUN(ld4_8b);
+    RUN(ld4_16b);
+    RUN(ld4_4h);
+    RUN(ld4_8h);
+    RUN(ld4_2s);
+    RUN(ld4_4s);
+    RUN(ld4_2d);
+    RUN(st2_8b);
+    RUN(st2_16b);
+    RUN(st2_4h);
+    RUN(st2_8h);
+    RUN(st2_2s);
+    RUN(st2_4s);
+    RUN(st2_2d);
+    RUN(st3_8b);
+    RUN(st3_16b);
+    RUN(st3_4h);
+    RUN(st3_8h);
+    RUN(st3_2s);
+    RUN(st3_4s);
+    RUN(st3_2d);
+    RUN(st4_8b);
+    RUN(st4_16b);
+    RUN(st4_4h);
+    RUN(st4_8h);
+    RUN(st4_2s);
+    RUN(st4_4s);
+    RUN(st4_2d);
     return 0;
 }
