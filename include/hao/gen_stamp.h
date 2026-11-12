@@ -1,9 +1,13 @@
 /* The provenance of hao's generated tables (src/NAME_gen.inc).
  *
- * Every generated table was derived from one macOS build: its arm64e and
- * x86_64 shared caches, its SDK headers and the arm64e files it ships. The
- * generators are not part of this repository; their output is reviewed and
- * committed here, and no row is edited by hand. Each table checks
+ * Each generated table names its inputs in its own header and in
+ * generated.lock (sha256, export id, format and, by input kind, the OS build,
+ * the SDK build and the shared cache UUID). Every table derived from a shared
+ * cache (input kind "cache") was derived from HAO_GEN_OS_BUILD's arm64e and
+ * x86_64 caches; tables from the SDK headers name their SDK build, and those
+ * also checked against an import census name the census's OS build. The
+ * generators are not part of this repository; their output is committed here
+ * byte for byte, and no row is edited by hand. Each table checks
  * HAO_GEN_FORMAT where it is included, so a table written for another layout
  * does not compile against this runtime; the includer includes this header
  * first.
@@ -17,8 +21,8 @@
 #ifndef HAO_GEN_STAMP_H
 #define HAO_GEN_STAMP_H
 
-#define HAO_GEN_OS_VERSION "27.0"   /* the macOS release the tables describe */
-#define HAO_GEN_OS_BUILD "26A428"   /* its build (kern.osversion) */
+#define HAO_GEN_OS_VERSION "27.2.1" /* the macOS release the cache tables describe */
+#define HAO_GEN_OS_BUILD "26B131"   /* its build (kern.osversion) */
 #define HAO_GEN_FORMAT 1            /* the table layout the includers read */
 
 /* Under -v: one line when the running system's build is not HAO_GEN_OS_BUILD.
