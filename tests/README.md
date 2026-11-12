@@ -511,3 +511,18 @@ ARM and reports the minimum of seven interleaved timing runs; timings have
 no acceptance threshold. `BEFORE=/path/to/older/hao` adds a before column,
 `HAO` selects the current engine, and `N`/`REPEATS` control the sample size.
 The dependent-operation loops remain available through `fpscalar -b`.
+
+`host/labels-race` pauses an unlocked re-export reader after it captures the
+name-table pointer, then runs a second binder. The control must finish; a
+private library with the old initialization guard must crash. `N=200` runs
+200 fresh processes per variant. This startup race does not require fork;
+the separate Rosetta MAP_JIT/fork protection failure remains a gate failure.
+
+`tests/host/mapjit_fork.c` is a standalone platform diagnostic with no hao
+linked. Build with `clang -arch x86_64 -O2 -pthread`, ad-hoc sign using
+`tools/hao.entitlements`, and run under `timeout -s KILL 30`. Repeat with
+`-arch arm64` for a native control. Each process performs 300 forks while
+other parent threads emit and execute code. The Rosetta parent can fault on
+a formerly writable MAP_JIT page; this diagnostic remains separate from the
+passing-control/mutation bridge regression and is not an expected-failure
+entry in the gate.

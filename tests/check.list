@@ -110,3 +110,4 @@ guest/extramisc	300	par	tests/guest/extramisc.sh
 guest/i8mm	300	par	tests/guest/i8mm.sh
 guest/widenfp	300	par	tests/guest/widenfp.sh
 guest/bfdot	300	par	tests/guest/bfdot.sh
+host/labels-race	300	par	tests/host/labels_race.sh

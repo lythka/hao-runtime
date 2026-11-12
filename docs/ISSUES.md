@@ -2016,16 +2016,32 @@ as described in `src/signals.c`. This result does not establish that all
 signal-handler paths are reentrant or change the concurrent fallback in
 `hao_jit_locate`. Application and release-image acceptance remain separate.
 
-## Intermittent host fork stress failure
+## Concurrent label initialization and fork stress
 
-`tests/guest/fork.sh`'s host `test_fork all` has historical SIGSEGV/SIGBUS
-failures. Reports from November 2026 include JIT emission
-(`x_mov_ld`/`exit_indirect`) and bridge binding (`type_at`) stacks.
-`test_fork` does not install hao's guest signal handlers, and those stacks
-do not show the recursive enum initialization above. One more SIGSEGV
-came from bridge binding (`labels_at` under `type_at`, a `w_bridge`
-thread) in a `make test` run on 11 November; six reruns right after passed.
-No shared cause has been established; the fork failure remains open.
+The name table used by unlocked re-export readers was rebuilt whenever an
+image refresh had not finished. Two startup binders could therefore
+reallocate and unmap a table while the first binder still held its address.
+Name initialization now publishes its own completion flag under the label
+lock; image refresh completion does not govern the name table's lifetime.
+The failures in `type_at` and `labels_at` occurred on parent worker threads
+before the first fork, rather than in a child with an inherited mutex.
+
+A test-only reader checkpoint forces this interleaving without relying on
+scheduler timing. In 200 independent processes, reverting the initialization
+guard causes 200 crashes; the fixed guard completes all 200 with no crash.
+The gate runs both a passing control and the failing mutation. No thread-local
+variables are introduced; the checkpoint is absent from production builds.
+
+JIT-emission failures during fork involve writes to MAP_JIT pages reported
+as read-only. A standalone two-writer executable, with no runtime linked,
+reproduces the same SIGBUS/KERN_PROTECTION_FAILURE in 8 of 200 Rosetta runs
+(300 forks per run); all 200 native arm64 control runs pass. This isolates a
+platform failure independently of the runtime's bridge and translation tables.
+The original full host stress workload passes 200/200 runs at 300 forks each;
+the deterministic label-table control and mutation provide the stronger
+regression check for that separate race. Intel behavior and a workaround for
+the Rosetta MAP_JIT/fork failure are not established. The gate continues to
+report a JIT stress crash as a failure.
 
 ## Repeated per-call work on guest -> native calls
 

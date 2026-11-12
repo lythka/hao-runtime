@@ -631,6 +631,9 @@ tests/host/fork.c
 tests/host/gmap.c
 tests/host/jitlock.c
 tests/host/jitlock.sh
+tests/host/labels_race.c
+tests/host/labels_race.sh
+tests/host/mapjit_fork.c
 tests/host/near-map.c
 tests/host/near-map.sh
 tests/host/reexec/child.m
