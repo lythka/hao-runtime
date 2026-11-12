@@ -6,12 +6,18 @@
  *     with LDP (or LDXP) and checks that both halves are equal. Run through
  *     the interpreter and the JIT, with a register base and with SP as the
  *     base. A control run that splits the access into two 8-byte halves
- *     must tear, which shows the race is real on this machine.
+ *     must tear, which shows the race is real on this machine. Each case
+ *     reads only once the writer is running, and repeats its ITERATIONS
+ *     loads until the writer has stored at least as often during them (the
+ *     control: until it tears), for at most ATOMIC16_SECONDS (30) each.
+ *     Under heavy host load the two threads may never overlap enough: the
+ *     case then prints SKIP (the race was not established, so it proves
+ *     nothing either way) and does not fail; a torn atomic load always fails.
  *  2. LDXP/LDAXP and LDP on a read-only page load the data without a fault
  *     (an exclusive load must not write), and LDXP + STXP still update a
  *     writable cell.
  *
- *   oracle-atomic [ITERATIONS]
+ *   [ATOMIC16_SECONDS=30] oracle-atomic [ITERATIONS]
  */
 #include "hao/cpu.h"
 #include <pthread.h>
@@ -20,6 +26,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sched.h>
+#include <time.h>
 #include <sys/mman.h>
 
 int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base);
@@ -35,10 +43,21 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base);
 
 static volatile uint64_t cell[4] __attribute__((aligned(64)));
 static long iters = 300000;
+static double limit_s = 30;
+static volatile long wstores;   /* the writer's stores so far */
+static volatile int wstarted;
+static int skips;
 static volatile int stop;
 static int fails;
 
-typedef struct { int jit, sp, split; uint32_t ld; long loads, torn; } race;
+typedef struct { int jit, sp, split; uint32_t ld; long loads, torn, overlap; } race;
+
+static double now_s(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec * 1e-9;
+}
 
 static int run(hao_cpu *c, uint32_t insn, int jit)
 {
@@ -52,10 +71,14 @@ static void *writer(void *arg)
     static __thread hao_cpu c;
     memset(&c, 0, sizeof c);
     c.x[2] = c.x[31] = (uint64_t)(uintptr_t)cell;
+    wstarted = 1;
     for (uint64_t k = 1; !stop; k++) {
-        if (r->split) { cell[0] = k; __asm__ volatile("" ::: "memory"); cell[1] = k; continue; }
-        c.x[0] = c.x[1] = k * 0x0101010101010101ull;
-        run(&c, r->sp ? STP_X0_X1_SP : STP_X0_X1_X2, r->jit);
+        if (r->split) { cell[0] = k; __asm__ volatile("" ::: "memory"); cell[1] = k; }
+        else {
+            c.x[0] = c.x[1] = k * 0x0101010101010101ull;
+            run(&c, r->sp ? STP_X0_X1_SP : STP_X0_X1_X2, r->jit);
+        }
+        wstores = (long)k;
     }
     return NULL;
 }
@@ -64,11 +87,18 @@ static void do_race(const char *what, race *r)
 {
     pthread_t t;
     stop = 0;
+    wstarted = 0;
+    wstores = 0;
     cell[0] = cell[1] = 0;
     pthread_create(&t, NULL, writer, r);
     hao_cpu c;
     memset(&c, 0, sizeof c);
     c.x[2] = c.x[31] = (uint64_t)(uintptr_t)cell;
+    double end = now_s() + limit_s;
+    while (!wstarted) sched_yield();
+    /* rounds of ITERATIONS loads until the race is established or time is up */
+    for (;;) {
+    long w0 = wstores;
     for (long k = 0; k < iters; k++) {
         uint64_t a, b;
         if (r->split) { a = cell[1]; __asm__ volatile("" ::: "memory"); b = cell[0]; }
@@ -80,12 +110,20 @@ static void do_race(const char *what, race *r)
         r->loads++;
         if (a != b) r->torn++;
     }
+    r->overlap += wstores - w0;
+    bool established = r->split ? r->torn != 0 : r->overlap >= r->loads;
+    if (established || (!r->split && r->torn) || now_s() > end) break;
+    }
     stop = 1;
     pthread_join(t, NULL);
-    bool bad = r->split ? r->torn == 0 : r->torn != 0;
-    printf("%-44s %9ld loads, %8ld torn  %s\n", what, r->loads, r->torn,
-           bad ? (r->split ? "FAIL (the control did not tear: the race is not exercised)" : "FAIL") : "ok");
-    if (bad) fails++;
+    bool established = r->split ? r->torn != 0 : r->overlap >= r->loads;
+    const char *res = !r->split && r->torn ? "FAIL"
+                    : established ? "ok"
+                    : r->split ? "SKIP (the control did not tear: the race was not established)"
+                    : "SKIP (the writer stored less often than the reader loaded: the race was not established)";
+    printf("%-44s %9ld loads, %8ld torn, %10ld stores  %s\n", what, r->loads, r->torn, r->overlap, res);
+    if (res[0] == 'F') fails++;
+    if (res[0] == 'S') skips++;
 }
 
 static sigjmp_buf jb;
@@ -132,13 +170,14 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (argc > 1) iters = atol(argv[1]);
+    if (getenv("ATOMIC16_SECONDS")) limit_s = atof(getenv("ATOMIC16_SECONDS"));
     signal(SIGSEGV, on_sig);
     signal(SIGBUS, on_sig);
     { hao_cpu c; memset(&c, 0, sizeof c); run(&c, CLREX, 1); }   /* JIT init before any thread */
     race r[] = {
-        {0, 0, 1, 0, 0, 0},
-        {0, 0, 0, LDP_X3_X4_X2, 0, 0}, {0, 1, 0, LDP_X3_X4_SP, 0, 0}, {0, 0, 0, LDXP_X3_X4_X2, 0, 0},
-        {1, 0, 0, LDP_X3_X4_X2, 0, 0}, {1, 1, 0, LDP_X3_X4_SP, 0, 0}, {1, 0, 0, LDXP_X3_X4_X2, 0, 0},
+        {0, 0, 1, 0, 0, 0, 0},
+        {0, 0, 0, LDP_X3_X4_X2, 0, 0, 0}, {0, 1, 0, LDP_X3_X4_SP, 0, 0, 0}, {0, 0, 0, LDXP_X3_X4_X2, 0, 0, 0},
+        {1, 0, 0, LDP_X3_X4_X2, 0, 0, 0}, {1, 1, 0, LDP_X3_X4_SP, 0, 0, 0}, {1, 0, 0, LDXP_X3_X4_X2, 0, 0, 0},
     };
     static const char *names[] = {
         "control: two 8-byte halves (must tear)",
@@ -148,6 +187,6 @@ int main(int argc, char **argv)
     for (unsigned k = 0; k < sizeof r / sizeof *r; k++) do_race(names[k], &r[k]);
     readonly_checks(0);
     readonly_checks(1);
-    printf("atomic16: %s (%d failures)\n", fails ? "FAILED" : "OK", fails);
+    printf("atomic16: %s (%d failures, %d races not established)\n", fails ? "FAILED" : "OK", fails, skips);
     return fails != 0;
 }

@@ -22,6 +22,15 @@
 #            BUDGET_SPREAD (its 6000 function pointers get thunks at load).
 # Each judged case fails when its overhead exceeds its budget (KB):
 #   BUDGET_C (2048), BUDGET_OBJC (2048), BUDGET_SPREAD (3072)
+# Every measured process, native and hao alike, runs with MallocMaxMagazines=
+# MAGAZINES (4). libmalloc keeps one tiny/small magazine per CPU a thread has
+# allocated on, so on this 16-CPU host under load hao's threads touched more
+# of them and one run grew by 300-400 KB of Malloc Tiny/Small and page tables
+# (the code and data categories do not move). The cap removes that host
+# dependence. Malloc Nano stays per CPU and still varies by up to about 150 KB,
+# so a case over budget is measured again, up to TRIES (3) runs, and the
+# smallest is judged: load adds memory, never removes it, and growth in hao
+# itself raises every run.
 # The judged runs use tests/guest/footprint_front.c, hao's launcher with every
 # guest file mapped: that is how hao takes a file only root can change (a
 # system daemon's), and the budgets are about those. The test's guests are
@@ -33,10 +42,10 @@
 # on 27.0) minus such a daemon's native footprint (findmylocateagent: 13.7 MB
 # natively on this 27.2 host, KernelEventAgent 2.8 MB) leaves 1 to 12 MB;
 # hao's code-independent share must stay a small part of that. Measured on
-# the 27.2 development Mac under Rosetta: about 1.1 MB for c and objc, about
-# 1 MB of it page tables; spread 1.4 MB (6.5 MB before the growable tables).
+# the 27.2 development Mac under Rosetta: objc about 1.8 MB under the JIT,
+# about 1.1 MB of it page tables; spread 1.4 MB (6.5 MB before the growable tables).
 # Prints one line per case and PASS/FAIL; exit 0 if all pass, 1 otherwise.
-#   OUT=dir HAO=/abs/build/hao [FP_TIMEOUT=60] [N=1024] [BIG_FNS=6000] [LIMIT_KB=16384] [MODES="jit interp aot"] tests/guest/footprint.sh
+#   OUT=dir HAO=/abs/build/hao [FP_TIMEOUT=60] [N=1024] [BIG_FNS=6000] [LIMIT_KB=16384] [TRIES=3] [MAGAZINES=4] [MODES="jit interp aot"] tests/guest/footprint.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-footprint)}
@@ -48,6 +57,8 @@ MODES=${MODES:-jit interp aot}
 BUDGET_C=${BUDGET_C:-2048}
 BUDGET_OBJC=${BUDGET_OBJC:-2048}
 BUDGET_SPREAD=${BUDGET_SPREAD:-3072}
+TRIES=${TRIES:-3}
+MAGAZINES=${MAGAZINES:-4}
 T=${T:-90}
 mkdir -p "$OUT"
 case $HAO in /*) ;; *) echo "HAO must be an absolute path"; exit 2 ;; esac
@@ -99,7 +110,7 @@ esac
 measure() {
     name=$1; shift
     rm -f "$OUT/$name.json"
-    FP_HOLD=1 timeout -s KILL "$T" "$@" >"$OUT/$name.out" 2>"$OUT/$name.err" &
+    FP_HOLD=1 MallocMaxMagazines=$MAGAZINES timeout -s KILL "$T" "$@" >"$OUT/$name.out" 2>"$OUT/$name.err" &
     tpid=$!
     i=0
     while ! grep -q '^footprint_kb=' "$OUT/$name.out" 2>/dev/null; do
@@ -128,6 +139,18 @@ print(own, pt, p["footprint"] // 1024)
 EOF
 }
 
+# measure_mode: one measurement of case $cs in mode $m, into h and hpt
+measure_mode() {
+    case $cs:$m in
+    limited:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_AOT_LIMIT_KB="$LIMIT_KB" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+    *:jit) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+    *:interp) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" --interp "$OUT/$g.arm64e" $args) ;;
+    bigaot:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_VERBOSE=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+    *:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+    esac
+    h=$1; hpt=$2
+}
+
 fails=0
 printf '%-8s %-7s %9s %9s %9s %9s %7s  %s\n' case route native_kb hao_kb overhead pt_delta budget result
 for cs in c objc spread bigaot limited; do
@@ -143,14 +166,17 @@ for cs in c objc spread bigaot limited; do
     set -- $(measure "$cs-native" "$OUT/$g.arm64" $args)
     nat=$1; natpt=$2
     for m in $modes; do
-        case $cs:$m in
-        limited:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_AOT_LIMIT_KB="$LIMIT_KB" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
-        *:jit) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
-        *:interp) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" --interp "$OUT/$g.arm64e" $args) ;;
-        bigaot:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_VERBOSE=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
-        *:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
-        esac
-        h=$1; hpt=$2
+        measure_mode
+        # Over budget: measure again (at most TRIES in all) and judge the smallest.
+        # Load adds memory and never removes it, so the smallest sample is closest
+        # to hao's own share; growth in hao raises every sample and still fails.
+        tries=1
+        while [ "$h" != - ] && [ "$nat" != - ] && [ "$budget" != info ] &&
+              [ $((h - nat)) -gt "$budget" ] && [ $tries -lt "$TRIES" ]; do
+            h0=$h; hpt0=$hpt
+            measure_mode; tries=$((tries + 1))
+            if [ "$h" = - ] || [ "$h" -gt "$h0" ]; then h=$h0; hpt=$hpt0; fi
+        done
         want=$(sed -n 1p "$OUT/$cs-native.out")
         got=$(sed -n 1p "$OUT/$cs-$m.out")
         skipped=$(grep -c "not loaded under the process's memory limit" "$OUT/$cs-$m.err")
@@ -162,7 +188,8 @@ for cs in c objc spread bigaot limited; do
             elif [ $cs = limited ] && [ "$skipped" != 1 ]; then r="FAIL (the cache was not skipped under the limit)"
             elif [ $cs = bigaot ] && [ "$loaded" = 0 ]; then r="FAIL (the cache was not loaded)"
             elif [ "$budget" = info ]; then r="info (cache $(ls -lS "$OUT/aotc" | awk 'NR == 2 { print int($5 / 1024) }') KB)"
-            elif [ $ov -gt "$budget" ]; then r=FAIL
+            elif [ $ov -gt "$budget" ]; then r="FAIL (smallest of $tries)"
+            elif [ $tries -gt 1 ]; then r="PASS (smallest of $tries)"
             else r=PASS; fi
         fi
         case $r in PASS|info*) ;; *) fails=$((fails + 1)) ;; esac

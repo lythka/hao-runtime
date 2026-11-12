@@ -136,7 +136,8 @@ except SystemExit as e:
     sys.exit(0 if "NULL" in str(e) else 1)
 sys.exit(1)
 PY
-else echo "SKIP stamp cases (no $KC)"; fi
+elif [ -z "$KC" ]; then echo "SKIP stamp cases (KC not set: a BootKernelExtensions.kc of the target kernel)"
+else echo "SKIP stamp cases (KC=$KC is not a file)"; fi
 # --- bundle main executables: the stub binds the bundle's Info.plist and resource seal
 OUT=$OUT/bundle B=$B "$here/bundle.sh" || bad "tests/tools/bundle.sh"
 # --- the stub's launch image set (the program's native dependencies) and its own LC_UUID
