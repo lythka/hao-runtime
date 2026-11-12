@@ -222,7 +222,7 @@ be trusted:
 | Process | Switches honoured |
 |---|---|
 | Open: an ordinary user's process | all |
-| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS` |
+| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS`, `HAO_SWIFT_VALUE_SURVEY` |
 | Set-ID: credentials changed at exec | none |
 
 The guarded list holds only switches that run the same code through another
@@ -238,7 +238,7 @@ ignored.
 Boot arguments reach every process of a boot, set-ID programs and PID 1
 included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
 `hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_no_aot=1`, `hao_no_chain=1`,
-`hao_jit_helpers_only=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
+`hao_jit_helpers_only=1`, `hao_swift_value_survey=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
 `hao_verbose=N`. No boot argument turns library validation or the signature
 check off.
 

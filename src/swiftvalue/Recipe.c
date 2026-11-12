@@ -10,7 +10,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+#include "hao/opts.h"
+#include "hao/runtime.h"
+#endif
 
 #define SWIFT __attribute__((swiftcall))
 typedef struct {
@@ -39,6 +44,8 @@ typedef struct {
     int existentials;   /* admit existential and Swift class payloads (guest calls of native witnesses only) */
     int (*known_layout)(const void *type);   /* if set: a struct (other than Array and String) whose layout
                                                 it rejects ends the XI path (collect_inline_patches) */
+    unsigned surveyed;  /* survey mode: refusing types printed so far (collect) */
+    int survey;
 } reflection;
 
 static const witnesses *vwt(const void *type)
@@ -242,6 +249,50 @@ static int function_value(reflection *r, const void *type)
     return 0;
 }
 
+/* The offset of the code word that supplies TYPE's extra inhabitants, when
+ * they come from a function value: Optionals take their payload's, a struct
+ * or tuple its first field with the most (each step checked against the
+ * value witness tables), down to a function value that is not a block
+ * (function_value). Those inhabitants are code words 0..0x7ffffffe on both
+ * architectures, so an Optional over such a type has the same nil on both. */
+static int function_xi_word(reflection *r, const void *type, uint64_t *offset)
+{
+    uint64_t at = 0;
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uintptr_t kind = r->kind(type);
+        if (!v->extra) return 0;
+        if (kind == 0x302) {
+            if (!function_value(r,type)) return 0;
+            *offset = at;
+            return 1;
+        }
+        if (kind == 0x202 && m[1] == r->optional) {
+            if (vwt(m[2])->extra != v->extra + 1) return 0;
+            type = m[2];
+            continue;
+        }
+        if (kind != 0x200 && kind != 0x301) return 0;
+        intptr_t count = r->count(type);
+        if (count < 1 || count > 64) return 0;
+        const void *best = NULL;
+        intptr_t best_at = -1;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type,i,&info);
+            intptr_t o = r->offset(type,i);
+            if (info.free_name) info.free_name(info.name);
+            if (!child || o < 0 || (uint64_t)o + vwt(child)->size > v->size) return 0;
+            if (!best || vwt(child)->extra > vwt(best)->extra) { best = child; best_at = o; }
+        }
+        if (vwt(best)->extra != v->extra) return 0;
+        at += (uint64_t)best_at;
+        type = best;
+    }
+    return 0;
+}
+
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth);
 static int collect_inner(reflection *r, const void *type, const unsigned char *value,
@@ -271,6 +322,18 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         int byte_case = common_byte_optional_case(type,value);
         if (byte_case >= 0) {
             if (byte_case) return 1; /* inactive payload remains opaque */
+            return collect(r,m[2],value,base,out,capacity,used,depth + 1);
+        }
+        /* A payload whose inhabitants are a function's code word: this
+         * Optional's nil is that word equal to the inhabitants the payload
+         * already consumed, the same on both architectures. */
+        uint64_t code_at;
+        if (m[1] == r->optional && payload->extra && v->extra + 1 == payload->extra &&
+            function_xi_word(r,m[2],&code_at)) {
+            uint64_t word, none = 0x7fffffffu - payload->extra;
+            memcpy(&word,value + code_at,8);
+            if (word == none) return 1;                      /* inactive payload remains opaque */
+            if (word > none && word < 0x7fffffffu) return 0; /* an outer Optional's nil: not this type's value */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
         /* No payload extra inhabitants: Swift's single-payload enum layout
@@ -353,17 +416,47 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     return 1;
 }
 
+/* Survey mode (HAO_SWIFT_VALUE_SURVEY): print a type the walk refuses at
+ * value offset BASE and go on with its siblings, so that one refused value
+ * names every refusing type in it. The value is still refused. Only the
+ * innermost refusing types are printed: a type that refuses for its own
+ * reason after a descendant was printed is not. */
+static void survey(reflection *r, const void *type, uint64_t base, unsigned depth)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    typedef struct { const char *text; uintptr_t length; } type_name;
+    typedef type_name SWIFT name_fn(const void *, bool);
+    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
+    type_name n = name ? name(type,true) : (type_name){"?",1};
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG,"Swift value survey: refused at offset %llu depth %u: metadata=%p kind=%#lx size=%llu flags=%#x xi=%#x type=%.*s\n",
+        (unsigned long long)base,depth,type,(unsigned long)r->kind(type),(unsigned long long)vwt(type)->size,
+        vwt(type)->flags,vwt(type)->extra,(int)(n.length > 4096 ? 4096 : n.length),n.text);
+#else
+    (void)type; (void)base; (void)depth;
+#endif
+    r->surveyed++;
+}
+
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
 {
+    unsigned before = r->surveyed;
     int ok = collect_inner(r,type,value,base,out,capacity,used,depth);
+    if (r->survey && (!ok || r->surveyed != before)) {
+        if (!ok && r->surveyed == before) {
+            if (!r->unresolved) r->unresolved = type;
+            survey(r,type,base,depth);
+        }
+        return 1;           /* keep walking; collect_patches refuses the value */
+    }
     if (!ok && !r->unresolved) r->unresolved = type;
     return ok;
 }
 
 static int collect_patches(const void *type, const void *value, empty_patch *out,
                            unsigned capacity, const void **unresolved, int existentials,
-                           int (*known_layout)(const void *))
+                           int (*known_layout)(const void *), int survey_mode)
 {
     reflection r = {
         dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
@@ -371,12 +464,12 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
         dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
         dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
-        known_layout,
+        known_layout, 0, survey_mode,
     };
     unsigned used = 0;
     if (unresolved) *unresolved = type;
     if (!type || !value || !out || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional) return -1;
-    if (!collect(&r, type, value, 0, out, capacity, &used, 0)) {
+    if (!collect(&r, type, value, 0, out, capacity, &used, 0) || r.surveyed) {
         if (unresolved && r.unresolved) *unresolved = r.unresolved;
         return -1;
     }
@@ -387,18 +480,29 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
 int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
                                  unsigned capacity, const void **unresolved)
 {
-    return collect_patches(type,value,out,capacity,unresolved,0,NULL);
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    int survey_mode = hao_opt.swift_value_survey;
+#else
+    int survey_mode = 0;
+#endif
+    return collect_patches(type,value,out,capacity,unresolved,0,NULL,survey_mode);
+}
+
+int collect_survey_patches(const void *type, const void *value, empty_patch *out,
+                           unsigned capacity, const void **unresolved)
+{
+    return collect_patches(type,value,out,capacity,unresolved,0,NULL,1);
 }
 
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)
 {
-    return collect_patches(type,value,out,capacity,NULL,1,NULL);
+    return collect_patches(type,value,out,capacity,NULL,1,NULL,0);
 }
 
 int collect_inline_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
                            int (*known_layout)(const void *))
 {
-    return collect_patches(type,value,out,capacity,NULL,1,known_layout);
+    return collect_patches(type,value,out,capacity,NULL,1,known_layout,0);
 }
 
 int collect_empty_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)

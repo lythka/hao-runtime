@@ -55,7 +55,8 @@ int main(void)
     CHECK(!o.allow_unsigned && o.verbose == 1, "boot argument hao=u does not allow unsigned guests");
     /* the boot-argument list (hao/opts.h): every knob by name, in PID 1, a daemon and a set-ID process */
     {
-        static const char *yes[] = {"nx_stats", "crash_trace", "bridge_stats", "no_aot", "no_chain", "jit_helpers_only", NULL};
+        static const char *yes[] = {"nx_stats", "crash_trace", "bridge_stats", "no_aot", "no_chain", "jit_helpers_only",
+                                  "swift_value_survey", NULL};
         static const char *dev[] = {"no_msgsend", "no_closures", "no_swiftreg", "no_block_thunks", "no_fixup_thunks",
                                     "no_struct_thunks", "bridge_check", "no_varsniff", "no_ifunits", "no_swift_thunks",
                                     "no_swift_values", "native_libcxx", "no_thunks", "sigreturn_kernel", "no_probe", NULL};
@@ -85,7 +86,7 @@ int main(void)
                 if (pass == 1) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) && !hao_env_test_switch(up), "%s: bring-up knob", up);
             }
         }
-        CHECK(nknobs == 21, "boot-argument lists name 21 knobs (%d)", nknobs);
+        CHECK(nknobs == 22, "boot-argument lists name 22 knobs (%d)", nknobs);
     }
     /* the test switches: read from an ordinary environment by a HAO_TEST_SWITCHES build only */
     {

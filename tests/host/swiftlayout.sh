@@ -10,7 +10,11 @@
 # C. a multi-payload enum with a trailing tag byte equal to the case index is walked by layout; two empty
 #    cases, a size or xi that does not match and a tag byte past the cases stay refused.
 # F. a function value other than a block, under any number of Optionals, has identical nils on both and
-#    is walked with no patch; a block's XIs differ (k against 2k).
+#    is walked with no patch; a block's XIs differ (k against 2k). So does an Optional of a struct whose
+#    XIs come from such a function (closure-typed fields of every kind: global actor, inout, async).
+# G. a Clang-imported enum (ComparisonResult, NSLineBreakMode: native metadata) is its integer.
+# S. survey mode (hao_sv_collect_survey_patches): a value with two refusing fields prints both on stderr
+#    and is still refused.
 # D. a value of fewer than 8 bytes (a single-payload or spare-bit enum, a struct of them, an Optional of
 #    one, Optional<Bool>) is walked with no patch.
 # Every measured line must be equal on both architectures except the listed keys, the contract lines must
@@ -205,8 +209,25 @@ W Optional<CAction> nil walk 0
 W Optional<Optional<CAction>> outer nil walk 0
 W Row nils walk 0
 W Row some walk 0
+W Button walk 0
+W Handlers nils walk 0
+W Handlers some walk 0
+W Optional<Optional<Handlers>> outer nil walk 0
+W Optional<Optional<Handlers>> inner nil walk 0
+W Optional<Optional<Handlers>> some walk 0
+W ComparisonResult walk 0
+W Optional<ComparisonResult> nil walk 0
+W Optional<ComparisonResult> some walk 0
+W Oriented walk 0
+W Oriented nil walk 0
+W TwoRefused survey refused Seventeen
 EOF
 grep '^W ' "$OUT/x86_64" >"$OUT/walk" || true
+sed -n 's/^hao\[[^]]*\]: Swift value survey: \(refused at offset [0-9]* depth [0-9]*\):.* type=/S \1 /p' "$OUT/x86_64.err" >"$OUT/survey"
+printf '%s\n' "S refused at offset 0 depth 1 swiftlayout.Seventeen" "S refused at offset 8 depth 1 swiftlayout.TwoEmpty" >"$OUT/survey.expected"
+if ! cmp -s "$OUT/survey.expected" "$OUT/survey"; then
+    echo "FAIL survey lines:"; diff "$OUT/survey.expected" "$OUT/survey" | sed 's/^/    /'; fail=1
+fi
 if ! cmp -s "$OUT/walk.expected" "$OUT/walk"; then
     echo "FAIL walk verdicts:"; diff "$OUT/walk.expected" "$OUT/walk" | sed 's/^/    /'; fail=1
 fi
