@@ -1,5 +1,173 @@
 # Runtime issues and measured scope
 
+## SIMD coverage: combined validation and measurements
+
+The seven instruction groups below remove interpreter calls for ordinary
+operands while retaining the original descriptor helper on every decline.
+AOT generation of the same large FP/SIMD-heavy arm64 program at base 678b97a
+and the combined change reports 2,332,343 blocks and 12,561,074 instructions:
+98.8% -> 99.5% translated natively. Generated code grows from 625,517 to
+639,290 KiB (2.2%). Only cache generation was run, and both temporary caches
+were removed; these figures do not establish application performance.
+
+The final `make check` returns zero: 83 manifest passes, one expected failure
+and three expected skips, with no unexpected failures or fork type-at crash.
+This includes the full five-mode oracle, sanitizer oracle, unit, AOT, guest,
+host and packaging gates. The combined vector test passes 714,822 complete
+state cases with full FPSR and all 16 FPCR RMode/FZ/DN settings. The encoder
+check passes 40,555 encodings. The 621-line native instruction test agrees
+with JIT, interpreter, helpers-only and AOT. The expanded 112-form benchmark
+also agrees in every engine. Its separate statistics runs at 50,000 iterations
+count 88,000,000 -> 0 helper calls in both JIT and AOT; translated workload
+code grows from 291 to 726 KiB.
+
+All four mutation controls pass and all thirteen independent mutations are
+caught. The new mutations produce 1,024 mismatches for ZIP order, 756 for
+ADDV width, 3,000 for FADDP pair order, 404 for FDIV result admission and
+4,610 for negative register shifts. The eight existing FP32/FP16 mutations
+also pass their detection checks. FDIV's mutation includes an exact tiny
+result whose required fallback is checked by routing even when result bits
+agree. No interpreter behavior was changed. The already-documented reserved
+permute/across-lane leniencies remain confined to the existing helper path.
+
+Replay of the identical 200,000-record simd/block/fma corpora captured on
+678b97a has zero mismatches and unchanged IEEE-flag difference counts:
+interpreter 1/0/0, JIT 9/4,975/0. Separate fresh-corpus oracle runs also pass;
+the fixed-corpus comparison isolates flag differences from random sampling.
+
+The following are Rosetta development-host ratios, candidate/base, from
+seven interleaved uninstrumented runs per build and engine, four million
+instructions per form per run. Lower ratios mean less elapsed time in this
+workload. Sixteen identical operations execute per loop; the accumulator
+resets every sixteen operations, and loop/reset/entry costs are included.
+Inputs are fixed ordinary values. Every measured run matches the native
+arm64 checksum. Timing starts after all test jobs finish; statistics run
+separately. These ratios do not decide Intel performance acceptance.
+
+FCMGT #0 .4S in AOT is retained for Intel measurement: its median ratio is
+1.063. Relative to the baseline median, its baseline observations span
+0.944–1.017 and candidate observations 1.006–1.069; the ranges overlap.
+Its JIT median ratio is 0.972. No form was discarded on Rosetta evidence.
+Intel timing and application acceptance remain unmeasured for these changes.
+Other precision variants, double fused arithmetic, reciprocal estimates,
+AES, BRK and SVE keep their existing paths, as scoped below.
+
+| Instruction / arrangement (scalar suffix = indexed lane) | JIT ratio | AOT ratio |
+| --- | ---: | ---: |
+| `zip1_8b` | 0.010 | 0.008 |
+| `zip1_16b` | 0.006 | 0.005 |
+| `zip1_4h` | 0.012 | 0.010 |
+| `zip1_8h` | 0.009 | 0.008 |
+| `zip1_2s` | 0.016 | 0.014 |
+| `zip1_4s` | 0.013 | 0.011 |
+| `zip1_2d` | 0.014 | 0.013 |
+| `zip2_8b` | 0.046 | 0.045 |
+| `zip2_16b` | 0.009 | 0.008 |
+| `zip2_4h` | 0.055 | 0.056 |
+| `zip2_8h` | 0.011 | 0.010 |
+| `zip2_2s` | 0.069 | 0.067 |
+| `zip2_4s` | 0.016 | 0.014 |
+| `zip2_2d` | 0.017 | 0.016 |
+| `uzp1_8b` | 0.031 | 0.029 |
+| `uzp1_16b` | 0.020 | 0.020 |
+| `uzp1_4h` | 0.043 | 0.040 |
+| `uzp1_8h` | 0.031 | 0.028 |
+| `uzp1_2s` | 0.050 | 0.048 |
+| `uzp1_4s` | 0.040 | 0.040 |
+| `uzp1_2d` | 0.048 | 0.045 |
+| `uzp2_8b` | 0.031 | 0.030 |
+| `uzp2_16b` | 0.021 | 0.017 |
+| `uzp2_4h` | 0.042 | 0.041 |
+| `uzp2_8h` | 0.029 | 0.028 |
+| `uzp2_2s` | 0.050 | 0.050 |
+| `uzp2_4s` | 0.042 | 0.037 |
+| `uzp2_2d` | 0.048 | 0.047 |
+| `trn1_8b` | 0.033 | 0.030 |
+| `trn1_16b` | 0.024 | 0.024 |
+| `trn1_4h` | 0.039 | 0.036 |
+| `trn1_8h` | 0.035 | 0.033 |
+| `trn1_2s` | 0.053 | 0.050 |
+| `trn1_4s` | 0.050 | 0.049 |
+| `trn1_2d` | 0.048 | 0.045 |
+| `trn2_8b` | 0.032 | 0.031 |
+| `trn2_16b` | 0.024 | 0.023 |
+| `trn2_4h` | 0.041 | 0.039 |
+| `trn2_8h` | 0.035 | 0.032 |
+| `trn2_2s` | 0.052 | 0.050 |
+| `trn2_4s` | 0.050 | 0.045 |
+| `trn2_2d` | 0.049 | 0.046 |
+| `addv_8b` | 0.106 | 0.108 |
+| `addv_16b` | 0.089 | 0.088 |
+| `addv_4h` | 0.081 | 0.079 |
+| `addv_8h` | 0.077 | 0.078 |
+| `addv_4s` | 0.051 | 0.050 |
+| `uaddlp_4h` | 0.046 | 0.043 |
+| `uaddlp_8h` | 0.033 | 0.032 |
+| `uaddlp_2s` | 0.053 | 0.051 |
+| `uaddlp_4s` | 0.041 | 0.038 |
+| `uaddlp_1d` | 0.059 | 0.058 |
+| `uaddlp_2d` | 0.049 | 0.047 |
+| `saddlp_4h` | 0.049 | 0.047 |
+| `saddlp_8h` | 0.031 | 0.030 |
+| `saddlp_2s` | 0.055 | 0.053 |
+| `saddlp_4s` | 0.039 | 0.041 |
+| `saddlp_1d` | 0.059 | 0.057 |
+| `saddlp_2d` | 0.049 | 0.045 |
+| `uadalp_4h` | 0.047 | 0.045 |
+| `uadalp_8h` | 0.032 | 0.031 |
+| `uadalp_2s` | 0.055 | 0.053 |
+| `uadalp_4s` | 0.038 | 0.037 |
+| `uadalp_1d` | 0.065 | 0.062 |
+| `uadalp_2d` | 0.052 | 0.050 |
+| `sadalp_4h` | 0.051 | 0.050 |
+| `sadalp_8h` | 0.035 | 0.043 |
+| `sadalp_2s` | 0.059 | 0.056 |
+| `sadalp_4s` | 0.044 | 0.042 |
+| `sadalp_1d` | 0.065 | 0.064 |
+| `sadalp_2d` | 0.054 | 0.052 |
+| `faddp_4s` | 0.102 | 0.102 |
+| `faddp_2s` | 0.160 | 0.158 |
+| `faddp_s` | 0.305 | 0.301 |
+| `faddp_2d` | 0.160 | 0.161 |
+| `faddp_d` | 0.270 | 0.269 |
+| `fmaxv_4s` | 0.158 | 0.153 |
+| `fminv_4s` | 0.155 | 0.156 |
+| `fmaxnmv_4s` | 0.158 | 0.156 |
+| `fminnmv_4s` | 0.156 | 0.158 |
+| `fdiv_2s` | 0.165 | 0.163 |
+| `fdiv_4s` | 0.109 | 0.107 |
+| `fcmeq_zero_2s` | 0.060 | 0.056 |
+| `fcmeq_zero_4s` | 0.045 | 0.038 |
+| `fcmge_zero_2s` | 0.068 | 0.065 |
+| `fcmge_zero_4s` | 0.048 | 0.045 |
+| `fcmgt_zero_2s` | 0.994 | 0.978 |
+| `fcmgt_zero_4s` | 0.972 | 1.063 |
+| `fcmle_zero_2s` | 0.071 | 0.066 |
+| `fcmle_zero_4s` | 0.047 | 0.046 |
+| `fcmlt_zero_2s` | 0.066 | 0.064 |
+| `fcmlt_zero_4s` | 0.047 | 0.048 |
+| `ushl_2s` | 0.132 | 0.126 |
+| `ushl_4s` | 0.196 | 0.188 |
+| `ushl_2d` | 0.110 | 0.107 |
+| `sshl_2s` | 0.134 | 0.129 |
+| `sshl_4s` | 0.191 | 0.182 |
+| `sshl_2d` | 0.131 | 0.129 |
+| `fmul_s0` | 0.216 | 0.218 |
+| `fmul_s1` | 0.214 | 0.216 |
+| `fmul_s2` | 0.213 | 0.214 |
+| `fmul_s3` | 0.216 | 0.213 |
+| `fmla_s0` | 0.496 | 0.486 |
+| `fmla_s1` | 0.489 | 0.486 |
+| `fmla_s2` | 0.484 | 0.482 |
+| `fmla_s3` | 0.487 | 0.483 |
+| `fmls_s0` | 0.484 | 0.486 |
+| `fmls_s1` | 0.485 | 0.490 |
+| `fmls_s2` | 0.488 | 0.484 |
+| `fmls_s3` | 0.487 | 0.493 |
+| `fmul_d0` | 0.210 | 0.210 |
+| `fmul_d1` | 0.211 | 0.209 |
+
+
 ## Dynamic helper groups in translated code
 
 `--stats` counts executed interpreter calls by fixed decoder group and reports
@@ -21,7 +189,7 @@ operations; static site counts are separate from these dynamic call counts.
 A fixed-loop test in JIT and AOT subtracts N=0 startup counts and observes exactly
 1000 each of untranslated reciprocal estimates, FABD and integer ADDP,
 1000 subnormal FADD declines, and no
-calls for 1000 ordinary FADDs. A 35-form SIMD workload matches native in JIT,
+calls for 1000 ordinary FADDs. The initial 35-form SIMD workload matches native in JIT,
 interpreter, helpers-only and AOT. Before further translations it makes
 27,200,000 helper calls at 50000 iterations: permutes 4,800,000; FP pairwise
 4,000,000; pair-long, FP reductions, zero compares, register shifts and scalar
@@ -89,6 +257,27 @@ Reserved size/Q combinations do not gain a translation. The interpreter
 already accepts some reserved permute arrangements, listed as a known
 leniency in `tests/oracle/known.h`; its behavior is unchanged here.
 Performance on Intel and application acceptance remain separate checks.
+
+## Inline floating-point comparisons with zero
+
+FCMEQ/FCMGE/FCMGT/FCMLE/FCMLT #0 on .2S/.4S use integer admission and
+CMPPS with the correct operand order. Both signed zeros compare equal;
+NaNs, infinities and denormals retain the original helper, including its
+IOC/IDC and FZ/DN behavior. The old FCMGT-specific branch in packed
+conversions is replaced by this shared comparison path. Accepted code
+leaves EFLAGS unchanged, and the helper path materializes and restores live
+NZCV through the existing convention. Narrow destinations clear the upper
+half; source/destination aliases are read before the result is stored.
+Half and double comparisons with zero remain helpers.
+
+Validation: 646,726 complete-state cases pass, covering full FPSR,
+all 16 RMode/FZ/DN settings, aliases, signed zeros, special inputs and
+live NZCV. Directed zero/subnormal cases assert inline/helper routing.
+The 530-line native instruction test passes in JIT, interpreter,
+helpers-only and AOT, now under every one of those 16 FPCR settings for
+all of its floating-point forms. `make test` passes, including the full
+all-mode oracle with zero mismatches and 39,787 encoder checks. Intel
+performance and application acceptance remain separate checks.
 
 ## Inline single-precision vector division
 

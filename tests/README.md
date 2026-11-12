@@ -323,7 +323,7 @@ its control plus eight independent variants.
 with 1000 admitted FADDs excluded; N=0 subtracts startup calls. Without
 `--stats`, no group lines are printed.
 
-`guest/coverage-bench` compares a 35-form SIMD workload with native arm64 in
+`guest/coverage-bench` compares all 112 SIMD arrangements and indexed forms with native arm64 in
 JIT, interpreter, helpers-only and AOT. Constant ordinary operands and sixteen
 operations per loop make each instruction's helper cost measurable. Timing
 runs omit statistics; separate runs report helper groups. Loop/reset overhead
@@ -359,3 +359,8 @@ scalar FMUL S/D and FMLA/FMLS S, every index, high source register numbers,
 aliases, upper clearing, FP special values and directed fused rounding.
 The full-state cases use all 16 RMode/FZ/DN settings and full FPSR;
 ordinary inputs with inactive signaling NaNs must remain inline.
+
+The vector unit checks all five FP32 comparisons with zero in .2S/.4S,
+including signed zeros, aliases, full FPSR and all 16 FPCR settings, with
+ordinary/tiny helper-route assertions. `jitinsns` now checks every FP form
+under all 16 RMode/FZ/DN settings in each engine against native arm64.

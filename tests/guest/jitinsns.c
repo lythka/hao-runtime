@@ -375,7 +375,7 @@ static const uint32_t fv[] = {
     0x3f800000, 0xbf800000, 0x3f800001, 0x3fffffff, 0x1f800000, 0x5f800000, 0x20000000, 0x40490fdb,
 };
 #define NF (sizeof fv / sizeof *fv)
-static const uint64_t fpcrs[] = {0, 3u << 22, 1u << 24, 1u << 25, 2u << 22 | 3u << 24, 1u << 22};
+static const uint64_t fpcrs[] = {0u << 22, 1u << 22, 2u << 22, 3u << 22, 4u << 22, 5u << 22, 6u << 22, 7u << 22, 8u << 22, 9u << 22, 10u << 22, 11u << 22, 12u << 22, 13u << 22, 14u << 22, 15u << 22};
 #define VECF(name, insn)                                                                \
     NOINL static uint64_t name(const uint32_t *in, uint64_t fpcr, uint64_t *fl)        \
     {                                                                                   \
@@ -455,6 +455,16 @@ VECF(t_cov_fmlss3, "fmls s2, s0, v17.s[3]")
 VECF(t_cov_fmuld0, "fmul d2, d0, v17.d[0]")
 VECF(t_cov_fmuld1, "fmul d2, d0, v17.d[1]")
 
+VECF(t_fcmeqz2s, "fcmeq v2.2s, v0.2s, #0.0")
+VECF(t_fcmeqz4s, "fcmeq v2.4s, v0.4s, #0.0")
+VECF(t_fcmgez2s, "fcmge v2.2s, v0.2s, #0.0")
+VECF(t_fcmgez4s, "fcmge v2.4s, v0.4s, #0.0")
+VECF(t_fcmgtz2s, "fcmgt v2.2s, v0.2s, #0.0")
+VECF(t_fcmgtz4s, "fcmgt v2.4s, v0.4s, #0.0")
+VECF(t_fcmlez2s, "fcmle v2.2s, v0.2s, #0.0")
+VECF(t_fcmlez4s, "fcmle v2.4s, v0.4s, #0.0")
+VECF(t_fcmltz2s, "fcmlt v2.2s, v0.2s, #0.0")
+VECF(t_fcmltz4s, "fcmlt v2.4s, v0.4s, #0.0")
 /* round to integral: vector .4S/.2S/.2D and scalar S/D */
 #define FR(n, mn)                                                                       \
     VECF(t_##n##4s, mn " v2.4s, v0.4s") VECF(t_##n##2s, mn " v2.2s, v1.2s")             \
@@ -890,6 +900,16 @@ int main(void)
     RF(fmaxnmv);
     RF(fminnmv);
     RF(fdiv2s); RF(fdiv4s);
+    RF(fcmeqz2s);
+    RF(fcmeqz4s);
+    RF(fcmgez2s);
+    RF(fcmgez4s);
+    RF(fcmgtz2s);
+    RF(fcmgtz4s);
+    RF(fcmlez2s);
+    RF(fcmlez4s);
+    RF(fcmltz2s);
+    RF(fcmltz4s);
     RF4(fmla); RF4(fmls);
     RF(fmlae0); RF(fmlae1); RF(fmlae2); RF(fmlae3); RF(fmlse0); RF(fmlse1); RF(fmlse2); RF(fmlse3);
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);
