@@ -2243,7 +2243,9 @@ records matches in both engines. All 111,051 native-ran records in the
 148,480-record targeted corpus also match, with zero flag differences. The
 known-unimplemented table is empty. Nine reserved-encoding exceptions remain;
 reserved execution behavior is outside this change. A deliberately stale
-implemented-instruction exception makes the full exception audit fail.
+implemented-instruction exception makes the full exception audit fail. Linking
+the strict checker with the previous JIT also fails on the 15 SIMD flag
+differences, while the current JIT passes the same records.
 
 Rosetta timings below are ns per instruction, minimum of seven interleaved
 runs of one million eight-instruction loop iterations, with the same
@@ -2253,29 +2255,29 @@ dependency chain, so repeated multiply/divide can reach zero or infinity.
 
 | Form | Before | After | Native ARM |
 |---|---:|---:|---:|
-| fadd s | 3.54 | 3.50 | 0.55 |
-| fadd d | 3.54 | 3.54 | 0.56 |
-| fsub s | 3.51 | 3.60 | 0.56 |
-| fsub d | 3.52 | 3.62 | 0.56 |
-| fmul s | 3.50 | 3.56 | 0.83 |
-| fmul d | 3.48 | 3.57 | 0.81 |
-| fdiv s | 4.25 | 4.36 | 2.12 |
-| fdiv d | 4.78 | 4.86 | 2.63 |
-| fsqrt s | 6.24 | 6.30 | 2.62 |
-| fsqrt d | 6.94 | 6.95 | 3.36 |
-| fcvt ds | 6.76 | 6.76 | 0.80 |
-| fcvt sd | 32.60 | 33.00 | 0.80 |
-| fcmp s | 0.93 | 1.13 | 0.13 |
-| fcmp d | 0.87 | 1.16 | 0.13 |
-| fcmp s0 | 0.93 | 0.90 | 0.13 |
-| fcmp d0 | 0.87 | 0.91 | 0.13 |
-| fcmpe s | 0.96 | 1.13 | 0.13 |
-| fcmpe d | 0.88 | 1.11 | 0.13 |
-| fcmpe s0 | 0.92 | 0.91 | 0.13 |
-| fcmpe d0 | 0.86 | 0.93 | 0.13 |
+| fadd s | 3.83 | 3.92 | 0.61 |
+| fadd d | 3.84 | 3.92 | 0.61 |
+| fsub s | 3.84 | 3.91 | 0.61 |
+| fsub d | 3.82 | 3.91 | 0.61 |
+| fmul s | 3.83 | 3.92 | 0.90 |
+| fmul d | 3.83 | 3.92 | 0.89 |
+| fdiv s | 4.71 | 4.78 | 2.32 |
+| fdiv d | 5.24 | 5.29 | 2.89 |
+| fsqrt s | 6.65 | 6.78 | 2.88 |
+| fsqrt d | 7.55 | 7.53 | 3.68 |
+| fcvt ds | 7.11 | 7.07 | 0.83 |
+| fcvt sd | 35.02 | 34.77 | 0.87 |
+| fcmp s | 1.03 | 1.12 | 0.14 |
+| fcmp d | 0.95 | 1.12 | 0.14 |
+| fcmp s0 | 1.01 | 0.99 | 0.14 |
+| fcmp d0 | 0.95 | 1.01 | 0.14 |
+| fcmpe s | 1.03 | 1.12 | 0.14 |
+| fcmpe d | 0.95 | 1.11 | 0.14 |
+| fcmpe s0 | 1.01 | 0.99 | 0.14 |
+| fcmpe d0 | 0.95 | 1.04 | 0.14 |
 
 Large finite products/quotients and cancellation near the normal/subnormal
 boundary can use the slower helper even when a particular result would be
-safe inline. Register comparisons add about 0.2–0.3 ns in these Rosetta loops;
+safe inline. Register comparisons add about 0.1–0.2 ns in these Rosetta loops;
 other timings include host-load variation. Intel performance, FZ16/AHP,
 alternative FP controls and exception traps remain unmeasured or unsupported.
