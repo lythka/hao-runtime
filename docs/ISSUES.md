@@ -1542,7 +1542,7 @@ Remaining limitations:
 - Each translated single-precision arithmetic instruction is about 250-350
   bytes of x86 code: `vbench`'s translations grew from 13 to 33 KB.
 
-## FEAT_AFP control policy (analysis only)
+## FEAT_AFP control policy: RES0
 
 The guest commpage advertises no optional CPU features. However,
 `FPCR_WRITABLE` includes AH, FIZ and NEP (bits 1, 0 and 2), so hao retains
@@ -1619,6 +1619,17 @@ examples), with exact readback for every requested control combination.
 `make -j8 check` passes on the unchanged runtime: 102 guest/host passes,
 one expected failure, three expected skips, and no unexpected failures.
 This validates the analysis branch's baseline, not FEAT_AFP emulation.
+
+
+Decision: RES0. `FPCR_WRITABLE` (`src/a64_simd.c`) and the JIT's inline MSR
+FPCR mask (`src/jit.c`) no longer include bits 0-2. A guest's write to AH,
+FIZ or NEP is dropped, and reads back 0, as on a CPU without FEAT_AFP. Before
+the change those bits read back as written while every engine ran the baseline
+semantics. `test_jit_vector` checks that MSR FPCR with every writable bit set
+reads back without bits 0-2, in the interpreter and the JIT; with the old mask
+both report the bits kept. Software that writes these bits without checking
+for FEAT_AFP gets the baseline results, where newer Apple silicon would apply
+AFP's rules.
 
 ## Scalar FP conversions, max/min and round-to-integral cost
 

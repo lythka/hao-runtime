@@ -43,7 +43,9 @@ boundary, with runtime-sized values handled where the layout is proven.
 
 **Instructions**
 - SVE, SME and SM3/SM4 are treated as undefined instructions.
-- FPCR.AH, FIZ and NEP (FEAT_AFP) are not modeled.
+- FPCR.AH, FIZ and NEP (FEAT_AFP) are RES0: hao does not advertise FEAT_AFP,
+  so a write to them is ignored and they read back 0. Newer Apple silicon
+  keeps them and changes some FP results.
 
 **Execution**
 - Only code in loaded guest images is translated. ARM64 code a program

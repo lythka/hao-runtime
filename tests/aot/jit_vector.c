@@ -960,6 +960,18 @@ int main(void)
         for (int live = 0; live < 2; live++) check(insn, insn2, &in, live);
         per[kind]++;
     }
+    /* FEAT_AFP's FIZ, AH and NEP (FPCR bits 0-2) are RES0: hao neither
+     * advertises nor models them, so MSR FPCR drops them in the interpreter
+     * and in the JIT's inline FPCR write alike (a64_simd.c FPCR_WRITABLE). */
+    for (int jit = 0; jit < 2; jit++) {
+        hao_cpu in;
+        memset(&in, 0, sizeof in);
+        in.x[0] = 0x07ff9f07;                         /* every writable bit, AFP's included */
+        const uint32_t msr = 0xD51B4400u;             /* msr fpcr, x0 */
+        outcome o;
+        run(&o, &in, &msr, 1, 0x100000, jit);
+        if (o.fpcr & 7) { printf("MISMATCH %s msr fpcr kept FEAT_AFP bits: fpcr %x\n", jit ? "jit" : "interp", o.fpcr); fails++; }
+    }
     printf("jit vector: %ld cases (%ld faulting, %ld of them stores straddling the page end; %ld undefined) [fp %ld, by element %ld, misc %ld, shift %ld, ld/st %ld,"
            " integer %ld, misc/frint %ld, tbl/ext %ld, by element/scalar frint %ld], %ld mismatches\n",
            cases, faults, straddles, undefs, 2 * (per[0] + per[1]), 2 * per[2], 2 * per[3], 2 * per[4], 2 * (per[5] + per[6] + per[7]),

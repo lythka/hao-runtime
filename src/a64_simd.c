@@ -57,9 +57,13 @@ static inline uint64_t rfe(hao_cpu *c, unsigned r, int es) { return es == 8 ? c-
 
 /* ------------------------------------------------ FP environment (cpu.h) */
 
-/* FPCR bits that read back as written on Apple silicon (measured on an M4:
- * FIZ/AH/NEP, the trap enables, Len, FZ16, Stride, RMode, FZ, DN, AHP). */
-#define FPCR_WRITABLE 0x07FF9F07u
+/* FPCR bits a guest can set: those that read back as written on Apple silicon
+ * (the trap enables, Len, FZ16, Stride, RMode, FZ, DN, AHP), less FEAT_AFP's
+ * FIZ, AH and NEP (bits 0-2). hao neither advertises FEAT_AFP nor models it,
+ * so those bits are RES0, as on a CPU without it: a write is ignored and
+ * reads back 0. An M4 keeps them and changes min/max, estimates, flushing and
+ * lane merging (docs/ISSUES.md, FEAT_AFP control policy). */
+#define FPCR_WRITABLE 0x07FF9F00u
 #define FPCR_RMODE_SHIFT 22
 #define FPCR_FZ  (1u << 24)
 #define FPCR_DN  (1u << 25)
