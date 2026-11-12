@@ -83,6 +83,69 @@ func texts() {
     }
 }
 
+// The same with several empty cases: they share the tag after the cases and keep their index in the
+// payload's first bytes (String payloads with two, Int payloads with five).
+enum Text2 { case one(String), two(String, String), none, other }
+enum Count5 { case one(Int), two(Int, Int), e0, e1, e2, e3, e4 }
+func emptyCases() {
+    let s2 = { (t: Text2) -> String in
+        switch t { case .one(let a): return "one(\(a))"; case .two(let a, let b): return "two(\(a), \(b))"
+                   case .none: return "none"; case .other: return "other" }
+    }
+    let s5 = { (t: Count5) -> String in
+        switch t { case .one(let a): return "one(\(a))"; case .two(let a, let b): return "two(\(a), \(b))"
+                   case .e0: return "e0"; case .e1: return "e1"; case .e2: return "e2"; case .e3: return "e3"; case .e4: return "e4" }
+    }
+    let d2 = { (x: (Text2, C??)) in "\(s2(x.0)) \(describe(x.1) { "\($0.n)" })" }
+    let d5 = { (x: (Count5, C??)) in "\(s5(x.0)) \(describe(x.1) { "\($0.n)" })" }
+    let v2: [(Text2, C??)] = [(.one("Cupertino"), nil), (.none, .some(nil)), (.other, nil),
+                              (.two("a", String(repeating: "y", count: 40)), .some(.some(C(3)))), (.other, .some(nil))]
+    for (k, v) in v2.enumerated() {
+        print("Text2", k, "copy", d2(copied(v)), "drop", dropped(v))
+        print("Text2", k, "assign", d2(assigned(v2[(k + 1) % v2.count], v)))
+    }
+    let v5: [(Count5, C??)] = [(.e0, nil), (.one(7), .some(nil)), (.e4, nil), (.two(1, 2), nil), (.e2, .some(.some(C(8)))),
+                               (.e3, .some(nil)), (.e1, nil)]
+    for (k, v) in v5.enumerated() {
+        print("Count5", k, "copy", d5(copied(v)), "drop", dropped(v))
+        print("Count5", k, "assign", d5(assigned(v5[(k + 1) % v5.count], v)))
+    }
+}
+
+// Guest enums whose tag lies in their payloads' spare bits (arm64 layout, arm64 witnesses), beside a
+// C?? in a tuple the native tuple witnesses take whole: the walk decodes the case from the image's
+// layout record. Pointer tags with an empty case, tags in a Bool's spare bits with empty cases, and a
+// 17-case enum (its tag needs bit 2). Inlined, so that the arrays are destroyed by code specialized
+// for their element (native code destroying them would read the guest's nils: out of scope).
+struct IB { var i: Int; var b: Bool }
+enum GPtr { case a(C), b(C), none }
+enum GLow { case a(IB), b(IB), c(IB), e0, e1 }
+enum G17 { case c0(C), c1(C), c2(C), c3(C), c4(C), c5(C), c6(C), c7(C), c8(C)
+           case c9(C), c10(C), c11(C), c12(C), c13(C), c14(C), c15(C), c16(C) }
+@inline(__always) func run2<E>(_ name: String, _ values: [(E, C??)], _ shown: @escaping (E) -> String) {
+    let d = { (x: (E, C??)) in "\(shown(x.0)) \(describe(x.1) { "\($0.n)" })" }
+    for (k, v) in values.enumerated() {
+        print(name, k, "copy", d(copied(v)), "drop", dropped(v))
+        print(name, k, "assign", d(assigned(values[(k + 1) % values.count], v)))
+    }
+}
+func spareCases() {
+    run2("GPtr", [(GPtr.a(C(1)), nil), (.b(C(2)), .some(nil)), (.none, nil), (.none, .some(.some(C(3))))]) {
+        switch $0 { case .a(let c): return "a(\(c.n))"; case .b(let c): return "b(\(c.n))"; case .none: return "none" }
+    }
+    run2("GLow", [(GLow.a(IB(i: 1, b: true)), nil), (.c(IB(i: 3, b: false)), .some(nil)), (.e0, nil), (.e1, .some(nil)),
+                  (.b(IB(i: 2, b: true)), .some(.some(C(4))))]) {
+        switch $0 { case .a(let x): return "a(\(x.i) \(x.b))"; case .b(let x): return "b(\(x.i) \(x.b))"
+                    case .c(let x): return "c(\(x.i) \(x.b))"; case .e0: return "e0"; case .e1: return "e1" }
+    }
+    let n17 = { (g: G17) -> String in
+        switch g { case .c0(let c), .c1(let c), .c2(let c), .c3(let c), .c4(let c), .c5(let c), .c6(let c), .c7(let c),
+                        .c8(let c), .c9(let c), .c10(let c), .c11(let c), .c12(let c), .c13(let c), .c14(let c),
+                        .c15(let c), .c16(let c): return "\(String(describing: g).split(separator: "(")[0]) \(c.n)" }
+    }
+    run2("G17", [(G17.c0(C(5)), nil), (.c16(C(6)), .some(nil)), (.c9(C(7)), nil), (.c4(C(8)), .some(.some(C(9))))], n17)
+}
+
 final class Holder {
     lazy var store: (any P)? = nil
     lazy var other: (any P)? = S()
@@ -107,6 +170,8 @@ final class Holder {
         }
         intervals()
         texts()
+        emptyCases()
+        spareCases()
         // A frozen native struct (CollectionOfOne) carries the nil: guest code reads it inline.
         print("CollectionOfOne generic nil", describe(noneOf(CollectionOfOne<AnyObject>?.self)) { "\($0.first === nil)" })
         print("done")

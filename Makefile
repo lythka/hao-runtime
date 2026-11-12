@@ -43,7 +43,7 @@ RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c 
 RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c
 RT += src/swiftvalue/Recipe.c src/swiftvalue/Enum.c src/swiftvalue/Common.c src/swiftvalue/Aggregate.c
-RT += src/swiftvalue/NativeLeaf.c
+RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c
 RT_O := $(patsubst src/%.c,$(B)/%.o,$(RT)) $(B)/bridge_x86_64.o
 
 # libhao.dylib holds the runtime; hao (CLI, kext launcher) and hao-stub (the

@@ -3,7 +3,8 @@
 # a pointer extra inhabitant (tests/guest/optwitness.swift): guest code writes that nil inline as arm64's
 # 1, the x86_64 witnesses read 2; a lazy `(any P)?` property destroyed unread is one such call. Payloads: an existential, a class-bound existential, a Swift class, AnyObject and
 # [Int]; a guest struct whose nil is carried by a resilient native struct's Optional (OSSignposter?); and
-# tuples of a guest enum with a trailing tag byte and a C??, which the tuple witnesses take whole.
+# tuples of a C?? with guest multi-payload enums, which the tuple witnesses take whole: trailing tag bytes
+# (one, two and five empty cases) and tags in the payloads' spare bits (decoded from the image's record).
 # The program is arm64 natively and arm64e under hao (JIT, --interp, AOT); every line must equal
 # native arm64.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/optwitness.sh

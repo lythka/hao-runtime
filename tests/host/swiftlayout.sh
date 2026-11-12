@@ -17,8 +17,18 @@
 #    and is still refused.
 # D. a value of fewer than 8 bytes (a single-payload or spare-bit enum, a struct of them, an Optional of
 #    one, Optional<Bool>) is walked with no patch.
+# E. a tag-byte enum with two or five empty cases is walked (its empty cases share a tag and keep their
+#    index in the payload area); a bad index, tag or xi stays refused. Spare-bit tags decided by a table
+#    row (mpenum_gen.inc): rows given explicitly (R lines: flags 1|2 admit empty cases and tags in a
+#    Bool's spare bits; a row without flag 1 or 2 refuses even the 16-byte enum rule B admits; a row of
+#    another XI count is ignored), the tables' lookups (T lookup), and native types of this host found in
+#    them: spare-bit enums walked by their rows; types declared differently on arm64 (archdiff_gen.inc)
+#    walked as before where resilient (guest code holds them only through native witnesses), refused
+#    where frozen (Float16: alone, in a tuple, as an Optional nil) unless inside a native unfrozen struct.
+#    Where this host's image is not the build the tables describe, the program prints "T LABEL none" and
+#    that label's lines are skipped.
 # Every measured line must be equal on both architectures except the listed keys, the contract lines must
-# hold on each, and the walk lines must be exactly the expected ones.
+# hold on each, and the walk, row and table lines must be exactly the expected ones.
 #   OUT=dir [LIB=build] tests/host/swiftlayout.sh   (Apple silicon host: the arm64 program runs natively)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -35,9 +45,14 @@ timeout -s KILL 60 arch -arm64 "$OUT/swiftlayout.arm64" >"$OUT/arm64" 2>"$OUT/ar
 timeout -s KILL 60 "$OUT/swiftlayout.x86_64" "$LIB/libhao.dylib" >"$OUT/x86_64" 2>"$OUT/x86_64.err" || { echo "FAIL x86_64 run"; cat "$OUT/x86_64.err"; exit 1; }
 fail=0
 a5="a5a5a5a5a5a5a5a5"; z="0000000000000000"
+# The tables' lookups are binary searches: rows strictly ascending by UUID, then offset.
+for t in mpenum archdiff; do
+    awk -F'[{", ]+' '/^    \{"/ { h = sprintf("%16s", substr($3, 3)); gsub(/ /, "0", h); o = $2 " " h; if (o <= last) { print "FAIL " FILENAME ": row out of order: " $0; bad = 1 } last = o }
+                     END { exit bad }' "$repo/src/${t}_gen.inc" || fail=1
+done
 
 # Measurements: keys (kind, label, index) whose lines may differ between the architectures.
-key() { grep -v '^W ' "$1" | awk '{ k = $1 " " $2; if ($1 == "X" || $1 == "C") k = k " " $3; print k " | " $0 }' | sort; }
+key() { grep -v '^[WRT] ' "$1" | awk '{ k = $1 " " $2; if ($1 == "X" || $1 == "C") k = k " " $3; print k " | " $0 }' | sort; }
 key "$OUT/arm64" >"$OUT/arm64.keyed"; key "$OUT/x86_64" >"$OUT/x86_64.keyed"
 comm -3 "$OUT/arm64.keyed" "$OUT/x86_64.keyed" | sed 's/^[[:space:]]*//; s/ | .*//' | sort -u >"$OUT/differ"
 {
@@ -49,7 +64,12 @@ comm -3 "$OUT/arm64.keyed" "$OUT/x86_64.keyed" | sed 's/^[[:space:]]*//; s/ | .*
     for c in 1 3 5 7 9 11 13 15; do echo "C Seventeen#$c z"; done
     echo "V SpareNested.b(outerNil)"; echo "V TextNil.two(outerNil)"
     echo "X BAction 1"; echo "X BAction 2"
+    echo "L BundleDescription"   # its XI count: pointer spare bits
 } | sort -u >"$OUT/differ.expected"
+# The native spare-bit enums of section E must have been measured on both (their lines are then equal).
+for k in "C NWListener.State#4 z" "C BundleDescription#2 z" "C ResizeBehavior#1 z" "C ZoomBehavior#2 z"; do
+    grep -q "^$k" "$OUT/arm64" && grep -q "^$k" "$OUT/x86_64" || { echo "FAIL not measured on both: $k"; fail=1; }
+done
 if ! cmp -s "$OUT/differ" "$OUT/differ.expected"; then
     echo "FAIL arm64/x86_64 differences other than expected:"; diff "$OUT/differ.expected" "$OUT/differ" | sed 's/^/    /'; fail=1
 fi
@@ -84,7 +104,21 @@ C SecondaryText#2 f $z $z $z $z 02 back=2
 X SecondaryText 0 $a5 $a5 $a5 $a5 ff
 X SecondaryText 1 $a5 $a5 $a5 $a5 fe
 L TwoEmpty size=33 stride=40 flags=0x2230007 xi=0xfd
+C TwoEmpty#2 f $z $z $z $z 02 back=2
 C TwoEmpty#3 f 0000000000000001 $z $z $z 02 back=3
+L FiveEmpty size=17 stride=24 flags=0x200007 xi=0xfd
+C FiveEmpty#1 f $a5 $a5 01 back=1
+C FiveEmpty#2 f $z $z 02 back=2
+C FiveEmpty#3 f 0000000000000001 $z 02 back=3
+C FiveEmpty#6 f 0000000000000004 $z 02 back=6
+X FiveEmpty 0 $a5 $a5 ff
+L Low2 size=9 stride=16 flags=0x200007 xi=0x7e
+C Low2#1 z $z 80 back=1
+L Low3E2 size=9 stride=16 flags=0x200007 xi=0x7c
+C Low3E2#1 z $z 40 back=1
+C Low3E2#2 z $z 80 back=2
+C Low3E2#3 z $z c0 back=3
+C Low3E2#4 z 0000000000000001 c0 back=4
 L TextNil size=25 stride=32 flags=0x2230007 xi=0xfd
 L Kind size=1 stride=1 flags=0x200000 xi=0xfc
 L Flags size=2 stride=2 flags=0x200000 xi=0x3ffc
@@ -186,7 +220,7 @@ W TextNil.two(outer nil) walk 1 0:2>2
 W TextNil.two(inner nil) walk 1 0:0>0
 W TextNil.two(object) walk 0
 W TextNil.none walk 0
-W TwoEmpty.one (stays refused) refused TwoEmpty
+W TwoEmpty.one walk 0
 W Optional<SecondaryText> nil (stays refused) refused Optional<SecondaryText>
 W SecondaryText size+1 (stays refused) refused SecondaryText
 W SecondaryText xi-1 (stays refused) refused SecondaryText
@@ -221,16 +255,101 @@ W Optional<ComparisonResult> some walk 0
 W Oriented walk 0
 W Oriented nil walk 0
 W TwoRefused survey refused Seventeen
+W TwoEmpty.two walk 0
+W TwoEmpty.none walk 0
+W TwoEmpty.other walk 0
+W FiveEmpty#0 walk 0
+W FiveEmpty#1 walk 0
+W FiveEmpty#2 walk 0
+W FiveEmpty#3 walk 0
+W FiveEmpty#4 walk 0
+W FiveEmpty#5 walk 0
+W FiveEmpty#6 walk 0
+W FiveEmpty xi-1 (stays refused) refused FiveEmpty
+W FiveEmpty empty index 5 (stays refused) refused FiveEmpty
+W FiveEmpty tag 3 (stays refused) refused FiveEmpty
+R Content.styled row none case 1 (AV, Style)
+R Content.styled row {2,0,0x3ffffe,0} refused
+R Content.styled row {2,0,0x3ffffe,4} refused
+R Content.styled row {2,0,0x3ffffe,1} refused
+R Content.styled row {2,0,0x3ffffe,3} case 1 (AV, Style)
+R Content.styled row {2,0,0x3fffff,0} case 1 (AV, Style)
+R Content.styled row {3,0,0x3ffffe,3} refused
+R SpareEmpty.b row none refused
+R SpareEmpty.b row {2,1,0x7fd,3} case 1 Box
+R SpareEmpty.none row {2,1,0x7fd,3} case 2 empty
+R SpareEmpty.none row {2,1,0x7fd,1} refused
+R SpareEmpty.none row {2,1,0x7fe,3} refused
+R Low2.b row none refused
+R Low2.b row {2,0,0x7e,3} case 1 IntBool
+R Low3E2.c row {3,2,0x7c,3} case 2 IntBool
+R Low3E2.e1 row {3,2,0x7c,3} case 4 empty
+R Seventeen.c1 row none refused
+R Seventeen.c1 row {17,0,0x7ef,0} refused
+T lookup archdiff ComputationalGraph.Output.Errors p
+T lookup archdiff ComputationalGraph.Feature s
+T lookup archdiff Charts._PrimitivePlottableKind.Storage s
+T lookup archdiff Swift.Float16 s
+T lookup archdiff unlisted -
+T lookup mpenum FontParser.(private).GlyphMap {2,0,0x1fe,0}
+T lookup mpenum MediaPlaybackCore.Event {4,0,0x7fffffff,4}
+T lookup mpenum Network.NWListener.State {2,3,0x3d,7}
+T lookup mpenum first {2,0,0x7fe,3}
+T lookup mpenum last {4,0,0x7c,7}
+T lookup mpenum unlisted -
+T NWListener.State row {2,3,0x3d,7} live xi=0x3d
+T BundleDescription row {2,1,0x7fd,3} live xi=0x7fd
+T ResizeBehavior row {2,0,0x7e,7} live xi=0x7e
+W ResizeBehavior#0 walk 0
+W ResizeBehavior#1 walk 0
+T ZoomBehavior row {3,0,0x7d,7} live xi=0x7d
+W ZoomBehavior#0 walk 0
+W ZoomBehavior#1 walk 0
+W ZoomBehavior#2 walk 0
+W NWListener.State.waiting walk 0
+W NWListener.State.failed walk 0
+W NWListener.State.setup walk 0
+W NWListener.State.ready walk 0
+W NWListener.State.cancelled walk 0
+W BundleDescription.main walk 0
+W BundleDescription.forClass walk 0
+W BundleDescription.atURL walk 0
+T ComputationalGraph.Output.Errors archdiff p size=17
+W ComputationalGraph.Output.Errors walk 0
+W ComputationalGraph.Output.Errors in a tuple walk 0
+W ComputationalGraph.Output.Errors Optional nil refused Optional<Errors>
+W ComputationalGraph.Output.Errors in a native unfrozen struct walk 0
+T ComputationalGraph.Feature.DataType archdiff s size=1
+W ComputationalGraph.Feature.DataType walk 0
+W ComputationalGraph.Feature.DataType in a tuple walk 0
+W ComputationalGraph.Feature.DataType Optional nil walk 0
+W ComputationalGraph.Feature.DataType in a native unfrozen struct walk 0
+T Swift.Float16 archdiff s size=0
+W Swift.Float16 refused Float16
+W Swift.Float16 in a tuple refused (Int, Float16)
+W Swift.Float16 Optional nil refused Optional<Float16>
+W Swift.Float16 in a native unfrozen struct walk 0
 EOF
-grep '^W ' "$OUT/x86_64" >"$OUT/walk" || true
+grep '^[WRT] ' "$OUT/x86_64" >"$OUT/walk" || true
+# Native types whose image on this host is another build than the tables': their lines are skipped.
+sed -n 's/^T \(.*\) none$/\1/p' "$OUT/walk" >"$OUT/skipped"
+if [ -s "$OUT/skipped" ]; then
+    for f in walk walk.expected; do
+        awk 'NR == FNR { s[++n] = $0; next }
+             { for (i = 1; i <= n; ++i) if (index($0, "W " s[i]) == 1 || index($0, "T " s[i] " ") == 1) next; print }' \
+            "$OUT/skipped" "$OUT/$f" >"$OUT/$f.kept" && mv "$OUT/$f.kept" "$OUT/$f"
+    done
+    echo "note: skipped (this host's image is not the tables' build): $(tr '\n' ' ' <"$OUT/skipped")"
+fi
 sed -n 's/^hao\[[^]]*\]: Swift value survey: \(refused at offset [0-9]* depth [0-9]*\):.* type=/S \1 /p' "$OUT/x86_64.err" >"$OUT/survey"
-printf '%s\n' "S refused at offset 0 depth 1 swiftlayout.Seventeen" "S refused at offset 8 depth 1 swiftlayout.TwoEmpty" >"$OUT/survey.expected"
+printf '%s\n' "S refused at offset 0 depth 1 swiftlayout.Seventeen" "S refused at offset 8 depth 1 swiftlayout.SpareEmpty" >"$OUT/survey.expected"
 if ! cmp -s "$OUT/survey.expected" "$OUT/survey"; then
     echo "FAIL survey lines:"; diff "$OUT/survey.expected" "$OUT/survey" | sed 's/^/    /'; fail=1
 fi
 if ! cmp -s "$OUT/walk.expected" "$OUT/walk"; then
-    echo "FAIL walk verdicts:"; diff "$OUT/walk.expected" "$OUT/walk" | sed 's/^/    /'; fail=1
+    echo "FAIL walk, row and table verdicts:"; diff "$OUT/walk.expected" "$OUT/walk" | sed 's/^/    /'; fail=1
 fi
-echo "measured $(grep -vc '^W ' "$OUT/arm64") lines arm64, $(grep -vc '^W ' "$OUT/x86_64") x86_64; $(wc -l <"$OUT/walk" | tr -d ' ') walks"
+echo "measured $(grep -vc '^[WRT] ' "$OUT/arm64") lines arm64, $(grep -vc '^[WRT] ' "$OUT/x86_64") x86_64;" \
+     "$(grep -c '^W ' "$OUT/walk") walks, $(grep -c '^R ' "$OUT/walk") row cases, $(grep -c '^T ' "$OUT/walk") table lines"
 [ $fail = 0 ] && echo "swiftlayout: PASS" || echo "swiftlayout: FAIL"
 exit $fail
