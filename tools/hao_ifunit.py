@@ -32,6 +32,9 @@ RECORDS.tsv, one exported symbol per line ('#' comments; '-' for an empty field)
              "OFF.W,OFF.W,...", W in 1 2 4 8, at most 16, inside the 16 guest stack words hao copies)
            | Z (std::string parameters converted, src/cxxstr.c: enc is 'P' or '.' then one role
              per register x0..x5, '-' r v w; tools/gen_cxxstr.py)
+           | D (Foundation.Data? nils converted, hao/bridge.h: class TYPED, enc is 'R' (the result
+             is a Data? too) or '.' then one role per register x0..x7, 'd' a Data?'s first word
+             followed by '+' its second, '-' anything else, trailing '-' optional; at least one Data?)
   argmask  - (the full argument scan) or a hex mask of the slots that may carry
            guest code: bits 0-7 x0-x7, bits 8-15 stack argument slots 0-7
   resmask  - or a hex mask: 1 the result may be a native function pointer, 2 a block
@@ -134,6 +137,19 @@ def cxxstr_enc_ok(e):
     return 1 <= len(r) <= 6 and not set(r) - set('-rvw') and any(c != '-' for c in r)
 
 
+def optdata_enc_ok(e):
+    """hao_optdata_enc_ok (include/hao/bridge.h)"""
+    if not e or e[0] not in 'R.': return False
+    r, pairs, i = e[1:], int(e[0] == 'R'), 0
+    while i < len(r):
+        if r[i] == 'd':
+            if i + 1 >= len(r) or r[i + 1] != '+': return False
+            pairs += 1; i += 2
+        elif r[i] == '-': i += 1
+        else: return False
+    return len(r) <= 8 and pairs > 0
+
+
 def check_rec(name, cls, kind, flags, enc, why, thunk='', *, allow_legacy_code=False):
     sig, thk = flags & F_SIG, flags & F_THUNK
     code, proven = why.startswith('source=code'), bool(flags & F_PROVEN)
@@ -148,10 +164,12 @@ def check_rec(name, cls, kind, flags, enc, why, thunk='', *, allow_legacy_code=F
         if cls != 2 or sig or thk or proven or code:
             raise Bad('%s: a stack pack is TYPED with no other conversion' % name)
         stackpack(enc)
-    elif kind and chr(kind) not in NARROW and chr(kind) != 'Z':
+    elif kind and chr(kind) not in NARROW and chr(kind) not in 'ZD':
         raise Bad('%s: result kind %r' % (name, chr(kind)))
     if kind and chr(kind) == 'Z' and (sig or thk or not cxxstr_enc_ok(enc)):
         raise Bad('%s: a std::string conversion (kind Z) needs its roles in enc' % name)
+    if kind and chr(kind) == 'D' and (cls != 2 or sig or thk or proven or not optdata_enc_ok(enc)):
+        raise Bad('%s: a Data? conversion (kind D) is TYPED with its roles in enc' % name)
     if sig and (not enc or kind):
         raise Bad('%s: a signature call needs an encoding and no kind' % name)
     if bool(thk) != bool(thunk):

@@ -83,6 +83,10 @@ static void e_kind(uint8_t *b, size_t *n) { (void)n; rec0(b)->kind = 'q'; }
 /* a std::string conversion (src/cxxstr.c) whose roles are missing, or not roles (the record's name) */
 static void e_cxxstr_noenc(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 'Z'; rec0(b)->flags = 0; rec0(b)->enc = 0; }
 static void e_cxxstr_badenc(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 'Z'; rec0(b)->flags = 0; rec0(b)->enc = rec0(b)->name; }
+/* a Data? conversion (kind D) whose roles are missing or not roles, or that is not TYPED */
+static void e_optdata_noenc(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 'D'; rec0(b)->flags = 0; rec0(b)->enc = 0; }
+static void e_optdata_badenc(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 'D'; rec0(b)->flags = 0; rec0(b)->enc = rec0(b)->name; }
+static void e_optdata_exact(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_EXACT; rec0(b)->kind = 'D'; rec0(b)->flags = 0; }
 static void e_exact_kind(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_EXACT; rec0(b)->kind = 'B'; }
 static void e_typed_bare(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 0; rec0(b)->flags = 0; }
 static void e_sig_noenc(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 0; rec0(b)->flags = HAO_IFR_SIG; rec0(b)->enc = 0; }
@@ -176,6 +180,9 @@ int main(int argc, char **argv)
             {"kind", e_kind, true, "result kind"},
             {"std::string conversion without roles", e_cxxstr_noenc, true, "kind Z"},
             {"std::string conversion with bad roles", e_cxxstr_badenc, true, "kind Z"},
+            {"Data? conversion without roles", e_optdata_noenc, true, "kind D"},
+            {"Data? conversion with bad roles", e_optdata_badenc, true, "kind D"},
+            {"Data? conversion not TYPED", e_optdata_exact, true, "kind D"},
             {"EXACT with a kind", e_exact_kind, true, "EXACT with a conversion"},
             {"TYPED without a conversion", e_typed_bare, true, "TYPED without a conversion"},
             {"signature without encoding", e_sig_noenc, true, "needs an encoding"},

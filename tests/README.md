@@ -119,6 +119,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/stackguard | PASS | 1 | |
 | guest/svarchdiff | PASS | 1 | the walker on guest values holding Swift.Float16 (declared differently by architecture, frozen): refused; its Float16 refusals are checked only where this host's libswiftCore is the build `src/archdiff_gen.inc` describes |
 | guest/mkgeometry | PASS | 2 | MapKit geometry functions passing or returning 32-byte HFAs (MKMapRect, MKCoordinateRegion) by value, including two without a header: native arm64 results under JIT, `--interp`, helpers-only and AOT; the six rows `src/aggspi_gen.inc` added for them fail without them |
+| guest/optdata | PASS | 30 | Foundation.Data? arguments and result of a native Swift library through interface-unit kind D: native arm64 results under JIT, `--interp`, helpers-only and AOT; without the unit a nil argument arrives as an empty Data (the control) |
 | guest/svconformance | PASS | 2 | |
 | guest/swift-object-callbacks | PASS | 5 | |
 | guest/swiftlate | PASS | 4 | |

@@ -83,6 +83,10 @@ int hao_ifunit_check(const void *buf, uint64_t size, const uint8_t *uuid, hao_if
         } else if (r.kind == 'Z') {
             if ((r.flags & (HAO_IFR_SIG | HAO_IFR_THUNK)) || !r.enc || !hao_cxxstr_enc_ok(str + r.enc))
                 REJ("record %u (%s): a std::string conversion (kind Z) needs its roles in enc", k, name);
+        } else if (r.kind == 'D') {
+            if (r.cls != HAO_BR_TYPED || (r.flags & (HAO_IFR_SIG | HAO_IFR_THUNK | HAO_IFR_PROVEN)) || !r.enc ||
+                !hao_optdata_enc_ok(str + r.enc))
+                REJ("record %u (%s): a Data? conversion (kind D) is TYPED with its roles in enc", k, name);
         } else if (r.kind && !narrow_kind(r.kind)) REJ("record %u (%s): result kind %#x", k, name, r.kind);
         const char *proof = str + r.why;
         bool code = !strncmp(proof, "source=code", 11), proven = r.flags & HAO_IFR_PROVEN;
