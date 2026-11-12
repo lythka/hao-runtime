@@ -1,5 +1,31 @@
 # Runtime issues and measured scope
 
+## Fifteen more aggregate-by-value functions in the aggspi table
+
+`src/aggspi_gen.inc` gains 15 rows of generator output: system functions
+that take or return an aggregate whose AAPCS64 and SysV classifications differ.
+These are a 32-byte rect or 128-byte transform, a 40-byte callback table, a
+24-byte reply chunk, a 32-byte integer rect, or `audit_token_t`. Without a row,
+such a call takes the UNKNOWN route, which places the aggregate wrongly on one
+side. The rows are:
+- `CGContextDrawPDFPageInRect` and `CGContextDrawPDFPageInRect2`
+- `IOHIDVirtualServiceClientCreate`
+- the two MDS channel reply-chunk readers
+- `CA_CGRectApplyTransform`
+- `CGRegionGetBoundingBox`
+- `AXFGeometryShiftPointFullyWithinContainerRect`
+- `NUPixelRectIsNull`
+- six audit-token readers
+
+All 15 have no public header. Their signatures come from both slices' code,
+and five are confirmed by a native differential. The table header is
+unchanged.
+
+Limits: no guest test in this repository calls these 15 functions;
+`guest/aggspi6` and `guest/mkgeometry` cover the same marshalling shapes.
+Other unsigned functions with a by-value aggregate over 16 bytes still take the
+UNKNOWN route.
+
 ## Foundation.Data? arguments of native Swift functions (unit kind D)
 
 A live `Data` has the same 16 bytes on arm64 and x86_64 (the tag is the top two
