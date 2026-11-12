@@ -10,6 +10,7 @@
 #include <string.h>
 #ifdef HAO_SWIFT_VALUE_RUNTIME
 #include "hao/macho.h"
+bool hao_probe_read8(uint64_t a, uint64_t *out);   /* hao/runtime.h */
 #endif
 #define SWIFT __attribute__((swiftcall))
 typedef struct { void *fn[8]; uint64_t size, stride; uint32_t flags, extra; } witnesses;
@@ -192,8 +193,11 @@ static const void *existential_wrapper(const void *m)
 /* The first Optional of either consumes XI0, a null object word, on both
  * Darwin64 targets; nil never inspects the inactive witness word. A live
  * value is admitted only in the struct wrapper (a bare existential field may
- * be weak), only in the runtime, and only when its witness table is native
- * (in no guest image): a guest conformance's table is arm64 code. Error,
+ * be weak), only in the runtime, and only when its conformance is native:
+ * a guest conformance's table is arm64 code. A table in no guest image is
+ * not enough, since a generic conformance's table is instantiated on the
+ * heap; its first word (the protocol conformance descriptor) must lie in no
+ * guest image either. Error,
  * extended/composed/superclass existentials and nested Optionals need
  * independent contracts. */
 static bool class_existential_value(const void *m, const void *value)
@@ -202,8 +206,9 @@ static bool class_existential_value(const void *m, const void *value)
     if (!wrapped && !one_witness_class_existential(m)) return false;
     if (!u64(value)) return true;
 #ifdef HAO_SWIFT_VALUE_RUNTIME
-    uint64_t table = u64((const char *)value + 8);
+    uint64_t table = u64((const char *)value + 8), conformance = 0;
     if (!wrapped || !table || hao_image_for_addr(table)) return false;
+    if (!hao_probe_read8(table, &conformance) || !conformance || hao_image_for_addr(conformance)) return false;
     return ((single_tag_fn *)vwt(wrapped)->fn[6])(value,1,wrapped) == 0;
 #else
     return false;

@@ -47,6 +47,7 @@ guest/sret-forward	300	par	tests/guest/sret-forward.sh
 guest/stackargs	300	par	tests/guest/stackargs.sh
 guest/stackguard	300	par	tests/guest/stackguard.sh
 guest/swift-object-callbacks	300	par	tests/guest/swift-object-callbacks.sh
+guest/svconformance	300	par	tests/guest/svconformance.sh
 guest/swiftlate	300	par	tests/guest/swiftlate.sh
 guest/swiftls	300	par	tests/guest/swiftls.sh
 guest/swiftmeta	300	par	tests/guest/swiftmeta.sh
