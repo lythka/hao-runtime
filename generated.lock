@@ -1,0 +1,148 @@
+{
+  "lock_version": 1,
+  "files": [
+    {
+      "path": "src/aggspi_gen.inc",
+      "sha256": "ac545ca583e7de173fabe4c2b5d740babb044a92bc5e986a6967f5578dc96635",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "fe0faaf6144a16a8",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/archdiff_gen.inc",
+      "sha256": "6a506d4f2b2b6ce1dc898dfa7bdc9b8304963aca7147b8b2da6f72087f5c96d2",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "5118fb6f01e62639",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/cxxstr_gen.inc",
+      "sha256": "067a6048de5b951399ab85791e9b08eee306ac6ac3162cc700fc638853226b57",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "d3adf3b5840b2baa",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/fmtattr_gen.inc",
+      "sha256": "0d3e6fd37827a790e1f4a60e495d1aef3554b38cdc2e90eded46653b49cbe459",
+      "format": 1,
+      "input_kind": "sdk+census",
+      "export_id": "694aac82d042f8be",
+      "os_build": "26B131",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/fmtfamily_gen.inc",
+      "sha256": "d62b55cf46871cb5aa33646cd549a7a9e6bfe7d2ee54d7666cba921d1fd8a6d2",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "ed4470bfc28e726e",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/frozenstruct_gen.inc",
+      "sha256": "86c237df03776033067e3cb4de1980c5fc13755a26796df7be53fd7a4246eac6",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "af6a3ca9237187a7",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/gss_gen.inc",
+      "sha256": "4e6b1fd0e79e19f922b27aec4c10392d61e106bf18e97fbd50d5b5400f634c12",
+      "format": 1,
+      "input_kind": "sdk",
+      "export_id": "15f5d437d385ab3a",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/intvarargs_gen.inc",
+      "sha256": "119da6cddadf7f783d0e6165873abc057c8d9cc7dd99d9d1c11c2f71ba018c0e",
+      "format": 1,
+      "input_kind": "sdk+census",
+      "export_id": "7cc5c0a3c45880d8",
+      "os_build": "26B131",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/mpenum_gen.inc",
+      "sha256": "adc6213d4d413ccf8fc14c1d9fb489febb93495c1425688d0fbe100df25fcbd6",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "28639a9242360ecc",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/narrowret_gen.inc",
+      "sha256": "f42e1c59bd4ee1d4a4342184b7bdcd08209312b39d2479a330ed4861127dff7b",
+      "format": 1,
+      "input_kind": "sdk+census",
+      "export_id": "7ab54981af7dfdf4",
+      "os_build": "26B131",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/regvar_gen.inc",
+      "sha256": "0ca64368b06e267723b7242947b42c129cbddd23dcf36c5344f685afa1fbf855",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "c748b3a88eca6b12",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/sigdb_gen.inc",
+      "sha256": "7568363dcd8db646c9ea8d5aa71dc9573337bd6a4105e976901a9e3a0729ab2d",
+      "format": 1,
+      "input_kind": "sdk+census",
+      "export_id": "1c7f157d13a7d869",
+      "os_build": "26B131",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/stackargs_gen.inc",
+      "sha256": "a69acae88db5421bfd9090cf039114098aa6ce437752ffedc4523591a992c75d",
+      "format": 1,
+      "input_kind": "sdk+census",
+      "export_id": "a5de1ef5f53c19c4",
+      "os_build": "26B131",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/varargs_gen.inc",
+      "sha256": "ad976ca26c6a771f9397e7114f52d79f4645322a001518ceab6844f05e4344dd",
+      "format": 1,
+      "input_kind": "sdk+census",
+      "export_id": "5930fcafc2acc1dd",
+      "os_build": "26B131",
+      "sdk_build": "26B118"
+    },
+    {
+      "path": "src/variants_gen.inc",
+      "sha256": "dc288b83d39286c2df52b6932b37bfefe7e5a70f4e9e4c755d6af122aeb30f9f",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "bf5c2b5986176647",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "src/vlist_gen.inc",
+      "sha256": "a3547e1ad1d1055fbd9cc849737379366b898e6a16485b8de9215340b2d33fae",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "b603ef2fd1e4c382",
+      "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    }
+  ]
+}

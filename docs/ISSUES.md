@@ -1,5 +1,36 @@
 # Runtime issues and measured scope
 
+## Generated tables regenerated for 26B131, with generated.lock
+
+All 16 `src/*_gen.inc` tables are now generator output for one stated set of
+inputs. Each carries its own stamped header, and `generated.lock` lists each
+table's sha256, export id, format and inputs:
+- the nine tables derived from a shared cache come from the 27.2.1 (26B131)
+  arm64e and x86_64 caches (cache UUID 262FA161...);
+- six come from the SDK 27.2 (26B118) headers, checked against the 26B131
+  import census;
+- gss comes from the SDK headers only.
+
+`include/hao/gen_stamp.h` moves from 26A428 to 26B131, the build every cache
+table was derived from. Before this, aggspi carried 26B131 rows under a 26A428
+stamp, and several tables carried no stamp of their own. The files are taken
+byte for byte; no row is edited here.
+
+Row changes against the previous tables:
+- `_MKMapRectIntersection` moves from aggspi to sigdb, typed from
+  `MKGeometry.h` with the same marshalling.
+- sigdb gains `___sincospif_stret`.
+- narrowret gains `_CFURLIsFileReferenceURL` and `_CGColorSpaceIsPQBased`, and
+  drops `_nw_txt_record_remove_key`, which nothing imports on 26B131.
+- intvarargs drops `__os_log_internal`, which `src/interpose.c` traps.
+- Only importer counts in comments change in variants.
+
+The contract checker's lock check (sha256 per file, a cache table's build
+equal to `HAO_GEN_OS_BUILD`, the format equal to `HAO_GEN_FORMAT`) passes.
+
+Limits: a system older than 26B131 runs with tables describing 26B131 (`-v`
+says so); the earlier 26A428 tables are in git history.
+
 ## Categories on Swift class stubs
 
 A Swift class whose superclass comes from another module built with library
