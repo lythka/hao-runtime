@@ -438,6 +438,8 @@ VECF(t_fmaxv, "fmaxv s2, v0.4s")
 VECF(t_fminv, "fminv s2, v0.4s")
 VECF(t_fmaxnmv, "fmaxnmv s2, v0.4s")
 VECF(t_fminnmv, "fminnmv s2, v0.4s")
+VECF(t_fdiv2s, "fdiv v2.2s, v0.2s, v1.2s")
+VECF(t_fdiv4s, "fdiv v2.4s, v0.4s, v1.4s")
 /* round to integral: vector .4S/.2S/.2D and scalar S/D */
 #define FR(n, mn)                                                                       \
     VECF(t_##n##4s, mn " v2.4s, v0.4s") VECF(t_##n##2s, mn " v2.2s, v1.2s")             \
@@ -872,6 +874,7 @@ int main(void)
     RF(fminv);
     RF(fmaxnmv);
     RF(fminnmv);
+    RF(fdiv2s); RF(fdiv4s);
     RF4(fmla); RF4(fmls);
     RF(fmlae0); RF(fmlae1); RF(fmlae2); RF(fmlae3); RF(fmlse0); RF(fmlse1); RF(fmlse2); RF(fmlse3);
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);

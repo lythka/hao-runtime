@@ -348,3 +348,8 @@ unmodified translation, then with the right-shift count negation removed.
 The control must pass and the mutation must report an architectural mismatch.
 The vector test covers every signed low-byte count (-128..127) for USHL/SSHL
 .2S/.4S/.2D, ignored upper count bits, aliases and live NZCV.
+
+Vector division cases cover .2S/.4S, aliases, full FPSR, all 16 FPCR controls
+and directed exact/subnormal results. The FP coverage mutation script also
+suppresses FDIV result admission; a directed exact tiny result asserts the
+required helper route even if its architectural bits happen to agree.

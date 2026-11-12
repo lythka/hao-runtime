@@ -2453,7 +2453,7 @@ static void vfp_constants64(tctx *t)
     vones(t, 11); x_sse_shift_ri(&t->b, 0x73, 2, 11, 53); x_sse_shift_ri(&t->b, 0x73, 6, 11, 52); /* 0x7ff0000000000000 */
 }
 
-enum { VFP_ADD, VFP_SUB, VFP_MUL, VFP_MAX, VFP_MIN, VFP_EQ, VFP_GE, VFP_GT };
+enum { VFP_ADD, VFP_SUB, VFP_MUL, VFP_DIV, VFP_MAX, VFP_MIN, VFP_EQ, VFP_GE, VFP_GT };
 
 static void vfp_constants(tctx *t)
 {
@@ -2465,28 +2465,33 @@ static void vfp_constants(tctx *t)
 /* Vd = Vn op Vm (idx < 0) or Vn op Vm.S[idx] */
 static void t_vfp32(tctx *t, int op, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
 {
-    static const uint8_t arith[3] = {0x58, 0x5C, 0x59};
+    static const uint8_t arith[4] = {0x58, 0x5C, 0x59, 0x5E};
     vld(t, 0, rn);
     vld(t, 1, rm);
     if (idx >= 0) x_sse_rri(&t->b, 0x66, 0x70, 1, 1, (uint8_t)(0x55 * idx));
     if (!Q) { x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0); x_sse_rr(&t->b, 0xF3, 0x7E, 0, 1, 1); }
+    if (!Q && op == VFP_DIV) {
+        /* Duplicate active lanes: padded 0/0 must not raise IOC. */
+        x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0x44);
+        x_sse_rri(&t->b, 0x66, 0x70, 1, 1, 0x44);
+    }
     if (!t->vfp_prev) vfp_constants(t);
     vzero(t, 4);
     vfp_special(t, 0);
     vfp_special(t, 1);
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);                      /* pmovmskb ecx, xmm4 */
     size_t decline = jrcxnz32(t), done;
-    if (op <= VFP_MUL) {
+    if (op <= VFP_DIV) {
         x_stmxcsr(&t->b, MXCSR_SLOT);
         P(0x6F, 2, 0);
-        x_sse_rr(&t->b, 0, arith[op], 0, 2, 1);                  /* addps / subps / mulps */
+        x_sse_rr(&t->b, 0, arith[op], 0, 2, 1);                  /* addps / subps / mulps / divps */
         /* declined result lanes: exponent all ones, zero or minimum normal
          * (exponent & 0xfe == 0) */
         P(0x6F, 3, 2); P(0xDB, 3, 7); P(0x76, 3, 7);
         vones(t, 4); x_sse_shift_ri(&t->b, 0x72, 2, 4, 25); x_sse_shift_ri(&t->b, 0x72, 6, 4, 24);   /* 0x7f000000 */
         P(0xDB, 4, 2); P(0x76, 4, 5); P(0xEB, 4, 3);
         x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
-        size_t exact = jrcxnz32(t);
+        size_t exact = jrcxnz32(t); /* packed arithmetic result admission */
         size_t store = xb_len(&t->b);
         vst(t, rd, 2, Q);
         done = x_jmp32(&t->b);
@@ -2497,6 +2502,7 @@ static void t_vfp32(tctx *t, int op, unsigned rd, unsigned rn, unsigned rm, int 
         P(0x6F, 3, 0); P(0xDB, 3, 6); P(0x76, 3, 5);             /* |x| == 0 */
         P(0x6F, 8, 1); P(0xDB, 8, 6); P(0x76, 8, 5);             /* |y| == 0 */
         if (op == VFP_MUL) P(0xEB, 3, 8);
+        else if (op == VFP_DIV) { P(0xDF, 8, 3); P(0x6F, 3, 8); } /* zero numerator, nonzero divisor */
         else {
             P(0xDB, 3, 8);
             if (op == VFP_ADD) { vones(t, 9); x_sse_shift_ri(&t->b, 0x72, 6, 9, 31); P(0xEF, 9, 1); }  /* y ^ sign */
@@ -2957,6 +2963,7 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
     case 0x02: o = VFP_ADD; break;
     case 0x22: o = VFP_SUB; break;
     case 0x43: o = VFP_MUL; break;
+    case 0x47: o = VFP_DIV; break;
     case 0x00: case 0x06: o = VFP_MAX; break;                    /* FMAXNM, FMAX: no NaN is admitted */
     case 0x20: case 0x26: o = VFP_MIN; break;
     case 0x04: o = VFP_EQ; break;
