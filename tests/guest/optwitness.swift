@@ -8,6 +8,7 @@
 // keeps the native encoding: no guest code can read it inline, and native witnesses read it back.
 // Out of scope (docs/ISSUES.md): native generic code reading such a value itself (an Array element
 // read through the native Array subscript, a dynamic cast out of `Any`).
+import Foundation
 import os
 
 protocol P { func f() -> Int }
@@ -160,6 +161,8 @@ final class Holder {
         run("C", [C??.none, .some(nil), .some(.some(C(5)))]) { "\($0.n)" }
         run("AnyObject", [AnyObject??.none, .some(nil), .some(.some(C(6)))]) { "\(($0 as! C).n)" }
         run("[Int]", [[Int]??.none, .some(nil), .some(.some([7, 8]))]) { "\($0)" }
+        // Data: its nils differ by architecture (spare bits of its representation) and are translated.
+        run("Data", [Data??.none, .some(nil), .some(.some(Data([7, 8, 9])))]) { "\($0.count) bytes" }
         // A lazy existential property that was never read, destroyed with its object.
         for k in 0..<3 {
             let h = Holder()

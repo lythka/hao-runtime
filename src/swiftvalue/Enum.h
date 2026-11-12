@@ -33,6 +33,17 @@ typedef struct {
     uint64_t copy[HAO_SV_SPARE_WORDS], mask[HAO_SV_SPARE_WORDS];
 } fixed_enum_case;
 int discover_fixed_enum_case(const void *type, const void *value, fixed_enum_case *out);
+/* A compiler-laid-out multi-payload enum with one extra tag byte and no
+ * spare bit (tag_byte_case's layout): the byte's offset and the number of
+ * tags in use; its extra inhabitants are the byte's values 255, 254, ...,
+ * the same on arm64 and x86_64. */
+int tag_byte_layout(const void *type, uint64_t *tag_offset, unsigned *tags);
+/* Extra inhabitant K of a fixed multi-payload layout whose tags lie in the
+ * payloads' common spare bits SPARE (AREA bytes, the payload area, no extra
+ * tag bits), as IRGen stores it (GenEnum.cpp getFixedExtraInhabitantValue):
+ * the AREA bytes into OUT. Returns 0 for a layout that needs extra tag bits. */
+int spare_bit_xi(const unsigned char *spare, uint64_t area, unsigned payload_cases, unsigned empty,
+                 uint32_t k, unsigned char *out);
 /* The same with ROW in place of the type's table row (NULL: none), for tests
  * of the row rules on types the tables do not list. */
 int discover_fixed_enum_case_row(const void *type, const void *value, fixed_enum_case *out, const mpenum_row *row);

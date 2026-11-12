@@ -534,6 +534,97 @@ and from 355 to 205 (by element); FP32 FMLA stays at 19.5 as a control.
 Application acceptance is not measured. FZ16/AHP still decline the fast path; the existing full
 interpreter path does not model those controls, and is unchanged here.
 
+## Nils of standard Swift types: pointer words, single inhabitants, tag bytes, Data
+
+hao-research's walk of the Optional fields that 26B131 applications store
+(inventory of 598 guest binaries and 187 arm64e-only cache images) found the
+walk refusing the nils of common standard types. Since 596461f a refusal
+passes the value through unpatched (logged), so these were unconverted, and
+`Data?` the one whose nil differs at the first level: a native-made nil
+reads as a present `Data` in guest code, and the reverse.
+
+Rules now (`Recipe.c` `selected`, `collect_inner`):
+
+- Pointer-word inhabitants on every walk, published values included (before,
+  existentials and class references only for guest calls of native
+  witnesses): Set and Dictionary storage (nominal descriptors `$sShMn`,
+  `$sSDMn`), opaque and class-bound existentials (kind and flags, as
+  before), `AnyHashable` (through its box existential), Swift class
+  references (value witness table `$sBoWV` or `$sBOWV`), thick metatypes
+  (kinds 0x304/0x306, table `$sBomWV`), `URL` and `DateComponents` (through
+  their fields). XI0 is 0 on both, XI k is k on arm64 and 2k on x86_64, so
+  the first nil needs nothing and the second (`AnyObject??`,
+  `DateComponents?`) gets the existing two-consumed patch. Only the planned
+  word is certified: a present existential's contents and an object's
+  fields are not walked, as on the witness path. On the plain walk a live
+  existential needs every witness table and its conformance descriptor in
+  no guest image (a guest conformance's table is arm64 code), wherever it
+  sits (before, only an Optional's leaf rule checked one), and a live Swift
+  object word must be a heap pointer (`tests/guest/svconformance.sh` still
+  refuses its guest conformances).
+- One extra inhabitant, the zero word, identical on both: UnsafeRawPointer,
+  UnsafeMutableRawPointer, OpaquePointer, ObjectIdentifier and Selector, by
+  nominal descriptor. Only the first Optional uses it; the next one is a tag
+  byte (the existing trailing-tag rule).
+- Tag-byte inhabitants (`tag_byte_xi`): an Optional whose payload's
+  inhabitants come from a multi-payload enum with one extra tag byte and no
+  spare bit (Enum.c `tag_byte_layout`), for example `IndexPath` (its storage
+  enum: size 17, xi 0xfc) and `Optional<SecondaryText>`. The nils are the
+  byte's values 255, 254, ... on both; nothing is patched.
+- Translated spare-bit inhabitants (`translated_xi_enum`): an Optional whose
+  payload's inhabitants come from a native enum listed in `mpenum_gen.inc`
+  without flag 4, whose row applies (live XI count = the row's x86_64 one, no
+  extra tag bits on either side) and gives both masks. This Optional's nil
+  is the enum's XI k, k the inhabitants inner Optionals consumed; the walk
+  computes XI k for both layouts (Enum.c `spare_bit_xi`, IRGen's
+  getFixedExtraInhabitantValue) and recognizes either. Each word in which
+  they differ is a patch: the bits found, the receiving witness set's
+  (materialized with the Optional's own inject witness) and arm64's
+  (`empty_patch.arm_bits`, new: guest code's encoding, which
+  `witness_to_guest` now writes instead of consumed - 1). An XI with no
+  arm64 encoding (k at or past arm64's count; `Data`'s 12) and an outer
+  Optional's nil are refused. Foundation's `Data` (`Data._Representation`:
+  spare byte 15, ff on x86_64, f0 on arm64): XI 0, 1, 2 are word 1
+  ff../bf../7f.. against f0../b0../70... SwiftUI's
+  `ContainerBackgroundValue.Content` is translated the same way (both its
+  words: ff00..07 against f000..07).
+- Guest calls of `Data`'s own single-payload tag witnesses
+  (getEnumTagSinglePayload, storeEnumTagSinglePayload with one empty case)
+  are intercepted like an Optional's (`payload_witnesses_locked`): guest
+  generic code asks a `T` = `Data` whether its `T?` is nil through them.
+  `graph()` counts an Optional with a translated nil as affected.
+
+`tests/host/swiftlayout.sh` section N measures on both architectures the
+layout and XIs 0-2 of each type and its Optional, and walks `T?` nil and
+some, `T??` outer and inner nil for 20 types (80 walks); N2 walks native and
+arm64 nils of `Data?`, `Data??`, a struct holding `Data?` and its Optional
+(patches equal to the measured words of both), and refuses the nil of 13
+nested Optionals of `Data` (XI 12). `tests/host/swiftvalue.sh` now
+expects `AnyObject??` (beside an affected enum) walked, with its second nil
+a patch. On main c6657a0's libhao 69 of the 80
+N walks were refused (`AnyObject?`, `Box?` and `URL?` nil and some and the
+outer nils of the raw-pointer types' `T??` were walked); 67 of them walk
+now, `DateComponents??` outer and inner nil stay refused (three consumed
+inhabitants, past the bound). All 7 N2 walks were refused; 6 walk now. `tests/guest/optwitness.sh` runs `Data??` nil, some(nil) and a
+value through native Optional witnesses and `Data`'s own: on c6657a0 a
+Data-only build of it gave 2 lines that differ from native arm64 (a guest
+nil read as present by native code); now all 179 lines of the test equal
+native arm64 under JIT, `--interp` and AOT.
+
+`src/mpenum_gen.inc` is now hao-research's r3 (e0c0f3d), row format 2
+(`HAO_MPENUM_ROWS 2`): the r2 counts and flags plus arm64's XI count, both
+architectures' extra tag bits, and for rows without flag 4 both common
+spare-bit masks. `Tables.h` `mpenum_row` carries them.
+
+Remaining limitations:
+- Data?: only the nils are translated; a `Data??` deeper than 12 Optionals
+  has no arm64 encoding and is refused. Other native single-payload types
+  whose XI0 differs have no witness interception of their own tag witnesses
+  (only Data's); their Optionals are translated when walked.
+- Rows with flag 4 carry no masks: their XIs are identical, but an
+  Optional of such an enum is still not planned (refused, passed through).
+- Measured on the development host (26B123 runtimes), not on the target.
+
 ## Multi-payload enum rules from generated tables, and guest spare-bit enums
 
 The Swift value walk (`src/swiftvalue/Recipe.c` `collect`, `Enum.c`
@@ -569,7 +660,8 @@ OS build.
   byte on x86_64, spare bits on arm64).
 
 Both are hao-research's r2 exports (6dff5fb), after its x86_64 slide-info
-v2 parser fix (r1 had 1899 and 36 rows; no r1 row changed).
+v2 parser fix (r1 had 1899 and 36 rows; no r1 row changed); mpenum_gen.inc
+is since r3 (row format 2, below).
 
 Rules now:
 
@@ -698,8 +790,8 @@ Remaining limitations:
   `archdiff_gen.inc` lists the declaring types; the walk finds containers of
   a frozen one by containment.
 - Unpaired native spare-bit enums (no row) keep rule B; their XIs and
-  `Optional`s are still refused, and Optional nils of spare-bit enums whose
-  XIs differ are not translated.
+  `Optional`s are still refused. Optional nils of listed enums whose XIs
+  differ are translated since (section above).
 - Guest spare-bit enums: the layout is IRGen's as modelled, checked only
   through the XI count, the size and these test enums; a layout that needs
   spare bits and extra tag bits, and a generic (runtime-laid-out) guest enum

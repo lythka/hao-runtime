@@ -20,6 +20,9 @@
 #define enum_payloads hao_sv_enum_payloads
 #define enum_inline_payloads hao_sv_enum_inline_payloads
 #define discover_fixed_enum_case_row hao_sv_discover_fixed_enum_case_row
+#define tag_byte_layout hao_sv_tag_byte_layout
+#define spare_bit_xi hao_sv_spare_bit_xi
+#define translated_nil_type hao_sv_translated_nil_type
 #define mpenum_lookup hao_sv_mpenum_lookup
 #define archdiff_lookup hao_sv_archdiff_lookup
 #define mpenum_type hao_sv_mpenum_type

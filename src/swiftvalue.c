@@ -133,6 +133,7 @@ static bool graph(builder *b, const void *type, unsigned depth)
     empty_plan empty;
     bool affected = (b->existentials ? discover_witness_plan(type,&empty) : discover_empty_plan(type,&empty)) &&
                     empty.consumed == 2;
+    affected |= kind == 0x202 && translated_nil_type(type);   /* a spare-bit enum XI that differs (Data?) */
     if (kind == 0x200 || kind == 0x301) {
         intptr_t count = b->count(type);
         if (count < 0 || count > 64) { b->failed = true; return false; }
@@ -434,12 +435,47 @@ static unsigned witness_metadata_reg(unsigned slot)
 }
 
 static void witness_setup_locked(void);
+static bool payload_witnesses_added;
+static void payload_witnesses_locked(void);
 void hao_swift_witness_setup(void)
 {
-    if (__atomic_load_n(&witness_count,__ATOMIC_ACQUIRE) || hao_opt.no_swift_values) return;
+    if ((__atomic_load_n(&witness_count,__ATOMIC_ACQUIRE) && __atomic_load_n(&payload_witnesses_added,__ATOMIC_ACQUIRE)) ||
+        hao_opt.no_swift_values) return;
     pthread_mutex_lock(&witness_setup_lock);
     if (!witness_count) witness_setup_locked();
+    if (witness_count && !payload_witnesses_added) payload_witnesses_locked();
     pthread_mutex_unlock(&witness_setup_lock);
+}
+
+/* The single-payload tag witnesses (getEnumTagSinglePayload, slot 6;
+ * storeEnumTagSinglePayload, slot 7) of a payload type whose first extra
+ * inhabitant differs between arm64 and x86_64, so that guest generic code
+ * asking a type's own witnesses about its Optional's nil (`if case .some =
+ * v` for a `T?` with T = Data) gets it in their encoding: Foundation's Data
+ * (its representation's spare bits; Recipe.c translated_nil_type). The
+ * handler walks the type's Optional, as for an Optional's own witnesses.
+ * Added when Foundation is loaded; the readers see a new entry once
+ * witness_count includes it. */
+static void payload_witnesses_locked(void)
+{
+    const void *data = dlsym(RTLD_DEFAULT,"$s10Foundation4DataVN");
+    if (!data || !optional_metadata) return;   /* Foundation not loaded yet: a later image retries */
+    const void *optional = optional_metadata(0,data).metadata;
+    if (!optional || !translated_nil_type(optional)) { __atomic_store_n(&payload_witnesses_added,true,__ATOMIC_RELEASE); return; }
+    unsigned n = witness_count;
+    uint64_t lo = hao_swift_witness_lo, hi = hao_swift_witness_hi;
+    static const unsigned slots[] = {6,7};
+    for (unsigned i = 0; i < 2 && n < WITNESS_MAX; ++i) {
+        uint64_t pc = (uint64_t)(uintptr_t)((void *const *)vwt(data))[slots[i]];
+        if (!native_function(pc)) continue;
+        witness_pc[n++] = (typeof(witness_pc[0])){pc,slots[i]};
+        if (pc < lo) lo = pc;
+        if (pc > hi) hi = pc;
+    }
+    hao_swift_witness_hi = hi;
+    __atomic_store_n(&witness_count,n,__ATOMIC_RELEASE);
+    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+    __atomic_store_n(&payload_witnesses_added,true,__ATOMIC_RELEASE);
 }
 static void witness_setup_locked(void)
 {
@@ -590,8 +626,9 @@ static int guest_layout(const void *type)
 /* For the walk (Tables.h): a listed type guest code lays out is a frozen one. */
 int native_frozen_type(const void *type) { return native_frozen(type); }
 
-/* A nil the witness made: the guest's encoding, extra inhabitant
- * consumed - 1 as the value consumed - 1 (arm64), where guest code can read
+/* A nil the witness made: the guest's encoding (the walk's arm64 bits:
+ * extra inhabitant consumed - 1 as the value consumed - 1 for a pointer
+ * word, arm64's XI of a spare-bit enum for Data?), where guest code can read
  * it inline. Inside a struct of a native module (resilient for all hao knows)
  * the native encoding stays: its readers are native witnesses, also those
  * reached from native code that holds an enclosing guest struct, which no
@@ -600,7 +637,7 @@ static void witness_to_guest(const void *type, void *value)
 {
     witness_patches w;
     w.count = value ? collect_inline_patches(type,value,w.p,64,guest_layout) : -1;
-    for (int i = 0; i < w.count; ++i) { uint64_t bits = w.p[i].consumed - 1; memcpy((char *)value + w.p[i].offset,&bits,8); }
+    for (int i = 0; i < w.count; ++i) { memcpy((char *)value + w.p[i].offset,&w.p[i].arm_bits,8); }
 }
 
 /* Each element's outer nils in the witness's encoding, in place; their
