@@ -19,8 +19,8 @@ int collect_empty_patches_detail(const void *type, const void *value, empty_patc
  * published to native code by this, so the publication contracts for
  * existential values (weak storage, guest witness tables) do not apply. */
 int discover_witness_plan(const void *type, empty_plan *out);
-/* collect_empty_patches_detail in survey mode whatever HAO_SWIFT_VALUE_SURVEY
- * says (tests/host/swiftlayout). */
+/* collect_empty_patches_detail in survey mode: every innermost refusing type
+ * is printed (swiftvalue.c, after a refusal; tests/host/swiftlayout). */
 int collect_survey_patches(const void *type, const void *value, empty_patch *out,
                            unsigned capacity, const void **unresolved);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);

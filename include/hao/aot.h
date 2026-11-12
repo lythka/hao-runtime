@@ -123,7 +123,7 @@ void hao_aot_code_id(const void *mach_header, uint64_t cmds_len, const uint64_t 
  *          calls are bridged: only the engine switches (HAO_NO_AOT,
  *          HAO_INTERP, HAO_NO_CHAIN, HAO_JIT_HELPERS_ONLY) and the printing
  *          ones (HAO_VERBOSE, HAO_CRASH_TRACE, HAO_NX_STATS,
- *          HAO_BRIDGE_STATS, HAO_SWIFT_VALUE_SURVEY) are honoured.
+ *          HAO_BRIDGE_STATS) are honoured.
  * SETUGID: credentials changed at exec (issetugid(), or uid != euid, or
  *          gid != egid). No switch is honoured, and dependency paths follow
  *          dyld's rule for such a process (hao_dep_path_allowed).

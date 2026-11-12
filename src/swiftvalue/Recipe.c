@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef HAO_SWIFT_VALUE_RUNTIME
-#include "hao/opts.h"
 #include "hao/runtime.h"
 #endif
 
@@ -416,7 +415,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     return 1;
 }
 
-/* Survey mode (HAO_SWIFT_VALUE_SURVEY): print a type the walk refuses at
+/* Survey mode (collect_survey_patches): print a type the walk refuses at
  * value offset BASE and go on with its siblings, so that one refused value
  * names every refusing type in it. The value is still refused. Only the
  * innermost refusing types are printed: a type that refuses for its own
@@ -480,12 +479,7 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
 int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
                                  unsigned capacity, const void **unresolved)
 {
-#ifdef HAO_SWIFT_VALUE_RUNTIME
-    int survey_mode = hao_opt.swift_value_survey;
-#else
-    int survey_mode = 0;
-#endif
-    return collect_patches(type,value,out,capacity,unresolved,0,NULL,survey_mode);
+    return collect_patches(type,value,out,capacity,unresolved,0,NULL,0);
 }
 
 int collect_survey_patches(const void *type, const void *value, empty_patch *out,
