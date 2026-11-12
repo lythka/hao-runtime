@@ -1,5 +1,36 @@
 # Runtime issues and measured scope
 
+## MapKit 32-byte HFA functions in the aggregate-by-value table
+
+Maps on the target crashed (SIGSEGV writing through `rdi`) in
+`MKMapRectForCoordinateRegion`, which takes an `MKCoordinateRegion` and returns
+an `MKMapRect`, four doubles each. On arm64 both are HFAs in `v0-v3`; on SysV
+they are MEMORY class, the argument on the stack and the result through a hidden
+pointer in `rdi`. No signature described the function, so the call took the
+UNKNOWN route, whose inference cannot tell a 32-byte HFA from four separate
+doubles: the native code wrote its result through the guest's first argument
+register value.
+
+`src/aggspi_gen.inc` (generator output, hao-research `tools/aggspi.txt`) now
+types `MKMapRectForCoordinateRegion` and `MKMapRectBoundingMapPointsWrappingMeridian`
+(no header; the first fixed by a native differential, the second generated from
+both slices' code) and the four public `MKGeometry.h` functions of the same shape
+that no table typed: `MKMapRectIntersection`, `MKMapRectDivide`,
+`MKMapRectSpans180thMeridian` and `MKMapRectRemainder`. The other public ones were
+already in `sigdb_gen.inc`. The header of the copied table is unchanged; its rows
+are the generator's output for the updated spec.
+
+`tests/guest/mkgeometry.sh` compares all six and two typed controls with native
+arm64 in JIT, `--interp`, helpers-only and AOT; with the previous table it fails.
+
+Limits: `MKMapRectUnionWrappingMeridian`, `MKMapRectContainsRectWrappingMeridian`,
+`MKMapRectIntersectsMapRectWrappingMeridian` and `MKCoordinatesForRegion` take or
+return the same aggregates but their argument order is not determined from the
+code; they stay untyped. Other frameworks' C functions with a by-value aggregate
+over 16 bytes and no signature have the same failure; a census is open in
+hao-research. Measured on the 26B123 development host; the target's MapKit
+exports the same symbols.
+
 ## SIMD coverage: combined validation and measurements
 
 The seven instruction groups below remove interpreter calls for ordinary

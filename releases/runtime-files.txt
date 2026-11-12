@@ -558,6 +558,8 @@ tests/guest/stubself.c
 tests/guest/stubself.sh
 tests/guest/stubswap.c
 tests/guest/svarchdiff.sh
+tests/guest/mkgeometry.m
+tests/guest/mkgeometry.sh
 tests/guest/svarchdiff.swift
 tests/guest/svconformance.sh
 tests/guest/svconformance.swift

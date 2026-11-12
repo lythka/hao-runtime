@@ -49,6 +49,7 @@ guest/stackargs	300	par	tests/guest/stackargs.sh
 guest/stackguard	300	par	tests/guest/stackguard.sh
 guest/swift-object-callbacks	300	par	tests/guest/swift-object-callbacks.sh
 guest/svarchdiff	300	par	tests/guest/svarchdiff.sh
+guest/mkgeometry	300	par	tests/guest/mkgeometry.sh
 guest/svconformance	300	par	tests/guest/svconformance.sh
 guest/swiftlate	300	par	tests/guest/swiftlate.sh
 guest/swiftls	300	par	tests/guest/swiftls.sh
