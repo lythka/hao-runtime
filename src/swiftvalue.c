@@ -9,6 +9,7 @@
 #include "hao/swiftschema.h"
 #include "hao/opts.h"
 #include "hao/gmap.h"
+#include "hao/gen_stamp.h"
 #define HAO_SWIFT_VALUE_RUNTIME 1
 #include "swiftvalue/Aggregate.h"
 #include "swiftvalue/Common.h"
@@ -484,11 +485,55 @@ static void witness_restore(void *value, const witness_patches *w)
  * defines (its nominal descriptor lies in one). A native module's struct may
  * be resilient (libswiftos OSSignposter): guest code reads it only through its
  * native witnesses, and so does native code holding the enclosing value. */
+/* Native structs whose layout their module freezes (@frozen or @_fixed_layout in its interface), so guest
+ * code compiled against it may read them inline (frozenstruct_gen.inc). Matched by qualified nominal name:
+ * freezing is permanent ABI in a library-evolution module, so a name listed for one build holds for any;
+ * the UUID and offset columns are the generator's join and are not used here. */
+static const struct { const char *uuid; uint64_t offset; const char *name; } frozen_structs[] = {
+#include "frozenstruct_gen.inc"
+};
+static hao_gmap frozen_types = HAO_GMAP_INIT(2, 1, 6, 14);       /* nominal descriptor -> 1 frozen, 2 not */
+
+static bool native_frozen(const void *type)
+{
+    const void *const *m = type;
+    uint64_t desc = (uint64_t)(uintptr_t)m[1];
+    const uint64_t *e = hao_gmap_get1(&frozen_types,desc);
+    if (e) return e[1] == 1;
+    typedef struct { const char *text; uintptr_t length; } type_name;
+    typedef type_name SWIFT name_fn(const void *, bool);
+    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
+    type_name n = name ? name(type,true) : (type_name){NULL,0};
+    char nominal[512];                                 /* the qualified name without generic arguments */
+    size_t w = 0;
+    int depth = 0;
+    bool ok = n.text && n.length < sizeof nominal;
+    for (uintptr_t i = 0; ok && i < n.length; ++i) {
+        char ch = n.text[i];
+        if (ch == '<') depth++;
+        else if (ch == '>') { if (--depth < 0) ok = false; }
+        else if (!depth) nominal[w++] = ch;
+    }
+    bool frozen = false;
+    if (ok && !depth) {
+        nominal[w] = 0;
+        for (size_t k = 0; k < sizeof frozen_structs / sizeof *frozen_structs && !frozen; ++k)
+            frozen = !strcmp(frozen_structs[k].name,nominal);
+    }
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim1(&frozen_types,desc,&fresh);
+    if (slot && fresh) { slot[1] = frozen ? 1 : 2; hao_gmap_publish1(&frozen_types,slot,desc); }
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    return frozen;
+}
+
 static int guest_layout(const void *type)
 {
     const void *const *m = type;
     if ((uintptr_t)m[0] != 0x200) return 1;           /* tuples, Optionals: by their elements */
-    return hao_image_for_addr((uint64_t)(uintptr_t)m[1]) != NULL;
+    if (hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return 1;   /* the guest's own struct */
+    return native_frozen(type);                       /* a native one: only if its module froze it */
 }
 
 /* A nil the witness made: the guest's encoding, extra inhabitant

@@ -177,6 +177,7 @@ src/fmtattr_gen.inc
 src/fnslots.c
 src/front/cli.c
 src/front/stub.c
+src/frozenstruct_gen.inc
 src/gmap.c
 src/gss.c
 src/gss_gen.inc

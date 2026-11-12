@@ -586,11 +586,19 @@ Remaining limitations:
   it with the witness natively) and `swift_dynamicCast` out of `Any`. Memory
   that guest inline code and native code both read can hold only one
   encoding. That is the open part of `guest/xinhab`, which stays `xfail`.
-- A frozen struct of a native module other than `Array` and `String`,
-  which guest code could read inline, gets no guest-encoded nil when one is
-  made inside it. The descriptor does not say whether a struct is frozen.
+- A native struct counts as guest-readable only when `src/frozenstruct_gen.inc`
+  lists it: a table generated from the SDK interfaces' `@frozen` and
+  `@_fixed_layout` declarations, joined against the 26B131 x86_64 cache and
+  matched at run time by qualified nominal name, since freezing is
+  permanent ABI. A frozen struct the table misses (for example in a private
+  module without an interface) is treated as resilient and keeps the native
+  encoding. Before the table, every native struct was: a nil made through the
+  shared Optional witnesses inside `CollectionOfOne<AnyObject>??` read as
+  present in guest code.
 - Witnesses of native generic structs and enums other than Optional (each
-  type has its own) are not recognized. Neither are value boxes (an `Any`
+  type has its own) are not recognized: a nil a generic struct's own native
+  witness makes (`CollectionOfOne<AnyObject?>?` from unspecialized generic
+  code) keeps the native encoding, whatever the frozen table says. Neither are value boxes (an `Any`
   holding such a value is destroyed by the box's witness).
 - Two consumed inhabitants are the bound, as for published values: a third
   nesting level is handed over unchanged.
