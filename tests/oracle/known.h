@@ -15,9 +15,6 @@ typedef struct { uint32_t mask, value; const char *what; } known_enc;
 static const known_enc known_unimpl[] = {
     {0xFFFFFC00, 0x1E634000, "BFCVT"},
     {0xBFFFFC00, 0x0EA16800, "BFCVTN/BFCVTN2"},
-    {0xBF009400, 0x2F001000, "fcmla (indexed)"},
-    {0xBF20E400, 0x2E00C400, "fcmla"},
-    {0xBF20EC00, 0x2E00E400, "fcadd"},
     {0xBFC0F400, 0x0F800000, "fmlal (indexed)"},
     {0xBFC0F400, 0x0F00F000, "sudot (indexed)"},
     {0xBFC0F400, 0x2F808000, "fmlal2 (indexed)"},

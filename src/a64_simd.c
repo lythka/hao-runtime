@@ -639,6 +639,34 @@ static bool three_same_int_valid(unsigned op, unsigned U, unsigned size, unsigne
     }
 }
 
+/* Complex arithmetic operates on adjacent real/imaginary lanes. Preserve
+ * all sources before writing Rd, including an indexed pair in Rd itself. */
+static int simd_complex(hao_cpu *c, uint32_t i, bool indexed, bool add)
+{
+    unsigned Q = BIT(i, 30), size = BITS(i, 23, 22);
+    if (!size || (size == 3 && (!Q || indexed))) return -1;
+    if (indexed && ((size == 1 && !Q && BIT(i, 11)) ||
+                    (size == 2 && (!Q || BIT(i, 21))))) return -1;
+    int es = 1 << size, n = (Q ? 16 : 8) / es;
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    unsigned rot = add ? (BIT(i, 12) ? 3 : 1) : indexed ? BITS(i, 14, 13) : BITS(i, 12, 11);
+    unsigned idx = size == 1 ? (BIT(i, 11) << 1 | BIT(i, 21)) : BIT(i, 11);
+    hao_vreg a = c->v[rn], b = c->v[rm], d = c->v[rd], r = {0};
+    fpctx x = fp_ctx(c);
+    for (int e = 0; e < n; e += 2) {
+        int j = indexed ? 2 * (int)idx : e;
+        uint64_t br = eget(&b, es, j + (rot & 1)), bi = eget(&b, es, j + !(rot & 1));
+        if (rot == 1 || rot == 2) br = fp_neg(br, es);
+        if (rot == 2 || rot == 3) bi = fp_neg(bi, es);
+        uint64_t ar = eget(&a, es, e + (add ? 0 : (rot & 1)));
+        uint64_t ai = add ? eget(&a, es, e + 1) : ar;
+        eset(&r, es, e, add ? fp_add(&x, es, ar, br) : fp_muladd(&x, es, eget(&d, es, e), ar, br));
+        eset(&r, es, e + 1, add ? fp_add(&x, es, ai, bi) : fp_muladd(&x, es, eget(&d, es, e + 1), ai, bi));
+    }
+    vfinish(c, rd, &r, Q);
+    return 0;
+}
+
 /* FP16 uses distinct Advanced SIMD encodings from the single/double
  * three-same and miscellaneous groups. Keep these explicit so reserved
  * encodings cannot fall into integer operations sharing nearby bit fields. */
@@ -2024,6 +2052,9 @@ int a64_exec_simd(hao_cpu *c, uint32_t i, uint64_t pc)
     if ((i & 0xFF208C00) == 0x5E000000) return crypto_sha3reg(c, i);
     if ((i & 0xFF3E0C00) == 0x5E280800) return crypto_sha2reg(c, i);
     if ((i & 0xFF000000) == 0xCE000000) return crypto_ce(c, i);
+    if ((i & 0xBF20E400) == 0x2E00C400) return simd_complex(c, i, false, false);
+    if ((i & 0xBF20EC00) == 0x2E00E400) return simd_complex(c, i, false, true);
+    if ((i & 0xBF009400) == 0x2F001000) return simd_complex(c, i, true, false);
     if ((i & 0x9FE0FC00) == 0x0E809400) return simd_dot(c, i, 0);
     if ((i & 0x9FC0F400) == 0x0F80E000) return simd_dot(c, i, 1);
     if ((i & 0xAF20F400) == 0x2E008400) return simd_rdmla(c, i);
