@@ -342,3 +342,9 @@ translator with the FADDP pair ordering deliberately corrupted. The complete
 state test must detect the mutation; source files and the built runtime remain
 unchanged. `guest/jitinsns` also includes vector/scalar S/D FADDP and all four
 single-precision min/max reductions, compared with native in every engine.
+
+`aot/register-shift-mutations` runs the vector differential test first on an
+unmodified translation, then with the right-shift count negation removed.
+The control must pass and the mutation must report an architectural mismatch.
+The vector test covers every signed low-byte count (-128..127) for USHL/SSHL
+.2S/.4S/.2D, ignored upper count bits, aliases and live NZCV.

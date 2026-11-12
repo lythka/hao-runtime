@@ -1977,6 +1977,36 @@ static void vmul(tctx *t, unsigned size)
     P(0xEB, 0, 2);
 }
 
+/* Per-lane signed low-byte shifts, without a host flag write. SSE's
+ * oversized logical shift gives zero, including a negative count encoded
+ * as an unsigned 64-bit value. A separate right candidate uses -count and
+ * is selected only for a negative count. Stage every lane before Vd writes
+ * so aliases read the original source and shift vector throughout. */
+static void t_simd_register_shift(tctx *t, unsigned rd, unsigned rn, unsigned rm, unsigned size, unsigned Q, unsigned U)
+{
+    int es = 1 << size, lanes = (Q ? 16 : 8) / es;
+    vzero(t, 8);
+    for (int lane = 0; lane < lanes; lane++) {
+        if (size == 3) x_movq_ld(&t->b, 0, velem(rn, es, lane));
+        else x_movd_ld(&t->b, 0, velem(rn, es, lane));
+        x_movs_ld(&t->b, 1, 1, RAX, velem(rm, es, lane));
+        x_sse_rr(&t->b, 0x66, 0x6E, 1, 1, RAX);                 /* signed low byte */
+        P(0x6F, 4, 0); P(size == 3 ? 0xF3 : 0xF2, 4, 1);      /* left candidate */
+        vzero(t, 2); P(0xFB, 2, 1);                             /* register shift: -count */
+        vzero(t, 3); P38(0x37, 3, 1);                           /* count < 0 */
+        if (U) P(size == 3 ? 0xD3 : 0xD2, 0, 2);               /* logical right */
+        else if (size == 2) P(0xE2, 0, 2);                      /* arithmetic right dword */
+        else {
+            vzero(t, 1); P38(0x37, 1, 0);                       /* sign mask */
+            P(0xEF, 0, 1); P(0xD3, 0, 2); P(0xEF, 0, 1);      /* arithmetic right qword */
+        }
+        P(0xDB, 0, 3); P(0xEB, 0, 4);
+        if (lane) x_sse_shift_ri(&t->b, 0x73, 7, 0, (uint8_t)(lane * es));
+        P(0xEB, 8, 0);
+    }
+    vst(t, rd, 8, (int)Q);
+}
+
 static bool t_simd_three_same(tctx *t, uint32_t i)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 11);
@@ -1997,6 +2027,10 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
         return true;
     }
     if (size == 3 && !Q) return false;
+    if (op == 8 && size >= 2) {
+        t_simd_register_shift(t, rd, rn, rm, size, Q, U);
+        return true;
+    }
     switch (op) {
     case 0x10:                                                   /* ADD / SUB */
         vld(t, 0, rn); vld(t, 1, rm);

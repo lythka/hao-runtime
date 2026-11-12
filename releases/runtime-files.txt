@@ -705,3 +705,4 @@ tests/guest/coverage_bench.c
 tests/guest/coverage_bench.sh
 tests/aot/integer_mutations.sh
 tests/aot/fp_coverage_mutations.sh
+tests/aot/register_shift_mutations.sh
