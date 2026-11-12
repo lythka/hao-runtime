@@ -150,6 +150,226 @@ BENCH(tail_frecps4s, "frecps v2.4s, v0.4s, v1.4s", tail)
 BENCH(tail_frsqrtss, "frsqrts s2, s0, s1", tail)
 BENCH(tail_frsqrts2s, "frsqrts v2.2s, v0.2s, v1.2s", tail)
 BENCH(tail_frsqrts4s, "frsqrts v2.4s, v0.4s, v1.4s", tail)
+BENCH(tail_saddl0_0, "saddl v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_saddl0_1, "saddl v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_saddl0_2, "saddl v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_saddl1_0, "saddl2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_saddl1_1, "saddl2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_saddl1_2, "saddl2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_uaddl0_0, "uaddl v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_uaddl0_1, "uaddl v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_uaddl0_2, "uaddl v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_uaddl1_0, "uaddl2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_uaddl1_1, "uaddl2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_uaddl1_2, "uaddl2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_saddw0_0, "saddw v2.8h, v0.8h, v1.8b", single)
+BENCH(tail_saddw0_1, "saddw v2.4s, v0.4s, v1.4h", single)
+BENCH(tail_saddw0_2, "saddw v2.2d, v0.2d, v1.2s", single)
+BENCH(tail_saddw1_0, "saddw2 v2.8h, v0.8h, v1.16b", single)
+BENCH(tail_saddw1_1, "saddw2 v2.4s, v0.4s, v1.8h", single)
+BENCH(tail_saddw1_2, "saddw2 v2.2d, v0.2d, v1.4s", single)
+BENCH(tail_uaddw0_0, "uaddw v2.8h, v0.8h, v1.8b", single)
+BENCH(tail_uaddw0_1, "uaddw v2.4s, v0.4s, v1.4h", single)
+BENCH(tail_uaddw0_2, "uaddw v2.2d, v0.2d, v1.2s", single)
+BENCH(tail_uaddw1_0, "uaddw2 v2.8h, v0.8h, v1.16b", single)
+BENCH(tail_uaddw1_1, "uaddw2 v2.4s, v0.4s, v1.8h", single)
+BENCH(tail_uaddw1_2, "uaddw2 v2.2d, v0.2d, v1.4s", single)
+BENCH(tail_ssubl0_0, "ssubl v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_ssubl0_1, "ssubl v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_ssubl0_2, "ssubl v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_ssubl1_0, "ssubl2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_ssubl1_1, "ssubl2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_ssubl1_2, "ssubl2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_usubl0_0, "usubl v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_usubl0_1, "usubl v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_usubl0_2, "usubl v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_usubl1_0, "usubl2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_usubl1_1, "usubl2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_usubl1_2, "usubl2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_ssubw0_0, "ssubw v2.8h, v0.8h, v1.8b", single)
+BENCH(tail_ssubw0_1, "ssubw v2.4s, v0.4s, v1.4h", single)
+BENCH(tail_ssubw0_2, "ssubw v2.2d, v0.2d, v1.2s", single)
+BENCH(tail_ssubw1_0, "ssubw2 v2.8h, v0.8h, v1.16b", single)
+BENCH(tail_ssubw1_1, "ssubw2 v2.4s, v0.4s, v1.8h", single)
+BENCH(tail_ssubw1_2, "ssubw2 v2.2d, v0.2d, v1.4s", single)
+BENCH(tail_usubw0_0, "usubw v2.8h, v0.8h, v1.8b", single)
+BENCH(tail_usubw0_1, "usubw v2.4s, v0.4s, v1.4h", single)
+BENCH(tail_usubw0_2, "usubw v2.2d, v0.2d, v1.2s", single)
+BENCH(tail_usubw1_0, "usubw2 v2.8h, v0.8h, v1.16b", single)
+BENCH(tail_usubw1_1, "usubw2 v2.4s, v0.4s, v1.8h", single)
+BENCH(tail_usubw1_2, "usubw2 v2.2d, v0.2d, v1.4s", single)
+BENCH(tail_smull0_0, "smull v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_smull0_1, "smull v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_smull0_2, "smull v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_smull1_0, "smull2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_smull1_1, "smull2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_smull1_2, "smull2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_umull0_0, "umull v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_umull0_1, "umull v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_umull0_2, "umull v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_umull1_0, "umull2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_umull1_1, "umull2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_umull1_2, "umull2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_smlal0_0, "smlal v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_smlal0_1, "smlal v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_smlal0_2, "smlal v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_smlal1_0, "smlal2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_smlal1_1, "smlal2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_smlal1_2, "smlal2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_umlal0_0, "umlal v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_umlal0_1, "umlal v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_umlal0_2, "umlal v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_umlal1_0, "umlal2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_umlal1_1, "umlal2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_umlal1_2, "umlal2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_smlsl0_0, "smlsl v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_smlsl0_1, "smlsl v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_smlsl0_2, "smlsl v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_smlsl1_0, "smlsl2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_smlsl1_1, "smlsl2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_smlsl1_2, "smlsl2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_umlsl0_0, "umlsl v2.8h, v0.8b, v1.8b", single)
+BENCH(tail_umlsl0_1, "umlsl v2.4s, v0.4h, v1.4h", single)
+BENCH(tail_umlsl0_2, "umlsl v2.2d, v0.2s, v1.2s", single)
+BENCH(tail_umlsl1_0, "umlsl2 v2.8h, v0.16b, v1.16b", single)
+BENCH(tail_umlsl1_1, "umlsl2 v2.4s, v0.8h, v1.8h", single)
+BENCH(tail_umlsl1_2, "umlsl2 v2.2d, v0.4s, v1.4s", single)
+BENCH(tail_sqxtn0_0, "sqxtn v2.8b, v0.8h", single)
+BENCH(tail_sqxtn0_1, "sqxtn v2.4h, v0.4s", single)
+BENCH(tail_sqxtn0_2, "sqxtn v2.2s, v0.2d", single)
+BENCH(tail_sqxtn1_0, "sqxtn2 v2.16b, v0.8h", single)
+BENCH(tail_sqxtn1_1, "sqxtn2 v2.8h, v0.4s", single)
+BENCH(tail_sqxtn1_2, "sqxtn2 v2.4s, v0.2d", single)
+BENCH(tail_uqxtn0_0, "uqxtn v2.8b, v0.8h", single)
+BENCH(tail_uqxtn0_1, "uqxtn v2.4h, v0.4s", single)
+BENCH(tail_uqxtn0_2, "uqxtn v2.2s, v0.2d", single)
+BENCH(tail_uqxtn1_0, "uqxtn2 v2.16b, v0.8h", single)
+BENCH(tail_uqxtn1_1, "uqxtn2 v2.8h, v0.4s", single)
+BENCH(tail_uqxtn1_2, "uqxtn2 v2.4s, v0.2d", single)
+BENCH(tail_sqxtun0_0, "sqxtun v2.8b, v0.8h", single)
+BENCH(tail_sqxtun0_1, "sqxtun v2.4h, v0.4s", single)
+BENCH(tail_sqxtun0_2, "sqxtun v2.2s, v0.2d", single)
+BENCH(tail_sqxtun1_0, "sqxtun2 v2.16b, v0.8h", single)
+BENCH(tail_sqxtun1_1, "sqxtun2 v2.8h, v0.4s", single)
+BENCH(tail_sqxtun1_2, "sqxtun2 v2.4s, v0.2d", single)
+BENCH(tail_shll0_0, "shll v2.8h, v0.8b, #8", single)
+BENCH(tail_shll0_1, "shll v2.4s, v0.4h, #16", single)
+BENCH(tail_shll0_2, "shll v2.2d, v0.2s, #32", single)
+BENCH(tail_shll1_0, "shll2 v2.8h, v0.16b, #8", single)
+BENCH(tail_shll1_1, "shll2 v2.4s, v0.8h, #16", single)
+BENCH(tail_shll1_2, "shll2 v2.2d, v0.4s, #32", single)
+BENCH(tail_sri0_0_1, "sri v2.8b, v0.8b, #1", single)
+BENCH(tail_sri0_0_4, "sri v2.8b, v0.8b, #4", single)
+BENCH(tail_sri0_0_8, "sri v2.8b, v0.8b, #8", single)
+BENCH(tail_sli0_0_0, "sli v2.8b, v0.8b, #0", single)
+BENCH(tail_sli0_0_4, "sli v2.8b, v0.8b, #4", single)
+BENCH(tail_sli0_0_7, "sli v2.8b, v0.8b, #7", single)
+BENCH(tail_rev160_0, "rev16 v2.8b, v0.8b", single)
+BENCH(tail_rev320_0, "rev32 v2.8b, v0.8b", single)
+BENCH(tail_rev640_0, "rev64 v2.8b, v0.8b", single)
+BENCH(tail_sri0_1_1, "sri v2.4h, v0.4h, #1", single)
+BENCH(tail_sri0_1_8, "sri v2.4h, v0.4h, #8", single)
+BENCH(tail_sri0_1_16, "sri v2.4h, v0.4h, #16", single)
+BENCH(tail_sli0_1_0, "sli v2.4h, v0.4h, #0", single)
+BENCH(tail_sli0_1_8, "sli v2.4h, v0.4h, #8", single)
+BENCH(tail_sli0_1_15, "sli v2.4h, v0.4h, #15", single)
+BENCH(tail_rev320_1, "rev32 v2.4h, v0.4h", single)
+BENCH(tail_rev640_1, "rev64 v2.4h, v0.4h", single)
+BENCH(tail_sqdmulh0_1, "sqdmulh v2.4h, v0.4h, v1.4h", single)
+BENCH(tail_sqdmulh0_1_0, "sqdmulh v2.4h, v0.4h, v1.h[0]", single)
+BENCH(tail_sqdmulh0_1_1, "sqdmulh v2.4h, v0.4h, v1.h[1]", single)
+BENCH(tail_sqdmulh0_1_2, "sqdmulh v2.4h, v0.4h, v1.h[2]", single)
+BENCH(tail_sqdmulh0_1_3, "sqdmulh v2.4h, v0.4h, v1.h[3]", single)
+BENCH(tail_sqdmulh0_1_4, "sqdmulh v2.4h, v0.4h, v1.h[4]", single)
+BENCH(tail_sqdmulh0_1_5, "sqdmulh v2.4h, v0.4h, v1.h[5]", single)
+BENCH(tail_sqdmulh0_1_6, "sqdmulh v2.4h, v0.4h, v1.h[6]", single)
+BENCH(tail_sqdmulh0_1_7, "sqdmulh v2.4h, v0.4h, v1.h[7]", single)
+BENCH(tail_sqrdmulh0_1, "sqrdmulh v2.4h, v0.4h, v1.4h", single)
+BENCH(tail_sqrdmulh0_1_0, "sqrdmulh v2.4h, v0.4h, v1.h[0]", single)
+BENCH(tail_sqrdmulh0_1_1, "sqrdmulh v2.4h, v0.4h, v1.h[1]", single)
+BENCH(tail_sqrdmulh0_1_2, "sqrdmulh v2.4h, v0.4h, v1.h[2]", single)
+BENCH(tail_sqrdmulh0_1_3, "sqrdmulh v2.4h, v0.4h, v1.h[3]", single)
+BENCH(tail_sqrdmulh0_1_4, "sqrdmulh v2.4h, v0.4h, v1.h[4]", single)
+BENCH(tail_sqrdmulh0_1_5, "sqrdmulh v2.4h, v0.4h, v1.h[5]", single)
+BENCH(tail_sqrdmulh0_1_6, "sqrdmulh v2.4h, v0.4h, v1.h[6]", single)
+BENCH(tail_sqrdmulh0_1_7, "sqrdmulh v2.4h, v0.4h, v1.h[7]", single)
+BENCH(tail_sri0_2_1, "sri v2.2s, v0.2s, #1", single)
+BENCH(tail_sri0_2_16, "sri v2.2s, v0.2s, #16", single)
+BENCH(tail_sri0_2_32, "sri v2.2s, v0.2s, #32", single)
+BENCH(tail_sli0_2_0, "sli v2.2s, v0.2s, #0", single)
+BENCH(tail_sli0_2_16, "sli v2.2s, v0.2s, #16", single)
+BENCH(tail_sli0_2_31, "sli v2.2s, v0.2s, #31", single)
+BENCH(tail_rev640_2, "rev64 v2.2s, v0.2s", single)
+BENCH(tail_sqdmulh0_2, "sqdmulh v2.2s, v0.2s, v1.2s", single)
+BENCH(tail_sqdmulh0_2_0, "sqdmulh v2.2s, v0.2s, v1.s[0]", single)
+BENCH(tail_sqdmulh0_2_1, "sqdmulh v2.2s, v0.2s, v1.s[1]", single)
+BENCH(tail_sqdmulh0_2_2, "sqdmulh v2.2s, v0.2s, v1.s[2]", single)
+BENCH(tail_sqdmulh0_2_3, "sqdmulh v2.2s, v0.2s, v1.s[3]", single)
+BENCH(tail_sqrdmulh0_2, "sqrdmulh v2.2s, v0.2s, v1.2s", single)
+BENCH(tail_sqrdmulh0_2_0, "sqrdmulh v2.2s, v0.2s, v1.s[0]", single)
+BENCH(tail_sqrdmulh0_2_1, "sqrdmulh v2.2s, v0.2s, v1.s[1]", single)
+BENCH(tail_sqrdmulh0_2_2, "sqrdmulh v2.2s, v0.2s, v1.s[2]", single)
+BENCH(tail_sqrdmulh0_2_3, "sqrdmulh v2.2s, v0.2s, v1.s[3]", single)
+BENCH(tail_sri1_0_1, "sri v2.16b, v0.16b, #1", single)
+BENCH(tail_sri1_0_4, "sri v2.16b, v0.16b, #4", single)
+BENCH(tail_sri1_0_8, "sri v2.16b, v0.16b, #8", single)
+BENCH(tail_sli1_0_0, "sli v2.16b, v0.16b, #0", single)
+BENCH(tail_sli1_0_4, "sli v2.16b, v0.16b, #4", single)
+BENCH(tail_sli1_0_7, "sli v2.16b, v0.16b, #7", single)
+BENCH(tail_rev161_0, "rev16 v2.16b, v0.16b", single)
+BENCH(tail_rev321_0, "rev32 v2.16b, v0.16b", single)
+BENCH(tail_rev641_0, "rev64 v2.16b, v0.16b", single)
+BENCH(tail_sri1_1_1, "sri v2.8h, v0.8h, #1", single)
+BENCH(tail_sri1_1_8, "sri v2.8h, v0.8h, #8", single)
+BENCH(tail_sri1_1_16, "sri v2.8h, v0.8h, #16", single)
+BENCH(tail_sli1_1_0, "sli v2.8h, v0.8h, #0", single)
+BENCH(tail_sli1_1_8, "sli v2.8h, v0.8h, #8", single)
+BENCH(tail_sli1_1_15, "sli v2.8h, v0.8h, #15", single)
+BENCH(tail_rev321_1, "rev32 v2.8h, v0.8h", single)
+BENCH(tail_rev641_1, "rev64 v2.8h, v0.8h", single)
+BENCH(tail_sqdmulh1_1, "sqdmulh v2.8h, v0.8h, v1.8h", single)
+BENCH(tail_sqdmulh1_1_0, "sqdmulh v2.8h, v0.8h, v1.h[0]", single)
+BENCH(tail_sqdmulh1_1_1, "sqdmulh v2.8h, v0.8h, v1.h[1]", single)
+BENCH(tail_sqdmulh1_1_2, "sqdmulh v2.8h, v0.8h, v1.h[2]", single)
+BENCH(tail_sqdmulh1_1_3, "sqdmulh v2.8h, v0.8h, v1.h[3]", single)
+BENCH(tail_sqdmulh1_1_4, "sqdmulh v2.8h, v0.8h, v1.h[4]", single)
+BENCH(tail_sqdmulh1_1_5, "sqdmulh v2.8h, v0.8h, v1.h[5]", single)
+BENCH(tail_sqdmulh1_1_6, "sqdmulh v2.8h, v0.8h, v1.h[6]", single)
+BENCH(tail_sqdmulh1_1_7, "sqdmulh v2.8h, v0.8h, v1.h[7]", single)
+BENCH(tail_sqrdmulh1_1, "sqrdmulh v2.8h, v0.8h, v1.8h", single)
+BENCH(tail_sqrdmulh1_1_0, "sqrdmulh v2.8h, v0.8h, v1.h[0]", single)
+BENCH(tail_sqrdmulh1_1_1, "sqrdmulh v2.8h, v0.8h, v1.h[1]", single)
+BENCH(tail_sqrdmulh1_1_2, "sqrdmulh v2.8h, v0.8h, v1.h[2]", single)
+BENCH(tail_sqrdmulh1_1_3, "sqrdmulh v2.8h, v0.8h, v1.h[3]", single)
+BENCH(tail_sqrdmulh1_1_4, "sqrdmulh v2.8h, v0.8h, v1.h[4]", single)
+BENCH(tail_sqrdmulh1_1_5, "sqrdmulh v2.8h, v0.8h, v1.h[5]", single)
+BENCH(tail_sqrdmulh1_1_6, "sqrdmulh v2.8h, v0.8h, v1.h[6]", single)
+BENCH(tail_sqrdmulh1_1_7, "sqrdmulh v2.8h, v0.8h, v1.h[7]", single)
+BENCH(tail_sri1_2_1, "sri v2.4s, v0.4s, #1", single)
+BENCH(tail_sri1_2_16, "sri v2.4s, v0.4s, #16", single)
+BENCH(tail_sri1_2_32, "sri v2.4s, v0.4s, #32", single)
+BENCH(tail_sli1_2_0, "sli v2.4s, v0.4s, #0", single)
+BENCH(tail_sli1_2_16, "sli v2.4s, v0.4s, #16", single)
+BENCH(tail_sli1_2_31, "sli v2.4s, v0.4s, #31", single)
+BENCH(tail_rev641_2, "rev64 v2.4s, v0.4s", single)
+BENCH(tail_sqdmulh1_2, "sqdmulh v2.4s, v0.4s, v1.4s", single)
+BENCH(tail_sqdmulh1_2_0, "sqdmulh v2.4s, v0.4s, v1.s[0]", single)
+BENCH(tail_sqdmulh1_2_1, "sqdmulh v2.4s, v0.4s, v1.s[1]", single)
+BENCH(tail_sqdmulh1_2_2, "sqdmulh v2.4s, v0.4s, v1.s[2]", single)
+BENCH(tail_sqdmulh1_2_3, "sqdmulh v2.4s, v0.4s, v1.s[3]", single)
+BENCH(tail_sqrdmulh1_2, "sqrdmulh v2.4s, v0.4s, v1.4s", single)
+BENCH(tail_sqrdmulh1_2_0, "sqrdmulh v2.4s, v0.4s, v1.s[0]", single)
+BENCH(tail_sqrdmulh1_2_1, "sqrdmulh v2.4s, v0.4s, v1.s[1]", single)
+BENCH(tail_sqrdmulh1_2_2, "sqrdmulh v2.4s, v0.4s, v1.s[2]", single)
+BENCH(tail_sqrdmulh1_2_3, "sqrdmulh v2.4s, v0.4s, v1.s[3]", single)
+BENCH(tail_sri1_3_1, "sri v2.2d, v0.2d, #1", single)
+BENCH(tail_sri1_3_32, "sri v2.2d, v0.2d, #32", single)
+BENCH(tail_sri1_3_64, "sri v2.2d, v0.2d, #64", single)
+BENCH(tail_sli1_3_0, "sli v2.2d, v0.2d, #0", single)
+BENCH(tail_sli1_3_32, "sli v2.2d, v0.2d, #32", single)
+BENCH(tail_sli1_3_63, "sli v2.2d, v0.2d, #63", single)
+BENCH(tail_addpd, "addp d2, v0.2d", single)
+
 int main(int argc, char **argv)
 {
     unsigned long n = argc > 1 ? strtoul(argv[1], 0, 0) : 50000;
@@ -270,5 +490,224 @@ int main(int argc, char **argv)
     RUN(fmls_s3);
     RUN(fmul_d0);
     RUN(fmul_d1);
+    RUN(tail_saddl0_0);
+    RUN(tail_saddl0_1);
+    RUN(tail_saddl0_2);
+    RUN(tail_saddl1_0);
+    RUN(tail_saddl1_1);
+    RUN(tail_saddl1_2);
+    RUN(tail_uaddl0_0);
+    RUN(tail_uaddl0_1);
+    RUN(tail_uaddl0_2);
+    RUN(tail_uaddl1_0);
+    RUN(tail_uaddl1_1);
+    RUN(tail_uaddl1_2);
+    RUN(tail_saddw0_0);
+    RUN(tail_saddw0_1);
+    RUN(tail_saddw0_2);
+    RUN(tail_saddw1_0);
+    RUN(tail_saddw1_1);
+    RUN(tail_saddw1_2);
+    RUN(tail_uaddw0_0);
+    RUN(tail_uaddw0_1);
+    RUN(tail_uaddw0_2);
+    RUN(tail_uaddw1_0);
+    RUN(tail_uaddw1_1);
+    RUN(tail_uaddw1_2);
+    RUN(tail_ssubl0_0);
+    RUN(tail_ssubl0_1);
+    RUN(tail_ssubl0_2);
+    RUN(tail_ssubl1_0);
+    RUN(tail_ssubl1_1);
+    RUN(tail_ssubl1_2);
+    RUN(tail_usubl0_0);
+    RUN(tail_usubl0_1);
+    RUN(tail_usubl0_2);
+    RUN(tail_usubl1_0);
+    RUN(tail_usubl1_1);
+    RUN(tail_usubl1_2);
+    RUN(tail_ssubw0_0);
+    RUN(tail_ssubw0_1);
+    RUN(tail_ssubw0_2);
+    RUN(tail_ssubw1_0);
+    RUN(tail_ssubw1_1);
+    RUN(tail_ssubw1_2);
+    RUN(tail_usubw0_0);
+    RUN(tail_usubw0_1);
+    RUN(tail_usubw0_2);
+    RUN(tail_usubw1_0);
+    RUN(tail_usubw1_1);
+    RUN(tail_usubw1_2);
+    RUN(tail_smull0_0);
+    RUN(tail_smull0_1);
+    RUN(tail_smull0_2);
+    RUN(tail_smull1_0);
+    RUN(tail_smull1_1);
+    RUN(tail_smull1_2);
+    RUN(tail_umull0_0);
+    RUN(tail_umull0_1);
+    RUN(tail_umull0_2);
+    RUN(tail_umull1_0);
+    RUN(tail_umull1_1);
+    RUN(tail_umull1_2);
+    RUN(tail_smlal0_0);
+    RUN(tail_smlal0_1);
+    RUN(tail_smlal0_2);
+    RUN(tail_smlal1_0);
+    RUN(tail_smlal1_1);
+    RUN(tail_smlal1_2);
+    RUN(tail_umlal0_0);
+    RUN(tail_umlal0_1);
+    RUN(tail_umlal0_2);
+    RUN(tail_umlal1_0);
+    RUN(tail_umlal1_1);
+    RUN(tail_umlal1_2);
+    RUN(tail_smlsl0_0);
+    RUN(tail_smlsl0_1);
+    RUN(tail_smlsl0_2);
+    RUN(tail_smlsl1_0);
+    RUN(tail_smlsl1_1);
+    RUN(tail_smlsl1_2);
+    RUN(tail_umlsl0_0);
+    RUN(tail_umlsl0_1);
+    RUN(tail_umlsl0_2);
+    RUN(tail_umlsl1_0);
+    RUN(tail_umlsl1_1);
+    RUN(tail_umlsl1_2);
+    RUN(tail_sqxtn0_0);
+    RUN(tail_sqxtn0_1);
+    RUN(tail_sqxtn0_2);
+    RUN(tail_sqxtn1_0);
+    RUN(tail_sqxtn1_1);
+    RUN(tail_sqxtn1_2);
+    RUN(tail_uqxtn0_0);
+    RUN(tail_uqxtn0_1);
+    RUN(tail_uqxtn0_2);
+    RUN(tail_uqxtn1_0);
+    RUN(tail_uqxtn1_1);
+    RUN(tail_uqxtn1_2);
+    RUN(tail_sqxtun0_0);
+    RUN(tail_sqxtun0_1);
+    RUN(tail_sqxtun0_2);
+    RUN(tail_sqxtun1_0);
+    RUN(tail_sqxtun1_1);
+    RUN(tail_sqxtun1_2);
+    RUN(tail_shll0_0);
+    RUN(tail_shll0_1);
+    RUN(tail_shll0_2);
+    RUN(tail_shll1_0);
+    RUN(tail_shll1_1);
+    RUN(tail_shll1_2);
+    RUN(tail_sri0_0_1);
+    RUN(tail_sri0_0_4);
+    RUN(tail_sri0_0_8);
+    RUN(tail_sli0_0_0);
+    RUN(tail_sli0_0_4);
+    RUN(tail_sli0_0_7);
+    RUN(tail_rev160_0);
+    RUN(tail_rev320_0);
+    RUN(tail_rev640_0);
+    RUN(tail_sri0_1_1);
+    RUN(tail_sri0_1_8);
+    RUN(tail_sri0_1_16);
+    RUN(tail_sli0_1_0);
+    RUN(tail_sli0_1_8);
+    RUN(tail_sli0_1_15);
+    RUN(tail_rev320_1);
+    RUN(tail_rev640_1);
+    RUN(tail_sqdmulh0_1);
+    RUN(tail_sqdmulh0_1_0);
+    RUN(tail_sqdmulh0_1_1);
+    RUN(tail_sqdmulh0_1_2);
+    RUN(tail_sqdmulh0_1_3);
+    RUN(tail_sqdmulh0_1_4);
+    RUN(tail_sqdmulh0_1_5);
+    RUN(tail_sqdmulh0_1_6);
+    RUN(tail_sqdmulh0_1_7);
+    RUN(tail_sqrdmulh0_1);
+    RUN(tail_sqrdmulh0_1_0);
+    RUN(tail_sqrdmulh0_1_1);
+    RUN(tail_sqrdmulh0_1_2);
+    RUN(tail_sqrdmulh0_1_3);
+    RUN(tail_sqrdmulh0_1_4);
+    RUN(tail_sqrdmulh0_1_5);
+    RUN(tail_sqrdmulh0_1_6);
+    RUN(tail_sqrdmulh0_1_7);
+    RUN(tail_sri0_2_1);
+    RUN(tail_sri0_2_16);
+    RUN(tail_sri0_2_32);
+    RUN(tail_sli0_2_0);
+    RUN(tail_sli0_2_16);
+    RUN(tail_sli0_2_31);
+    RUN(tail_rev640_2);
+    RUN(tail_sqdmulh0_2);
+    RUN(tail_sqdmulh0_2_0);
+    RUN(tail_sqdmulh0_2_1);
+    RUN(tail_sqdmulh0_2_2);
+    RUN(tail_sqdmulh0_2_3);
+    RUN(tail_sqrdmulh0_2);
+    RUN(tail_sqrdmulh0_2_0);
+    RUN(tail_sqrdmulh0_2_1);
+    RUN(tail_sqrdmulh0_2_2);
+    RUN(tail_sqrdmulh0_2_3);
+    RUN(tail_sri1_0_1);
+    RUN(tail_sri1_0_4);
+    RUN(tail_sri1_0_8);
+    RUN(tail_sli1_0_0);
+    RUN(tail_sli1_0_4);
+    RUN(tail_sli1_0_7);
+    RUN(tail_rev161_0);
+    RUN(tail_rev321_0);
+    RUN(tail_rev641_0);
+    RUN(tail_sri1_1_1);
+    RUN(tail_sri1_1_8);
+    RUN(tail_sri1_1_16);
+    RUN(tail_sli1_1_0);
+    RUN(tail_sli1_1_8);
+    RUN(tail_sli1_1_15);
+    RUN(tail_rev321_1);
+    RUN(tail_rev641_1);
+    RUN(tail_sqdmulh1_1);
+    RUN(tail_sqdmulh1_1_0);
+    RUN(tail_sqdmulh1_1_1);
+    RUN(tail_sqdmulh1_1_2);
+    RUN(tail_sqdmulh1_1_3);
+    RUN(tail_sqdmulh1_1_4);
+    RUN(tail_sqdmulh1_1_5);
+    RUN(tail_sqdmulh1_1_6);
+    RUN(tail_sqdmulh1_1_7);
+    RUN(tail_sqrdmulh1_1);
+    RUN(tail_sqrdmulh1_1_0);
+    RUN(tail_sqrdmulh1_1_1);
+    RUN(tail_sqrdmulh1_1_2);
+    RUN(tail_sqrdmulh1_1_3);
+    RUN(tail_sqrdmulh1_1_4);
+    RUN(tail_sqrdmulh1_1_5);
+    RUN(tail_sqrdmulh1_1_6);
+    RUN(tail_sqrdmulh1_1_7);
+    RUN(tail_sri1_2_1);
+    RUN(tail_sri1_2_16);
+    RUN(tail_sri1_2_32);
+    RUN(tail_sli1_2_0);
+    RUN(tail_sli1_2_16);
+    RUN(tail_sli1_2_31);
+    RUN(tail_rev641_2);
+    RUN(tail_sqdmulh1_2);
+    RUN(tail_sqdmulh1_2_0);
+    RUN(tail_sqdmulh1_2_1);
+    RUN(tail_sqdmulh1_2_2);
+    RUN(tail_sqdmulh1_2_3);
+    RUN(tail_sqrdmulh1_2);
+    RUN(tail_sqrdmulh1_2_0);
+    RUN(tail_sqrdmulh1_2_1);
+    RUN(tail_sqrdmulh1_2_2);
+    RUN(tail_sqrdmulh1_2_3);
+    RUN(tail_sri1_3_1);
+    RUN(tail_sri1_3_32);
+    RUN(tail_sri1_3_64);
+    RUN(tail_sli1_3_0);
+    RUN(tail_sli1_3_32);
+    RUN(tail_sli1_3_63);
+    RUN(tail_addpd);
     return 0;
 }

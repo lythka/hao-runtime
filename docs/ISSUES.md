@@ -40,6 +40,37 @@ UNDEF. SVE/SME was not executed in a complete run (fatal if executed), not
 measured by counters. BRK remains a deliberate trap. This evidence does not
 establish behavior on every possible application input.
 
+## Integer SIMD tail: widening, saturation and lane operations
+
+The JIT now emits SSE2 through SSE4.2 for signed/unsigned widening add,
+subtract, multiply and accumulate, SHLL, SQXTN/UQXTN/SQXTUN, SRI/SLI,
+REV16/32/64, scalar ADDP and vector/indexed SQDMULH/SQRDMULH. Narrowing and
+multiply-high preserve sticky FPSR.QC without changing live NZCV; each
+source is loaded before an aliased destination is stored. Scalar SIMD
+byte/halfword loads and stores now use the existing address/writeback path.
+No interpreter semantics changed. Unallocated neighboring encodings keep
+helper routing; scalar saturating and indexed widening forms remain outside
+this change.
+
+Validation: the complete-state differential test passes 729,670 cases,
+including every new integer arrangement, selected halves, aliases, saturation
+boundaries, full FPSR and live NZCV. Byte/halfword memory checks include
+inaccessible pages and pre/post-index writeback. The native instruction
+comparison passes in JIT, interpreter, helpers-only and AOT (229 added forms,
+850 output lines total). The encoder check passes 40,811 forms. Independent
+mutations remove QC publication and incorrectly widen the already-wide input;
+the unchanged control must pass before the mutations run. Full runtime gates
+are recorded separately. Cumulative coverage after this group is 99.7050%
+(9,985 additional sites), with generated code 645,955 -> 646,110 KiB.
+The temporary measurement cache was removed.
+
+The 219 added ordinary benchmark loops execute 3,504,000 previously
+untranslated helper calls at 1,000 iterations on the base; this translation
+executes zero, with identical result checksums. Generated code for that
+whole instruction workload grows from 1,317 to 1,611 KiB. Timing acceptance
+on Intel remains separate from development-host measurements.
+
+
 ## MapKit 32-byte HFA functions in the aggregate-by-value table
 
 Maps on the target crashed (SIGSEGV writing through `rdi`) in

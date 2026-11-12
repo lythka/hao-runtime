@@ -234,6 +234,76 @@ static uint32_t enc_indexed(void)
     return 0x0f000000u | ops[rr(3)] << 12 | rr(2) << 30 | U << 29 | size << 22 | rr(2) << 21 | rr(2) << 11;   /* M and Rm below */
 }
 
+/* Integer tail: lane widths, halves, aliases, QC and live NZCV. */
+static void integer_tail_case(uint32_t i, unsigned rn, unsigned rm, unsigned k)
+{
+    static const uint64_t edges[] = {0, ~0ull, 0x8000800080008000ull, 0x8000000080000000ull,
+        0x8000000000000000ull, 0x7fff7fff7fff7fffull, 0x7fffffff7fffffffull,
+        0x000000ff00000100ull, 0x0000ffff00010000ull, 0x7fffffff80000000ull};
+    hao_cpu in; state(&in, rn, rm);
+    if (k < 20) for (unsigned r = 0; r < 32; r++) {
+        in.v[r].d[0] = edges[(k / 2 + (k & 1 ? r : 0)) % 10];
+        in.v[r].d[1] = edges[(k / 2 + (k & 1 ? r + 1 : 0)) % 10];
+    }
+    in.fpsr = k & 1 ? 0x0800009f : 0;
+    for (unsigned live = 0; live < 2; live++) {
+        vector_helper_calls = 0; check(i, 0, &in, live);
+        if (vector_helper_calls && fails++ < 20)
+            printf("MISMATCH integer tail helper %08x: %u calls\n", i, vector_helper_calls);
+    }
+}
+static void integer_tail(void)
+{
+    for (unsigned q = 0; q < 2; q++) for (unsigned u = 0; u < 2; u++)
+        for (unsigned size = 0; size < 3; size++) for (unsigned op = 0; op < 13; op++) {
+            if (op > 3 && op != 8 && op != 10 && op != 12) continue;
+            for (unsigned k = 0; k < 32; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                integer_tail_case(0x0e200000u | q << 30 | u << 29 | size << 22 | op << 12 | rm << 16 | rn << 5 | rd, rn, rm, k);
+            }
+        }
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 3; size++)
+        for (unsigned form = 0; form < 7; form++) for (unsigned k = 0; k < 32; k++) {
+            unsigned op = (unsigned[]){0,0,1,0x12,0x14,0x14,0x13}[form];
+            unsigned u = (unsigned[]){0,1,0,1,0,1,1}[form];
+            if ((form == 1 && size >= 2) || (form == 2 && size >= 1)) continue;
+            unsigned rd = reg(), rn = k & 1 ? rd : reg();
+            integer_tail_case(0x0e200800u | q << 30 | u << 29 | size << 22 | op << 12 | rn << 5 | rd, rn, rn, k);
+        }
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned op = 8; op <= 10; op += 2) for (unsigned shift = 0; shift < (8u << size); shift++) {
+            if (size == 3 && !q) continue;
+            unsigned imm = op == 8 ? (16u << size) - shift - 1 : (8u << size) + shift;
+            for (unsigned k = 0; k < 4; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg();
+                integer_tail_case(0x2f000400u | q << 30 | imm << 16 | op << 11 | rn << 5 | rd, rn, rn, k + 20);
+            }
+        }
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 1; size <= 2; size++)
+        for (unsigned round = 0; round < 2; round++) for (int idx = -1; idx < (size == 1 ? 8 : 4); idx++)
+            for (unsigned k = 0; k < 32; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                if (idx >= 0 && size == 1) rm &= 15;
+                uint32_t i = idx < 0 ? 0x0e20b400u | round << 29 | rm << 16 :
+                    0x0f00c000u | round << 12 | rm << 16 |
+                    (size == 1 ? (unsigned)(idx & 1) << 20 | (unsigned)((idx >> 1) & 1) << 21 | (unsigned)(idx >> 2) << 11 :
+                        (unsigned)(idx & 1) << 21 | (unsigned)(idx >> 1) << 11);
+                integer_tail_case(i | q << 30 | size << 22 | rn << 5 | rd, rn, rm, k);
+            }
+    for (unsigned k = 0; k < 64; k++) {
+        unsigned rd = reg(), rn = k & 1 ? rd : reg();
+        integer_tail_case(0x5ef1b800u | rn << 5 | rd, rn, rn, k);
+    }
+    for (unsigned sz = 0; sz < 2; sz++) for (unsigned load = 0; load < 2; load++)
+        for (unsigned mode = 0; mode < 4; mode++) for (unsigned k = 0; k < 20; k++) {
+            hao_cpu in; state(&in, 1, 2);
+            in.x[1] = (uintptr_t)mem + (k < 10 ? PG + k : 2 * PG - (k % 3));
+            uint32_t i = 0x3c000020u | sz << 30 | load << 22;
+            if (mode == 2) i |= 1u << 24; else i |= mode << 10;
+            check(i, 0, &in, false); check(i, 0, &in, true);
+        }
+}
+
 int main(void)
 {
     mem = mmap(NULL, 3 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -259,6 +329,7 @@ int main(void)
                 if (!k && vector_helper_calls) { if (fails++ < 20) printf("MISMATCH tail fused admission %08x\n", i); }
             }
         }
+    integer_tail();
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {

@@ -7,7 +7,7 @@ int main(int argc, char **argv)
         __asm__ volatile("movi v1.4s, #0\n"
                          "frecpe v0.4s, v1.4s\n" /* deliberately untranslated */
                          "fabd v0.4s, v1.4s, v1.4s\n" /* not FADDP */
-                         "addp d0, v1.2d\n"       /* integer, not FP pair */
+                         "sqadd v0.2d, v1.2d, v1.2d\n" /* deliberately untranslated integer */
                          "movi v2.4s, #1\n"      /* subnormal: input decline */
                          "fadd v0.4s, v2.4s, v2.4s\n"
                          "fmov v3.4s, #1.0\n"
