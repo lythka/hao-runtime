@@ -9,6 +9,8 @@ import SwiftUI   // loaded only to resolve SwiftUI.ContainerBackgroundValue.Cont
 //    its words and that has no empty case (a 17-case enum and Optional of such an enum stay refused).
 // C: a multi-payload enum with a trailing tag byte (size = largest payload + 1, xi = 256 - cases,
 //    at most one empty case); two empty cases, a mismatching size or xi, a bad tag stay refused.
+// D: a value of fewer than 8 bytes holds no pointer word, so nothing in it is patched, whatever its
+//    enum layout (spare bits of a payload, extra inhabitants of a payload enum, an Optional of one).
 // Lines: L layout, X extra inhabitant k written into 0xa5 storage, C case injected into zeroed (z) or
 // 0xa5 (f) storage with the tag read back, V a live value's words (P = the Box object's address),
 // W a walk: "walk N" with each patch offset:source>receiver, or "refused TYPE".
@@ -37,6 +39,10 @@ enum SpareNested { case a(Box), b(Box, NSObject??) }
 enum SecondaryText { case one(String); case two(String, String); case none }
 enum TwoEmpty { case one(String); case two(String, String); case none, other }
 enum TextNil { case one(String); case two(NSObject??, String); case none }   // a nested nil in a payload
+
+enum Kind { case clear, cloudy(Trend), snow }                 // single payload, the payload's inhabitants
+enum Flags { case a(Bool), b(Bool), c(Bool, Bool), none }    // multi-payload, tag in Bool's spare bits
+struct Small { var kind: Kind; var flags: Flags; var count: Int16 }
 
 typealias StoreTag = @convention(c) (UnsafeMutableRawPointer, UInt32, UInt32, UnsafeRawPointer) -> Void
 typealias GetTag = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> UInt32
@@ -267,3 +273,15 @@ do {
         p[32] = 0
     }
 }
+
+// D. Fewer than 8 bytes.
+for (label, t) in [("Kind", Kind.self), ("Flags", Flags.self), ("Small", Small.self),
+                   ("Optional<Kind>", Kind?.self)] as [(String, Any.Type)] { layout(label, t) }
+cases("Kind", Kind.self, 3, 0)
+cases("Flags", Flags.self, 4, 0xa5)
+for (label, v) in [("Kind.clear", Kind.clear), ("Kind.cloudy", .cloudy(.down)), ("Kind.snow", .snow)] { walk(label, v) }
+for (label, v) in [("Flags.a", Flags.a(true)), ("Flags.c", .c(false, true)), ("Flags.none", .none)] { walk(label, v) }
+walk("Small", Small(kind: .cloudy(.up), flags: .b(true), count: 7))
+walk("Optional<Kind> nil", Kind?.none)
+walk("Optional<Bool> nil", Bool?.none)
+walk("Optional<Bool> some", Bool?.some(true))

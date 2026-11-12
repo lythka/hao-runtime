@@ -67,6 +67,16 @@ Rules as implemented:
   case's payload is walked as its type at offset 0, the empty case needs
   nothing, any other byte is refused. This is layout only, so it applies to
   a guest enum whose witnesses are arm64 code as well.
+- D (`Recipe.c` `collect_inner`): a value of fewer than 8 bytes is walked
+  with no patch and no verdict on its case. A patch rewrites a pointer word,
+  and such a value holds none. Before this rule every enum of that size
+  other than a payload-free one was refused, for example a 1-byte guest
+  enum with payload cases (flags 0x2200000) inside a SwiftUI value, and an
+  `Optional<Bool>` published as a result. Either refusal ended the process.
+  `swiftlayout` measures a single-payload enum (1 byte, xi 0xfc), a Bool
+  multi-payload enum (2 bytes), a 6-byte struct of them and an `Optional` of
+  the first. Each is identical on both architectures. Those 8 walks and 2
+  of `Optional<Bool>` were refused before this rule.
 
 Both enum rules are used by the walk only. The ownership transfers in
 `Aggregate.c` and `graph()`, which picks the types whose native witnesses a
