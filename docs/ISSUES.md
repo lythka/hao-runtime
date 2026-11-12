@@ -1736,7 +1736,8 @@ first copy; after it, all 94 lines equal native arm64. It now also copies,
 assigns, tests and drops nil, full and empty values of `Optional` of such a
 guest struct, and makes a nil one through generic code. Before the narrower
 nil rule that case stopped with "Unexpectedly found nil" in all three modes;
-now all 101 lines equal native arm64.
+after it all 101 lines equaled native arm64. With the cases added since, the
+test prints 179 lines, all equal to native arm64 under JIT, `--interp` and AOT.
 
 Remaining limitations:
 - Native code that reads such a value itself, rather than a witness the guest
