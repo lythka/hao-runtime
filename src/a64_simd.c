@@ -449,6 +449,33 @@ static uint64_t shl_reg(uint64_t a, int64_t sh, int es, bool u, bool rnd)
     return (uint64_t)(v >> sh) & emask(es);
 }
 
+/* Saturation is only possible for a left shift. Compare before shifting,
+ * including counts at least as wide as the lane; never shift a signed value
+ * or invoke C's undefined large-count shifts. Right shifts share rounding
+ * and sign-extension with SSHL/USHL. */
+static uint64_t sat_shl_reg(uint64_t a, int sh, int es, bool u, bool rnd, bool *sat)
+{
+    int bits = es * 8;
+    sh = (int8_t)sh;
+    a &= emask(es);
+    if (sh <= 0) return shl_reg(a, sh, es, u, rnd);
+    if (!a) return 0;
+    if (u) {
+        if (sh >= bits || a > (emask(es) >> sh)) {
+            *sat = true;
+            return emask(es);
+        }
+    } else {
+        int64_t value = sext(a, bits);
+        int64_t hi = (int64_t)(emask(es) >> 1), lo = -hi - 1;
+        if (sh >= bits || value > (hi >> sh) || value < (lo >> sh)) {
+            *sat = true;
+            return (uint64_t)(value < 0 ? lo : hi) & emask(es);
+        }
+    }
+    return (a << sh) & emask(es);
+}
+
 /* Integer helper paths use only baseline SSE2. Read every input before the
  * caller writes Rd: upper/lower source selection and Rd aliases are distinct
  * from the destination's Q-dependent clearing/preservation rules. */
@@ -822,6 +849,7 @@ static int simd_three_same(hao_cpu *c, uint32_t i, int scalar)
         case 0x07: v = (U ? x >= y : sx >= sy) ? emask(es) : 0; break;
         case 0x08: v = shl_reg(x, (int64_t)(int8_t)y, es, U, false); break;
         case 0x0A: v = shl_reg(x, (int64_t)(int8_t)y, es, U, true); break;
+        case 0x09: case 0x0B: v = sat_shl_reg(x, (int8_t)y, es, U, op == 0x0B, &sat); break;
         case 0x0C: v = U ? (x > y ? x : y) : (uint64_t)(sx > sy ? sx : sy); break;
         case 0x0D: v = U ? (x < y ? x : y) : (uint64_t)(sx < sy ? sx : sy); break;
         case 0x0E: v = U ? (x > y ? x - y : y - x) : (uint64_t)(sx > sy ? sx - sy : sy - sx); break;
