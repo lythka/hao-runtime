@@ -210,6 +210,16 @@ Rules as implemented:
   multi-payload enum (2 bytes), a 6-byte struct of them and an `Optional` of
   the first. Each is identical on both architectures. Those 8 walks and 2
   of `Optional<Bool>` were refused before this rule.
+- F (`Recipe.c` `function_value`): a function value other than a block, under
+  any number of `Optional`s, is walked with no patch. Measured in native
+  arm64 and x86_64 programs: a Swift closure is a code word and a context
+  word (16 bytes, flags 0x10007), a thin or C function one code word; xi
+  0x7fffffff, XI k is code word k on both, context untouched, and each
+  `Optional` consumes the next. Its captures live in a separate heap object.
+  A block is an ObjC reference whose XI k is k on arm64 and 2k on x86_64, so
+  it is excluded. Before, every `Optional` of a closure was refused, for
+  example `Optional<(Bool) -> ()>` in a SwiftUI value, which ended the
+  process. `swiftlayout` section F: 8 walks refused before, all pass.
 
 Both enum rules are used by the walk only. The ownership transfers in
 `Aggregate.c` and `graph()`, which picks the types whose native witnesses a
