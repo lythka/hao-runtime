@@ -1542,6 +1542,84 @@ Remaining limitations:
 - Each translated single-precision arithmetic instruction is about 250-350
   bytes of x86 code: `vbench`'s translations grew from 13 to 33 KB.
 
+## FEAT_AFP control policy (analysis only)
+
+The guest commpage advertises no optional CPU features. However,
+`FPCR_WRITABLE` includes AH, FIZ and NEP (bits 1, 0 and 2), so hao retains
+writes to them while executing the baseline FP semantics. Readback alone
+therefore suggests behavior the interpreter and translated code do not provide.
+No feature policy or runtime behavior is changed here.
+
+Native measurements on an Apple M4 Max reporting `hw.optional.arm.FEAT_AFP=1`
+cover all eight AH/FIZ/NEP combinations, FZ clear/set for subnormal and
+estimate cases, scalar S min/max and addition, and H/S/D estimates. Each
+operation starts with FPSR clear; the probe reads full Qd, FPCR and FPSR and
+restores the caller's FPCR. All three bits stick, independently and together.
+The following examples use raw IEEE hexadecimal bits and round-to-nearest:
+
+| Operation / inputs | AH=0 | AH=1 |
+|---|---|---|
+| FMIN S, -0, +0 | -0, FPSR=0 | +0, FPSR=0 |
+| FMAX S, +0, -0 | +0, FPSR=0 | -0, FPSR=0 |
+| FMIN S, 7fc00123, 3f800000 | 7fc00123, FPSR=0 | 3f800000, IOC |
+| FMIN S, 3f800000, 7fc00123 | 7fc00123, FPSR=0 | 7fc00123, IOC |
+| FMAX S, 7f800123, 3f800000 | 7fc00123, IOC | 3f800000, IOC |
+| FRECPE S, 3f812345 | 3f7d8000 | 3f7db800 |
+| FRSQRTE S, 3f812345 | 3f7e8000 | 3f7ed000 |
+| FRECPE S, +0 | +infinity, DZC | +infinity, FPSR=0 |
+| FRSQRTE S, -1 | 7fc00000, IOC | ffc00000, FPSR=0 |
+
+AH changes the S estimate precision and exception policy. For the measured
+H input 4248 and D input 400921fb54442d18, normal estimate values were unchanged;
+that observation is not exhaustive validation of either precision. FIZ alone
+leaves those ordinary estimates unchanged.
+
+For `FADD S` of the smallest positive subnormal (00000001) and +0:
+
+| AH | FIZ | FZ | Result | FPSR |
+|---:|---:|---:|---|---|
+| 0 | 0 | 0 | 00000001 | 0 |
+| 0 | 0 | 1 | 00000000 | IDC |
+| 0 | 1 | 0 | 00000000 | 0 |
+| 0 | 1 | 1 | 00000000 | IDC |
+| 1 | 0 | 0 | 00000001 | IDC |
+| 1 | 0 | 1 | 00000000 | IDC, UFC, IXC |
+| 1 | 1 | 0 or 1 | 00000000 | 0 |
+
+NEP independently changes upper-lane merging. With Vn upper 96 bits
+`5566778899aabbcc11223344` and Vd initialized to all `dd` bytes,
+`FADD S0,S1,S2` preserves Vn's upper bits when NEP=1; NEP=0 clears them.
+Scalar FRECPE/FRSQRTE H/S/D instead preserve Vd's inactive bits under NEP.
+Implementing one common scalar-result clearing rule would be incorrect.
+These measurements agree with Arm's [FPCR description](https://www.df.lth.se/~getz/ARM/SysReg/AArch64-fpcr.html)
+and [FP operation pseudocode](https://www.scs.stanford.edu/~zyedidia/arm64/shared_pseudocode.html).
+
+Policy choices:
+
+- **Treat AH/FIZ/NEP as RES0:** recommended for the current baseline feature
+  contract. Mask them on writes and readback; keep them unadvertised. This
+  gives internally consistent baseline behavior, but intentionally differs
+  from newer native CPUs for software writing the bits without feature checks.
+- **Model them without advertising:** preserves behavior for direct writers
+  while leaving feature discovery unchanged. Requires every affected FP
+  operation's result, NaN ordering, flushing, flags and merging semantics,
+  with interpreter/JIT/AOT parity; helper fallback alone is insufficient today.
+- **Model and advertise FEAT_AFP:** enables feature-detecting software to rely
+  on the complete contract. Requires the same semantic work plus a consistent
+  guest feature-discovery policy, including non-AFP host validation. Advertising
+  the bits before implementing their behavior is not a valid intermediate step.
+
+An implementation decision remains required. The measurements are directed
+examples, not a full FEAT_AFP oracle; other rounding modes, DN combinations,
+all NaN operand orders and the full operation set remain unmeasured. No
+advertisement or control masking has been added.
+
+Validation: the native probe covers 176 AFP records (plus separate half-control
+examples), with exact readback for every requested control combination.
+`make -j8 check` passes on the unchanged runtime: 102 guest/host passes,
+one expected failure, three expected skips, and no unexpected failures.
+This validates the analysis branch's baseline, not FEAT_AFP emulation.
+
 ## Scalar FP conversions, max/min and round-to-integral cost
 
 The translator emitted SSE code for scalar FADD/FSUB/FMUL/FDIV/FSQRT, FCVT
