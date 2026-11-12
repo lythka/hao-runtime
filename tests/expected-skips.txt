@@ -3,7 +3,7 @@
 # that is not in this tree or not on a development host (tests/README.md).
 host/sigpolicy	^SKIP profile cases \(PROFILE not set\)
 host/sigpolicy	^SKIP hao under .*: x86_64 under Rosetta takes no fault
-tools	^SKIP stamp cases \(no \)
+tools	^SKIP stamp cases \(KC not set:
 guest/cli	^SKIP Apple-signed guest \(HAO_FS:
 guest/cli	^SKIP trusted cdhash list \(HAO_FS:
 tools	^SKIP MenuBarAgent \(HAO_FS:

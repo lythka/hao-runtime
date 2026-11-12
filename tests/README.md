@@ -256,11 +256,22 @@ November as well. Those stacks are in JIT emission or bridge binding,
 without the recursive enum initialization above; no shared cause has been
 established (see [remaining issues](../docs/ISSUES.md)).
 
-Flaky under host load: `make oracle`'s `atomic16` control case ("two
-8-byte halves (must tear)") failed in one of three `make oracle` runs with 0
-torn loads of 300000 while the host's load average was about 20 from other
-jobs; it is a check that the race is exercised, not a hao result, and five
-direct runs right after tore 1935 to 281425 times.
+Host load: `make oracle`'s `atomic16` race cases once failed their control
+("two 8-byte halves (must tear)") with 0 torn loads of 300000 at a load
+average of about 20, because the writer thread barely ran during the reads.
+Each case now starts reading once its writer runs and repeats its loads
+until the writer has stored at least as often (the control: until it tears),
+for at most `ATOMIC16_SECONDS` (30). A case that cannot establish the race
+prints SKIP and does not fail; `make oracle` does not go through
+`tests/check.sh`, so such a SKIP shows only in its output (the last line
+counts "races not established"). A torn atomic load always fails.
+
+`guest/footprint` measures every process with `MallocMaxMagazines=4` and
+judges the smallest of up to three runs of a case over budget. Without the
+cap, the `objc` JIT case grew by 300-400 KB of Malloc Tiny/Small and page
+tables under a load average of about 20 (libmalloc's per-CPU magazines on
+this 16-CPU host) and failed its 2048 KB budget in two of three full gates;
+the code and data categories did not move.
 
 ## Sanitizer check
 
