@@ -126,7 +126,9 @@ for mode,args,policy in [
 host=OUT/'reserved.c'
 invalid=[]
 for base in (0x0f40c000,0x0f40d000,0x5f40c000,0x5f40d000):
-    invalid += [(base&~0x00c00000), (base|0x00c00000), (base|0x20000000)]
+    invalid += [(base&~0x00c00000), (base|0x00c00000)]
+    # U=1, opcode D is allocated SQRDMLAH, covered by guest/satmul.
+    if not (base & 0x1000): invalid.append(base | 0x20000000)
 host.write_text(r'''
 #include "hao/cpu.h"
 #include <stdio.h>

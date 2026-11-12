@@ -2154,3 +2154,20 @@ The translated engines run under Rosetta; Intel behavior is not measured.
 FZ16/AHP and alternate FP controls are outside this comparison. Remaining
 unimplemented instructions retain explicit exceptions; JIT IEEE-flag differences
 remain separately reported until their inline paths are corrected.
+## Saturating widening and rounding multiply-accumulate
+
+The interpreter lacked execution cases for SQDMLAL/SQDMLSL/SQDMULL and
+SQRDMLAH/SQRDMLSH, including indexed and scalar forms. Widening products now
+saturate before accumulation, while rounding high-half accumulates retain the
+combined product and accumulator until their single final saturation. Signed
+128-bit intermediates cover the doubled minimum product and 64-bit accumulator
+overflow. Source snapshots preserve register aliases and upper-half selection;
+QC is cumulative and unused scalar destination bits are cleared.
+
+On identical 200,000-record native SIMD input, interpreter and JIT known-UNDEF
+counts fall from 4,036 to 2,362 with zero value or QC mismatches. A directed
+native comparison covers 222 forms and operand layouts, fourteen boundary
+patterns in each source and clear/preset FPSR (87,024 executions per engine).
+JIT, interpreter, helper-only and AOT outputs agree. Translated execution was
+under Rosetta; Intel execution and performance remain unmeasured. Other missing
+instruction groups and pre-existing JIT IEEE-flag differences remain separate.
