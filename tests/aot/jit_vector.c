@@ -296,6 +296,22 @@ int main(void)
                 uint32_t i = 0x0e204400 | q << 30 | u << 29 | sz << 22 | rm << 16 | rn << 5 | rd;
                 check(i, 0, &in, false); check(i, 0, &in, true);
             }
+    for (unsigned control = 0; control < 16; control++)
+        for (unsigned q = 0; q < 2; q++) for (unsigned k = 0; k < 256; k++) {
+            unsigned rd = reg(), rn = k > 1 && (k & 1) ? rd : 1, rm = k > 1 && (k & 2) ? rn : 2;
+            hao_cpu in; state(&in, rn, rm); in.fpcr = control << 22;
+            if (k < 2) for (int e = 0; e < 4; e++) {
+                in.v[rn].s[e] = k ? 0x00800000 : 0x40c00000;
+                in.v[rm].s[e] = 0x40000000;
+            }
+            uint32_t i = 0x2e20fc00 | q << 30 | rm << 16 | rn << 5 | rd;
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k < 2 && vector_helper_calls != k) {
+                    if (fails++ < 20) printf("MISMATCH division admission %08x fpcr %x: %u helper calls\n", i, in.fpcr, vector_helper_calls);
+                }
+            }
+        }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */

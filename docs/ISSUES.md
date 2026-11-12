@@ -90,6 +90,28 @@ already accepts some reserved permute arrangements, listed as a known
 leniency in `tests/oracle/known.h`; its behavior is unchanged here.
 Performance on Intel and application acceptance remain separate checks.
 
+## Inline single-precision vector division
+
+FDIV .2S/.4S shares the vector arithmetic input/result admission and saved
+MXCSR rollback. Every active input must be zero or normal. Results near
+underflow, overflow or an invalid division go to the original helper with
+the pre-attempt flags. An exact zero numerator divided by a nonzero ordinary
+divisor may stay inline. The .2S expansion duplicates its active pair before
+DIVPS so inactive 0/0 lanes cannot raise IOC; the destination still clears
+its upper half. Guest rounding/FZ and live NZCV are preserved, with no VEX,
+absolute addresses, allocation or TLS. Double and half vector division
+remain helpers.
+
+Validation: 605,766 complete-state cases pass with full FPSR and all 16
+RMode/FZ/DN settings. Directed ordinary and exact-tiny divisions assert
+respectively zero and one helper call. All 520 native instruction-test
+lines agree in JIT, interpreter, helpers-only and AOT; 39,787 encoder
+checks pass. Suppressing FDIV result admission produces 464 mismatches,
+including result differences and required-helper-route failures, while
+the unmodified mutation control passes. `make test` passes, including the
+full all-mode oracle with zero mismatches. Intel speed and application
+acceptance remain unmeasured.
+
 ## Inline floating-point pairwise sums and extrema reductions
 
 FADDP .2S/.4S/.2D and scalar S/D now select adjacent pairs with integer
