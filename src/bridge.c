@@ -707,6 +707,9 @@ static uint32_t lbl_mask, lbl_used;
 static const struct mach_header_64 **lbl_seen;
 static uint32_t lbl_nseen, lbl_capseen, lbl_count;
 static bool lbl_ready;
+/* the name table (lbl_names, lbl_n) is complete; it never changes again, so its entries are read
+ * without labels_lock. lbl_ready only says a refresh of the images finished. */
+static bool lbl_names_ready;
 static uint64_t st_lbl_images, st_lbl_addrs, st_trap_alias, st_lbl_ns, st_lbl_ind, st_lbl_ind_ns;
 
 static void lbl_add_name(const char *name, void *ctx)
@@ -800,7 +803,7 @@ static void labels_refresh(void)
     uint32_t nind = 0;
     hao_crit_enter();
     pthread_mutex_lock(&labels_lock);
-    if (!lbl_ready) labels_init();
+    if (!lbl_names_ready) { labels_init(); __atomic_store_n(&lbl_names_ready, true, __ATOMIC_RELEASE); }
     for (uint32_t k = 0; k < m; k++) {
         const struct mach_header_64 *h = imgs[2 * k];
         if (lbl_seen_has(h)) continue;
