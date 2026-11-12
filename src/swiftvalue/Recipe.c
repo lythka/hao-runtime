@@ -1,9 +1,8 @@
 /* Bounded representation policy, operating on trusted initialized native
  * metadata supplied by the admitted callback or fixture. No arbitrary memory probing.
  * ABI: Metadata.h, ValueWitnessTable.h, ReflectionMirror.cpp, Reflection.h.
- * The selected XI field is the first with maximum XI count. An Array of an
- * enum has native-only storage (ArrayBuffer.swift); BridgeObject alone does
- * not establish that invariant. */
+ * The selected XI field is the first with maximum XI count. An Array's
+ * buffer word supplies only empty encodings here: its elements stay opaque. */
 #include "Recipe.h"
 #include "Common.h"
 #include "Enum.h"
@@ -131,12 +130,14 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
         return 1;
     }
     if (kind == 0x200 && m[1] == r->array) {
-        /* Only non-Optional enum Elements are admitted by this policy.
-         * A class/ObjC existential Array must not inherit this proof. */
-        /* The guest-call path rewrites only the buffer word's outer nil,
-         * whose inhabitants are the BridgeObject's for any Element. */
-        if ((r->kind(m[2]) != 0x201 && !r->existentials) || v->size != 8 || v->stride != 8 ||
-            v->extra != 0x7fffffff || (v->flags & 255) != 7) return 0;
+        /* The buffer word's inhabitants do not depend on the Element:
+         * measured in native arm64 and x86_64 programs for struct, enum,
+         * Swift class, AnyObject, NSObject and Any Elements (size 8, flags
+         * 0x10007, xi 0x7fffffff; XI0 0, XI k k on arm64 and 2k on x86_64).
+         * This plans the empty encodings only. A live Array is not walked
+         * (collect stops at its buffer word): nothing here certifies the
+         * representation of its elements, which may be ObjC-bridged. */
+        if (v->size != 8 || v->stride != 8 || v->extra != 0x7fffffff || (v->flags & 255) != 7) return 0;
         *out = (empty_plan){8, 0, 0};
         return 1;
     }
@@ -273,8 +274,22 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     if (kind == 0x201) {
         if (common_leaf_value(type,value)) return 1;
         enum_case_plan active;
-        if (!discover_enum_case(type,value,&active)) return 0;
-        return !active.payload || collect(r,active.payload,value,base,out,capacity,used,depth + 1);
+        if (discover_enum_case(type,value,&active))
+            return !active.payload || collect(r,active.payload,value,base,out,capacity,used,depth + 1);
+        fixed_enum_case fixed;
+        if (!discover_fixed_enum_case(type,value,&fixed)) return 0;
+        if (!fixed.payload) return 1;     /* the empty case: no payload */
+        if (!fixed.spare) return collect(r,fixed.payload,value,base,out,capacity,used,depth + 1);
+        unsigned first = *used;
+        if (!collect(r,fixed.payload,(const unsigned char *)fixed.copy,base,out,capacity,used,depth + 1)) return 0;
+        /* A patch is written into the live value: one over a tag bit would
+         * change the case. */
+        for (unsigned i = first; i < *used; ++i) {
+            uint64_t at = out[i].offset - base;
+            for (uint64_t b = at; b < at + 8; ++b)
+                if ((fixed.mask[b / 8] >> (8 * (b % 8))) & 0xff) return 0;
+        }
+        return 1;
     }
     if (kind == 0x305) return common_objc_reference_value(type,value);
     if (kind != 0x200 && kind != 0x301) return 1;

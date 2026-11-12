@@ -65,6 +65,24 @@ func intervals() {
     sp.endInterval("iv", st)
 }
 
+// A guest enum with a trailing tag byte (String / (String, String) / one empty case: the byte is the
+// case index) beside a nested Optional in a tuple. The tuple's native witnesses take the whole tuple,
+// so its walk has to get through the enum, by its layout (its witnesses are arm64 code), to give the
+// Optional's outer nil the native encoding.
+enum Text { case one(String), two(String, String), none }
+func texts() {
+    let shown = { (t: Text) -> String in
+        switch t { case .one(let a): return "one(\(a))"; case .two(let a, let b): return "two(\(a), \(b))"; case .none: return "none" }
+    }
+    let d = { (x: (Text, C??)) in "\(shown(x.0)) \(describe(x.1) { "\($0.n)" })" }
+    let values: [(Text, C??)] = [(.one("Cupertino"), nil), (.two("12:00", String(repeating: "x", count: 40)), .some(nil)),
+                                 (.none, nil), (.one("x"), .some(.some(C(9)))), (.two("a", "b"), nil)]
+    for (k, v) in values.enumerated() {
+        print("Text", k, "copy", d(copied(v)), "drop", dropped(v))
+        print("Text", k, "assign", d(assigned(values[(k + 1) % values.count], v)))
+    }
+}
+
 final class Holder {
     lazy var store: (any P)? = nil
     lazy var other: (any P)? = S()
@@ -88,6 +106,7 @@ final class Holder {
             print("holder kept", copied(h) === h)
         }
         intervals()
+        texts()
         print("done")
     }
 }

@@ -1,5 +1,105 @@
 # Runtime issues and measured scope
 
+## Swift values with an Array-supplied nil, spare-bit enum tags or an extra tag byte
+
+The Swift value walk (`src/swiftvalue/Recipe.c` `selected`/`collect`, run
+on a published value and on a guest call of a native value witness) refused
+three shapes, and a refusal at publication ends the process:
+
+- An `Optional` of a struct whose extra inhabitants come from an `Array`
+  field. Swift takes a struct's inhabitants from its first field with the
+  largest count, and an `Array` ties with most pointer-sized fields and
+  comes first. `selected()` planned an `Array` buffer word only for an enum
+  Element (any Element on the witness path).
+- A compiler-laid-out multi-payload enum whose tag is in the payloads'
+  spare bits, for example `SwiftUI.ContainerBackgroundValue.Content`
+  (16 bytes, flags 0x210007; a class-reference word, or two of them).
+- A compiler-laid-out multi-payload enum with an extra tag byte, for
+  example `String` / `(String, String)` / one empty case (33 bytes, stride
+  40, flags 0x2230007, xi 0xfd).
+
+`enum_payloads()` accepts only runtime-laid-out enums (the runtime's
+multi-payload tag witness and a payload-size word in the metadata), which
+the two enum shapes do not have.
+
+Measured in one program built natively for arm64 and for x86_64
+(`tests/host/swiftlayout.swift`, arm64 natively and x86_64 under Rosetta
+on the development host):
+
+- `Array<E>` is one buffer word, size 8, flags 0x10007, xi 0x7fffffff, for
+  E a struct, an enum, a Swift class, `AnyObject`, `NSObject` and `Any`.
+  XI0 is 0 on both; XI k is k on arm64 and 2k on x86_64. `Optional<S>.none`
+  of a struct whose first field is the `Array` writes only that word.
+- Spare-bit tags: for the 16-byte enum above (and its SwiftUI original)
+  injecting case 0 into zeroed storage writes nothing and case 1 sets bit 63
+  of word 1 on both; live values are `[p, 0]` and `[p, 0x8000000000000000|p]`
+  on both. A five-case enum of one class reference uses bits 61-63 on both.
+  A 17-case one uses bits 60-63 and 2 on arm64, 59-63 on x86_64. The empty
+  encodings always differ: xi 0x3ffe against 0x3ffffe for the 16-byte enum,
+  XI0 words f000000000000007 against ff00000000000007.
+- Extra tag byte: payload cases leave the payload as it is and write the
+  case index into byte 32; the empty case is a zero payload with tag 2; the
+  inhabitants are tag bytes ff, fe, ... Identical on both, live values too.
+  With two empty cases xi is still 0xfd (they share tag 2 and keep their
+  index in the payload area).
+
+Rules as implemented:
+
+- A: the `Array` branch of `selected()` admits any Element on both paths.
+  It plans the buffer word's empty encodings only. A live `Array` is not
+  walked: its elements are still not certified, and an outer nil inside an
+  element is no patch of the enclosing value.
+- B (`Enum.c` `spare_bit_case`): an enum whose field descriptor is
+  MultiPayloadEnum, with 2 to 64 direct payload cases that all resolve and
+  no empty case; size a multiple of 8 up to 128 bytes, equal to its stride,
+  alignment 8; every value witness (0-7, 11-13) native, in no guest image
+  or thunk. Each payload case injected with the native witness into zeroed
+  storage must read back as that case and set no bit outside bits 60-63 of
+  a word. The live case is the native `getEnumTag`; that case's payload is
+  walked as its type from a copy with every injected tag bit cleared
+  (`destructiveProjectEnumData` is never run on the live value). A patch
+  inside it that would overwrite a tag bit refuses the value.
+- C (`Enum.c` `tag_byte_case`): an enum whose field descriptor is
+  MultiPayloadEnum, with 2 to 64 direct payload cases that all resolve and
+  at most one empty case; size = largest payload + 1 and xi = 256 - (payload
+  cases + empty cases), which in Swift's layout means no spare bit carries
+  the tag. The byte at the largest payload's size is the case: a payload
+  case's payload is walked as its type at offset 0, the empty case needs
+  nothing, any other byte is refused. This is layout only, so it applies to
+  a guest enum whose witnesses are arm64 code as well.
+
+Both enum rules are used by the walk only. The ownership transfers in
+`Aggregate.c` and `graph()`, which picks the types whose native witnesses a
+publication intercepts, still follow only runtime-laid-out enums.
+
+`tests/host/swiftlayout.sh` (new in `tests/check.list`) checks the
+measurements on each architecture, that every other measured line is equal
+on both, and 46 walk verdicts over the x86_64 values. Before the change 36
+of them were refused: every `Optional` of an `Array`-first struct except
+an enum Element, every enum value of shape B and C, nil patches inside
+their payloads included. Still refused, as expected: the 17-case enum, an
+`Optional` nil of the B enum and of its SwiftUI original, a spare-bit enum
+with an empty case, the extra-tag enum with two empty cases, copies of its
+metadata with size + 1 or xi - 1, and a tag byte past the cases.
+`tests/guest/optwitness.sh` now also copies, assigns and drops tuples of the
+C-shaped guest enum and a `C??` through the native tuple witnesses (arm64e
+guest under JIT, `--interp` and AOT against native arm64). The walk must get
+through the enum to give the `C??` outer nil its native encoding. Before the
+change all three modes crashed in `swift_retain(0x1)`; now all 111 lines are
+equal.
+
+Remaining limitations:
+- Measured on the development host's native Swift runtimes (arm64, and
+  x86_64 under Rosetta), not on the target system or Intel hardware.
+- An `Optional` of a B or C enum is refused. For B its nil encodings
+  differ. For C they are tag bytes that are the same on both, but not part
+  of this rule.
+- B: a guest-defined spare-bit enum (arm64 witnesses), an empty case, a tag
+  that needs a bit outside 60-63 and an enum over 128 bytes are refused.
+  The tag-bit patch refusal is not exercised: the payload words that held a
+  nil in the measured enums had no spare bits, so no tag landed in them.
+- C: only one empty case was measured, and more are refused.
+
 ## Table lookups, EXT, integer multiplies and round-to-integral in translated code
 
 Translated code ran TBL/TBX, EXT, the integer vector multiplies (MUL, MLA,

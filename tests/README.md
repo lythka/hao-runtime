@@ -141,6 +141,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | host/near-map | PASS | 1 | |
 | host/dscselhoist | PASS | 1 | |
 | host/swiftvalue | PASS | 1 | |
+| host/swiftlayout | PASS | 4 | builds one Swift program for arm64 and x86_64, runs both natively (the arm64 one needs Apple silicon) and loads SwiftUI in both, without making a view, to resolve one of its enum types |
 | objc | PASS | 5 | |
 | tools | SKIP (expected) | 25 | runs bundle, stubdeps, platform, identity and aotpayload; stamp cases need `KC` (a kernel collection); MenuBarAgent case needs `HAO_FS` |
 | tools/release | PASS | 1 | python3.14 |
