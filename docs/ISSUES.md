@@ -71,6 +71,39 @@ whole instruction workload grows from 1,317 to 1,611 KiB. Timing acceptance
 on Intel remains separate from development-host measurements.
 
 
+## Half arithmetic tail
+
+Cumulative static coverage reaches 99.8069% (1,415 additional sites), with
+generated code 649,079 -> 651,281 KiB. The 37 ordinary forms at 5,000
+iterations reduce JIT/AOT helper calls from 2,960,000 to zero. Temporary
+coverage caches were removed.
+
+FMUL, FADD and FSUB .4H/.8H now widen ordinary operands exactly to binary64,
+compute the exact product or sum, and round once with the same integer
+binary16 machinery as FMLA. This includes all eight indexed FMUL lanes and
+scalar H arithmetic. A shared pair-rounding emitter keeps fused and ordinary
+half arithmetic aligned. Scalar and vector FMIN/FMAX/FMINNM/FMAXNM select
+original operands using signed integer keys; -0 orders before +0, preserving
+the architecture's tie rule without FP arithmetic.
+
+Subnormal or nonfinite inputs, FZ16/AHP and other unsupported controls retain
+the interpreter. Exact products and sums can produce subnormal half results,
+overflow and inexact results inline, with full sticky FPSR. No interpreter
+semantics changed. Half division and scalar half fused operations remain
+helpers.
+
+Focused validation passes 743,890 complete-state cases and 796 native
+instruction hashes in JIT, interpreter, helpers-only and AOT. Cases include
+all sixteen RMode/FZ/DN settings, signed zeros, normal/subnormal/overflow
+boundaries, aliases, all indexed lanes, inactive scalar bits and live NZCV.
+The half-subtraction mutation is caught (616 state mismatches), with a
+passing control. A separate 37-form ordinary workload at N=5000 removes
+2,960,000 helper calls in both JIT and AOT: 1,280,000 indexed-vector,
+1,120,000 other and 560,000 scalar-FP calls. JIT workload code grows from
+101 to 1,854 KiB. Every output matches native.
+Full-gate and cumulative coverage measurements accompany integration;
+Intel performance and application acceptance remain unmeasured.
+
 ## Integer and format conversion tail
 
 Cumulative static coverage reaches 99.7424% (4,689 additional sites), with

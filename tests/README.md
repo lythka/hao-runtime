@@ -413,3 +413,12 @@ FSQRT .2S/.4S/.2D, every FPCR RMode/FZ/DN setting, aliases, zero signs,
 NaNs and range boundaries. `jitinsns` compares all seven forms with native
 ARM in each engine; `coverage-bench` adds per-form checksum/timing/statistics
 cases with ordinary inputs.
+
+Half arithmetic cases cover FMUL/FADD/FSUB .4H/.8H, every indexed FMUL lane,
+scalar H arithmetic and scalar/vector FMIN/FMAX/FMINNM/FMAXNM. The tests use
+all sixteen FPCR settings, aliases, special operands, signed zeros, exact
+and inexact half rounding boundaries and ordinary-input helper assertions.
+`guest/jitinsns` compares these with native across all engines, while
+`guest/coverage-bench` adds 37 ordinary half forms. The FP coverage mutation
+script changes half subtraction into addition; `MUTATIONS` can select a
+subset for focused development runs, with the full set remaining the default.

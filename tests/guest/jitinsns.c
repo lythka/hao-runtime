@@ -399,6 +399,43 @@ VECF(t_tail_fcvtl_4s, "fcvtl v2.4s,v0.4h")
 VECF(t_tail_fcvtl_2d, "fcvtl v2.2d,v0.2s")
 VECF(t_tail_fcvtl2_4s, "fcvtl2 v2.4s,v0.8h")
 VECF(t_tail_fcvtl2_2d, "fcvtl2 v2.2d,v0.4s")
+VECF(t_tail_fmul_4h, "fmul v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fmul_8h, "fmul v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fmul_h, "fmul h2,h0,h1")
+VECF(t_tail_fadd_4h, "fadd v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fadd_8h, "fadd v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fadd_h, "fadd h2,h0,h1")
+VECF(t_tail_fsub_4h, "fsub v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fsub_8h, "fsub v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fsub_h, "fsub h2,h0,h1")
+VECF(t_tail_fmax_4h, "fmax v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fmax_8h, "fmax v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fmax_h, "fmax h2,h0,h1")
+VECF(t_tail_fmin_4h, "fmin v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fmin_8h, "fmin v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fmin_h, "fmin h2,h0,h1")
+VECF(t_tail_fmaxnm_4h, "fmaxnm v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fmaxnm_8h, "fmaxnm v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fmaxnm_h, "fmaxnm h2,h0,h1")
+VECF(t_tail_fminnm_4h, "fminnm v2.4h,v0.4h,v1.4h")
+VECF(t_tail_fminnm_8h, "fminnm v2.8h,v0.8h,v1.8h")
+VECF(t_tail_fminnm_h, "fminnm h2,h0,h1")
+VECF(t_tail_fmul_4h_e0, "fmul v2.4h,v0.4h,v1.h[0]")
+VECF(t_tail_fmul_8h_e0, "fmul v2.8h,v0.8h,v1.h[0]")
+VECF(t_tail_fmul_4h_e1, "fmul v2.4h,v0.4h,v1.h[1]")
+VECF(t_tail_fmul_8h_e1, "fmul v2.8h,v0.8h,v1.h[1]")
+VECF(t_tail_fmul_4h_e2, "fmul v2.4h,v0.4h,v1.h[2]")
+VECF(t_tail_fmul_8h_e2, "fmul v2.8h,v0.8h,v1.h[2]")
+VECF(t_tail_fmul_4h_e3, "fmul v2.4h,v0.4h,v1.h[3]")
+VECF(t_tail_fmul_8h_e3, "fmul v2.8h,v0.8h,v1.h[3]")
+VECF(t_tail_fmul_4h_e4, "fmul v2.4h,v0.4h,v1.h[4]")
+VECF(t_tail_fmul_8h_e4, "fmul v2.8h,v0.8h,v1.h[4]")
+VECF(t_tail_fmul_4h_e5, "fmul v2.4h,v0.4h,v1.h[5]")
+VECF(t_tail_fmul_8h_e5, "fmul v2.8h,v0.8h,v1.h[5]")
+VECF(t_tail_fmul_4h_e6, "fmul v2.4h,v0.4h,v1.h[6]")
+VECF(t_tail_fmul_8h_e6, "fmul v2.8h,v0.8h,v1.h[6]")
+VECF(t_tail_fmul_4h_e7, "fmul v2.4h,v0.4h,v1.h[7]")
+VECF(t_tail_fmul_8h_e7, "fmul v2.8h,v0.8h,v1.h[7]")
 /* Tail conversions: every allocated arrangement and explicit rounding mode. */
 VECF(t_tail_fcvtns_2s, "fcvtns v2.2s,v0.2s")
 VECF(t_tail_fcvtns_4s, "fcvtns v2.4s,v0.4s")
@@ -1859,6 +1896,43 @@ int main(void)
     RR(tail_fcvtl_2d);
     RR(tail_fcvtl2_4s);
     RR(tail_fcvtl2_2d);
+    RR(tail_fmul_4h);
+    RR(tail_fmul_8h);
+    RR(tail_fmul_h);
+    RR(tail_fadd_4h);
+    RR(tail_fadd_8h);
+    RR(tail_fadd_h);
+    RR(tail_fsub_4h);
+    RR(tail_fsub_8h);
+    RR(tail_fsub_h);
+    RR(tail_fmax_4h);
+    RR(tail_fmax_8h);
+    RR(tail_fmax_h);
+    RR(tail_fmin_4h);
+    RR(tail_fmin_8h);
+    RR(tail_fmin_h);
+    RR(tail_fmaxnm_4h);
+    RR(tail_fmaxnm_8h);
+    RR(tail_fmaxnm_h);
+    RR(tail_fminnm_4h);
+    RR(tail_fminnm_8h);
+    RR(tail_fminnm_h);
+    RR(tail_fmul_4h_e0);
+    RR(tail_fmul_8h_e0);
+    RR(tail_fmul_4h_e1);
+    RR(tail_fmul_8h_e1);
+    RR(tail_fmul_4h_e2);
+    RR(tail_fmul_8h_e2);
+    RR(tail_fmul_4h_e3);
+    RR(tail_fmul_8h_e3);
+    RR(tail_fmul_4h_e4);
+    RR(tail_fmul_8h_e4);
+    RR(tail_fmul_4h_e5);
+    RR(tail_fmul_8h_e5);
+    RR(tail_fmul_4h_e6);
+    RR(tail_fmul_8h_e6);
+    RR(tail_fmul_4h_e7);
+    RR(tail_fmul_8h_e7);
     RR(tail_fcvt_sd);
     RR(tail_fcvt_ds);
     RR(tail_fcvt_hs);

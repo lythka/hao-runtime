@@ -18,7 +18,7 @@ static const vec shift64_a = {0x8123456789abcdefull, 0x0123456776543210ull};
 static const vec shift64_b = {0x01000000000000f4ull, 0x8000000000000007ull};
 static const vec integer_a = {1, 2}, integer_b = {3, 4};
 static const vec half_integer_a = {0x0004000300020001ull, 0x0008000700060005ull}, half_integer_b = {0,0};
-static const vec half_a = {0x4400420040003c00ull, 0x4800470046004500ull}, half_b = {0,0};
+static const vec half_a = {0x4400420040003c00ull, 0x4800470046004500ull}, half_b = {0x3800380038003800ull,0x3800380038003800ull};
 static uint64_t now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000 + (uint64_t)t.tv_nsec; }
 #define BENCH(name, insn, kind) \
 static __attribute__((noinline)) vec name(unsigned long n) { \
@@ -38,6 +38,43 @@ BENCH(tail_fcvtl_4s, "fcvtl v2.4s,v0.4h", half)
 BENCH(tail_fcvtl_2d, "fcvtl v2.2d,v0.2s", single)
 BENCH(tail_fcvtl2_4s, "fcvtl2 v2.4s,v0.8h", half)
 BENCH(tail_fcvtl2_2d, "fcvtl2 v2.2d,v0.4s", single)
+BENCH(tail_fmul_4h, "fmul v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fmul_8h, "fmul v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fmul_h, "fmul h2,h0,h1", half)
+BENCH(tail_fadd_4h, "fadd v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fadd_8h, "fadd v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fadd_h, "fadd h2,h0,h1", half)
+BENCH(tail_fsub_4h, "fsub v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fsub_8h, "fsub v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fsub_h, "fsub h2,h0,h1", half)
+BENCH(tail_fmax_4h, "fmax v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fmax_8h, "fmax v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fmax_h, "fmax h2,h0,h1", half)
+BENCH(tail_fmin_4h, "fmin v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fmin_8h, "fmin v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fmin_h, "fmin h2,h0,h1", half)
+BENCH(tail_fmaxnm_4h, "fmaxnm v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fmaxnm_8h, "fmaxnm v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fmaxnm_h, "fmaxnm h2,h0,h1", half)
+BENCH(tail_fminnm_4h, "fminnm v2.4h,v0.4h,v1.4h", half)
+BENCH(tail_fminnm_8h, "fminnm v2.8h,v0.8h,v1.8h", half)
+BENCH(tail_fminnm_h, "fminnm h2,h0,h1", half)
+BENCH(tail_fmul_4h_e0, "fmul v2.4h,v0.4h,v1.h[0]", half)
+BENCH(tail_fmul_8h_e0, "fmul v2.8h,v0.8h,v1.h[0]", half)
+BENCH(tail_fmul_4h_e1, "fmul v2.4h,v0.4h,v1.h[1]", half)
+BENCH(tail_fmul_8h_e1, "fmul v2.8h,v0.8h,v1.h[1]", half)
+BENCH(tail_fmul_4h_e2, "fmul v2.4h,v0.4h,v1.h[2]", half)
+BENCH(tail_fmul_8h_e2, "fmul v2.8h,v0.8h,v1.h[2]", half)
+BENCH(tail_fmul_4h_e3, "fmul v2.4h,v0.4h,v1.h[3]", half)
+BENCH(tail_fmul_8h_e3, "fmul v2.8h,v0.8h,v1.h[3]", half)
+BENCH(tail_fmul_4h_e4, "fmul v2.4h,v0.4h,v1.h[4]", half)
+BENCH(tail_fmul_8h_e4, "fmul v2.8h,v0.8h,v1.h[4]", half)
+BENCH(tail_fmul_4h_e5, "fmul v2.4h,v0.4h,v1.h[5]", half)
+BENCH(tail_fmul_8h_e5, "fmul v2.8h,v0.8h,v1.h[5]", half)
+BENCH(tail_fmul_4h_e6, "fmul v2.4h,v0.4h,v1.h[6]", half)
+BENCH(tail_fmul_8h_e6, "fmul v2.8h,v0.8h,v1.h[6]", half)
+BENCH(tail_fmul_4h_e7, "fmul v2.4h,v0.4h,v1.h[7]", half)
+BENCH(tail_fmul_8h_e7, "fmul v2.8h,v0.8h,v1.h[7]", half)
 BENCH(tail_fcvtzu_4s, "fcvtzu v2.4s,v0.4s", single)
 BENCH(tail_fcvtns_4s, "fcvtns v2.4s,v0.4s", single)
 BENCH(tail_fcvtps_4s, "fcvtps v2.4s,v0.4s", single)
@@ -481,6 +518,43 @@ int main(int argc, char **argv)
     RUN(tail_fcvtl_2d);
     RUN(tail_fcvtl2_4s);
     RUN(tail_fcvtl2_2d);
+    RUN(tail_fmul_4h);
+    RUN(tail_fmul_8h);
+    RUN(tail_fmul_h);
+    RUN(tail_fadd_4h);
+    RUN(tail_fadd_8h);
+    RUN(tail_fadd_h);
+    RUN(tail_fsub_4h);
+    RUN(tail_fsub_8h);
+    RUN(tail_fsub_h);
+    RUN(tail_fmax_4h);
+    RUN(tail_fmax_8h);
+    RUN(tail_fmax_h);
+    RUN(tail_fmin_4h);
+    RUN(tail_fmin_8h);
+    RUN(tail_fmin_h);
+    RUN(tail_fmaxnm_4h);
+    RUN(tail_fmaxnm_8h);
+    RUN(tail_fmaxnm_h);
+    RUN(tail_fminnm_4h);
+    RUN(tail_fminnm_8h);
+    RUN(tail_fminnm_h);
+    RUN(tail_fmul_4h_e0);
+    RUN(tail_fmul_8h_e0);
+    RUN(tail_fmul_4h_e1);
+    RUN(tail_fmul_8h_e1);
+    RUN(tail_fmul_4h_e2);
+    RUN(tail_fmul_8h_e2);
+    RUN(tail_fmul_4h_e3);
+    RUN(tail_fmul_8h_e3);
+    RUN(tail_fmul_4h_e4);
+    RUN(tail_fmul_8h_e4);
+    RUN(tail_fmul_4h_e5);
+    RUN(tail_fmul_8h_e5);
+    RUN(tail_fmul_4h_e6);
+    RUN(tail_fmul_8h_e6);
+    RUN(tail_fmul_4h_e7);
+    RUN(tail_fmul_8h_e7);
     RUN(tail_fcvtzu_4s);
     RUN(tail_fcvtns_4s);
     RUN(tail_fcvtps_4s);
