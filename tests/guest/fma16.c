@@ -94,7 +94,7 @@ int main(void)
     uint64_t rng=0x657721b39a1355ull;
     for (unsigned f=0; f<42; f++) {
         uint64_t h=0xcbf29ce484222325ull;
-        for (unsigned control=0; control<16; control++)
+        for (unsigned control=0; control<64; control++)
             for (unsigned k=0; k<512; k++) {
                 uint16_t st[3][8];
                 for (unsigned l=0; l<8; l++) {
@@ -104,7 +104,7 @@ int main(void)
                 /* Indexed lanes must be distinguishable in ordinary cases. */
                 if (k>=22 && !(k%4)) for(unsigned l=0;l<8;l++) st[2][l]=0x3000+l*0x101;
                 unsigned sr=k&1 ? 0x0800009f : 0;
-                unsigned flags=run(f,st,(uint64_t)control<<22,sr);
+                unsigned flags=run(f,st,((uint64_t)(control&15)<<22)|((uint64_t)(control&16)<<15)|((uint64_t)(control&32)<<21),sr);
                 for(unsigned l=0;l<8;l++) h=(h^st[0][l])*0x100000001b3ull;
                 h=(h^flags)*0x100000001b3ull;
             }

@@ -29,6 +29,13 @@ Without `OUT`, every script now works in a new `mktemp -d -t hao-NAME`
 directory instead of a fixed `$TMPDIR/hao-NAME`; callers that pass `OUT` are
 unchanged.
 
+The half-precision `guest/halfops` and `guest/fma16` matrices include all 64
+RMode/FZ/DN/FZ16/AHP settings, with clear and sticky FPSR. Halfops also checks
+scalar FCVT H/S/D, vector FCVTN/FCVTN2/FCVTL/FCVTL2, and widening arithmetic
+at half subnormal, alternative-format, overflow and NaN boundaries. Native,
+interpreter, JIT, helpers-only and AOT outputs must match. Random SIMD, block,
+known and FMA oracle records also draw FZ16 and AHP; AFP bits remain excluded.
+
 ## What you need
 
 Everything in `make test` and `make check` is self-contained apart from the

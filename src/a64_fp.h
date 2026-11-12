@@ -4,7 +4,7 @@
  * esize 2 (half), 4 (single) or 8 (double) bytes. Every operation follows
  * the Arm ARM pseudocode (FPUnpack, FPProcessNaNs, FPRound, FPMulAdd, ...)
  * under the guest FP environment described in cpu.h: rounding mode and FZ
- * come from MXCSR, DN from cpu->fpcr, and the cumulative exception flags are
+ * come from MXCSR, DN/FZ16/AHP from cpu->fpcr, and cumulative flags are
  * raised in MXCSR.
  */
 #ifndef HAO_A64_FP_H
@@ -16,6 +16,7 @@ typedef struct {
     hao_cpu *c;
     unsigned rmode;   /* FPCR.RMode: 0 RN, 1 RP, 2 RM, 3 RZ */
     bool fz, dn;
+    bool fz16;
     bool no_exceptions; /* BFDOT/BFMMLA never change cumulative flags. */
 } fpctx;
 
