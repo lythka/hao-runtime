@@ -710,6 +710,10 @@ static bool lbl_ready;
 /* the name table (lbl_names, lbl_n) is complete; it never changes again, so its entries are read
  * without labels_lock. lbl_ready only says a refresh of the images finished. */
 static bool lbl_names_ready;
+#ifdef HAO_TEST_SWITCHES
+/* Pause a re-export reader after it captures the immutable name table. */
+void (*hao_test_labels_reader)(void);
+#endif
 static uint64_t st_lbl_images, st_lbl_addrs, st_trap_alias, st_lbl_ns, st_lbl_ind, st_lbl_ind_ns;
 
 static void lbl_add_name(const char *name, void *ctx)
@@ -832,7 +836,11 @@ static void labels_refresh(void)
         if (!ind[k].path) continue;
         void *hd = dlopen(ind[k].path, RTLD_LAZY | RTLD_NOLOAD);
         if (!hd) continue;
-        uint64_t a = typed_at((uint64_t)(uintptr_t)dlsym(hd, lbl_names[ind[k].idx].name + 1));
+        const lbl_name *names = lbl_names;
+#ifdef HAO_TEST_SWITCHES
+        if (hao_test_labels_reader) hao_test_labels_reader();
+#endif
+        uint64_t a = typed_at((uint64_t)(uintptr_t)dlsym(hd, names[ind[k].idx].name + 1));
         dlclose(hd);
         if (!a) continue;
         hao_crit_enter();
