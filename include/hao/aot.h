@@ -39,13 +39,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-/* ------------------------------------------------------------ format v6
+/* ------------------------------------------------------------ format v7
  * file = hdr | ents[nblocks] | links[nlinks] | code[code_size]
  * code[0..15] is the base slot (the image base, patched at load).
  * payload_hash = hao_aot_hash64(ents..end of code). It is an integrity
  * check only; trust comes from ownership and from the code identity. */
 #define HAO_AOT_MAGIC "HAOAOT2"
-#define HAO_AOT_VERSION 6
+#define HAO_AOT_VERSION 7
 #define HAO_AOT_MAX_FILE (1024ull << 20)
 
 /* What code_id holds. */

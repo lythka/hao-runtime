@@ -1435,8 +1435,52 @@ VECF(t_tail_fccmpe_d_nv, "cmp x6, #0\nfccmpe d0, d1, #5, nv")
 VEC2(t_tail_fpcr, "and x2, x0, #0x3c00000\nmsr fpcr, x2\nmrs x2, fpcr\nmsr fpcr, xzr")
 VEC2(t_tail_fpsr, "mov x2, #0x9f\nmovk x2, #0x800, lsl #16\nand x2, x0, x2\nmsr fpsr, x2\nmrs x2, fpsr\nmsr fpsr, xzr")
 
+VECF(t_tail_frecpe_2s, "frecpe v2.2s, v0.2s")
+VECF(t_tail_frecpe_4s, "frecpe v2.4s, v0.4s")
+VECF(t_tail_frecpe_2d, "frecpe v2.2d, v0.2d")
+VECF(t_tail_frecpe_s, "frecpe s2, s0")
+VECF(t_tail_frecpe_d, "frecpe d2, d0")
+VECF(t_tail_frsqrte_2s, "frsqrte v2.2s, v0.2s")
+VECF(t_tail_frsqrte_4s, "frsqrte v2.4s, v0.4s")
+VECF(t_tail_frsqrte_2d, "frsqrte v2.2d, v0.2d")
+VECF(t_tail_frsqrte_s, "frsqrte s2, s0")
+VECF(t_tail_frsqrte_d, "frsqrte d2, d0")
+
+/* Every estimate table index, exponent parity, sign and exceptional exponent,
+ * with both ends of each fraction bucket and all FPCR controls. */
+static void run_estimate(const char *name, fnf f, int dbl)
+{
+    uint64_t hash = 14695981039346656037ull;
+    unsigned mbits = dbl ? 52 : 23, maxexp = dbl ? 2047 : 255;
+    for (unsigned c = 0; c < 16; c++) for (unsigned idx = 0; idx < 256; idx++)
+        for (unsigned k = 0; k < 8; k++) for (unsigned sign = 0; sign < 2; sign++) {
+            unsigned exp = (unsigned[]){0,1,maxexp/2-1,maxexp/2,maxexp-3,maxexp-2,maxexp-1,maxexp}[k];
+            uint64_t bits = (uint64_t)exp << mbits | (uint64_t)idx << (mbits-8);
+            if (idx & 1) bits |= (1ull << (mbits-8))-1;
+            if (sign) bits |= 1ull << (dbl ? 63 : 31);
+            uint32_t in[12];
+            for (unsigned lane=0; lane<(dbl ? 6 : 12); lane++) {
+                if (dbl) memcpy(in+2*lane, &bits, 8); else in[lane]=(uint32_t)bits;
+            }
+            uint64_t fl=0, result=f(in, fpcrs[c], &fl);
+            hash=mix(mix(hash,result),fl);
+        }
+    printf("%-10s %016llx\n",name,(unsigned long long)hash);
+}
+
 int main(void)
 {
+    run_estimate("tail_frecpe_2s", t_tail_frecpe_2s, 0);
+    run_estimate("tail_frecpe_4s", t_tail_frecpe_4s, 0);
+    run_estimate("tail_frecpe_2d", t_tail_frecpe_2d, 1);
+    run_estimate("tail_frecpe_s", t_tail_frecpe_s, 0);
+    run_estimate("tail_frecpe_d", t_tail_frecpe_d, 1);
+    run_estimate("tail_frsqrte_2s", t_tail_frsqrte_2s, 0);
+    run_estimate("tail_frsqrte_4s", t_tail_frsqrte_4s, 0);
+    run_estimate("tail_frsqrte_2d", t_tail_frsqrte_2d, 1);
+    run_estimate("tail_frsqrte_s", t_tail_frsqrte_s, 0);
+    run_estimate("tail_frsqrte_d", t_tail_frsqrte_d, 1);
+
     R(tail_fpcr);
     R(tail_fpsr);
     runf("tail_fccmp_s_eq", t_tail_fccmp_s_eq);

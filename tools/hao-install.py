@@ -27,7 +27,7 @@ Runs as root inside an image builder (pure Python, no developer tools):
      by anyone but root (src/aot_policy.c); with neither directory it runs
      without AOT. A symlink or non-directory at either path is an error.
      The payload's caches (hao-image-payload --aot) are bound to its
-     libhao.dylib: a <uuid>.aot in usr/lib/hao/aot that is not a v6 cache of
+     libhao.dylib: a <uuid>.aot in usr/lib/hao/aot that is not a v7 cache of
      the installed usr/lib/hao/libhao.dylib (left by an earlier payload) is
      removed, since hao would only read and reject it; install.json
      aot_caches records the count, bytes and removals.
@@ -215,7 +215,7 @@ def macho_uuid(path):
 
 
 def check_aot_caches(system, errors):
-    """The caches in usr/lib/hao/aot (include/hao/aot.h: magic, version 6, the
+    """The caches in usr/lib/hao/aot (include/hao/aot.h: magic, version 7, the
     guest UUID at 16, the generating libhao's at 32 and the kind of code
     identity at 96, in a 136-byte header): keep those of the installed libhao
     that are bound to a signed guest's cdhash (kind 1; hao serves no other
@@ -233,7 +233,7 @@ def check_aot_caches(system, errors):
             continue   # ensure_aot_dirs reported it
         with open(f, "rb") as fh:
             h = fh.read(136)
-        if len(h) == 136 and h[:8] == b"HAOAOT2\0" and int.from_bytes(h[8:12], "little") == 6 and \
+        if len(h) == 136 and h[:8] == b"HAOAOT2\0" and int.from_bytes(h[8:12], "little") == 7 and \
                 int.from_bytes(h[12:16], "little") == 136 and int.from_bytes(h[96:100], "little") == 1 and \
                 h[16:32].hex() == name[:32] and gen is not None and h[32:48].hex() == gen:
             rec["caches"] += 1

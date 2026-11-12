@@ -291,7 +291,7 @@ other write access, and a relative DIR is taken from the working directory.
 Ownership says who wrote a cache, not which code it stands for. The LC_UUID,
 vmsize and load-command hash in its header only name a guest: a file that
 copies a program's mach header and load commands and carries other
-instructions has all three. So the header (format v6) also carries the
+instructions has all three. So the header (format v7) also carries the
 identity of the code it was translated from, and the loader accepts a cache
 only for an image whose own code gives the same identity.
 

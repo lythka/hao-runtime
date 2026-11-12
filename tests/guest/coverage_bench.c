@@ -511,6 +511,17 @@ BENCH(tail_msr_fpcr, "msr fpcr, xzr", single)
 BENCH(tail_mrs_fpsr, "msr fpsr, xzr\nmrs x9, fpsr\nfmov d2, x9", single)
 BENCH(tail_msr_fpsr, "msr fpsr, xzr", single)
 
+BENCH(tail_frecpe_2s, "frecpe v2.2s, v0.2s", single)
+BENCH(tail_frecpe_4s, "frecpe v2.4s, v0.4s", single)
+BENCH(tail_frecpe_2d, "frecpe v2.2d, v0.2d", double)
+BENCH(tail_frecpe_s, "frecpe s2, s0", single)
+BENCH(tail_frecpe_d, "frecpe d2, d0", double)
+BENCH(tail_frsqrte_2s, "frsqrte v2.2s, v0.2s", single)
+BENCH(tail_frsqrte_4s, "frsqrte v2.4s, v0.4s", single)
+BENCH(tail_frsqrte_2d, "frsqrte v2.2d, v0.2d", double)
+BENCH(tail_frsqrte_s, "frsqrte s2, s0", single)
+BENCH(tail_frsqrte_d, "frsqrte d2, d0", double)
+
 int main(int argc, char **argv)
 {
     unsigned long n = argc > 1 ? strtoul(argv[1], 0, 0) : 50000;
@@ -974,5 +985,15 @@ int main(int argc, char **argv)
     RUN(tail_msr_fpcr);
     RUN(tail_mrs_fpsr);
     RUN(tail_msr_fpsr);
+    RUN(tail_frecpe_2s);
+    RUN(tail_frecpe_4s);
+    RUN(tail_frecpe_2d);
+    RUN(tail_frecpe_s);
+    RUN(tail_frecpe_d);
+    RUN(tail_frsqrte_2s);
+    RUN(tail_frsqrte_4s);
+    RUN(tail_frsqrte_2d);
+    RUN(tail_frsqrte_s);
+    RUN(tail_frsqrte_d);
     return 0;
 }

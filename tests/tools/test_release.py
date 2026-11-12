@@ -52,7 +52,7 @@ class ReleaseTests(unittest.TestCase):
         self.aot_name = 'root/usr/lib/hao/aot/' + '2' * 32 + '.aot'
         code = bytes(16)
         self.add(self.aot_name, self.aot_file(identity, code))
-        self.packages['aot'].update(format_version=6, runtime_uuid='1' * 32, guests={self.aot_name: dict(
+        self.packages['aot'].update(format_version=7, runtime_uuid='1' * 32, guests={self.aot_name: dict(
             uuid=identity['uuid'], guest_id=identity['guest_id'], unsigned_sha256=identity['unsigned_sha256'],
             header=r.aot_identity(self.generated / self.aot_name),
             paths={'usr/bin/fixture': identity['sha256']})})
@@ -61,8 +61,8 @@ class ReleaseTests(unittest.TestCase):
         ver.write_bytes(plistlib.dumps({'ProductBuildVersion': 'fixture-build'}))
         self.save()
 
-    def aot_file(self, identity, code, version=6, kind=1, hash_type=2, code_id=bytes.fromhex('c0' * 20) + bytes(12)):
-        """An AOT cache of the fixture guest: format v6, bound to a (made up) SHA-256 cdhash."""
+    def aot_file(self, identity, code, version=7, kind=1, hash_type=2, code_id=bytes.fromhex('c0' * 20) + bytes(12)):
+        """An AOT cache of the fixture guest: format v7, bound to a (made up) SHA-256 cdhash."""
         return r.AOT.pack(b'HAOAOT2\0', version, r.AOT.size, bytes.fromhex('2' * 32), bytes.fromhex('1' * 32), 4096,
                           identity['guest_id'], 0, 0, len(code), r.AOT.size + len(code), r.hao_ifunit.hash64(code),
                           kind, hash_type, code_id) + code
@@ -187,11 +187,13 @@ class ReleaseTests(unittest.TestCase):
         self.rebind_aot(kind=2, hash_type=0, code_id=bytes.fromhex('ab' * 32))
         with self.assertRaisesRegex(r.Invalid, 'not bound to a signed guest'): r.validate(self.bundle)
 
-    def test_aot_v5_rejected(self):
-        self.add(self.aot_name, self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16), version=5)); self.save()
-        with self.assertRaisesRegex(r.Invalid, 'unsupported AOT format'): self.preflight()
-        self.packages['aot']['format_version'] = 5; self.save()
-        with self.assertRaisesRegex(r.Invalid, 'unsupported execution format'): r.validate(self.bundle)
+    def test_old_aot_versions_rejected(self):
+        for version in (5, 6):
+            self.packages['aot']['format_version'] = 7
+            self.add(self.aot_name, self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16), version=version)); self.save()
+            with self.assertRaisesRegex(r.Invalid, 'unsupported AOT format'): self.preflight()
+            self.packages['aot']['format_version'] = version; self.save()
+            with self.assertRaisesRegex(r.Invalid, 'unsupported execution format'): r.validate(self.bundle)
 
     def test_rehashed_unit_wrong_library_rejected(self):
         name = 'root/usr/lib/hao/if/' + '4' * 32

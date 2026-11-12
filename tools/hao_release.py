@@ -26,7 +26,7 @@ ASYNC_DESCRIPTOR = 'root/usr/lib/hao/async-contract.json'
 HELPERS = {'hao-install.py', 'hao_fat.py', 'hao_codesig.py', 'stamp_identity.py'}
 HEX = re.compile(r'[0-9a-f]{64}')
 UUID = re.compile(r'[0-9a-f]{32}')
-AOT = struct.Struct('<8sII16s16sQQIIQQQII32s')   # include/hao/aot.h hao_aot_hdr, format v6 (136 bytes)
+AOT = struct.Struct('<8sII16s16sQQIIQQQII32s')   # include/hao/aot.h hao_aot_hdr, format v7 (136 bytes)
 AOT_ID_CDHASH = 1
 FEATURES = {'sse2', 'cx16', 'avx', 'sse3', 'ssse3', 'sse4.1', 'sse4.2', 'avx2'}
 
@@ -137,7 +137,7 @@ def aot_identity(path):
     with open(path, 'rb') as f: header = f.read(AOT.size)
     require(len(header) == AOT.size, 'truncated AOT header')
     magic, version, hs, uuid, gen, vm, gid, nb, nl, cs, fs, ph, kind, hash_type, code_id = AOT.unpack(header)
-    require(magic == b'HAOAOT2\0' and version == 6 and hs == AOT.size, 'unsupported AOT format')
+    require(magic == b'HAOAOT2\0' and version == 7 and hs == AOT.size, 'unsupported AOT format')
     require(fs == path.stat().st_size and fs == hs + nb * 8 + nl * 8 + cs and cs >= 16, 'AOT size mismatch')
     # The code identity the runtime checks: for a signed guest (kind 1) the 20-byte cdhash of the slice.
     require(kind != AOT_ID_CDHASH or not any(code_id[20:]), 'AOT cdhash padding is not zero')
@@ -257,7 +257,7 @@ def validate(bundle, target=None):
     require(set(packages['runtime']['files']) == RUNTIME_FILES, 'runtime file set mismatch')
     runtime_uuid = macho(files['root/usr/lib/hao/libhao.dylib']['object'].read_bytes())['uuid']
     require(packages['runtime']['runtime_uuid'] == runtime_uuid, 'runtime UUID mismatch')
-    require(packages['compatibility']['interface_version'] == 2 and packages['aot']['format_version'] == 6, 'unsupported execution format')
+    require(packages['compatibility']['interface_version'] == 2 and packages['aot']['format_version'] == 7, 'unsupported execution format')
     units = records = 0
     for name in packages['compatibility']['files']:
         leaf = PurePosixPath(name).name

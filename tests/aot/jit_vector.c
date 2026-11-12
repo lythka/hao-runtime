@@ -500,6 +500,49 @@ static void fp_system_tail(void)
     fp_env_check = false;
 }
 
+static void estimate_tail(void)
+{
+    for (unsigned root = 0; root < 2; root++) for (unsigned dbl = 0; dbl < 2; dbl++)
+        for (unsigned form = 0; form < 3; form++) {
+            bool scalar = form == 2; unsigned q = form != 0;
+            if (dbl && !q) continue;
+            uint32_t op = (scalar ? 0x5ea1d800u : 0x0ea1d800u) | q << 30 | root << 29 | dbl << 22;
+            unsigned mbits = dbl ? 52 : 23, maxexp = dbl ? 2047 : 255;
+            for (unsigned idx = 0; idx < 256; idx++) for (unsigned parity = 0; parity < 2; parity++)
+                for (unsigned edge = 0; edge < 2; edge++) {
+                    unsigned rd = reg(), rn = idx & 1 ? rd : reg();
+                    hao_cpu in; state(&in, rn, rn); in.fpcr = (idx & 15) << 22;
+                    uint64_t bits = (uint64_t)(maxexp / 2 - 1 + parity) << mbits | (uint64_t)idx << (mbits - 8);
+                    if (edge) bits |= (1ull << (mbits - 8)) - 1;
+                    if (!root && (idx & 2)) bits |= 1ull << (dbl ? 63 : 31);
+                    for (unsigned lane = 0; lane < (dbl ? 2 : 4); lane++) {
+                        if (dbl) in.v[rn].d[lane] = bits; else in.v[rn].s[lane] = (uint32_t)bits;
+                    }
+                    for (unsigned live = 0; live < 2; live++) {
+                        vector_helper_calls = 0; check(op | rn << 5 | rd, 0, &in, live);
+                        if (vector_helper_calls && fails++ < 20) printf("MISMATCH estimate ordinary helper %08x\n", op);
+                    }
+                }
+            for (unsigned control = 0; control < 16; control++) for (unsigned k = 0; k < 24; k++) {
+                hao_cpu in; state(&in, 1, 2); in.fpcr = control << 22;
+                unsigned exp = (unsigned[]){0,1,maxexp-3,maxexp-2,maxexp-1,maxexp}[k / 4];
+                uint64_t bits = (uint64_t)exp << mbits | (k & 1 ? 1 : 0);
+                if (k & 2) bits |= 1ull << (dbl ? 63 : 31);
+                for (unsigned lane = 0; lane < (dbl ? 2 : 4); lane++) {
+                    if (dbl) in.v[1].d[lane] = bits; else in.v[1].s[lane] = (uint32_t)bits;
+                }
+                check(op | 1u << 5, 0, &in, false); check(op | 1u << 5, 0, &in, true);
+            }
+            /* A later special lane must decline without an earlier store. */
+            if (!scalar) {
+                hao_cpu in; state(&in, 1, 2);
+                if (dbl) { in.v[1].df[0] = 1; in.v[1].d[1] = 1; }
+                else { for (int lane=0; lane<4; lane++) in.v[1].f[lane]=1; in.v[1].s[q ? 3 : 1]=1; }
+                check(op | 1u << 5 | 1u, 0, &in, true);
+            }
+        }
+}
+
 int main(void)
 {
     mem = mmap(NULL, 3 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -529,6 +572,8 @@ int main(void)
 
 
     fpcr_pending_exception();
+
+    estimate_tail();
     fp_system_tail();
     integer_tail();
 
