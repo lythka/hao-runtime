@@ -107,6 +107,8 @@ final class Holder {
         }
         intervals()
         texts()
+        // A frozen native struct (CollectionOfOne) carries the nil: guest code reads it inline.
+        print("CollectionOfOne generic nil", describe(noneOf(CollectionOfOne<AnyObject>?.self)) { "\($0.first === nil)" })
         print("done")
     }
 }
