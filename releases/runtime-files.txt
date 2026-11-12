@@ -693,3 +693,5 @@ tools/value-contracts/optional-data-26B131.json
 tests/aot/fmla_mutations.sh
 tests/guest/fmla_bench.c
 tests/guest/fmla_bench.sh
+tests/guest/state_bench.c
+tests/guest/state_bench.sh

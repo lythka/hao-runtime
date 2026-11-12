@@ -281,3 +281,11 @@ three more instruction groups. They were of two kinds:
 Measured after the change: `make oracle` (200000 records per mode) and
 `make oracle-asan ORACLE_ASAN_N=200000` (twice, different seeds) match
 native arm64 on every record with no sanitizer report.
+
+`guest/state-bench` compares native arm64, JIT, interpreter, helpers-only
+and AOT for table-driven BLR/RET calls (compact and 8-KiB-spaced targets),
+BR tail dispatch, alternating return sites, a single return site, and
+short arithmetic blocks surrounding an XPACI helper. It prints timing
+without counters, then collects `--stats` separately. Default N=100000;
+`N=100000000 ENGINES='jit aot'` makes longer measurement runs. The result
+checksum must match native; timings have no pass/fail threshold.
