@@ -165,7 +165,7 @@ oracle-asan: $(B)/oracle-native $(B)/asan/oracle-check $(B)/asan/oracle-atomic
 	  echo "== $$m (asan)"; $(ASAN_ENV) timeout -s KILL 900 $(B)/asan/oracle-check $(B)/asan/oracle-$$m.bin --show 5 \
 	    --bad $(B)/asan/oracle_bad_$$m.txt >$(B)/asan/oracle-$$m.log 2>&1 || fail=1; tail -3 $(B)/asan/oracle-$$m.log; \
 	done; \
-	echo "== atomic (asan)"; $(ASAN_ENV) timeout -s KILL 300 $(B)/asan/oracle-atomic >$(B)/asan/oracle-atomic.log 2>&1 || fail=1; \
+	echo "== atomic (asan)"; $(ASAN_ENV) ATOMIC16_SECONDS=10 timeout -s KILL 300 $(B)/asan/oracle-atomic >$(B)/asan/oracle-atomic.log 2>&1 || fail=1; \
 	tail -3 $(B)/asan/oracle-atomic.log; \
 	if grep -lE 'runtime error:|ERROR: AddressSanitizer' $(B)/asan/oracle-*.log; then echo "sanitizer reports in the logs above"; fail=1; fi; \
 	exit $$fail

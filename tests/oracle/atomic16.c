@@ -9,7 +9,8 @@
  *     must tear, which shows the race is real on this machine. Each case
  *     reads only once the writer is running, and repeats its ITERATIONS
  *     loads until the writer has stored at least as often during them (the
- *     control: until it tears), for at most ATOMIC16_SECONDS (30) each.
+ *     control: until it tears), for at most ATOMIC16_SECONDS (30) each,
+ *     the writer's start included.
  *     Under heavy host load the two threads may never overlap enough: the
  *     case then prints SKIP (the race was not established, so it proves
  *     nothing either way) and does not fail; a torn atomic load always fails.
@@ -27,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sched.h>
+#include <stdatomic.h>
 #include <time.h>
 #include <sys/mman.h>
 
@@ -44,10 +46,10 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base);
 static volatile uint64_t cell[4] __attribute__((aligned(64)));
 static long iters = 300000;
 static double limit_s = 30;
-static volatile long wstores;   /* the writer's stores so far */
-static volatile int wstarted;
+static _Atomic long wstores;   /* the writer's stores so far */
+static _Atomic int wstarted;
 static int skips;
-static volatile int stop;
+static _Atomic int stop;
 static int fails;
 
 typedef struct { int jit, sp, split; uint32_t ld; long loads, torn, overlap; } race;
@@ -71,14 +73,14 @@ static void *writer(void *arg)
     static __thread hao_cpu c;
     memset(&c, 0, sizeof c);
     c.x[2] = c.x[31] = (uint64_t)(uintptr_t)cell;
-    wstarted = 1;
-    for (uint64_t k = 1; !stop; k++) {
+    atomic_store(&wstarted, 1);
+    for (uint64_t k = 1; !atomic_load_explicit(&stop, memory_order_relaxed); k++) {
         if (r->split) { cell[0] = k; __asm__ volatile("" ::: "memory"); cell[1] = k; }
         else {
             c.x[0] = c.x[1] = k * 0x0101010101010101ull;
             run(&c, r->sp ? STP_X0_X1_SP : STP_X0_X1_X2, r->jit);
         }
-        wstores = (long)k;
+        atomic_store_explicit(&wstores, (long)k, memory_order_relaxed);
     }
     return NULL;
 }
@@ -86,20 +88,26 @@ static void *writer(void *arg)
 static void do_race(const char *what, race *r)
 {
     pthread_t t;
-    stop = 0;
-    wstarted = 0;
-    wstores = 0;
+    atomic_store(&stop, 0);
+    atomic_store(&wstarted, 0);
+    atomic_store(&wstores, 0);
     cell[0] = cell[1] = 0;
-    pthread_create(&t, NULL, writer, r);
+    if (pthread_create(&t, NULL, writer, r) != 0) {
+        printf("%-44s FAIL (pthread_create)\n", what);
+        fails++;
+        return;
+    }
     hao_cpu c;
     memset(&c, 0, sizeof c);
     c.x[2] = c.x[31] = (uint64_t)(uintptr_t)cell;
+    /* the deadline covers the writer's start and is checked inside a round */
     double end = now_s() + limit_s;
-    while (!wstarted) sched_yield();
+    while (!atomic_load(&wstarted) && now_s() <= end) sched_yield();
     /* rounds of ITERATIONS loads until the race is established or time is up */
-    for (;;) {
-    long w0 = wstores;
+    while (atomic_load(&wstarted)) {
+    long w0 = atomic_load_explicit(&wstores, memory_order_relaxed);
     for (long k = 0; k < iters; k++) {
+        if ((k & 4095) == 4095 && now_s() > end) break;
         uint64_t a, b;
         if (r->split) { a = cell[1]; __asm__ volatile("" ::: "memory"); b = cell[0]; }
         else {
@@ -110,13 +118,13 @@ static void do_race(const char *what, race *r)
         r->loads++;
         if (a != b) r->torn++;
     }
-    r->overlap += wstores - w0;
-    bool established = r->split ? r->torn != 0 : r->overlap >= r->loads;
+    r->overlap += atomic_load_explicit(&wstores, memory_order_relaxed) - w0;
+    bool established = r->split ? r->torn != 0 : r->loads > 0 && r->overlap >= r->loads;
     if (established || (!r->split && r->torn) || now_s() > end) break;
     }
-    stop = 1;
+    atomic_store(&stop, 1);
     pthread_join(t, NULL);
-    bool established = r->split ? r->torn != 0 : r->overlap >= r->loads;
+    bool established = r->split ? r->torn != 0 : r->loads > 0 && r->overlap >= r->loads;
     const char *res = !r->split && r->torn ? "FAIL"
                     : established ? "ok"
                     : r->split ? "SKIP (the control did not tear: the race was not established)"
