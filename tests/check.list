@@ -103,3 +103,4 @@ aot/aes-mutations	600	par	tests/aot/aes_mutations.sh
 aot/aes-profile	120	par	tests/aot/aes_profile.sh
 guest/satshift	900	par	tests/guest/satshift.sh
 guest/halfops	900	par	tests/guest/halfops.sh
+guest/satmul	300	par	tests/guest/satmul.sh

@@ -716,6 +716,8 @@ tests/guest/coverage_bench.c
 tests/guest/coverage_bench.sh
 tests/guest/halfops.c
 tests/guest/halfops.sh
+tests/guest/satmul.c
+tests/guest/satmul.sh
 tests/guest/satshift.c
 tests/guest/satshift.sh
 tests/guest/stubcat.sh

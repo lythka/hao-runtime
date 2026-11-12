@@ -422,6 +422,50 @@ static uint64_t signed_mulhigh(int64_t x, int64_t y, int es, bool round, bool *s
     return sat_s((int64_t)(p >> (es * 8)), es, sat);
 }
 
+/* Widened saturating products can reach +2^63 and accumulation can
+ * exceed either signed 64-bit bound. Keep both saturation stages exact. */
+static uint64_t sat_s128(__int128 v, int es, bool *sat)
+{
+    __int128 hi = ((__int128)1 << (es * 8 - 1)) - 1, lo = -hi - 1;
+    if (v > hi) { *sat = true; v = hi; }
+    if (v < lo) { *sat = true; v = lo; }
+    return (uint64_t)v & emask(es);
+}
+
+static uint64_t signed_mull(int64_t a, int64_t b, int64_t acc, int es, int op, bool *sat)
+{
+    uint64_t product = sat_s128((__int128)a * b * 2, es * 2, sat);
+    if (op == 2) return product;
+    __int128 wide = sext(product, es * 16);
+    return sat_s128((__int128)acc + (op ? -wide : wide), es * 2, sat);
+}
+
+/* SQRDMLAH/SH round and saturate the combined product and accumulator,
+ * rather than first saturating SQRDMULH's product. */
+static uint64_t signed_rdmla(int64_t a, int64_t b, int64_t acc, int es, bool sub, bool *sat)
+{
+    __int128 product = (__int128)a * b * 2;
+    __int128 sum = (__int128)acc * ((__int128)1 << (es * 8));
+    sum += (sub ? -product : product) + ((__int128)1 << (es * 8 - 1));
+    return sat_s128(sum >> (es * 8), es, sat);
+}
+
+static int simd_rdmla(hao_cpu *c, uint32_t i)
+{
+    unsigned size = BITS(i, 23, 22), Q = BIT(i, 30), scalar = BIT(i, 28);
+    if ((size != 1 && size != 2) || (scalar && !Q)) return -1;
+    int es = 1 << size, n = scalar ? 1 : (Q ? 16 : 8) / es;
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    hao_vreg a = c->v[rn], b = c->v[rm], d = c->v[rd], r = {0};
+    bool sat = false;
+    for (int e = 0; e < n; e++)
+        eset(&r, es, e, signed_rdmla(esget(&a, es, e), esget(&b, es, e),
+                                  esget(&d, es, e), es, BIT(i, 11), &sat));
+    if (sat) c->fpsr |= FPSR_QC;
+    vfinish(c, rd, &r, scalar ? 0 : Q);
+    return 0;
+}
+
 static uint64_t sat_u(int64_t v, int es, bool *sat)
 {
     if (es == 8) return (uint64_t)v;
@@ -1420,7 +1464,7 @@ static int simd_shift_imm(hao_cpu *c, uint32_t i, int scalar)
     return 0;
 }
 
-static int simd_three_diff(hao_cpu *c, uint32_t i)
+static int simd_three_diff(hao_cpu *c, uint32_t i, bool scalar)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 12);
     unsigned rm = BITS(i, 20, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
@@ -1430,6 +1474,18 @@ static int simd_three_diff(hao_cpu *c, uint32_t i)
     if (op == 0xE ? U || (size != 0 && size != 3) : size == 3) return -1;
     memset(&r, 0, sizeof r);
     int es = 1 << size, oes = es * 2, n = 8 / es, part = Q ? n : 0;
+    if (scalar && (U || (op != 9 && op != 11 && op != 13))) return -1;
+    if (op == 9 || op == 11 || op == 13) { /* SQDMLAL/SQDMLSL/SQDMULL */
+        if (U || (size != 1 && size != 2)) return -1;
+        bool sat = false;
+        if (scalar) { n = 1; part = 0; }
+        for (int e = 0; e < n; e++)
+            eset(&r, oes, e, signed_mull(esget(&a, es, part + e), esget(&b, es, part + e),
+                                       esget(&d, oes, e), es, op == 13 ? 2 : op == 11, &sat));
+        if (sat) c->fpsr |= FPSR_QC;
+        c->v[rd] = r;
+        return 0;
+    }
     if (es <= 2 && (op <= 3 || op == 8 || op == 0xA || op == 0xC)) {
         __m128i x = vi(&a), y = vi(&b), v;
         if (Q) { if (op != 1 && op != 3) x = _mm_srli_si128(x, 8); y = _mm_srli_si128(y, 8); }
@@ -1573,6 +1629,22 @@ static int simd_indexed(hao_cpu *c, uint32_t i, int scalar)
     else return -1;
     uint64_t y = eget(&c->v[rm], es, idx);
     int64_t sy = esget(&c->v[rm], es, idx);
+    if ((!U && (op == 3 || op == 7 || op == 11)) || (U && (op == 13 || op == 15))) {
+        bool sat = false, wide = !U;
+        int oes = wide ? es * 2 : es;
+        int n = scalar ? 1 : (wide ? 8 : (Q ? 16 : 8)) / es;
+        int part = wide && Q && !scalar ? n : 0;
+        for (int e = 0; e < n; e++) {
+            int64_t av = esget(&a, es, part + e), acc = esget(&d, oes, e);
+            uint64_t v = wide ? signed_mull(av, sy, acc, es, op == 11 ? 2 : op == 7, &sat)
+                              : signed_rdmla(av, sy, acc, es, op == 15, &sat);
+            eset(&r, oes, e, v);
+        }
+        if (sat) c->fpsr |= FPSR_QC;
+        if (wide) c->v[rd] = r;
+        else vfinish(c, rd, &r, scalar ? 0 : Q);
+        return 0;
+    }
     if (!U && (op == 0xC || op == 0xD)) {  /* SQDMULH/SQRDMULH by element */
         bool sat = false;
         int n = scalar ? 1 : (Q ? 16 : 8) / es;
@@ -1954,6 +2026,7 @@ int a64_exec_simd(hao_cpu *c, uint32_t i, uint64_t pc)
     if ((i & 0xFF000000) == 0xCE000000) return crypto_ce(c, i);
     if ((i & 0x9FE0FC00) == 0x0E809400) return simd_dot(c, i, 0);
     if ((i & 0x9FC0F400) == 0x0F80E000) return simd_dot(c, i, 1);
+    if ((i & 0xAF20F400) == 0x2E008400) return simd_rdmla(c, i);
     if (((i & 0x9F200400) == 0x0E000400 || (i & 0xDF200400) == 0x5E000400) && BIT(i, 22)) return simd_half_three_same(c, i);
     if ((i & 0x9F3E0C00) == 0x0E380800 || (i & 0xDF3E0C00) == 0x5E380800) return simd_half_two_misc(c, i);
     int r = -1;
@@ -1973,7 +2046,8 @@ int a64_exec_simd(hao_cpu *c, uint32_t i, uint64_t pc)
     if ((i & 0xDFE08400) == 0x5E000400) return simd_copy(c, i, 1);
     if ((i & 0x9F800400) == 0x0F000400) return simd_shift_imm(c, i, 0);
     if ((i & 0xDF800400) == 0x5F000400) return simd_shift_imm(c, i, 1);
-    if ((i & 0x9F200C00) == 0x0E200000) return simd_three_diff(c, i);
+    if ((i & 0x9F200C00) == 0x0E200000) return simd_three_diff(c, i, false);
+    if ((i & 0xDF200C00) == 0x5E200000) return simd_three_diff(c, i, true);
     if ((i & 0xBF208C00) == 0x0E000800) return simd_permute(c, i);
     if ((i & 0xBFE08400) == 0x2E000000 || (i & 0xBFE08C00) == 0x0E000000) return simd_ext_tbl(c, i);
     if ((i & 0x9F000400) == 0x0F000000) return simd_indexed(c, i, 0);
