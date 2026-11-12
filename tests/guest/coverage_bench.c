@@ -27,7 +27,7 @@ static __attribute__((noinline)) vec name(unsigned long n) { \
         "1: movi v2.4s, #0\n.rept 16\n" insn "\n.endr\n" \
         "subs %[n], %[n], #1\nb.ne 1b\nstr q2, [%[out]]\n" \
         : [n] "+&r"(n) : [a] "r"(&kind##_a), [b] "r"(&kind##_b), [out] "r"(&out) \
-        : "v0", "v1", "v2", "cc", "memory"); \
+        : "v0", "v1", "v2", "x9", "cc", "memory"); \
     return out; \
 }
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
@@ -501,6 +501,16 @@ MEMBENCH(st4_8h, "st4 {v2.8h, v3.8h, v4.8h, v5.8h}, [%[p]]")
 MEMBENCH(st4_2s, "st4 {v2.2s, v3.2s, v4.2s, v5.2s}, [%[p]]")
 MEMBENCH(st4_4s, "st4 {v2.4s, v3.4s, v4.4s, v5.4s}, [%[p]]")
 MEMBENCH(st4_2d, "st4 {v2.2d, v3.2d, v4.2d, v5.2d}, [%[p]]")
+
+BENCH(tail_fccmp_s, "fccmp s0, s1, #0, al", single)
+BENCH(tail_fccmpe_s, "fccmpe s0, s1, #0, al", single)
+BENCH(tail_fccmp_d, "fccmp d0, d1, #0, al", double)
+BENCH(tail_fccmpe_d, "fccmpe d0, d1, #0, al", double)
+BENCH(tail_mrs_fpcr, "mrs x9, fpcr\nfmov d2, x9", single)
+BENCH(tail_msr_fpcr, "msr fpcr, xzr", single)
+BENCH(tail_mrs_fpsr, "msr fpsr, xzr\nmrs x9, fpsr\nfmov d2, x9", single)
+BENCH(tail_msr_fpsr, "msr fpsr, xzr", single)
+
 int main(int argc, char **argv)
 {
     unsigned long n = argc > 1 ? strtoul(argv[1], 0, 0) : 50000;
@@ -955,5 +965,14 @@ int main(int argc, char **argv)
     RUN(st4_2s);
     RUN(st4_4s);
     RUN(st4_2d);
+
+    RUN(tail_fccmp_s);
+    RUN(tail_fccmpe_s);
+    RUN(tail_fccmp_d);
+    RUN(tail_fccmpe_d);
+    RUN(tail_mrs_fpcr);
+    RUN(tail_msr_fpcr);
+    RUN(tail_mrs_fpsr);
+    RUN(tail_msr_fpsr);
     return 0;
 }

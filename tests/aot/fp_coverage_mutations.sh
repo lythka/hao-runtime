@@ -5,7 +5,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo"
 OUT=${OUT:-$(mktemp -d -t hao-fp-coverage-mutations)}
 B=${B:-$repo/build}
-T=${T:-180}
+T=${T:-240}
 mkdir -p "$OUT"
 make B="$B" "$B/libhaocore.a" "$B/stubs_oracle.o" >/dev/null
 python3.14 - "$OUT" <<'PY'
@@ -20,6 +20,9 @@ mutations = {
 
     'half-subtract': ('P(arithmetic[op], 0, 1); /* exact half arithmetic */', 'P(arithmetic[op == HALF_SUB ? HALF_ADD : op], 0, 1); /* wrong half subtraction */'),
     'conversion-round': ('rounds[mode]); /* roundsd, with PE */', '3); /* wrong conversion rounding */'),
+
+    'fpcr-rounding': ('XSHR, 0, RDX, 8); x_alu_ri(&t->b, XAND, 0, RDX, 1u << 14);', 'XSHR, 0, RDX, 9); x_alu_ri(&t->b, XAND, 0, RDX, 1u << 14);'),
+    'fccmp-condition': ('a64_cond_to_xcc(cond) ^ 1) : 0;', 'a64_cond_to_xcc(cond)) : 0;'),
     'division-result': ('size_t exact = jrcxnz32(t); /* packed arithmetic result admission */', 'if (op == VFP_DIV) x_mov_ri(&t->b, RCX, 0); size_t exact = jrcxnz32(t);'),
     'pair-order': ('0, 1, 0x88); /* pair-add even lanes */', '0, 1, 0x82); /* wrong pair-add lanes */'),
 }
@@ -28,7 +31,7 @@ for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in ${MUTATIONS:-control pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract}; do
+for mutation in ${MUTATIONS:-control pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition}; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \

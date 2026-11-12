@@ -422,3 +422,24 @@ and inexact half rounding boundaries and ordinary-input helper assertions.
 `guest/coverage-bench` adds 37 ordinary half forms. The FP coverage mutation
 script changes half subtraction into addition; `MUTATIONS` can select a
 subset for focused development runs, with the full set remaining the default.
+
+The FP environment tail cases add FCCMP/FCCMPE S/D under every condition,
+all input NZCV, ordinary and exceptional operands, and FPCR controls. FPCR/FPSR
+moves include XZR, writable-mask checks, seeded x87 exceptions and comparison
+of x87 rounding bits as well as full FPSR and live NZCV. `guest/jitinsns`
+adds 66 native forms; `guest/coverage-bench` adds eight loops. The FP coverage
+mutation script independently reverses FCCMP's condition and corrupts the
+FPCR rounding mapping.
+
+FPCR state cases additionally seed a pending unmasked x87 invalid exception
+and rewrite unchanged FPCR in all four rounding modes, with NZCV live and
+dead. The JIT must skip the waiting FLDCW as the interpreter does. Rosetta
+preserves the exception flag but does not deliver this pending exception;
+Intel execution remains necessary to validate fault delivery itself.
+
+Tail coverage expands the full-state corpus and x87 checks. The vector
+unit and each mutation executable have a 240-second bound. Mutation runs
+set `HAO_VECTOR_FAIL_FAST`: after a witnessed state/admission mismatch they
+exit unsuccessfully, while every passing control still runs the entire
+corpus. This avoids spending the remainder of the corpus on a mutation
+already proved detectable. Suite-level timeouts remain bounded.

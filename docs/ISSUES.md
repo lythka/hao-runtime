@@ -40,6 +40,39 @@ UNDEF. SVE/SME was not executed in a complete run (fatal if executed), not
 measured by counters. BRK remains a deliberate trap. This evidence does not
 establish behavior on every possible application input.
 
+## Conditional FP comparisons and FP environment moves
+
+Cumulative static coverage reaches 99.8200% (1,650 additional sites), with
+generated code 651,281 -> 651,546 KiB. Eight ordinary loops at 1,000
+iterations remove 144,000 JIT/AOT helper calls. The combined groups 1–7
+pass 899,805 complete-state comparisons after integration, including the
+unchanged-control-word guard below. Temporary caches were removed.
+
+FCCMP/FCCMPE S/D now test the condition before admitting operands. A false
+condition installs the immediate NZCV without reading FP values or raising
+exceptions; ordinary true comparisons use SSE, while NaNs, infinities and
+subnormals retain the interpreter path. FPCR/FPSR reads and writes now emit
+the interpreter's mapping directly, including native MXCSR rounding/flush
+state, software QC/IDC, x87 rounding control and cumulative exceptions.
+Guest NZCV is materialized before integer bit mapping. No FP instruction
+executes before admission, and no interpreter behavior changed.
+
+The complete-state test passes 749,126 cases, including all conditions,
+input NZCV, S/D, signaling variants, FPCR controls, sticky FPSR and seeded
+x87 exceptions. System-register tests also compare x87 rounding bits and
+cover XZR plus masked writable values. Native comparisons pass across JIT,
+interpreter, helpers-only and AOT (916 lines), and 41,143 encoder forms pass,
+including all new x87 memory encodings. Independent mutations invert the
+conditional branch and corrupt the FPCR rounding mapping. Full gates and
+cumulative coverage are recorded at integration. Half FCCMP remains a helper.
+
+At 1,000 iterations, eight new benchmark loops eliminate 64,000 scalar-FP
+and 80,000 system helper calls. Their result checksums equal native ARM and
+the base; together with the integer loops, the workload drops from 3,648,000
+helper calls to zero. Development-host timing and Intel acceptance remain
+separate measurements.
+
+
 ## Integer SIMD tail: widening, saturation and lane operations
 
 The JIT now emits SSE2 through SSE4.2 for signed/unsigned widening add,
@@ -2090,3 +2123,11 @@ Remaining limitations:
   contend on.
 - Not measured on Intel hardware or with the target's interface units; the
   share each change has there is not established.
+
+The inline FPCR write also mirrors `x87_rc_set`'s unchanged-control-word
+check. It skips FLDCW when rounding is already correct: FLDCW is a waiting
+x87 instruction and can deliver a pending unmasked native x87 exception,
+where FNSTCW cannot. Nine focused state cases retain the pending invalid
+flag and cover all four unchanged rounding modes with live/dead NZCV.
+This Rosetta host preserves the flag but does not deliver the exception
+even for FWAIT; actual Intel exception delivery remains untested.

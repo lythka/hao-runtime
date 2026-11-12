@@ -1497,8 +1497,72 @@ static bool t_ordered(tctx *t, uint32_t i)
     return true;
 }
 
+/* Match a64_fpcr/fpsr_{read,write}, including shared native MXCSR state
+ * and the x87 rounding/exception state. Save guest NZCV before integer bit
+ * mapping; the stack entry stub reserves eight scratch bytes. */
+static bool t_fp_system(tctx *t, uint32_t i)
+{
+    uint32_t key = i & 0xffffffe0u;
+    bool read = BIT(i, 21), status = BIT(i, 5);
+    if (key != 0xd53b4400u && key != 0xd51b4400u && key != 0xd53b4420u && key != 0xd51b4420u) return false;
+    unsigned rt = BITS(i, 4, 0);
+    xmem env = xm(RSP, 0), cw = xm(RSP, 4);
+    fl_clobber(t);
+    x_stmxcsr(&t->b, env);
+    if (read && !status) {
+        x_mov_ld(&t->b, 4, RAX, xm(RBX, offsetof(hao_cpu, fpcr)));
+        x_alu_ri(&t->b, XAND, 0, RAX, ~(7u << 22));
+        x_mov_ld(&t->b, 4, RCX, env);
+        for (unsigned bit = 13; bit <= 15; bit++) {
+            x_mov_rr(&t->b, 0, RDX, RCX); x_alu_ri(&t->b, XAND, 0, RDX, 1u << bit);
+            x_shift_ri(&t->b, XSHL, 0, RDX, (uint8_t)(bit == 13 ? 10 : bit == 14 ? 8 : 9));
+            x_alu_rr(&t->b, XOR_, 0, RAX, RDX);
+        }
+        stx(t, rt, RAX, false);
+    } else if (!read && !status) {
+        ldx(t, RAX, rt, 0, false); x_alu_ri(&t->b, XAND, 0, RAX, 0x07ff9f07); /* FPCR_WRITABLE */
+        x_mov_st(&t->b, 4, xm(RBX, offsetof(hao_cpu, fpcr)), RAX);
+        x_mov_ld(&t->b, 4, RCX, env); x_alu_ri(&t->b, XAND, 0, RCX, ~0xe040u);
+        /* Swapped RMode in edx; retain it for the x87 control word. */
+        x_mov_rr(&t->b, 0, RDX, RAX); x_shift_ri(&t->b, XSHR, 0, RDX, 8); x_alu_ri(&t->b, XAND, 0, RDX, 1u << 14);
+        x_mov_rr(&t->b, 0, RSI, RAX); x_shift_ri(&t->b, XSHR, 0, RSI, 10); x_alu_ri(&t->b, XAND, 0, RSI, 1u << 13);
+        x_alu_rr(&t->b, XOR_, 0, RDX, RSI); x_alu_rr(&t->b, XOR_, 0, RCX, RDX);
+        x_alu_ri(&t->b, XAND, 0, RAX, 1u << 24);
+        size_t nofz = x_jcc32(&t->b, XCC_E);
+        x_alu_ri(&t->b, XOR_, 0, RCX, 0x8040); /* FTZ and DAZ */
+        x_patch32(&t->b, nofz, xb_len(&t->b));
+        x_mov_st(&t->b, 4, env, RCX); x_ldmxcsr(&t->b, env);
+        x_fnstcw(&t->b, cw); x_mov_ld(&t->b, 2, RCX, cw); x_mov_rr(&t->b, 0, RSI, RCX);
+        x_alu_ri(&t->b, XAND, 0, RCX, ~0x0c00u); x_shift_ri(&t->b, XSHR, 0, RDX, 3);
+        x_alu_rr(&t->b, XOR_, 0, RCX, RDX);
+        /* Like x87_rc_set: avoid a waiting FLDCW when nothing changed. */
+        x_alu_rr(&t->b, XCMP, 0, RCX, RSI);
+        size_t unchanged = x_jcc8(&t->b, XCC_E);
+        x_mov_st(&t->b, 2, cw, RCX); x_fldcw(&t->b, cw);
+        x_patch8(&t->b, unchanged, xb_len(&t->b));
+    } else if (read) {
+        x_fnstsw(&t->b, cw); x_mov_ld(&t->b, 2, RAX, cw); x_alu_ri(&t->b, XAND, 0, RAX, 0x3d);
+        x_mov_ld(&t->b, 4, RCX, env); x_alu_rr(&t->b, XOR_, 0, RAX, RCX);
+        x_mov_rr(&t->b, 0, RDX, RAX); x_alu_ri(&t->b, XAND, 0, RDX, 1);
+        x_shift_ri(&t->b, XSHR, 0, RAX, 1); x_alu_ri(&t->b, XAND, 0, RAX, 0x1e); x_alu_rr(&t->b, XOR_, 0, RAX, RDX);
+        x_mov_ld(&t->b, 4, RCX, xm(RBX, offsetof(hao_cpu, fpsr))); x_alu_ri(&t->b, XAND, 0, RCX, 0x08000080);
+        x_alu_rr(&t->b, XOR_, 0, RAX, RCX); stx(t, rt, RAX, false);
+    } else {
+        ldx(t, RAX, rt, 0, false); x_mov_rr(&t->b, 0, RDX, RAX); x_alu_ri(&t->b, XAND, 0, RDX, 0x08000080);
+        x_mov_st(&t->b, 4, xm(RBX, offsetof(hao_cpu, fpsr)), RDX);
+        x_mov_rr(&t->b, 0, RDX, RAX); x_alu_ri(&t->b, XAND, 0, RDX, 1);
+        x_alu_ri(&t->b, XAND, 0, RAX, 0x1e); x_shift_ri(&t->b, XSHL, 0, RAX, 1); x_alu_rr(&t->b, XOR_, 0, RAX, RDX);
+        x_mov_ld(&t->b, 4, RCX, env); x_alu_ri(&t->b, XAND, 0, RCX, ~0x3fu); x_alu_rr(&t->b, XOR_, 0, RAX, RCX);
+        x_mov_st(&t->b, 4, env, RAX); x_ldmxcsr(&t->b, env);
+        x_fnstsw(&t->b, cw); x_mov_ld(&t->b, 2, RAX, cw); x_alu_ri(&t->b, XAND, 0, RAX, 0x3d);
+        size_t clean = x_jcc8(&t->b, XCC_E); x_fnclex(&t->b); x_patch8(&t->b, clean, xb_len(&t->b));
+    }
+    return true;
+}
+
 static bool t_system(tctx *t, uint32_t i)
 {
+    if (t_fp_system(t, i)) return true;
     if (i == 0xD50320FF || i == 0xD503207F) return false;            /* XPACLRI (a64_xpac), WFI (UNDEF): helper */
     if ((i & 0xFFFFF01F) == 0xD503201F) return true;                 /* HINT space: NOP, PAC*SP, BTI, ... */
     if ((i & 0xFFFFF0FF) == 0xD50330BF) {                            /* DMB */
@@ -1723,6 +1787,8 @@ static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsig
 static bool t_tail_conversion(tctx *t, uint32_t i, uint64_t pc);
 static bool t_half_scalar(tctx *t, uint32_t i, uint64_t pc);
 
+static void t_fccmp(tctx *t, uint32_t i, uint64_t pc);
+
 static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
 {
     if (t_tail_conversion(t, i, pc)) return true;
@@ -1735,6 +1801,8 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         t_vfp_fma(t, BIT(i, 15) != BIT(i, 21), rd, rn, rm, -1, 0, i, pc);
         return true;
     }
+
+    if ((i & 0xff200c00) == 0x1e200400) { t_fccmp(t, i, pc); return true; }
     if ((i & 0xFF200C00) == 0x1E200800) {            /* 2-source: FMUL FDIV FADD FSUB (FNMUL) */
         static const uint8_t ops[4] = {0x59, 0x5E, 0x58, 0x5C};
         unsigned op = BITS(i, 15, 12);
@@ -2594,6 +2662,40 @@ static void vfp_constants(tctx *t)
     vzero(t, 5);
     vones(t, 6); x_sse_shift_ri(&t->b, 0x72, 2, 6, 1);                                     /* 0x7fffffff */
     vones(t, 7); x_sse_shift_ri(&t->b, 0x72, 2, 7, 24); x_sse_shift_ri(&t->b, 0x72, 6, 7, 23); /* 0x7f800000 */
+}
+
+/* FCCMP evaluates its condition before reading either FP operand. A
+ * false condition cannot raise exceptions. Ordinary active inputs take
+ * COMIS/UCOMIS; NaNs, infinities and subnormals use the unchanged helper. */
+static void t_fccmp(tctx *t, uint32_t i, uint64_t pc)
+{
+    unsigned cond = BITS(i, 15, 12), nzcv = BITS(i, 3, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    int dbl = BIT(i, 22);
+    fl_load(t); fl_materialize(t);
+    size_t skip = cond < 14 ? x_jcc32(&t->b, a64_cond_to_xcc(cond) ^ 1) : 0;
+    t->in_eflags = false; t->dirty = false;
+    fp_load(t, 0, rn, dbl); fp_load(t, 1, rm, dbl);
+    if (dbl) vfp_constants64(t); else vfp_constants(t);
+    vzero(t, 4);
+    if (dbl) { vfp_special64(t, 0); vfp_special64(t, 1); } else { vfp_special(t, 0); vfp_special(t, 1); }
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t special = jrcxnz32(t);
+    x_sse_rr(&t->b, dbl ? 0x66 : 0, BIT(i, 4) ? 0x2F : 0x2E, 0, 0, 1);
+    x_setcc(&t->b, XCC_P, RAX); x_setcc(&t->b, XCC_E, RCX); x_setcc(&t->b, XCC_B, RDX);
+    x_movzx8_rr(&t->b, RAX, RAX); x_movzx8_rr(&t->b, RCX, RCX); x_movzx8_rr(&t->b, RDX, RDX);
+    x_lea(&t->b, 0, RAX, xmi(RDX, RAX, 4, 0)); x_lea(&t->b, 0, RAX, xmi(RAX, RCX, 2, 0));
+    x_mov_ld(&t->b, 8, RAX, xmi(RBX, RAX, 8, CPU_OFF_FCMP)); x_mov_st(&t->b, 8, FLAGS, RAX);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, special, xb_len(&t->b)); helper(t, i, pc, true); st_helper -= !t->dry;
+    size_t helper_done = skip ? x_jmp32(&t->b) : 0;
+    if (skip) {
+        x_patch32(&t->b, skip, xb_len(&t->b));
+        uint32_t fl = HAO_FL_BASE | ((nzcv & 8) ? HAO_FL_SF : 0) | ((nzcv & 4) ? HAO_FL_ZF : 0) |
+            ((nzcv & 2) ? 0 : HAO_FL_CF) | ((nzcv & 1) ? HAO_FL_OF : 0);
+        x_mov_mi(&t->b, 8, FLAGS, (int32_t)fl);
+        x_patch32(&t->b, helper_done, xb_len(&t->b));
+    }
+    x_patch32(&t->b, done, xb_len(&t->b));
 }
 
 /* Vd = Vn op Vm (idx < 0) or Vn op Vm.S[idx] */

@@ -7,7 +7,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo"
 OUT=${OUT:-$(mktemp -d -t hao-wide-fp-mutations)}
 B=${B:-$repo/build}
-T=${T:-120}
+T=${T:-240}
 mkdir -p "$OUT"
 cp tests/aot/jit_vector.c "$OUT/vector.c"
 make B="$B" "$B/libhaocore.a" "$B/stubs_oracle.o" >/dev/null
