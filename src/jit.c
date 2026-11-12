@@ -2812,10 +2812,107 @@ static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
+/* Trim inactive lanes without touching EFLAGS. */
+static void vfp_trim(tctx *t, int r, int bytes)
+{
+    if (bytes == 4) {
+        x_sse_shift_ri(&t->b, 0x73, 7, r, 12);
+        x_sse_shift_ri(&t->b, 0x73, 3, r, 12);
+    } else if (bytes == 8) x_sse_rr(&t->b, 0xF3, 0x7E, 0, r, r);
+}
+
+/* Pairwise ADDPS/ADDPD, one guest rounding per pair. Integer admission
+ * precedes arithmetic; a result near underflow or overflow restores the
+ * pre-attempt MXCSR and invokes the original instruction helper. */
+static void t_vfp_pair_add(tctx *t, uint32_t i, uint64_t pc, bool scalar)
+{
+    unsigned Q = BIT(i, 30), dbl = BIT(i, 22), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), rd = BITS(i, 4, 0);
+    int bytes = scalar ? (dbl ? 8 : 4) : (Q ? 16 : 8);
+    vld(t, 0, rn);
+    if (scalar) {
+        if (!dbl) vfp_trim(t, 0, 8);
+        P(0x6F, 1, 0);
+        x_sse_shift_ri(&t->b, 0x73, 3, 1, dbl ? 8 : 4);
+        vfp_trim(t, 0, bytes); vfp_trim(t, 1, bytes);
+    } else {
+        vld(t, 1, rm);
+        if (dbl) {
+            P(0x6F, 2, 0); P(0x6C, 0, 1); P(0x6D, 2, 1); P(0x6F, 1, 2);
+        } else if (Q) {
+            P(0x6F, 2, 0);
+            x_sse_rri(&t->b, 0, 0xC6, 0, 1, 0x88); /* pair-add even lanes */
+            x_sse_rri(&t->b, 0, 0xC6, 2, 1, 0xDD);
+            P(0x6F, 1, 2);
+        } else {
+            P(0x6C, 0, 1); P(0x6F, 1, 0);
+            x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0x88);
+            x_sse_rri(&t->b, 0x66, 0x70, 1, 1, 0xDD);
+            vfp_trim(t, 0, 8); vfp_trim(t, 1, 8);
+        }
+    }
+    if (dbl) vfp_constants64(t); else vfp_constants(t);
+    vzero(t, 4);
+    if (dbl) { vfp_special64(t, 0); vfp_special64(t, 1); }
+    else { vfp_special(t, 0); vfp_special(t, 1); }
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    x_sse_rr(&t->b, dbl ? 0x66 : 0, 0x58, 0, 0, 1);
+    /* Conservative result admission includes rejecting exact zero and
+     * minimum-normal results. Inactive lanes never force a decline. */
+    P(0x6F, 2, 0); P(0xDB, 2, dbl ? 11 : 7);
+    if (dbl) P38(0x29, 2, 11); else P(0x76, 2, 7);
+    vconst(t, 3, dbl ? 0x7fe0000000000000ull : 0x7f0000007f000000ull, true);
+    P(0xDB, 3, 0);
+    if (dbl) P38(0x29, 3, 12); else P(0x76, 3, 5);
+    P(0xEB, 2, 3); vfp_trim(t, 2, bytes);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 2);
+    size_t restore = jrcxnz32(t);
+    vfp_trim(t, 0, bytes); vst(t, rd, 0, 1);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, restore, xb_len(&t->b)); x_ldmxcsr(&t->b, MXCSR_SLOT);
+    x_patch32(&t->b, decline, xb_len(&t->b)); helper_keep_flags(t, i, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
+}
+
+/* xmm0 = min/max(xmm0, xmm1), admitted ordinary singles. Signed zeros
+ * need ARM's AND (max) or OR (min), rather than SSE's second operand. */
+static void vfp_reduce_pair(tctx *t, bool minimum)
+{
+    P(0x6F, 8, 0); x_sse_rr(&t->b, 0, minimum ? 0x5D : 0x5F, 0, 8, 1);
+    P(0x6F, 2, 0); P(0xDB, 2, 6); P(0x76, 2, 5);
+    P(0x6F, 3, 1); P(0xDB, 3, 6); P(0x76, 3, 5); P(0xDB, 2, 3);
+    P(minimum ? 0xEB : 0xDB, 0, 1); P(0xDB, 0, 2);
+    P(0xDF, 2, 8); P(0xEB, 0, 2);
+}
+static bool t_vfp_reduce(tctx *t, uint32_t i, uint64_t pc)
+{
+    unsigned op = BITS(i, 16, 12), size = BITS(i, 23, 22), rd = BITS(i, 4, 0);
+    if ((op != 0x0c && op != 0x0f) || !BIT(i, 29) || !BIT(i, 30) || (size & 1)) return false;
+    bool minimum = size & 2;
+    vld(t, 0, BITS(i, 9, 5)); vfp_constants(t); vzero(t, 4); vfp_special(t, 0);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    P(0x6F, 1, 0);
+    x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0x88);
+    x_sse_rri(&t->b, 0x66, 0x70, 1, 1, 0xDD);
+    vfp_reduce_pair(t, minimum); /* (lane0 op lane1), (lane2 op lane3) */
+    x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0x55);
+    vfp_reduce_pair(t, minimum);
+    vfp_trim(t, 0, 4); vst(t, rd, 0, 1);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, decline, xb_len(&t->b)); helper_keep_flags(t, i, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
+    return true;
+}
+
 /* three-same, floating point: the single-precision forms of t_vfp32 */
 static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 11);
+    if (U && op == 0x1a && size < 2 && (!(size & 1) || Q)) {
+        t_vfp_pair_add(t, i, pc, false); return true;
+    }
     if (size & 1) return false;                                  /* double precision: helper */
     if (!U && op == 0x19) {
         t_vfp_fma(t, size >> 1, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, (int)Q, i, pc);
@@ -3148,7 +3245,7 @@ static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
 {
     if ((i & 0x9F200400) == 0x0E200400) return BITS(i, 15, 11) >= 0x18 ? t_vfp_three_same(t, i, pc) : t_simd_three_same(t, i);
     if ((i & 0x9F3E0C00) == 0x0E200800) return t_simd_two_misc(t, i, pc);
-    if ((i & 0x9F3E0C00) == 0x0E300800) return t_simd_across(t, i);
+    if ((i & 0x9F3E0C00) == 0x0E300800) return t_vfp_reduce(t, i, pc) || t_simd_across(t, i);
     if ((i & 0x9FF80400) == 0x0F000400) return t_simd_modimm(t, i);
     if ((i & 0x9FE08400) == 0x0E000400) return t_simd_copy(t, i);
     if ((i & 0x9F800400) == 0x0F000400) return t_simd_shift(t, i, false);
@@ -3163,8 +3260,11 @@ static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
     return false;
 }
 
-static bool t_simd_scalar(tctx *t, uint32_t i)
+static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
 {
+    if ((i & 0xFFBFFC00) == 0x7E30D800) {
+        t_vfp_pair_add(t, i, pc, true); return true;
+    }
     if ((i & 0xFFE0FC00) == 0x5E000400) {                        /* DUP (element), scalar: MOV Dd, Vn.D[1] ... */
         unsigned imm5 = BITS(i, 20, 16), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
         if (!(imm5 & 15)) return false;
@@ -3222,7 +3322,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         break;
     case 0xF:
         if ((i & 0x5F000000) == 0x1E000000) ok = t_fp(t, i, pc);
-        else ok = t_simd_scalar(t, i);
+        else ok = t_simd_scalar(t, i, pc);
         break;
     case 0x7:
         if ((i & 0xFFC08000) == 0xCE000000) ok = t_eor3_bcax(t, i);

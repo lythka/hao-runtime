@@ -216,6 +216,8 @@ int main(int argc, char **argv)
         }
         for (int c = 0; c < 16; c += 5) {
             begin(); x_sse_rri(&B, 0x66, 0xC2, a, c, 4); end("cmpneqpd %s, %s", xmmn(a), xmmn(c));
+            begin(); x_sse_rri(&B, 0, 0xC6, a, c, 0x88); end("shufps %s, %s, 136", xmmn(a), xmmn(c));
+            begin(); x_sse_rri(&B, 0, 0xC6, a, c, 0xDD); end("shufps %s, %s, 221", xmmn(a), xmmn(c));
             begin(); x_sse_rri(&B, 0xF2, 0x70, a, c, 0); end("pshuflw %s, %s, 0", xmmn(a), xmmn(c));
             begin(); x_sse_rri(&B, 0x66, 0x70, a, c, 0xEE); end("pshufd %s, %s, 238", xmmn(a), xmmn(c));
             static const uint8_t shuf[] = {0x00, 0x08, 0x55, 0xAA, 0xF5, 0xFF};

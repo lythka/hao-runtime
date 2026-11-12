@@ -336,3 +336,9 @@ half selection and an ADDV reduction at the wrong lane width.
 `guest/jitinsns` covers all 42 allocated ZIP/UZP/TRN forms, the five ADDV
 arrangements and all 24 signed/unsigned pairwise-long arrangements against
 native arm64 in JIT, interpreter, helpers-only and AOT.
+
+`aot/fp-coverage-mutations` runs a passing vector-test control and a private
+translator with the FADDP pair ordering deliberately corrupted. The complete
+state test must detect the mutation; source files and the built runtime remain
+unchanged. `guest/jitinsns` also includes vector/scalar S/D FADDP and all four
+single-precision min/max reductions, compared with native in every engine.

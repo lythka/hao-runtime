@@ -256,6 +256,30 @@ int main(void)
             i |= q << 30 | sz << 22 | rn << 5 | rd;
             check(i, 0, &in, false); check(i, 0, &in, true);
         }
+    /* Pairwise sums and extrema reductions, aliases and full FP state. */
+    static const uint32_t pair_forms[] = {
+        0x2e20d400, 0x6e20d400, 0x6e60d400, 0x7e30d800, 0x7e70d800,
+        0x6e30c800, 0x6eb0c800, 0x6e30f800, 0x6eb0f800
+    };
+    for (unsigned control = 0; control < 16; control++)
+        for (unsigned f = 0; f < sizeof pair_forms / sizeof *pair_forms; f++)
+            for (unsigned k = 0; k < 128; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                hao_cpu in; state(&in, rn, rm); in.fpcr = control << 22;
+                if (f == 2 || f == 4) for (int e = 0; e < 2; e++) { in.v[rn].d[e] = dval(); in.v[rm].d[e] = dval(); }
+                if (k < 4) for (int e = 0; e < 4; e++) {
+                    in.v[rn].s[e] = 0x3f800000u + (unsigned)e * 0x800000u;
+                    in.v[rm].s[e] = 0x41000000u + (unsigned)e * 0x100000u;
+                }
+                uint32_t i = pair_forms[f] | rn << 5 | rd | (f < 3 ? rm << 16 : 0);
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0;
+                    check(i, 0, &in, live);
+                    if (k == 0 && vector_helper_calls) {
+                        if (fails++ < 20) printf("MISMATCH pair admission %08x: %u helper calls\n", i, vector_helper_calls);
+                    }
+                }
+            }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */

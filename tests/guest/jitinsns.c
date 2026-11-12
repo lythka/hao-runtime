@@ -429,6 +429,15 @@ VECF(t_fmlse2, "fmls v2.2s, v0.2s, v17.s[2]")
 VECF(t_fmlse3, "fmls v2.2s, v0.2s, v17.s[3]")
 VECF(t_fchain, "fmul v2.4s, v0.4s, v1.4s\nfadd v2.4s, v2.4s, v0.4s\nfsub v2.4s, v2.4s, v1.4s\nfmax v2.4s, v2.4s, v1.4s")
 VECF(t_fadd2d, "fadd v2.2d, v0.2d, v1.2d")
+VECF(t_faddp2s, "faddp v2.2s, v0.2s, v1.2s")
+VECF(t_faddp4s, "faddp v2.4s, v0.4s, v1.4s")
+VECF(t_faddp2d, "faddp v2.2d, v0.2d, v1.2d")
+VECF(t_faddps, "faddp s2, v0.2s")
+VECF(t_faddpd, "faddp d2, v0.2d")
+VECF(t_fmaxv, "fmaxv s2, v0.4s")
+VECF(t_fminv, "fminv s2, v0.4s")
+VECF(t_fmaxnmv, "fmaxnmv s2, v0.4s")
+VECF(t_fminnmv, "fminnmv s2, v0.4s")
 /* round to integral: vector .4S/.2S/.2D and scalar S/D */
 #define FR(n, mn)                                                                       \
     VECF(t_##n##4s, mn " v2.4s, v0.4s") VECF(t_##n##2s, mn " v2.2s, v1.2s")             \
@@ -842,6 +851,15 @@ int main(void)
     RF(fmlah4); RF(fmlah5); RF(fmlah6); RF(fmlah7); RF(fmls4h); RF(fmls8h);
     RF(fmlsh0); RF(fmlsh1); RF(fmlsh2); RF(fmlsh3); RF(fmlsh4); RF(fmlsh5);
     RF(fmlsh6); RF(fmlsh7);
+    RF(faddp2s);
+    RF(faddp4s);
+    RF(faddp2d);
+    RF(faddps);
+    RF(faddpd);
+    RF(fmaxv);
+    RF(fminv);
+    RF(fmaxnmv);
+    RF(fminnmv);
     RF4(fmla); RF4(fmls);
     RF(fmlae0); RF(fmlae1); RF(fmlae2); RF(fmlae3); RF(fmlse0); RF(fmlse1); RF(fmlse2); RF(fmlse3);
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);
