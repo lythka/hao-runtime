@@ -367,7 +367,7 @@ static uint32_t fma_gen(oracle_rec *r, bool operands)
 
 int main(int argc, char **argv)
 {
-    if (argc < 5) { fprintf(stderr, "usage: %s OUT COUNT SEED dp|simd|mem|block|pac|fma\n", argv[0]); return 2; }
+    if (argc < 5) { fprintf(stderr, "usage: %s OUT COUNT SEED dp|simd|mem|block|pac|fma|known|reserved\n", argv[0]); return 2; }
     long count = atol(argv[2]);
     rng = strtoull(argv[3], 0, 0) | 1;
     int mode = -1;
@@ -377,7 +377,19 @@ int main(int argc, char **argv)
      * sample size. Operand state still comes from the requested seed. */
     size_t nu = sizeof known_unimpl / sizeof *known_unimpl;
     size_t nl = sizeof known_lenient / sizeof *known_lenient;
-    if (mode == OM_KNOWN) count = (long)(nu + nl) * 1024;
+    size_t ns = sizeof encoding_sweeps / sizeof *encoding_sweeps;
+    if (mode == OM_KNOWN) count = (long)(ns + nu + nl) * 1024;
+    /* Exhaust every non-register selector, including ignored immediate bits.
+     * Rm is fixed only in permute and indexed groups; indexed M stays swept. */
+    uint32_t sweep_mask[sizeof encoding_sweeps / sizeof *encoding_sweeps];
+    long sweep_count = 0;
+    for (size_t k = 0; k < ns; k++) {
+        sweep_mask[k] = ~encoding_sweeps[k].mask & ~0x3ffu;
+        if (k == 7) sweep_mask[k] &= ~0x1f0000u;
+        if (k == 8) sweep_mask[k] &= ~0x0f0000u;
+        sweep_count += 1L << __builtin_popcount(sweep_mask[k]);
+    }
+    if (mode == OM_RESERVED) count = sweep_count;
     FILE *out = fopen(argv[1], "wb");
     if (!out) { perror("open"); return 1; }
 
@@ -417,8 +429,20 @@ int main(int argc, char **argv)
         else if (pacrec) r.n = 1;
         else if (mode == OM_KNOWN) {
             size_t k = (size_t)rec / 1024;
-            const known_enc *e = k < nu ? &known_unimpl[k] : &known_lenient[k - nu];
+            const known_enc *e = k < ns ? &encoding_sweeps[k] : k < ns + nu ? &known_unimpl[k - ns] : &known_lenient[k - ns - nu];
             r.code[0] = ((uint32_t)rnd() & ~e->mask) | e->value;
+            r.n = 1;
+        }
+        else if (mode == OM_RESERVED) {
+            long index = rec;
+            size_t k = 0;
+            while (index >= (1L << __builtin_popcount(sweep_mask[k])))
+                index -= 1L << __builtin_popcount(sweep_mask[k++]);
+            uint32_t insn = encoding_sweeps[k].value | (1u << 5);
+            if (k >= 7) insn |= 2u << 16;
+            for (unsigned b = 10; b < 32; b++)
+                if (sweep_mask[k] & (1u << b)) { insn |= (index & 1) << b; index >>= 1; }
+            r.code[0] = insn;
             r.n = 1;
         }
         else if (mode == OM_FMA) { r.code[0] = fma_gen(&r, false); r.n = 1; }
@@ -451,8 +475,10 @@ int main(int argc, char **argv)
         /* x18 is reserved, x0 is the harness temp, BL writes x30; the HINT
          * PAC forms read x16/x17 */
         uint32_t used = 1u << 18 | 1u | 1u << 30 | (pacrec ? 3u << 16 : 0);
+        /* The reserved sweep fixes GPR operands at x0/x1. Its variable
+         * fields name only SIMD registers or selectors, including value 18. */
         for (uint32_t k = 0; k < r.n; k++) {
-            if ((names18(r.code[k]) && !crypto_vonly(r.code[k])) || (r.code[k] & 0x7FE0FC00) == 0x1AC03000) skip = true;   /* PACGA uses real keys */
+            if ((mode != OM_RESERVED && names18(r.code[k]) && !crypto_vonly(r.code[k])) || (r.code[k] & 0x7FE0FC00) == 0x1AC03000) skip = true;   /* PACGA uses real keys */
             used |= field_regs(r.code[k]);
         }
         if (skip || (used & 0x7fffffffu) == 0x7fffffffu) { rec--; continue; }

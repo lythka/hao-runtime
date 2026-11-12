@@ -74,6 +74,7 @@ uint64_t fp_maxnm(fpctx *x, int es, uint64_t a, uint64_t b);
 uint64_t fp_minnm(fpctx *x, int es, uint64_t a, uint64_t b);
 uint64_t fp_recps(fpctx *x, int es, uint64_t a, uint64_t b);    /* 2 - a*b */
 uint64_t fp_rsqrts(fpctx *x, int es, uint64_t a, uint64_t b);   /* (3 - a*b) / 2 */
+uint32_t fp_unsigned_estimate(uint32_t a, bool rsqrt);
 uint64_t fp_recpe(fpctx *x, int es, uint64_t a);
 uint64_t fp_rsqrte(fpctx *x, int es, uint64_t a);
 uint64_t fp_recpx(fpctx *x, int es, uint64_t a);

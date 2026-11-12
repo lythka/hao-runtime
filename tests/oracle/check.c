@@ -56,6 +56,7 @@ static int interp_code(hao_cpu *c, const oracle_rec *r)
 
 #define NUNIMPL (sizeof known_unimpl / sizeof *known_unimpl)
 #define NLENIENT (sizeof known_lenient / sizeof *known_lenient)
+_Static_assert(NLENIENT == 0, "reserved encodings must not have oracle exceptions");
 static long unimpl_hits[2][NUNIMPL], lenient_hits[2][NLENIENT];
 
 /* Count actual tolerated outcomes, not merely encodings. Counting all

@@ -526,3 +526,14 @@ other parent threads emit and execute code. The Rosetta parent can fault on
 a formerly writable MAP_JIT page; this diagnostic remains separate from the
 passing-control/mutation bridge regression and is not an expected-failure
 entry in the gate.
+
+`oracle` and `oracle-asan` include `reserved`: 30,016 selector combinations
+in nine SIMD groups, compared with native ARM for acceptance, values and flags.
+The `known` sample continues to exercise those groups after exception removal;
+adding a lenient exception fails the checker build. The exhaustive mode fixes
+GPR operands away from x18, so opcode/immediate fields equal to 18 are tested.
+`guest/reserved-simd` checks nine rejected encodings through all four engines
+(including loaded AOT caches), two valid ignored-bit aliases, and every unsigned
+reciprocal/reciprocal-square-root estimate bucket at both ends. Undefined guest
+instructions currently terminate with the runtime's diagnostic and SIGABRT;
+the oracle checks the internal UNDEF result against hardware SIGILL.

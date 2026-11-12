@@ -133,7 +133,7 @@ $(B)/oracle-atomic: tests/oracle/atomic16.c $(B)/libhaocore.a $(B)/jit.o $(B)/st
 
 # Every mode runs; the target fails if any of them reports a failure.
 ORACLE_N ?= 200000
-ORACLE_MODES ?= dp simd mem block fma known
+ORACLE_MODES ?= dp simd mem block fma known reserved
 oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	@fail=0; for m in $(ORACLE_MODES); do \
 	  timeout -s KILL 900 $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \

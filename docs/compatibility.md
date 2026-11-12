@@ -42,10 +42,8 @@ boundary, with runtime-sized values handled where the layout is proven.
 ## Known limitations
 
 **Instructions**
-- SVE, SME, SM3/SM4 and some rarely used SIMD forms are treated as undefined
-  instructions.
+- SVE, SME and SM3/SM4 are treated as undefined instructions.
 - Half precision does not model FZ16 or AHP.
-- Some FPSR flag differences remain for native-emitted operations with FZ.
 
 **Execution**
 - Only code in loaded guest images is translated. ARM64 code a program

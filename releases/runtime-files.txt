@@ -753,3 +753,5 @@ tests/aot/estimate_mutations.sh
 tests/aot/aes_mutations.sh
 tests/aot/aes_profile.c
 tests/aot/aes_profile.sh
+tests/guest/reserved_simd.c
+tests/guest/reserved_simd.sh
