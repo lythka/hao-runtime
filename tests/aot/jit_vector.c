@@ -390,6 +390,50 @@ static void conversion_cases(void)
     }
 }
 
+/* Half products and sums are exact in D before one integer H rounding. */
+static void half_arithmetic_cases(void)
+{
+    static const uint16_t hv[] = {0,0x8000,1,0x3ff,0x400,0x401,0x3555,0x3800,0x3bff,0x3c00,0x3c01,
+        0x3e00,0x4000,0xbc00,0x7bfe,0x7bff,0xfbff,0x7c00,0xfc00,0x7d01,0x7e01};
+    static const uint32_t ops[] = {0x0e401400,0x0ec01400,0x2e401c00,0x0e403400,0x0ec03400,0x0e400400,0x0ec00400};
+    for (unsigned q = 0; q < 2; q++) for (unsigned op = 0; op < 7; op++) for (unsigned k = 0; k < 256; k++) {
+        unsigned rn = 3, rm = k & 1 ? 3 : 17, rd = k & 2 ? rn : k & 4 ? rm : 4;
+        hao_cpu in; state(&in, rn, rm); in.fpcr = (k & 15) << 22;
+        for (int lane = 0; lane < 8; lane++) {
+            in.v[rn].h[lane] = k & 16 ? (uint16_t)rnd() : hv[(k + lane) % (sizeof hv / sizeof *hv)];
+            in.v[rm].h[lane] = k & 32 ? (uint16_t)rnd() : hv[(k / 3 + lane) % (sizeof hv / sizeof *hv)];
+        }
+        uint32_t i = ops[op] | q << 30 | rm << 16 | rn << 5 | rd;
+        check(i, 0, &in, false); check(i, 0, &in, true);
+    }
+    for (unsigned q = 0; q < 2; q++) for (unsigned idx = 0; idx < 8; idx++) for (unsigned k = 0; k < 64; k++) {
+        unsigned rn = 17, rm = 3, rd = k & 1 ? rn : k & 2 ? rm : 4;
+        hao_cpu in; state(&in, rn, rm); in.fpcr = (k & 15) << 22;
+        for (int lane = 0; lane < 8; lane++) {
+            in.v[rn].h[lane] = hv[(k + lane) % (sizeof hv / sizeof *hv)];
+            in.v[rm].h[lane] = hv[(k / 3 + lane) % (sizeof hv / sizeof *hv)];
+        }
+        uint32_t i = 0x0f009000 | q << 30 | ((idx >> 2) & 1) << 11 | ((idx >> 1) & 1) << 21 |
+                     (idx & 1) << 20 | rm << 16 | rn << 5 | rd;
+        check(i, 0, &in, false); check(i, 0, &in, true);
+    }
+    static const unsigned scalar_ops[] = {0,2,3,4,5,6,7};
+    for (unsigned op = 0; op < 7; op++) for (unsigned k = 0; k < 128; k++) {
+        hao_cpu in; state(&in, 3, 17); in.fpcr = (k & 15) << 22;
+        in.v[3].h[0] = hv[k % (sizeof hv / sizeof *hv)];
+        in.v[17].h[0] = hv[(k / 3) % (sizeof hv / sizeof *hv)];
+        uint32_t i = 0x1ee00800 | scalar_ops[op] << 12 | 17 << 16 | 3 << 5 | (k & 1 ? 3 : 4);
+        check(i, 0, &in, false); check(i, 0, &in, true);
+    }
+    for (unsigned op = 0; op < 7; op++) for (unsigned control = 0; control < 16; control++) {
+        hao_cpu in; state(&in, 3, 17); in.fpcr = control << 22;
+        for (int lane = 0; lane < 8; lane++) { in.v[3].h[lane] = lane & 1 ? 0x3c01 : 0x400; in.v[17].h[lane] = lane & 1 ? 0x3bff : 0x400; }
+        unsigned before = vector_helper_calls;
+        check(ops[op] | 1u << 30 | 17 << 16 | 3 << 5 | 4, 0, &in, true);
+        if (vector_helper_calls != before) { fprintf(stderr, "MISMATCH half arithmetic ordinary helper\n"); fails++; }
+    }
+}
+
 int main(void)
 {
     mem = mmap(NULL, 3 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -473,6 +517,8 @@ int main(void)
             }
             if (k % 8 == 0) check(i, 0x4e20d400u | rd << 16 | rn << 5 | rd, &in, true);
         }
+
+    half_arithmetic_cases();
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {
