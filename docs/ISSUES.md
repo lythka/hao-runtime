@@ -1,5 +1,45 @@
 # Runtime issues and measured scope
 
+## Dynamic helper groups in translated code
+
+`--stats` counts executed interpreter calls by fixed decoder group and reports
+up to twenty group/kind entries in descending call count, each with a sample
+encoding. Each emitted call carries a fourth ABI argument identifying a
+never-translated instruction or a runtime decline from an inline path. The
+interpreter descriptor and execution semantics are unchanged. Helpers-only
+translations count as untranslated; interpreter execution and whole-block
+interpreter fallback are outside these JIT-helper counters. AOT uses the same
+call contract and its cache remains bound to the generating runtime.
+
+Counters and representative encodings use relaxed lock-free atomics in a fixed
+24-by-2 table; the helper path allocates nothing, takes no lock and uses no TLS.
+Updates occur only with statistics enabled. Printing takes an approximate
+snapshot if other threads are still executing; it does not synchronize guest
+execution. Decoder groups intentionally aggregate arrangements and related
+operations; static site counts are separate from these dynamic call counts.
+
+A fixed-loop test in JIT and AOT subtracts N=0 startup counts and observes exactly
+1000 each of untranslated reciprocal estimates, FABD and integer ADDP,
+1000 subnormal FADD declines, and no
+calls for 1000 ordinary FADDs. A 35-form SIMD workload matches native in JIT,
+interpreter, helpers-only and AOT. Before further translations it makes
+27,200,000 helper calls at 50000 iterations: permutes 4,800,000; FP pairwise
+4,000,000; pair-long, FP reductions, zero compares, register shifts and scalar
+indexed operations each 3,200,000; vector division 1,600,000; ADDV 800,000.
+No input declines occur in that ordinary-operand workload.
+
+Validation includes the full default oracle and sanitizer oracle, make test,
+all eight existing FMA mutations, and the manifest's execution checks. The
+chain test now selects the summary by its `aot_blocks=` prefix rather than
+taking the last statistics line; its sites/race/JIT/AOT checks pass. Replay of
+the saved 200000-record simd/block/fma corpora has zero mismatches and unchanged
+IEEE-flag difference counts: interpreter 1/0/0 and JIT 9/4975/0.
+
+The base AOT measurement of a large FP/SIMD-heavy arm64 program is 2,332,343
+blocks and 12,561,074 instructions, 98.8% translated natively. Only cache
+generation was run; this is coverage evidence, not application acceptance.
+
+
 ## Inline FP16 FMLA/FMLS in translated code
 
 Vector FMLA/FMLS .4H/.8H, three-same and by element, emit an SSE2/SSE4

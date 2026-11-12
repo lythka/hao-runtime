@@ -42,7 +42,7 @@ want=$(timeout -s KILL 60 /usr/bin/awk "$prog" "$in")
 
 HAO_NO_AOT=1 timeout -s KILL 300 "$HAO" --stats /usr/bin/awk "$prog" "$in" >"$OUT/jit.out" 2>"$OUT/jit.err"
 rc=$?
-st=$(grep '^hao-jit:' "$OUT/jit.err" | tail -1)
+st=$(grep '^hao-jit: aot_blocks=' "$OUT/jit.err" | tail -1)
 ok=0
 [ $rc = 0 ] && [ "$(cat "$OUT/jit.out")" = "$want" ] && echo "$st" | grep -q ' sites_unaligned=0 link_skips=0' && ok=1
 check jit-awk $ok "rc=$rc out=$(cat "$OUT/jit.out") native=$want ${st#hao-jit: }"
@@ -80,7 +80,7 @@ PY
 prc=$?
 HAO_CACHE=$OUT/aot timeout -s KILL 300 "$HAO" --stats /usr/bin/awk "$prog" "$in" >"$OUT/aot.out" 2>"$OUT/aot.err"
 rc=$?
-ab=$(grep '^hao-jit:' "$OUT/aot.err" | tail -1 | sed -E 's/.*(aot_blocks=[0-9]+).*/\1/')
+ab=$(grep '^hao-jit: aot_blocks=' "$OUT/aot.err" | tail -1 | sed -E 's/.*(aot_blocks=[0-9]+).*/\1/')
 ok=0
 [ $prc = 0 ] && [ $rc = 0 ] && [ "$(cat "$OUT/aot.out")" = "$want" ] && {
     abn=${ab#aot_blocks=}; case $abn in ""|0|*[!0-9]*) ;; *) ok=1;; esac

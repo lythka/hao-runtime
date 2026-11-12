@@ -63,7 +63,7 @@ typedef struct hao_cpu {
     uint64_t host_scratch[5];/* 0x158 */
     /* runtime entry points, so translated code is position independent
      * (identical bytes for JIT and AOT): */
-    uint64_t rt_helper;      /* 0x180: int helper(cpu, uint64_t descriptor, pc);
+    uint64_t rt_helper;      /* 0x180: int helper(cpu, uint64_t descriptor, pc, declined);
                               * low32 = original ARM word, high32 = internal tag */
     uint64_t rt_exit;        /* 0x188: exit stub */
     uint64_t rt_jc;          /* 0x190: this thread's jump cache (jit.c) */

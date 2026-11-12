@@ -97,6 +97,56 @@ static uint64_t table_epoch = 1;
 static int (*jit_enter)(hao_cpu *, void *code);
 static uint64_t st_blocks, st_insns, st_native, st_helper, st_links, st_bytes, st_aot_blocks;
 static uint64_t st_helper_calls;      /* dynamic calls, only with --stats */
+/* Fixed decoder-class counters: no allocation or locks on a helper path.
+ * Every update is relaxed and lock-free on the required x86-64 target. */
+enum { HG_PERMUTE, HG_ADDV, HG_PAIR_LONG, HG_FP_PAIR, HG_FP_REDUCE,
+       HG_FDIV, HG_FP_ZERO, HG_REG_SHIFT, HG_INDEXED, HG_SCALAR_INDEXED,
+       HG_FP_VECTOR, HG_INT_VECTOR, HG_MISC, HG_ACROSS, HG_SHIFT,
+       HG_COPY, HG_THREE_DIFF, HG_SCALAR, HG_CRYPTO, HG_LDST,
+       HG_DP_IMM, HG_DP_REG, HG_SYSTEM, HG_OTHER, HG_COUNT };
+static const char *const helper_group_names[HG_COUNT] = {
+    "permute", "addv", "pair-long", "fp-pair", "fp-reduce", "fdiv",
+    "fp-zero", "register-shift", "indexed-vector", "indexed-scalar",
+    "fp-vector", "integer-simd", "simd-misc", "simd-across", "shift-immediate",
+    "simd-copy", "three-different", "fp-scalar", "crypto", "load-store",
+    "dp-immediate", "dp-register", "branch-system", "other"
+};
+static struct { uint64_t calls; uint32_t example; } helper_groups[HG_COUNT][2];
+static unsigned helper_group(uint32_t i)
+{
+    if ((i & 0xBF208C00) == 0x0E000800) return HG_PERMUTE;
+    if ((i & 0x9F3E0C00) == 0x0E300800) {
+        unsigned op = BITS(i, 16, 12);
+        return op == 0x1b ? HG_ADDV : op == 0x0c || op == 0x0f ? HG_FP_REDUCE : HG_ACROSS;
+    }
+    if ((i & 0xDF3E0C00) == 0x5E300800) return BIT(i, 29) ? HG_FP_PAIR : HG_INT_VECTOR;
+    if ((i & 0x9F3E0C00) == 0x0E200800) {
+        unsigned op = BITS(i, 16, 12);
+        return op == 2 || op == 6 ? HG_PAIR_LONG : op >= 0xc && op <= 0xe ? HG_FP_ZERO : HG_MISC;
+    }
+    if ((i & 0x9F200400) == 0x0E200400) {
+        unsigned op = BITS(i, 15, 11);
+        if (op == 8) return HG_REG_SHIFT;
+        if (op == 0x1f && BIT(i, 29)) return HG_FDIV;
+        if (op == 0x1a && BIT(i, 29) && !BIT(i, 23)) return HG_FP_PAIR;
+        return op >= 0x18 ? HG_FP_VECTOR : HG_INT_VECTOR;
+    }
+    if ((i & 0x9F000400) == 0x0F000000) return HG_INDEXED;
+    if ((i & 0xDF000400) == 0x5F000000) return HG_SCALAR_INDEXED;
+    if ((i & 0x9F800400) == 0x0F000400) return HG_SHIFT;
+    if ((i & 0x9FE08400) == 0x0E000400) return HG_COPY;
+    if ((i & 0x9F200C00) == 0x0E200000) return HG_THREE_DIFF;
+    if ((i & 0xFF000000) == 0xCE000000 || (i & 0xFF3E0C00) == 0x4E280800) return HG_CRYPTO;
+    if ((i & 0x5F000000) == 0x1E000000 || (i & 0x5F000000) == 0x1F000000) return HG_SCALAR;
+    switch (BITS(i, 28, 25)) {
+    case 8: case 9: return HG_DP_IMM;
+    case 10: case 11: return HG_SYSTEM;
+    case 4: case 6: case 12: case 14: return HG_LDST;
+    case 5: case 13: return HG_DP_REG;
+    default: return HG_OTHER;
+    }
+}
+
 static uint64_t st_sites, st_sites_unaligned, st_link_skips;   /* chainable exits emitted / not 4-aligned; links refused */
 static uint64_t st_fused;             /* instructions folded into the one before them (constant chains) */
 static uint64_t st_fl_exits, st_fl_unsaved;   /* direct exits reached with NZCV in EFLAGS / of those, left unsaved */
@@ -471,13 +521,14 @@ static void exit_indirect(tctx *t)
     x_jmp_m(&t->b, xm(RBX, CPU_OFF_RT_PROBE));
 }
 
-static void helper(tctx *t, uint32_t insn, uint64_t pc)
+static void helper(tctx *t, uint32_t insn, uint64_t pc, bool declined)
 {
     fl_materialize(t);
     t->in_eflags = false;
     x_mov_rr(&t->b, 1, RDI, RBX);
     x_mov_ri(&t->b, RSI, a64_helper_descriptor(insn));
     gaddr(t, RDX, pc);
+    x_mov_ri(&t->b, RCX, declined);  /* fourth ABI argument; descriptor unchanged */
     x_call_m(&t->b, xm(RBX, CPU_OFF_RT_HELPER));
     x_test_rr(&t->b, 0, RAX, RAX);
     size_t ok = x_jcc8(&t->b, XCC_E);
@@ -1493,7 +1544,7 @@ static void fp_store_checked(tctx *t, unsigned rd, int dbl, uint32_t insn, uint6
     fp_store(t, rd, 0);
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, nan, xb_len(&t->b));
-    helper(t, insn, pc);
+    helper(t, insn, pc, true);
     st_helper--;                                             /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
@@ -1539,7 +1590,7 @@ static void fp_maxmin(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, den[0], xb_len(&t->b));
     x_patch32(&t->b, den[1], xb_len(&t->b));
     x_patch32(&t->b, nan, xb_len(&t->b));
-    helper(t, i, pc);
+    helper(t, i, pc, true);
     st_helper--;                                               /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
@@ -1596,7 +1647,7 @@ static void fp_to_int_z(tctx *t, uint32_t i, uint64_t pc)
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, out, xb_len(&t->b));
     x_patch32(&t->b, slow, xb_len(&t->b));
-    helper(t, i, pc);
+    helper(t, i, pc, true);
     st_helper--;                                               /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
@@ -1670,7 +1721,7 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
     if (nslow) {
         size_t done = x_jmp32(&t->b);
         for (int k = 0; k < nslow; k++) x_patch32(&t->b, slow[k], xb_len(&t->b));
-        helper(t, i, pc);
+        helper(t, i, pc, true);
         st_helper--;                                           /* counted as native */
         x_patch32(&t->b, done, xb_len(&t->b));
     }
@@ -1803,7 +1854,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         if (sf) {
             size_t done = x_jmp32(&t->b);
             x_patch32(&t->b, big, xb_len(&t->b));
-            helper(t, i, pc);
+            helper(t, i, pc, true);
             st_helper--;                                         /* counted as native */
             x_patch32(&t->b, done, xb_len(&t->b));
         }
@@ -2305,7 +2356,7 @@ static size_t jrcxnz32(tctx *t)
 static void helper_keep_flags(tctx *t, uint32_t insn, uint64_t pc)
 {
     bool keep = t->in_eflags && t->live_out[t->idx], dirty = t->dirty;
-    helper(t, insn, pc);
+    helper(t, insn, pc, true);
     st_helper -= !t->dry;                                        /* counted as native */
     if (keep) { x_mov_ld(&t->b, 2, RAX, FLAGS); fl_from_eax(t); }
     t->in_eflags = keep;
@@ -3188,7 +3239,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         return 1;
     }
     if (ok) { ST(st_native); return 0; }
-    helper(t, i, pc);
+    helper(t, i, pc, false);
     if (is_block_end(i)) {
         /* brk/hlt/udf etc.: helper already exited on failure; otherwise continue at pc */
         fl_materialize(t);
@@ -4467,10 +4518,17 @@ static void init_fcmp(hao_cpu *c)
 
 /* The interpreter helper of translated code. It records the guest pc of
  * the instruction it runs, for a signal that interrupts it. */
-static int jit_helper(hao_cpu *c, uint64_t descriptor, uint64_t pc)
+static int jit_helper(hao_cpu *c, uint64_t descriptor, uint64_t pc, unsigned declined)
 {
     c->host_scratch[HAO_SCRATCH_HELPER] = pc;
-    if (hao_opt.stats) __atomic_fetch_add(&st_helper_calls, 1, __ATOMIC_RELAXED);
+    if (hao_opt.stats) {
+        unsigned group = helper_group((uint32_t)descriptor), kind = !!declined;
+        uint32_t empty = 0;
+        __atomic_fetch_add(&st_helper_calls, 1, __ATOMIC_RELAXED);
+        __atomic_compare_exchange_n(&helper_groups[group][kind].example, &empty,
+                                    (uint32_t)descriptor, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&helper_groups[group][kind].calls, 1, __ATOMIC_RELAXED);
+    }
     int r = a64_exec_helper(c, descriptor, pc);
     c->host_scratch[HAO_SCRATCH_HELPER] = 0;
     return r;
@@ -4608,6 +4666,22 @@ void hao_jit_stats(void)
             (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
             (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved,
             (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED));
+    uint64_t counts[HG_COUNT][2];
+    for (unsigned g = 0; g < HG_COUNT; g++)
+        for (unsigned k = 0; k < 2; k++)
+            counts[g][k] = __atomic_load_n(&helper_groups[g][k].calls, __ATOMIC_RELAXED);
+    for (unsigned rank = 0; rank < 20; rank++) {
+        unsigned best = 0, kind = 0;
+        for (unsigned g = 0; g < HG_COUNT; g++)
+            for (unsigned k = 0; k < 2; k++)
+                if (counts[g][k] > counts[best][kind]) { best = g; kind = k; }
+        if (!counts[best][kind]) break;
+        fprintf(stderr, "hao-jit: helper group %s kind=%s calls=%llu example=%08x\n",
+                helper_group_names[best], kind ? "declined" : "untranslated",
+                (unsigned long long)counts[best][kind],
+                __atomic_load_n(&helper_groups[best][kind].example, __ATOMIC_RELAXED));
+        counts[best][kind] = 0;
+    }
 }
 
 /* Oracle support: run code[0..n) placed at guest address `base` from its
