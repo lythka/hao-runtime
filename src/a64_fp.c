@@ -38,12 +38,13 @@ fpctx fp_ctx(hao_cpu *c)
 {
     uint32_t m = mxcsr_get();
     unsigned rc = (m >> 13) & 3;
-    fpctx x = {c, (rc == 1 || rc == 2) ? 3 - rc : rc, (m >> 15) & 1, (c->fpcr >> 25) & 1};
+    fpctx x = {c, (rc == 1 || rc == 2) ? 3 - rc : rc, (m >> 15) & 1, (c->fpcr >> 25) & 1, false};
     return x;
 }
 
 void fp_raise(fpctx *x, unsigned f)
 {
+    if (x->no_exceptions) return;
     if (f & FPX_IDC) x->c->fpsr |= FPX_IDC;
     f &= 0x1f;
     if (!f) return;
@@ -152,7 +153,7 @@ static uint64_t invalid(fpctx *x, int es) { fp_raise(x, FPX_IOC); return fp_defa
 
 /* ------------------------------------------------------------ rounding */
 
-enum { RND_ODD = 5 };
+enum { RND_ODD = 5, RND_BF_ODD = 6 };
 
 static inline int msb128(u128 v)
 {
@@ -162,16 +163,15 @@ static inline int msb128(u128 v)
 
 /* FPRound of the exact value (-1)^sign * m * 2^e (+ a nonzero tail below m's
  * last bit when sticky) to format es in `mode`. */
-static uint64_t round_pack_mode(fpctx *x, int es, int sign, int e, u128 m, bool sticky, int mode)
+static uint64_t round_pack_format(fpctx *x, int es, fmt f, int sign, int e, u128 m, bool sticky, int mode)
 {
-    fmt f = F(es);
     int p = (int)f.mbits + 1, emin = 1 - f.bias;          /* precision, minimum normal exponent */
     if (!m) {
         if (!sticky) return zero_of(es, sign);
         m = 1; e -= 200; sticky = false;                   /* a nonzero tail only: far below anything */
     }
     int L = msb128(m), E = e + L;                          /* value in [2^E, 2^(E+1)) */
-    if (x->fz && es != 2 && E < emin) {                    /* flush to zero before rounding */
+    if (x->fz && (es != 2 || f.ebits == 8) && E < emin) {                    /* flush to zero before rounding */
         fp_raise(x, FPX_UFC);
         return zero_of(es, sign);
     }
@@ -195,7 +195,7 @@ static uint64_t round_pack_mode(fpctx *x, int es, int sign, int e, u128 m, bool 
     case FPR_A: up = half && rb >= half; break;
     default: break;                                        /* RZ, odd */
     }
-    if (mode == RND_ODD && inexact) m |= 1;
+    if ((mode == RND_ODD || mode == RND_BF_ODD) && inexact) m |= 1;
     m += up;
     int be;                                                /* biased exponent */
     if (m >> p) { m >>= 1; lsb++; }                        /* carry out of a normal mantissa */
@@ -208,11 +208,15 @@ static uint64_t round_pack_mode(fpctx *x, int es, int sign, int e, u128 m, bool 
     }
     if (be >= (1 << f.ebits) - 1) {                        /* overflow */
         fp_raise(x, FPX_OFC | FPX_IXC);
-        bool to_inf = mode == FPR_N || mode == FPR_A || (mode == FPR_P && !sign) || (mode == FPR_M && sign);
-        if (to_inf) return inf_of(es, sign);
+        bool to_inf = mode == RND_BF_ODD || mode == FPR_N || mode == FPR_A || (mode == FPR_P && !sign) || (mode == FPR_M && sign);
+        if (to_inf) return (sign ? signbit_of(es) : 0) | (((1ull << f.ebits) - 1) << f.mbits);
         return (sign ? signbit_of(es) : 0) | (((1ull << f.ebits) - 2) << f.mbits) | ((1ull << f.mbits) - 1);
     }
     return (sign ? signbit_of(es) : 0) | (uint64_t)be << f.mbits | ((uint64_t)m & ((1ull << f.mbits) - 1));
+}
+static uint64_t round_pack_mode(fpctx *x, int es, int sign, int e, u128 m, bool sticky, int mode)
+{
+    return round_pack_format(x, es, F(es), sign, e, m, sticky, mode);
 }
 static uint64_t round_pack(fpctx *x, int es, int sign, int e, u128 m, bool sticky)
 {
@@ -974,6 +978,73 @@ uint64_t fp_cvt(fpctx *x, uint64_t a, int from, int to)
     if (u.cls == C_INF) return inf_of(to, u.sign);
     return round_pack(x, to, u.sign, u.e, u.m, false);
 }
+uint16_t fp_bfcvt(fpctx *x, uint32_t a)
+{
+    if (fp_isnan(a, 4)) {
+        if (is_snan(a, 4)) fp_raise(x, FPX_IOC);
+        return x->dn ? 0x7fc0 : (uint16_t)((a >> 16) | 0x40);
+    }
+    fpu u = unpack(x, 4, a);
+    if (u.cls == C_ZERO) return (uint16_t)(u.sign << 15);
+    if (u.cls == C_INF) return (uint16_t)(u.sign << 15 | 0x7f80);
+    return (uint16_t)round_pack_format(x, 2, (fmt){7, 8, 127}, u.sign, u.e, u.m, false, (int)x->rmode);
+}
+/* Widen without quieting NaNs: the fused operation must choose signalling
+ * NaNs in addend, first multiplicand, second multiplicand order. */
+uint32_t fp_widen_half(fpctx *x, uint16_t a)
+{
+    if ((a & 0x7c00) == 0x7c00) return (uint32_t)(a & 0x8000) << 16 | 0x7f800000 | (uint32_t)(a & 0x3ff) << 13;
+    return (uint32_t)fp_cvt(x, a, 2, 4);
+}
+/* BF dot products use their own FP environment and integer arithmetic:
+ * no speculative host operation may leak a flag into the guest environment. */
+static uint32_t bf_add(fpctx *x, uint32_t a, uint32_t b)
+{
+    fpu u = unpack(x, 4, a), v = unpack(x, 4, b);
+    if (u.cls >= C_QNAN || v.cls >= C_QNAN ||
+        (u.cls == C_INF && v.cls == C_INF && u.sign != v.sign)) return 0x7fc00000;
+    if (u.cls == C_INF) return (uint32_t)inf_of(4, u.sign);
+    if (v.cls == C_INF) return (uint32_t)inf_of(4, v.sign);
+    if (u.cls == C_ZERO && v.cls == C_ZERO) return (uint32_t)zero_of(4, u.sign == v.sign ? u.sign : x->rmode == FPR_M);
+    xval s = add_exact(u.sign, u.e, u.cls == C_ZERO ? 0 : u.m,
+                       v.sign, v.e, v.cls == C_ZERO ? 0 : v.m, (int)x->rmode);
+    return (uint32_t)round_pack(x, 4, s.sign, s.e, s.m, s.sticky);
+}
+uint32_t fp_bfdot(fpctx *env, uint32_t acc, uint32_t a, uint32_t b)
+{
+    fpctx x = *env;
+    bool extended = (x.c->fpcr & (1u << 13)) != 0;
+    x.no_exceptions = true; x.dn = true;
+    if (!extended) { x.rmode = RND_BF_ODD; x.fz = true; }
+    fpu u[2], v[2];
+    u128 prod[2]; int pe[2], ps[2]; bool inf[2];
+    for (int k = 0; k < 2; k++) {
+        u[k] = unpack(&x, 4, (uint32_t)(uint16_t)(a >> (16*k)) << 16);
+        v[k] = unpack(&x, 4, (uint32_t)(uint16_t)(b >> (16*k)) << 16);
+        if (u[k].cls >= C_QNAN || v[k].cls >= C_QNAN ||
+            (u[k].cls == C_INF && v[k].cls == C_ZERO) ||
+            (v[k].cls == C_INF && u[k].cls == C_ZERO)) return 0x7fc00000;
+        ps[k] = u[k].sign ^ v[k].sign;
+        inf[k] = u[k].cls == C_INF || v[k].cls == C_INF;
+        pe[k] = u[k].e + v[k].e;
+        prod[k] = u[k].cls == C_ZERO || v[k].cls == C_ZERO ? 0 : (u128)u[k].m * v[k].m;
+    }
+    uint32_t sum;
+    if (!extended) {
+        uint32_t p[2];
+        for (int k = 0; k < 2; k++) p[k] = (uint32_t)(inf[k] ? inf_of(4, ps[k]) : round_pack(&x, 4, ps[k], pe[k], prod[k], false));
+        sum = bf_add(&x, p[0], p[1]);
+    } else if (inf[0] || inf[1]) {
+        if (inf[0] && inf[1] && ps[0] != ps[1]) return 0x7fc00000;
+        sum = (uint32_t)inf_of(4, ps[inf[0] ? 0 : 1]);
+    } else if (!prod[0] && !prod[1]) {
+        sum = (uint32_t)zero_of(4, ps[0] == ps[1] ? ps[0] : x.rmode == FPR_M);
+    } else {
+        xval s = add_exact(ps[0], pe[0], prod[0], ps[1], pe[1], prod[1], (int)x.rmode);
+        sum = (uint32_t)round_pack(&x, 4, s.sign, s.e, s.m, s.sticky);
+    }
+    return bf_add(&x, acc, sum);
+}
 uint64_t fp_cvt_odd(fpctx *x, uint64_t a)
 {
     if (fp_isnan(a, 8)) return convert_nan(x, a, 8, 4);
@@ -1105,6 +1176,23 @@ uint64_t fp_rint(fpctx *x, int es, uint64_t a, int mode, bool exact)
     if (!n) return zero_of(es, u.sign);
     return round_pack(x, es, u.sign, 0, n, false);
 }
+/* FPRoundIntN: an out-of-range rounded integer is the signed indefinite,
+ * with IOC instead of IXC. Unpack still reports flushed inputs (IDC). */
+uint64_t fp_rint_range(fpctx *x, int es, uint64_t a, int mode, int bits)
+{
+    fpu u = unpack(x, es, a);
+    if (u.cls == C_ZERO) return zero_of(es, u.sign);
+    bool inex = false;
+    u128 n = u.cls == C_NUM ? round_int(u.sign, u.e, u.m, mode, &inex) : (u128)-1;
+    u128 limit = (u128)1 << (bits - 1);
+    if (n > limit || (n == limit && !u.sign)) {
+        fp_raise(x, FPX_IOC);
+        return round_pack(x, es, 1, bits - 1, 1, false);
+    }
+    if (inex) fp_raise(x, FPX_IXC);
+    return round_pack(x, es, u.sign, 0, n, false);
+}
+
 uint64_t fp_to_int(fpctx *x, int es, uint64_t a, int mode, bool uns, int bits, int fbits)
 {
     uint64_t fast;

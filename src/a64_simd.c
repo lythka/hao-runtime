@@ -1233,13 +1233,17 @@ static int simd_across(hao_cpu *c, uint32_t i)
     memset(&r, 0, sizeof r);
     int es = 1 << size, n = (Q ? 16 : 8) / es;
     if (op == 0x0C || op == 0x0F) {  /* FMAXNMV/FMAXV/FMINNMV/FMINV: .4S only */
-        if (!U || !Q || BIT(size, 0)) return -1;
+        if ((U && !Q) || BIT(size, 0)) return -1;
         fpctx x = fp_ctx(c);
         bool mn = BIT(size, 1), nm = op == 0x0C;
         /* Reduce(): pairwise tree, ((e0 op e1) op (e2 op e3)) */
         uint64_t (*f)(fpctx *, int, uint64_t, uint64_t) = mn ? (nm ? fp_minnm : fp_min) : (nm ? fp_maxnm : fp_max);
-        uint64_t lo = f(&x, 4, a.s[0], a.s[1]), hi = f(&x, 4, a.s[2], a.s[3]);
-        r.s[0] = (uint32_t)f(&x, 4, lo, hi);
+        int fes = U ? 4 : 2, count = (Q ? 16 : 8) / fes;
+        uint64_t tree[8];
+        for (int e = 0; e < count; e++) tree[e] = eget(&a, fes, e);
+        for (int width = count; width > 1; width /= 2)
+            for (int e = 0; e < width / 2; e++) tree[e] = f(&x, fes, tree[2*e], tree[2*e+1]);
+        eset(&r, fes, 0, tree[0]);
         c->v[rd] = r;
         return 0;
     }
@@ -1757,8 +1761,8 @@ static int simd_scalar_pairwise(hao_cpu *c, uint32_t i)
     hao_vreg a = c->v[rn], r;
     memset(&r, 0, sizeof r);
     if (!U && op == 0x1B && size == 3) { r.d[0] = a.d[0] + a.d[1]; c->v[rd] = r; return 0; }  /* ADDP Dd */
-    if (U) {
-        int es = BIT(size, 0) ? 8 : 4;
+    if (U || !(size & 1)) {
+        int es = U ? (BIT(size, 0) ? 8 : 4) : 2;
         fpctx x = fp_ctx(c);
         uint64_t xa = eget(&a, es, 0), ya = eget(&a, es, 1), v;
         unsigned key = BIT(size, 1) << 5 | op;
@@ -2046,8 +2050,155 @@ static int crypto_ce(hao_cpu *c, uint32_t i)
     return 0;
 }
 
+static int simd_bfdot(hao_cpu *c, uint32_t i, bool indexed, bool matrix)
+{
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), Q = BIT(i, 30);
+    if (matrix && !Q) return -1;
+    hao_vreg a = c->v[rn], b = c->v[rm], r = c->v[rd];
+    fpctx x = fp_ctx(c);
+    int idx = BIT(i, 11)*2 + BIT(i, 21);
+    if (matrix) {
+        for (int row = 0; row < 2; row++)
+            for (int col = 0; col < 2; col++)
+                for (int k = 0; k < 2; k++)
+                    r.s[2*row+col] = fp_bfdot(&x, r.s[2*row+col], a.s[2*row+k], b.s[2*col+k]);
+    } else {
+        for (int e = 0; e < (Q ? 4 : 2); e++) r.s[e] = fp_bfdot(&x, r.s[e], a.s[e], b.s[indexed ? idx : e]);
+    }
+    vfinish(c, rd, &r, Q);
+    return 0;
+}
+
+/* Half/BFloat16 widening multiply-add, and BFloat16 narrowing. */
+static int simd_widen_fp(hao_cpu *c, uint32_t i, bool bf, bool indexed)
+{
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), Q = BIT(i, 30);
+    unsigned idx = BIT(i, 11) * 4 + BITS(i, 21, 20);
+    if (indexed) rm &= 15;
+    hao_vreg a = c->v[rn], b = c->v[rm], d = c->v[rd], r = {0};
+    fpctx x = fp_ctx(c);
+    int n = bf ? 4 : (Q ? 4 : 2), part = BIT(i, 29);
+    bool sub = !bf && (indexed ? BIT(i, 14) : BIT(i, 23));
+    for (int e = 0; e < n; e++) {
+        int ae = bf ? 2*e + Q : n*part + e;
+        int be = indexed ? (int)idx : ae;
+        uint16_t ah = a.h[ae], bh = b.h[be];
+        if (sub) ah ^= 0x8000;
+        uint32_t av = bf ? (uint32_t)ah << 16 : fp_widen_half(&x, ah);
+        uint32_t bv = bf ? (uint32_t)bh << 16 : fp_widen_half(&x, bh);
+        r.s[e] = (uint32_t)fp_muladd(&x, 4, d.s[e], av, bv);
+    }
+    c->v[rd] = r;
+    return 0;
+}
+static int simd_bfcvt(hao_cpu *c, uint32_t i, bool scalar)
+{
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), Q = BIT(i, 30);
+    hao_vreg a = c->v[rn], r = {0};
+    fpctx x = fp_ctx(c);
+    if (!scalar && Q) r = c->v[rd];
+    for (int e = 0; e < (scalar ? 1 : 4); e++) r.h[(Q && !scalar ? 4 : 0)+e] = fp_bfcvt(&x, a.s[e]);
+    c->v[rd] = r;
+    return 0;
+}
+
+/* I8MM: mixed-sign dot products and the 2x8 by 8x2 matrix products. */
+static int simd_i8mm(hao_cpu *c, uint32_t i, bool matrix, bool indexed)
+{
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    bool Q = BIT(i, 30);
+    hao_vreg a = c->v[rn], b = c->v[rm], r = c->v[rd];
+    if (matrix) {
+        if (!Q) return -1;
+        bool au = BIT(i, 29) || BIT(i, 11), bu = BIT(i, 29);
+        for (int row = 0; row < 2; row++)
+            for (int col = 0; col < 2; col++)
+                for (int k = 0; k < 8; k++) {
+                    int av = au ? a.b[8*row+k] : a.sb[8*row+k];
+                    int bv = bu ? b.b[8*col+k] : b.sb[8*col+k];
+                    r.s[2*row+col] += (uint32_t)(av * bv);
+                }
+    } else {
+        bool au = !indexed || BIT(i, 23);
+        int idx = BIT(i, 11) * 2 + BIT(i, 21);
+        for (int e = 0; e < (Q ? 4 : 2); e++)
+            for (int k = 0; k < 4; k++) {
+                int av = au ? a.b[4*e+k] : a.sb[4*e+k];
+                int be = 4*(indexed ? idx : e)+k;
+                int bv = au ? b.sb[be] : b.b[be];
+                r.s[e] += (uint32_t)(av * bv);
+            }
+    }
+    vfinish(c, rd, &r, Q);
+    return 0;
+}
+
+/* Saturating unary/accumulate operations, bounded integral rounding and
+ * half reductions share the same semantics in every execution engine. */
+static int simd_extra_misc(hao_cpu *c, uint32_t i)
+{
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), Q = BIT(i, 30), U = BIT(i, 29);
+    unsigned size = BITS(i, 23, 22);
+    hao_vreg a = c->v[rn], d = c->v[rd], r = {0};
+    uint32_t unary = i & 0x8F3FFC00;
+    if (unary == 0x0E203800 || unary == 0x0E207800) {
+        bool scalar = BIT(i, 28), sat = false;
+        if ((scalar && !Q) || (!scalar && size == 3 && !Q)) return -1;
+        int es = 1 << size, bits = 8 * es, n = scalar ? 1 : (Q ? 16 : 8) / es;
+        for (int e = 0; e < n; e++) {
+            __int128 v, lo, hi;
+            if (unary == 0x0E203800) {
+                /* U=0: signed destination + unsigned source, U=1 vice versa. */
+                v = U ? (__int128)eget(&d, es, e) + esget(&a, es, e)
+                      : (__int128)esget(&d, es, e) + eget(&a, es, e);
+                lo = U ? 0 : -((__int128)1 << (bits - 1));
+                hi = U ? (__int128)emask(es) : ((__int128)1 << (bits - 1)) - 1;
+            } else {
+                v = esget(&a, es, e);
+                if (U || v < 0) v = -v;
+                lo = -((__int128)1 << (bits - 1)); hi = -lo - 1;
+            }
+            if (v < lo) { v = lo; sat = true; }
+            if (v > hi) { v = hi; sat = true; }
+            eset(&r, es, e, (uint64_t)v);
+        }
+        if (sat) c->fpsr |= 1u << 27;
+    } else {
+        bool scalar = (i & 0xFFBE7C00) == 0x1E284000;
+        bool vector = (i & 0x9FBFEC00) == 0x0E21E800;
+        if (!scalar && !vector) return -1;
+        int es = BIT(i, 22) ? 8 : 4;
+        if (vector && es == 8 && !Q) return -1;
+        fpctx x = fp_ctx(c);
+        int bits = (scalar ? BIT(i, 16) : BIT(i, 12)) ? 64 : 32;
+        int mode = (scalar ? BIT(i, 15) : U) ? fp_cur(&x) : FPR_Z;
+        for (int e = 0; e < (scalar ? 1 : (Q ? 16 : 8) / es); e++)
+            eset(&r, es, e, fp_rint_range(&x, es, eget(&a, es, e), mode, bits));
+    }
+    c->v[rd] = r;
+    return 0;
+}
+
 int a64_exec_simd(hao_cpu *c, uint32_t i, uint64_t pc)
 {
+    if ((i & 0xBFE0FC00) == 0x2E40FC00) return simd_bfdot(c, i, false, false);
+    if ((i & 0xBFC0F400) == 0x0F40F000) return simd_bfdot(c, i, true, false);
+    if ((i & 0xBFE0FC00) == 0x2E40EC00) return simd_bfdot(c, i, false, true);
+    if ((i & 0xFFFFFC00) == 0x1E634000) return simd_bfcvt(c, i, true);
+    if ((i & 0xBFFFFC00) == 0x0EA16800) return simd_bfcvt(c, i, false);
+    if ((i & 0xBFE0FC00) == 0x2EC0FC00) return simd_widen_fp(c, i, true, false);
+    if ((i & 0xBFC0F400) == 0x0FC0F000) return simd_widen_fp(c, i, true, true);
+    if ((i & 0xBF60FC00) == 0x0E20EC00 || (i & 0xBF60FC00) == 0x2E20CC00)
+        return simd_widen_fp(c, i, false, false);
+    if ((i & 0xBFC0B400) == 0x0F800000 || (i & 0xBFC0B400) == 0x2F808000)
+        return simd_widen_fp(c, i, false, true);
+    if ((i & 0x9FE0FC00) == 0x0E80A400 || (i & 0xBFE0FC00) == 0x0E80AC00)
+        return simd_i8mm(c, i, true, false);
+    if ((i & 0xBFE0FC00) == 0x0E809C00) return simd_i8mm(c, i, false, false);
+    if ((i & 0xBF40F400) == 0x0F00F000) return simd_i8mm(c, i, false, true);
+    if (((!BIT(i, 28) || BIT(i, 30)) && ((i & 0x8F3FFC00) == 0x0E203800 || (i & 0x8F3FFC00) == 0x0E207800)) ||
+        (i & 0xFFBE7C00) == 0x1E284000 || (i & 0x9FBFEC00) == 0x0E21E800)
+        return simd_extra_misc(c, i);
     if ((i & 0xFF3E0C00) == 0x4E280800) return crypto_aes(c, i);
     if ((i & 0xFF208C00) == 0x5E000000) return crypto_sha3reg(c, i);
     if ((i & 0xFF3E0C00) == 0x5E280800) return crypto_sha2reg(c, i);

@@ -344,6 +344,8 @@ tests/guest/async-lib/HaoNativeAsync.swift
 tests/guest/atoken.c
 tests/guest/atoken.sh
 tests/guest/bench.c
+tests/guest/bfdot.c
+tests/guest/bfdot.sh
 tests/guest/bfhelper.h
 tests/guest/bfhelper.m
 tests/guest/bitfields.m
@@ -716,8 +718,12 @@ tests/guest/helper_stats.c
 tests/guest/helper_stats.sh
 tests/guest/coverage_bench.c
 tests/guest/coverage_bench.sh
+tests/guest/extramisc.c
+tests/guest/extramisc.sh
 tests/guest/halfops.c
 tests/guest/halfops.sh
+tests/guest/i8mm.c
+tests/guest/i8mm.sh
 tests/guest/satmul.c
 tests/guest/satmul.sh
 tests/guest/satshift.c
@@ -727,6 +733,8 @@ tests/guest/stubcat.swift
 tests/guest/stubcat_lib.swift
 tests/guest/unarchbool.m
 tests/guest/unarchbool.sh
+tests/guest/widenfp.c
+tests/guest/widenfp.sh
 tests/aot/integer_mutations.sh
 tests/aot/fp_coverage_mutations.sh
 tests/aot/register_shift_mutations.sh
