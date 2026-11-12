@@ -92,3 +92,4 @@ aot/integer-mutations	600	par	tests/aot/integer_mutations.sh
 aot/fp-coverage-mutations	600	par	tests/aot/fp_coverage_mutations.sh
 aot/register-shift-mutations	300	par	tests/aot/register_shift_mutations.sh
 aot/structure-mutations	600	par	tests/aot/structure_mutations.sh
+aot/wide-fp-mutations	600	par	tests/aot/wide_fp_mutations.sh

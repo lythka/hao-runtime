@@ -717,3 +717,4 @@ tests/aot/register_shift_mutations.sh
 src/jit-conversions.inc
 
 tests/aot/structure_mutations.sh
+tests/aot/wide_fp_mutations.sh

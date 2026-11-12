@@ -603,6 +603,13 @@ VECF(t_cov_fmlss1, "fmls s2, s0, v17.s[1]")
 VECF(t_cov_fmlss2, "fmls s2, s0, v17.s[2]")
 VECF(t_cov_fmlss3, "fmls s2, s0, v17.s[3]")
 VECF(t_cov_fmuld0, "fmul d2, d0, v17.d[0]")
+VECF(t_wide_fadd, "fadd v2.2d, v0.2d, v1.2d")
+VECF(t_wide_fsub, "fsub v2.2d, v0.2d, v1.2d")
+VECF(t_wide_fmul, "fmul v2.2d, v0.2d, v1.2d")
+VECF(t_wide_fdiv, "fdiv v2.2d, v0.2d, v1.2d")
+VECF(t_wide_sqrtd, "fsqrt v2.2d, v0.2d")
+VECF(t_wide_sqrts, "fsqrt v2.4s, v0.4s")
+VECF(t_wide_sqrt2s, "fsqrt v2.2s, v0.2s")
 VECF(t_cov_fmuld1, "fmul d2, d0, v17.d[1]")
 
 VECF(t_fcmeqz2s, "fcmeq v2.2s, v0.2s, #0.0")
@@ -1716,6 +1723,12 @@ int main(void)
     RF(cov_fmlss1);
     RF(cov_fmlss2);
     RF(cov_fmlss3);
+    RR(wide_fadd);
+    RR(wide_fsub);
+    RR(wide_fmul);
+    RR(wide_fdiv);
+    RR(wide_sqrtd);
+    RF(wide_sqrts); RF(wide_sqrt2s);
     RR(cov_fmuld0);
     RR(cov_fmuld1);
     RR(tail_fcvtns_2s);

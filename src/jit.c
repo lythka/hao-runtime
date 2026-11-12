@@ -2674,6 +2674,61 @@ static void t_vfp32(tctx *t, int op, unsigned rd, unsigned rn, unsigned rm, int 
     t->vfp_consts = true;
 }
 
+/* Packed double arithmetic and packed single/double square roots. The
+ * same admission as host2/fp_sqrt: all inputs zero or normal, then reject
+ * nonfinite/tiny results with MXCSR restored before the descriptor helper.
+ * Integer lane comparisons preserve live NZCV throughout. */
+static void t_vfp_wide(tctx *t, int op, bool dbl, unsigned rd, unsigned rn, unsigned rm,
+                       int Q, uint32_t insn, uint64_t pc)
+{
+    bool sqrt = op == 4;
+    unsigned size = dbl ? 3 : 2;
+    int zero = dbl ? 12 : 5, mag = dbl ? 10 : 6, exp = dbl ? 11 : 7;
+    vld(t, 0, rn);
+    if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
+    if (!sqrt) vld(t, 1, rm); else vzero(t, 1);
+    if (dbl) vfp_constants64(t); else vfp_constants(t);
+    vzero(t, 4);
+    if (dbl) { vfp_special64(t, 0); vfp_special64(t, 1); }
+    else vfp_special(t, 0);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    P(0x6F, 2, 0);
+    static const uint8_t ops[] = {0x58, 0x5C, 0x59, 0x5E, 0x51};
+    x_sse_rr(&t->b, dbl ? 0x66 : 0, ops[op], 0, 2, sqrt ? 0 : 1);
+    P(0x6F, 3, 2); P(0xDB, 3, exp); vcmpeq(t, size, 3, exp);
+    vconst(t, 4, dbl ? 0x7fe0000000000000ull : 0x7f0000007f000000ull, true);
+    P(0xDB, 4, 2); vcmpeq(t, size, 4, zero); P(0xEB, 4, 3);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t exact = jrcxnz32(t);                                  /* wide result admission */
+    size_t store = xb_len(&t->b);
+    vst(t, rd, 2, Q);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, exact, xb_len(&t->b));
+    P(0x6F, 3, 0); P(0xDB, 3, mag); vcmpeq(t, size, 3, zero);
+    if (!sqrt) {
+        P(0x6F, 8, 1); P(0xDB, 8, mag); vcmpeq(t, size, 8, zero);
+        if (op == VFP_MUL) P(0xEB, 3, 8);
+        else if (op == VFP_DIV) { P(0xDF, 8, 3); P(0x6F, 3, 8); }
+        else {
+            P(0xDB, 3, 8);
+            if (op == VFP_ADD) {
+                vconst(t, 9, 0x8000000000000000ull, true); P(0xEF, 9, 1);
+            } else P(0x6F, 9, 1);
+            vcmpeq(t, size, 9, 0); P(0xEB, 3, 9);
+        }
+    }
+    P(0x6F, 8, 2); P(0xDB, 8, mag); vcmpeq(t, size, 8, zero); P(0xDB, 3, 8);
+    P(0xDF, 3, 4);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 3);
+    size_t restore = jrcxnz32(t);
+    x_patch32(&t->b, x_jmp32(&t->b), store);
+    x_patch32(&t->b, restore, xb_len(&t->b)); x_ldmxcsr(&t->b, MXCSR_SLOT);
+    x_patch32(&t->b, decline, xb_len(&t->b)); helper_keep_flags(t, insn, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
+}
+
 /* fma32_odd (a64_fp.c), two low single lanes -> two doubles in s.
  * a/b/c are destroyed; e is scratch. All inputs have passed integer
  * admission and MXCSR is RN. The product is exact; TwoSum recovers the
@@ -3135,7 +3190,19 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
     if (U && op == 0x1a && size < 2 && (!(size & 1) || Q)) {
         t_vfp_pair_add(t, i, pc, false); return true;
     }
-    if (size & 1) return false;                                  /* double precision: helper */
+    if (size & 1) {
+        int wide_op;
+        if (!Q) return false;                                   /* .1D reserved */
+        switch (U << 6 | (size >> 1) << 5 | (op & 7)) {
+        case 0x02: wide_op = VFP_ADD; break;
+        case 0x22: wide_op = VFP_SUB; break;
+        case 0x43: wide_op = VFP_MUL; break;
+        case 0x47: wide_op = VFP_DIV; break;
+        default: return false;
+        }
+        t_vfp_wide(t, wide_op, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), 1, i, pc);
+        return true;
+    }
     if (!U && op == 0x1f) {
         t_vfp_fma(t, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, (int)Q, i, pc);
         return true;
@@ -3524,6 +3591,12 @@ static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
 {
     if ((i & 0x9F200C00) == 0x0E200000) return t_simd_three_diff(t, i);
     if ((i & 0x9F200400) == 0x0E200400) return BITS(i, 15, 11) >= 0x18 ? t_vfp_three_same(t, i, pc) : t_simd_three_same(t, i);
+    if ((i & 0xBFBFFC00) == 0x2EA1F800) {                     /* FSQRT .2S/.4S/.2D */
+        bool dbl = BIT(i, 22); int Q = BIT(i, 30);
+        if (dbl && !Q) return false;
+        t_vfp_wide(t, 4, dbl, BITS(i, 4, 0), BITS(i, 9, 5), 0, Q, i, pc);
+        return true;
+    }
     if ((i & 0x9F3E0C00) == 0x0E200800) return t_simd_two_misc(t, i, pc);
     if ((i & 0x9F3E0C00) == 0x0E300800) return t_vfp_reduce(t, i, pc) || t_simd_across(t, i);
     if ((i & 0x9FF80400) == 0x0F000400) return t_simd_modimm(t, i);

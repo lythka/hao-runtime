@@ -405,3 +405,11 @@ its signal probes additionally check recovered PC, NZCV and writeback when
 interleaved transfers fault partway, skip or resume after page repair.
 `guest/coverage-bench` includes 42 interleaved memory forms for native
 checksums, separate helper statistics and uninstrumented timings.
+
+`aot/wide-fp-mutations` checks a passing control and then disables packed
+double/sqrt result admission; complete-state and exact-tiny helper-route
+checks must reject it. `jit_vector` covers FADD/FSUB/FMUL/FDIV .2D and
+FSQRT .2S/.4S/.2D, every FPCR RMode/FZ/DN setting, aliases, zero signs,
+NaNs and range boundaries. `jitinsns` compares all seven forms with native
+ARM in each engine; `coverage-bench` adds per-form checksum/timing/statistics
+cases with ordinary inputs.
