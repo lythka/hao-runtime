@@ -15,6 +15,7 @@ from pathlib import Path
 import sys
 s = Path('src/jit.c').read_text()
 mutations = {
+    'addv-width': ('P(padd[size], 0, 1);                                  /* ADDV lane width */', 'P(padd[0], 0, 1);'),
     'zip-order': ('unpack[size] + (op == 7 && Q ?', 'unpack[size] + (op == 3 && Q ?'),
 }
 Path(sys.argv[1], 'jit-control.c').write_text(s)
@@ -22,7 +23,7 @@ for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in control zip-order; do
+for mutation in control zip-order addv-width; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \

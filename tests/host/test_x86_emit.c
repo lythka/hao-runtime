@@ -228,6 +228,8 @@ int main(int argc, char **argv)
             }
             /* SSSE3 / SSE4.1 / SSE4.2 (66 0F 38 xx, 66 0F 3A xx ib) */
             static const struct { uint8_t op; const char *mn; } s38[] = {
+                {0x20, "pmovsxbw"}, {0x23, "pmovsxwd"}, {0x25, "pmovsxdq"},
+                {0x30, "pmovzxbw"}, {0x33, "pmovzxwd"}, {0x35, "pmovzxdq"},
                 {0x34, "pmovzxwq"}, {0x2B, "packusdw"}, {0x00, "pshufb"}, {0x1C, "pabsb"}, {0x1D, "pabsw"}, {0x1E, "pabsd"}, {0x29, "pcmpeqq"}, {0x37, "pcmpgtq"},
                 {0x38, "pminsb"}, {0x39, "pminsd"}, {0x3A, "pminuw"}, {0x3B, "pminud"}, {0x3C, "pmaxsb"}, {0x3D, "pmaxsd"},
                 {0x3E, "pmaxuw"}, {0x3F, "pmaxud"}, {0x40, "pmulld"},

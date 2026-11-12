@@ -40,6 +40,33 @@ blocks and 12,561,074 instructions, 98.8% translated natively. Only cache
 generation was run; this is coverage evidence, not application acceptance.
 
 
+## Inline integer reductions and pairwise long sums
+
+ADDV now translates the five allocated byte, halfword and word
+arrangements, summing modulo the source lane width and clearing every
+other destination bit. SADDLP/UADDLP and SADALP/UADALP translate all
+24 signed/unsigned widening and accumulating arrangements. Byte shuffles
+compact the even and odd source elements, SSE4.1 sign- or zero-extension
+widens them before addition, and accumulating forms add the old destination
+at the wider lane width. Both sources and the old destination are read
+before commit, preserving aliases; 64-bit vector results clear the upper
+half. These integer-only expansions leave NZCV, FPCR and FPSR unchanged.
+
+The native instruction guest covers every new arrangement and matches
+JIT, interpreter, helpers-only and AOT (580 output lines including the
+preceding permutes). The complete-state unit test passes 565,318 cases,
+including random states, aliases and live NZCV. A private-source mutation changes ADDV to byte-width
+addition and must produce result mismatches after an unchanged control
+passes (756 state mismatches); the ZIP-order mutation remains detected
+(1,024 mismatches). The encoder check passes 40,171 encodings, including
+all six signed/unsigned widening operations.
+
+Reserved arrangements remain on the existing helper path; the across-lane
+interpreter's known reserved-encoding leniency is unchanged. Saturating
+pairwise forms, other across-lane operations and the interpreter reference
+are outside this change. Intel timing and application acceptance remain
+separate checks.
+
 ## Inline SIMD lane permutes
 
 ZIP1/ZIP2, UZP1/UZP2 and TRN1/TRN2 translate every allocated byte,

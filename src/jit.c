@@ -2055,6 +2055,23 @@ static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 16, 12);
     unsigned rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    if (op == 2 || op == 6) { /* [SU]ADDLP / [SU]ADALP */
+        if (size == 3) return false;
+        static const uint8_t widen[3] = {0x20, 0x23, 0x25};
+        vld(t, 0, rn); P(0x6F, 1, 0);
+        /* Compact even/odd source lanes into the low half before widening. */
+        for (int r = 0; r < 2; r++) {
+            uint64_t mask = 0;
+            for (unsigned b = 0; b < 8; b++)
+                mask |= (uint64_t)((b >> size) * (2u << size) + (r << size) + (b & ((1u << size) - 1))) << (8 * b);
+            vconst(t, 2, mask, false); P38(0x00, r, 2);
+            P38((uint8_t)(widen[size] + (U ? 0x10 : 0)), r, r);
+        }
+        P(padd[size + 1], 0, 1);
+        if (op == 6) { vld(t, 1, rd); P(padd[size + 1], 0, 1); }
+        vst(t, rd, 0, (int)Q);
+        return true;
+    }
     if (op == 0x0F && (size & 2)) return t_vfp_absneg(t, i);    /* FABS / FNEG */
     if (op == 0x12 && !U) {                                      /* XTN, XTN2 (SQXTUN: helper) */
         if (size == 3) return false;                             /* unallocated */
@@ -2108,11 +2125,23 @@ static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
     return true;
 }
 
-/* UADDLV over bytes (with CNT, the population count of a register):
- * psadbw against zero sums each half's bytes. */
+/* ADDV wraps in its source lane width. UADDLV over bytes uses PSADBW
+ * against zero to sum each half, then combines the two wide sums. */
 static bool t_simd_across(tctx *t, uint32_t i)
 {
     unsigned Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    unsigned size = BITS(i, 23, 22), op = BITS(i, 16, 12);
+    if (op == 0x1b && !BIT(i, 29)) { /* ADDV, modulo the source lane width */
+        if (size == 3 || (size == 2 && !Q)) return false;
+        if (Q) vld(t, 0, rn); else x_movq_ld(&t->b, 0, VR(rn));
+        for (unsigned bytes = Q ? 8 : 4; bytes >= (1u << size); bytes >>= 1) {
+            P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x73, 3, 1, (uint8_t)bytes);
+            P(padd[size], 0, 1);                                  /* ADDV lane width */
+        }
+        vconst(t, 1, (1ull << (8u << size)) - 1, false); P(0xDB, 0, 1);
+        vst(t, rd, 0, 1);
+        return true;
+    }
     if (!BIT(i, 29) || BITS(i, 23, 22) || BITS(i, 16, 12) != 0x03) return false;
     vld(t, 0, rn);
     if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);

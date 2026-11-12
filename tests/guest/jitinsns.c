@@ -692,6 +692,36 @@ VEC2(t_cov_trn22s, "trn2 v2.2s, v0.2s, v1.2s")
 VEC2(t_cov_trn24s, "trn2 v2.4s, v0.4s, v1.4s")
 VEC2(t_cov_trn22d, "trn2 v2.2d, v0.2d, v1.2d")
 
+VEC2(t_cov_addv8b, "addv b2, v0.8b")
+VEC2(t_cov_addv16b, "addv b2, v0.16b")
+VEC2(t_cov_addv4h, "addv h2, v0.4h")
+VEC2(t_cov_addv8h, "addv h2, v0.8h")
+VEC2(t_cov_addv4s, "addv s2, v0.4s")
+VEC2(t_cov_saddlp4h, "saddlp v2.4h, v0.8b")
+VEC2(t_cov_saddlp8h, "saddlp v2.8h, v0.16b")
+VEC2(t_cov_saddlp2s, "saddlp v2.2s, v0.4h")
+VEC2(t_cov_saddlp4s, "saddlp v2.4s, v0.8h")
+VEC2(t_cov_saddlp1d, "saddlp v2.1d, v0.2s")
+VEC2(t_cov_saddlp2d, "saddlp v2.2d, v0.4s")
+VEC2(t_cov_uaddlp4h, "uaddlp v2.4h, v0.8b")
+VEC2(t_cov_uaddlp8h, "uaddlp v2.8h, v0.16b")
+VEC2(t_cov_uaddlp2s, "uaddlp v2.2s, v0.4h")
+VEC2(t_cov_uaddlp4s, "uaddlp v2.4s, v0.8h")
+VEC2(t_cov_uaddlp1d, "uaddlp v2.1d, v0.2s")
+VEC2(t_cov_uaddlp2d, "uaddlp v2.2d, v0.4s")
+VEC2(t_cov_sadalp4h, "sadalp v2.4h, v0.8b")
+VEC2(t_cov_sadalp8h, "sadalp v2.8h, v0.16b")
+VEC2(t_cov_sadalp2s, "sadalp v2.2s, v0.4h")
+VEC2(t_cov_sadalp4s, "sadalp v2.4s, v0.8h")
+VEC2(t_cov_sadalp1d, "sadalp v2.1d, v0.2s")
+VEC2(t_cov_sadalp2d, "sadalp v2.2d, v0.4s")
+VEC2(t_cov_uadalp4h, "uadalp v2.4h, v0.8b")
+VEC2(t_cov_uadalp8h, "uadalp v2.8h, v0.16b")
+VEC2(t_cov_uadalp2s, "uadalp v2.2s, v0.4h")
+VEC2(t_cov_uadalp4s, "uadalp v2.4s, v0.8h")
+VEC2(t_cov_uadalp1d, "uadalp v2.1d, v0.2s")
+VEC2(t_cov_uadalp2d, "uadalp v2.2d, v0.4s")
+
 #define R(n) run(#n, t_##n)
 #define RA(n) R(n##b); R(n##h); R(n##w); R(n##x)
 int main(void)
@@ -738,6 +768,35 @@ int main(void)
     R(cov_trn22s);
     R(cov_trn24s);
     R(cov_trn22d);
+    R(cov_addv8b);
+    R(cov_addv16b);
+    R(cov_addv4h);
+    R(cov_addv8h);
+    R(cov_addv4s);
+    R(cov_saddlp4h);
+    R(cov_saddlp8h);
+    R(cov_saddlp2s);
+    R(cov_saddlp4s);
+    R(cov_saddlp1d);
+    R(cov_saddlp2d);
+    R(cov_uaddlp4h);
+    R(cov_uaddlp8h);
+    R(cov_uaddlp2s);
+    R(cov_uaddlp4s);
+    R(cov_uaddlp1d);
+    R(cov_uaddlp2d);
+    R(cov_sadalp4h);
+    R(cov_sadalp8h);
+    R(cov_sadalp2s);
+    R(cov_sadalp4s);
+    R(cov_sadalp1d);
+    R(cov_sadalp2d);
+    R(cov_uadalp4h);
+    R(cov_uadalp8h);
+    R(cov_uadalp2s);
+    R(cov_uadalp4s);
+    R(cov_uadalp1d);
+    R(cov_uadalp2d);
     R(udiv); R(udivw); R(sdiv); R(sdivw);
     R(adc); R(adcw); R(adcs); R(adcsw); R(sbc); R(sbcw); R(sbcs); R(sbcsw); R(ngcs); R(add128);
     R(rbit); R(rbitw); R(rev16); R(rev16w); R(rev32); R(ctz);
