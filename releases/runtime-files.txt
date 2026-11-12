@@ -720,6 +720,8 @@ tests/guest/coverage_bench.c
 tests/guest/coverage_bench.sh
 tests/guest/extramisc.c
 tests/guest/extramisc.sh
+tests/guest/fpscalar_stable.c
+tests/guest/fpscalar_stable.sh
 tests/guest/halfops.c
 tests/guest/halfops.sh
 tests/guest/i8mm.c

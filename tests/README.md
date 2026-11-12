@@ -503,3 +503,11 @@ legacy scalar arithmetic no longer skips FZ cases. Both S/D variants,
 register/zero comparisons and the operand admission boundaries are included.
 The integrated instruction implementation has no `known_unimpl` exceptions;
 `known_lenient` continues to describe the separate reserved-encoding gaps.
+
+`tests/guest/fpscalar_stable.sh` measures all twenty affected scalar S/D
+forms on fixed normal inputs and a separate destination, so multiply/divide
+do not converge to zero or infinity. It checks result equality with native
+ARM and reports the minimum of seven interleaved timing runs; timings have
+no acceptance threshold. `BEFORE=/path/to/older/hao` adds a before column,
+`HAO` selects the current engine, and `N`/`REPEATS` control the sample size.
+The dependent-operation loops remain available through `fpscalar -b`.

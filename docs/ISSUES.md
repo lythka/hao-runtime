@@ -2281,3 +2281,48 @@ boundary can use the slower helper even when a particular result would be
 safe inline. Register comparisons add about 0.1–0.2 ns in these Rosetta loops;
 other timings include host-load variation. Intel performance, FZ16/AHP,
 alternative FP controls and exception traps remain unmeasured or unsupported.
+
+
+Separate measurements keep every source operand fixed and normal, with a
+distinct destination. They expose instruction throughput without a floating
+point dependency chain or convergence to zero/infinity. Results match native
+arm64 in every run. The same interpreter is used before and after; values are
+ns per instruction, minimum of seven interleaved runs of eight million
+instructions each.
+
+| Form | Before | After | Native ARM |
+|---|---:|---:|---:|
+| fadd s | 0.43 | 0.80 | 0.07 |
+| fadd d | 0.43 | 0.82 | 0.06 |
+| fsub s | 0.44 | 0.80 | 0.07 |
+| fsub d | 0.43 | 0.78 | 0.07 |
+| fmul s | 0.41 | 1.05 | 0.07 |
+| fmul d | 0.43 | 1.07 | 0.06 |
+| fdiv s | 0.61 | 1.08 | 0.26 |
+| fdiv d | 0.64 | 1.09 | 0.26 |
+| fsqrt s | 0.68 | 0.68 | 0.54 |
+| fsqrt d | 0.60 | 0.72 | 0.53 |
+| fcvt ds | 6.76 | 6.67 | 0.07 |
+| fcvt sd | 6.99 | 6.95 | 0.06 |
+| fcmp s | 0.91 | 1.08 | 0.14 |
+| fcmp d | 0.90 | 1.11 | 0.13 |
+| fcmp s0 | 0.91 | 0.94 | 0.13 |
+| fcmp d0 | 0.91 | 0.98 | 0.13 |
+| fcmpe s | 0.89 | 1.09 | 0.13 |
+| fcmpe d | 0.88 | 1.14 | 0.13 |
+| fcmpe s0 | 0.88 | 0.98 | 0.14 |
+| fcmpe d0 | 0.86 | 1.02 | 0.13 |
+
+Independent arithmetic pays about 0.3–0.7 ns for the operand checks under
+Rosetta; dependent arithmetic retains approximately its previous latency.
+The finite normal cases remain inline. These timings describe a cost of exact
+flags, not an Intel acceptance result.
+
+The combined known-UNDEF counts per 200,000-record native oracle mode are:
+dp 0 to 0, simd 4,036 to 0, mem 0 to 0, block 0 to 0 and fma 0 to 0.
+Full validation passes `make check` from a clean checkout of the runtime:
+unit tests, native and sanitizer oracles, and all 99 applicable guest/host
+checks. The complete 103-entry manifest retains one unrelated expected
+failure and three expected platform skips. Memory-footprint measurements
+use MallocMaxMagazines=4 for native and translated processes at the existing
+budgets; other checks use the default environment.
