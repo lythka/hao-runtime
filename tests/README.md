@@ -366,3 +366,12 @@ The vector unit checks all five FP32 comparisons with zero in .2S/.4S,
 including signed zeros, aliases, full FPSR and all 16 FPCR settings, with
 ordinary/tiny helper-route assertions. `jitinsns` now checks every FP form
 under all 16 RMode/FZ/DN settings in each engine against native arm64.
+
+The tail-coverage scalar tests add FMADD/FMSUB/FNMADD/FNMSUB S, FNMUL S,
+FRECPS and FRSQRTS S/.2S/.4S, all FPCR rounding/FZ/DN settings, aliases,
+fused near-ties, inactive lanes and full-state comparisons with live NZCV.
+The FP coverage mutation script additionally corrupts the scalar fused
+addend sign and omits the reciprocal-square-root step's exact factor of 1/2;
+each must fail the complete-state test. The native instruction and ordinary
+coverage benchmark include all eleven forms. AOT coverage prints four
+decimal places to distinguish changes below one tenth of a percent.

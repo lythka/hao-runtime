@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <time.h>
 typedef struct { uint64_t lo, hi; } vec;
+static const vec tail_a = {0x3f0000003f000000ull, 0x3f0000003f000000ull};
+static const vec tail_b = {0x3e8000003e800000ull, 0x3e8000003e800000ull};
 static const vec single_a = {0x400000003f800000ull, 0x4080000040400000ull};
 static const vec single_b = {0x3f0000003e800000ull, 0x3e0000003f800000ull};
 static const vec double_a = {0x3ff0000000000000ull, 0x4000000000000000ull};
@@ -137,6 +139,17 @@ BENCH(fmls_s2, "fmls s2, s0, v1.s[2]", single)
 BENCH(fmls_s3, "fmls s2, s0, v1.s[3]", single)
 BENCH(fmul_d0, "fmul d2, d0, v1.d[0]", double)
 BENCH(fmul_d1, "fmul d2, d0, v1.d[1]", double)
+BENCH(tail_fmadd, "fmadd s2, s0, s1, s0", tail)
+BENCH(tail_fmsub, "fmsub s2, s0, s1, s0", tail)
+BENCH(tail_fnmadd, "fnmadd s2, s0, s1, s0", tail)
+BENCH(tail_fnmsub, "fnmsub s2, s0, s1, s0", tail)
+BENCH(tail_fnmul, "fnmul s2, s0, s1", tail)
+BENCH(tail_frecpss, "frecps s2, s0, s1", tail)
+BENCH(tail_frecps2s, "frecps v2.2s, v0.2s, v1.2s", tail)
+BENCH(tail_frecps4s, "frecps v2.4s, v0.4s, v1.4s", tail)
+BENCH(tail_frsqrtss, "frsqrts s2, s0, s1", tail)
+BENCH(tail_frsqrts2s, "frsqrts v2.2s, v0.2s, v1.2s", tail)
+BENCH(tail_frsqrts4s, "frsqrts v2.4s, v0.4s, v1.4s", tail)
 int main(int argc, char **argv)
 {
     unsigned long n = argc > 1 ? strtoul(argv[1], 0, 0) : 50000;
@@ -144,6 +157,7 @@ int main(int argc, char **argv)
 #define RUN(name) do { uint64_t start = now(); vec v = name(n); uint64_t elapsed = now() - start; \
     printf("%-18s %016llx:%016llx\n", #name, (unsigned long long)v.hi, (unsigned long long)v.lo); \
     fprintf(stderr, "%-18s %.6f ns/op\n", #name, (double)elapsed / (16.0 * n)); } while (0)
+    RUN(tail_fmadd); RUN(tail_fmsub); RUN(tail_fnmadd); RUN(tail_fnmsub); RUN(tail_fnmul); RUN(tail_frecpss); RUN(tail_frecps2s); RUN(tail_frecps4s); RUN(tail_frsqrtss); RUN(tail_frsqrts2s); RUN(tail_frsqrts4s);
     RUN(zip1_8b);
     RUN(zip1_16b);
     RUN(zip1_4h);

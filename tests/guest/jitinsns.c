@@ -412,6 +412,17 @@ VECF(t_fmlsh4, "fmls v2.4h,v0.4h,v1.h[4]")
 VECF(t_fmlsh5, "fmls v2.8h,v0.8h,v1.h[5]")
 VECF(t_fmlsh6, "fmls v2.4h,v0.4h,v1.h[6]")
 VECF(t_fmlsh7, "fmls v2.8h,v0.8h,v1.h[7]")
+VECF(t_tail_fmadd, "fmadd s2, s0, s1, s2")
+VECF(t_tail_fmsub, "fmsub s2, s0, s1, s2")
+VECF(t_tail_fnmadd, "fnmadd s2, s0, s1, s2")
+VECF(t_tail_fnmsub, "fnmsub s2, s0, s1, s2")
+VECF(t_tail_fnmul, "fnmul s2, s0, s1")
+VECF(t_tail_frecpss, "frecps s2, s0, s1")
+VECF(t_tail_frecps2s, "frecps v2.2s, v0.2s, v1.2s")
+VECF(t_tail_frecps4s, "frecps v2.4s, v0.4s, v1.4s")
+VECF(t_tail_frsqrtss, "frsqrts s2, s0, s1")
+VECF(t_tail_frsqrts2s, "frsqrts v2.2s, v0.2s, v1.2s")
+VECF(t_tail_frsqrts4s, "frsqrts v2.4s, v0.4s, v1.4s")
 F4(fmla, "fmla") F4(fmls, "fmls")
 F4(fadd, "fadd") F4(fsub, "fsub") F4(fmul, "fmul") F4(fmax, "fmax") F4(fmin, "fmin") F4(fmaxnm, "fmaxnm")
 F4(fminnm, "fminnm") F4(fcmeq, "fcmeq") F4(fcmge, "fcmge") F4(fcmgt, "fcmgt")
@@ -910,6 +921,7 @@ int main(void)
     RF(fcmlez4s);
     RF(fcmltz2s);
     RF(fcmltz4s);
+    RF(tail_fmadd); RF(tail_fmsub); RF(tail_fnmadd); RF(tail_fnmsub); RF(tail_fnmul); RF(tail_frecpss); RF(tail_frecps2s); RF(tail_frecps4s); RF(tail_frsqrtss); RF(tail_frsqrts2s); RF(tail_frsqrts4s);
     RF4(fmla); RF4(fmls);
     RF(fmlae0); RF(fmlae1); RF(fmlae2); RF(fmlae3); RF(fmlse0); RF(fmlse1); RF(fmlse2); RF(fmlse3);
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);

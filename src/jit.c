@@ -1714,6 +1714,8 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
 #undef PI
 }
 
+static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc);
+static void t_scalar_indexed_mul(tctx *t, uint32_t i, uint64_t pc, int dbl, int idx);
 enum { RI_N, RI_M, RI_P, RI_Z, RI_A, RI_X, RI_I };
 static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsigned rn, uint32_t insn, uint64_t pc);
 
@@ -1723,11 +1725,16 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
     if (BIT(i, 31) && (i & 0x5F20FC00) != 0x1E200000) return false;
     if (type > 1) return false;                      /* half precision: helper */
     int dbl = type == 1, pfx = dbl ? 0xF2 : 0xF3;
+    if ((i & 0xFFC00000) == 0x1F000000) {
+        t_vfp_fma(t, BIT(i, 15) != BIT(i, 21), rd, rn, rm, -1, 0, i, pc);
+        return true;
+    }
     if ((i & 0xFF200C00) == 0x1E200800) {            /* 2-source: FMUL FDIV FADD FSUB (FNMUL) */
         static const uint8_t ops[4] = {0x59, 0x5E, 0x58, 0x5C};
         unsigned op = BITS(i, 15, 12);
         if (op >= 4 && op <= 7) { fp_maxmin(t, i, pc); return true; }
-        if (op > 3) return false;                    /* nmul: helper (NaN rules) */
+        if (op == 8 && !dbl) { t_scalar_indexed_mul(t, i, pc, 0, 0); return true; }
+        if (op > 3) return false;
         fp_load(t, 0, rn, dbl);
         fp_load(t, 1, rm, dbl);
         x_sse_rr(&t->b, pfx, ops[op], 0, 0, 1);
@@ -2560,10 +2567,14 @@ static void vfp_fma_odd(tctx *t, int a, int b, int c, int s, int e)
 static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
 {
     bool scalar = BIT(insn, 28);
+    bool three = (insn & 0x5F000000) == 0x1F000000;
+    bool step = !three && (insn & 0x8F20FC00) == 0x0E20FC00;
+    bool rsqrt = step && BIT(insn, 23);
     if (scalar) {
-        x_movd_ld(&t->b, 0, VR(rn)); x_movd_ld(&t->b, 1, velem(rm, 4, idx));
-        x_movd_ld(&t->b, 8, VR(rd));
+        x_movd_ld(&t->b, 0, VR(rn)); x_movd_ld(&t->b, 1, velem(rm, 4, idx < 0 ? 0 : idx));
+        x_movd_ld(&t->b, 8, VR(three ? BITS(insn, 14, 10) : rd));
     } else { vld(t, 0, rn); vld(t, 1, rm); vld(t, 8, rd); }
+    if (step) vconst(t, 8, rsqrt ? 0x4040000040400000ull : 0x4000000040000000ull, Q);
     if (!scalar && idx >= 0) x_sse_rri(&t->b, 0x66, 0x70, 1, 1, (uint8_t)(0x55 * idx));
     if (!Q) {
         x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
@@ -2583,9 +2594,10 @@ static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, 
     P(0xDF, 3, 2);
     x_sse_rr(&t->b, 0x66, 0x7E, 0, 3, RCX);
     size_t control = jrcxnz32(t);
-    if (sub) {
+    if (sub || (three && BIT(insn, 21))) {
         vones(t, 2); x_sse_shift_ri(&t->b, 0x72, 6, 2, 31);
-        P(0xEF, 0, 2);                                           /* negate product exactly */
+        if (sub) P(0xEF, 0, 2);                                  /* negate product exactly */
+        if (three && BIT(insn, 21)) P(0xEF, 8, 2);                /* scalar fused addend sign */
     }
     x_stmxcsr(&t->b, MXCSR_SLOT);
     x_movd_ld(&t->b, 2, MXCSR_SLOT);
@@ -2605,6 +2617,11 @@ static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, 
     }
     vfp_fma_odd(t, 0, 1, 8, 9, 4);
     if (Q) vfp_fma_odd(t, 10, 11, 12, 13, 4);
+    if (rsqrt) {
+        /* Exact scaling preserves the odd low bit; round to single only after it. */
+        vconst(t, 2, 0x3fe0000000000000ull, true);
+        P(0x59, 9, 2); if (Q) P(0x59, 13, 2);
+    }
     /* In RN, retain PE from an inexact sum (the conversion raises it too).
      * Otherwise restore guest RC before converting, as fma32 does. */
     nearest = x_jrcxz8(&t->b);
@@ -2977,6 +2994,10 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
         t_vfp_pair_add(t, i, pc, false); return true;
     }
     if (size & 1) return false;                                  /* double precision: helper */
+    if (!U && op == 0x1f) {
+        t_vfp_fma(t, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, (int)Q, i, pc);
+        return true;
+    }
     if (!U && op == 0x19) {
         t_vfp_fma(t, size >> 1, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, (int)Q, i, pc);
         return true;
@@ -3355,6 +3376,9 @@ static void t_scalar_indexed_mul(tctx *t, uint32_t i, uint64_t pc, int dbl, int 
     }
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
     size_t restore = jrcxnz32(t);
+    if ((i & 0xFFE0FC00) == 0x1E208800) {
+        vconst(t, 2, 0x80000000, false); P(0xEF, 0, 2);           /* FNMUL: negate after rounding */
+    }
     fp_store(t, rd, 0);                                         /* scalar loads cleared inactive lanes */
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, restore, xb_len(&t->b)); x_ldmxcsr(&t->b, MXCSR_SLOT);
@@ -3376,6 +3400,10 @@ static bool t_scalar_indexed(tctx *t, uint32_t i, uint64_t pc)
 
 static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
 {
+    if ((i & 0xFF60FC00) == 0x5E20FC00) {
+        t_vfp_fma(t, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, 0, i, pc);
+        return true;
+    }
     if ((i & 0xFFBFFC00) == 0x7E30D800) {
         t_vfp_pair_add(t, i, pc, true); return true;
     }
@@ -3436,7 +3464,7 @@ static int translate_insn(tctx *t, uint32_t i, uint64_t pc)
         if ((i & 0xFFC00000) == 0xD5000000) ok = t_system(t, i);
         break;
     case 0xF:
-        if ((i & 0x5F000000) == 0x1E000000) ok = t_fp(t, i, pc);
+        if ((i & 0x5E000000) == 0x1E000000) ok = t_fp(t, i, pc);
         else ok = t_simd_scalar(t, i, pc);
         break;
     case 0x7:
@@ -4418,7 +4446,7 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
         char idx[2 * HAO_AOT_ID_LEN + 1];
         int nb = id->kind == HAO_AOT_ID_CDHASH ? HAO_AOT_CDHASH_LEN : HAO_AOT_ID_LEN;
         for (int k = 0; k < nb; k++) snprintf(idx + 2 * k, 3, "%02x", id->id[k]);
-        fprintf(stderr, "hao-aot: %s: %zu blocks, %llu insns (%.1f%% translated natively, rest via interpreter helper), %zu/%d links, "
+        fprintf(stderr, "hao-aot: %s: %zu blocks, %llu insns (%.4f%% translated natively, rest via interpreter helper), %zu/%d links, "
                 "%zu KB code, bound to %s %s -> %s/%s\n",
                 im->path, nents, (unsigned long long)ninsns, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0.0,
                 nl, t.nlinks, (size_t)(h.code_size >> 10), id->kind == HAO_AOT_ID_CDHASH ? "cdhash" : "code hash (unsigned)", idx, dir, name);
