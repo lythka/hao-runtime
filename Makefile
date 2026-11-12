@@ -237,7 +237,11 @@ $(B)/test_jit_vector: tests/aot/jit_vector.c tests/oracle/fma_cases.h $(B)/jit.o
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	codesign -s - -f $@
 
-unit: $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap
+$(B)/test_round16: tests/aot/round16.c $(B)/libhaocore.a
+	$(CC) $(CFLAGS) -o $@ $< $(B)/libhaocore.a && codesign -s - -f $@
+
+unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap
+	timeout -s KILL 120 $(B)/test_round16
 	timeout -s KILL 90 $(B)/test_helper_descriptor
 	timeout -s KILL 120 $(B)/test_jit_vector
 	$(B)/test_imm_cond

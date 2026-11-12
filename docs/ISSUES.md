@@ -1,5 +1,48 @@
 # Runtime issues and measured scope
 
+## FP16 fused multiply-add rounding
+
+The ordinary-input `fp_vec16_muladd` path admits only binary64-exact
+products and sums, then needs one rounding to binary16. Its final per-lane
+call to the general soft-float converter is replaced by a finite-input
+integer converter. Normal results use a fixed mantissa shift; subnormals
+use an exponent-dependent shift. All four rounding modes, signed zeros,
+overflow selection, and cumulative IXC/UFC/OFC match `round_pack_mode`,
+which remains unchanged. Tininess is tested before rounding, including an
+inexact tiny value that rounds up to the minimum normal. Values just above
+max-finite do not raise OFC unless the rounded exponent overflows.
+Flags are accumulated and raised once per vector. No new allocation, TLS,
+CPU requirement or floating environment access is introduced by rounding.
+
+Validation: 2,577,664 differential rounding cases cover every finite half
+interval's endpoints and rounding midpoint (and adjacent doubles), both
+signs and all modes, plus random finite doubles. This exhausts boundary
+classes, not every possible interior double. The 42-form native guest test
+compares complete vector results and full FPSR under 16 RMode/FZ/DN settings
+with JIT, interpreter, helpers-only and AOT. Replay of the same 200,000-record
+fma/simd/block corpora as 46054f7 has zero mismatches and unchanged IEEE-flag
+differences: interpreter 0/0/0, JIT 0/14/4,963.
+
+Seven interleaved uninstrumented runs on Rosetta, sixteen million operations
+per form per run, give these median ns/FMLA .8H:
+
+| Form | JIT base -> C rounding | AOT base -> C rounding |
+| --- | --- | --- |
+| Three-same | 121.303 -> 55.694 | 120.316 -> 56.193 |
+| By element | 125.644 -> 63.007 | 125.188 -> 63.106 |
+
+The normal-input loop resets its half accumulator every sixteen operations;
+this overhead is included in both variants. Separate statistics runs of
+four million operations per half form report 8,000,000 helper calls in both
+variants and both engines. The C change does not yet inline half operations.
+The full `make check` gate passes: 78 manifest passes, one expected failure
+and three expected skips, with no unexpected failure or fork type-at crash.
+On Intel hardware (i5-3210M, 26B131, a bundled hao with JIT, seven
+interleaved runs), the median ns/FMLA .8H falls from 329 to 178 (three-same)
+and from 355 to 204 (by element); FP32 FMLA stays at 19.5 as a control.
+Application acceptance is not measured. FZ16/AHP still decline the fast path; the existing full
+interpreter path does not model those controls, and is unchanged here.
+
 ## Per-entry jump-cache base in translated code
 
 Each translated indirect branch previously loaded `cpu.rt_jc`, then its

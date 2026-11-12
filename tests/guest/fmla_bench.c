@@ -31,5 +31,23 @@ int main(int argc, char **argv)
         printf("%s %08x %08x %08x %08x\n", form ? "element" : "three", out[0], out[1], out[2], out[3]);
         fprintf(stderr, "%s %.3f ns/FMLA (%u instructions)\n", form ? "element" : "three", (double)elapsed / (count * 16), count * 16);
     }
+    const uint16_t ha[8] = {0x2400,0x2400,0x2400,0x2400,0x2400,0x2400,0x2400,0x2400};
+    const uint16_t hb[8] = {0x3c00,0x3c00,0x3c00,0x3c00,0x3c00,0x3c00,0x3c00,0x3c00};
+    for (unsigned form = 0; form < 2; form++) {
+        /* Reset each loop: half precision cannot accumulate millions of
+         * increments without saturating. The reset is included in timing. */
+        const void *a = ha, *b = hb;
+        uint32_t out[4]; unsigned n = count;
+        uint64_t start = ns();
+#define HALF_LOOP(step) __asm__ volatile( \
+    "ldr q1, [%[a]]\nldr q2, [%[b]]\n1: movi v0.8h, #0\n" REPEAT(step) \
+    "subs %w[n], %w[n], #1\nb.ne 1b\nstr q0, [%[out]]" \
+    : [n] "+r"(n) : [a] "r"(a), [b] "r"(b), [out] "r"(out) : "v0", "v1", "v2", "cc", "memory")
+        if (form) { HALF_LOOP("fmla v0.8h, v1.8h, v2.h[7]\n"); }
+        else { HALF_LOOP("fmla v0.8h, v1.8h, v2.8h\n"); }
+        uint64_t elapsed = ns() - start;
+        printf("half-%s %08x %08x %08x %08x\n", form ? "element" : "three", out[0], out[1], out[2], out[3]);
+        fprintf(stderr, "half-%s %.3f ns/FMLA (%u instructions)\n", form ? "element" : "three", (double)elapsed / (count * 16), count * 16);
+    }
     return 0;
 }
