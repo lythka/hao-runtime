@@ -261,12 +261,14 @@ static bool catl_has(uint64_t a)
 }
 static void catl_build(hao_image *img)
 {
-    uint64_t n, a = hao_image_section(img, NULL, "__objc_catlist", &n);
+    uint64_t n, n2, a = hao_image_section(img, NULL, "__objc_catlist", &n), a2 = hao_image_section(img, NULL, "__objc_catlist2", &n2);
+    if (!a) n = 0;
+    if (!a2) n2 = 0;
     free(catl.v);
-    catl.v = hao_alloc_check(calloc(n / 8 * 5 + 1, sizeof *catl.v), "ObjC category list");
+    catl.v = hao_alloc_check(calloc((n + n2) / 8 * 5 + 1, sizeof *catl.v), "ObjC category list");
     catl.n = 0;
-    for (uint64_t k = 0; k < n / 8; k++) {
-        category_t *cat = *(category_t **)(uintptr_t)(a + 8 * k);
+    for (uint64_t k = 0; k < (n + n2) / 8; k++) {
+        category_t *cat = *(category_t **)(uintptr_t)(k < n / 8 ? a + 8 * k : a2 + 8 * (k - n / 8));
         uint64_t l[5] = {cat->instanceMethods, cat->classMethods, cat->protocols, cat->instanceProperties, cat->classProperties};
         for (int j = 0; j < 5; j++) if (l[j]) catl.v[catl.n++] = l[j];
     }
@@ -736,8 +738,12 @@ static void attach_category(const category_t *cat, Class cls, bool class_props)
  * The class's own guest methods get x86 entry points at that point, as
  * register_class gives listed classes.
  * Swift class stubs (isa 1..15: classes with resilient ancestry) are named
- * only through the stub, which the class's metadata does not point back to;
- * a category on one is reported and not attached (none in 26A428). */
+ * only through the stub. A category on one (in __objc_catlist2, which hao
+ * read only from 26B1xx on, when apps began to have them) is kept here under
+ * the stub's address, as objc4 keeps it in unattachedCategories; it is
+ * attached when the class is realized, the stub found from the class's
+ * descriptor (TargetObjCResilientClassStubInfo, hao_swift_class_stub) as
+ * libswiftCore finds it for _objc_realizeClassFromSwift. */
 typedef struct { const category_t *cat; uint64_t cls; bool class_props; } pending_cat;
 static pending_cat *pend_cats;
 static size_t npend_cats, cap_pend_cats;
@@ -791,7 +797,8 @@ static void defer_category(const category_t *cat, bool class_props)
     hao_crit_leave();
     __atomic_fetch_add(&st_deferred, 1, __ATOMIC_RELAXED);
     HAO_LOG(1, "objc category %s on %s deferred until the Swift runtime realizes the class\n",
-                cat->name ? (const char *)(uintptr_t)cat->name : "?", class_getName((Class)(uintptr_t)cat->cls));
+                cat->name ? (const char *)(uintptr_t)cat->name : "?",
+                is_stub_class(cat->cls) ? "a Swift class stub" : class_getName((Class)(uintptr_t)cat->cls));
 }
 
 /* After the native runtime may have realized guest class c (force: c's
@@ -808,8 +815,10 @@ static void class_realized(uint64_t c, bool force)
     bool fresh = set_add(&late_classes, c);
     pending_cat *mine = NULL;
     size_t n = 0;
+    /* categories kept under the class's ObjC stub too (Description: word 8 of stable Swift class metadata) */
+    uint64_t stub = (((const class_t *)(uintptr_t)c)->data & FAST_IS_SWIFT_STABLE) ? hao_swift_class_stub(((const uint64_t *)(uintptr_t)c)[8]) : 0;
     for (size_t k = 0; fresh && k < npend_cats; k++) {
-        if (pend_cats[k].cls != c || !pend_cats[k].cat) continue;
+        if ((pend_cats[k].cls != c && (!stub || pend_cats[k].cls != stub)) || !pend_cats[k].cat) continue;
         pending_cat *m = hao_alloc_check(realloc(mine, (n + 1) * sizeof *mine), "ObjC pending categories");
         mine = m;
         mine[n++] = pend_cats[k];
@@ -961,8 +970,9 @@ void hao_objc_read_image(hao_image *img)
         remap_ignored_refs(img, "__objc_superrefs");
     }
     HAO_LOG(2, "objc: classes done\n");
-    /* 4. categories */
-    a = hao_image_section(img, NULL, "__objc_catlist", &n);
+    /* 4. categories: __objc_catlist2 holds those on Swift class stubs */
+    for (int list = 0; list < 2; list++) {
+    a = hao_image_section(img, NULL, list ? "__objc_catlist2" : "__objc_catlist", &n);
     for (uint64_t k = 0; k < n / 8; k++) {
         category_t *cat = *(category_t **)(uintptr_t)(a + 8 * k);
         if (img->dsc) dsc_set(&cat->cls, dsc_class(cat->cls));
@@ -974,13 +984,11 @@ void hao_objc_read_image(hao_image *img)
         }
         bool class_props = (info->flags & (1u << 6)) != 0;   /* HasCategoryClassProperties: category_t has classProperties */
         if (guest_class_unknown(cat->cls)) {
-            if (is_stub_class(cat->cls))
-                HAO_LOG(0, "objc category %s on a Swift class stub (%s) is not attached\n",
-                        cat->name ? (const char *)(uintptr_t)cat->name : "?", img->path);
-            else defer_category(cat, class_props);
+            defer_category(cat, class_props);   /* a stub's: keyed by the stub */
             continue;
         }
         attach_category(cat, cls, class_props);
+    }
     }
     HAO_LOG(2, "objc: categories done\n");
 }

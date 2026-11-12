@@ -714,6 +714,9 @@ tests/guest/helper_stats.c
 tests/guest/helper_stats.sh
 tests/guest/coverage_bench.c
 tests/guest/coverage_bench.sh
+tests/guest/stubcat.sh
+tests/guest/stubcat.swift
+tests/guest/stubcat_lib.swift
 tests/guest/unarchbool.m
 tests/guest/unarchbool.sh
 tests/aot/integer_mutations.sh

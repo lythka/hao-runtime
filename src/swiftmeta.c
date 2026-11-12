@@ -291,6 +291,38 @@ static bool rd32_any(uint64_t a, uint32_t *v)
     return true;
 }
 
+/* The trailing objects of a non-generic class descriptor up to its
+ * TargetObjCResilientClassStubInfo, as type_descriptor walks them: the
+ * resilient superclass, the metadata initialization, the vtable and the
+ * override table. The stub info is a rel32 to the stub's isa word (the
+ * address __objc_stublist and categories name). */
+uint64_t hao_swift_class_stub(uint64_t td)
+{
+    uint32_t f, extra, n;
+    if (!td || !hao_image_for_addr(td) || !rd32_any(td, &f)) return 0;
+    if ((f & 0x1f) != 16 || (f & 0x80)) return 0;        /* a class, not generic */
+    uint32_t ks = f >> 16;
+    bool resilient_super = ks & (1u << 13), vtable = ks & (1u << 15), overrides = ks & (1u << 14);
+    if (!resilient_super || !rd32_any(td + 28, &extra) || !(extra & 1)) return 0;   /* HasObjCResilientClassStub */
+    uint64_t p = td + 44 + 4;                             /* past TargetResilientSuperclass */
+    unsigned init = ks & 3;
+    if (init == 2) p += 4;
+    if (init == 1) p += 12;
+    if (vtable) {
+        if (!rd32_any(p + 4, &n)) return 0;
+        p += 8 + 8ull * n;
+    }
+    if (overrides) {
+        if (!rd32_any(p, &n)) return 0;
+        p += 4 + 12ull * n;
+    }
+    uint32_t v;
+    if (!rd32_any(p, &v) || !v) return 0;
+    uint64_t stub = p + (uint64_t)(int64_t)(int32_t)v;
+    hao_image *im = hao_image_for_addr(td);
+    return im && hao_image_for_addr(stub) == im ? stub : 0;
+}
+
 static void note(walk *w, uint64_t field, uint64_t target, int kind)
 {
     if (!target || w->slot) return;
