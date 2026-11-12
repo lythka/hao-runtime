@@ -392,6 +392,26 @@ static const uint64_t fpcrs[] = {0, 3u << 22, 1u << 24, 1u << 25, 2u << 22 | 3u 
         return mix(out[0], out[1]);                                                     \
     }
 #define F4(n, mn) VECF(t_##n##4s, mn " v2.4s, v0.4s, v1.4s") VECF(t_##n##2s, mn " v2.2s, v0.2s, v1.2s")
+VECF(t_fmla4h, "fmla v2.4h,v0.4h,v1.4h")
+VECF(t_fmla8h, "fmla v2.8h,v0.8h,v1.8h")
+VECF(t_fmlah0, "fmla v2.4h,v0.4h,v1.h[0]")
+VECF(t_fmlah1, "fmla v2.8h,v0.8h,v1.h[1]")
+VECF(t_fmlah2, "fmla v2.4h,v0.4h,v1.h[2]")
+VECF(t_fmlah3, "fmla v2.8h,v0.8h,v1.h[3]")
+VECF(t_fmlah4, "fmla v2.4h,v0.4h,v1.h[4]")
+VECF(t_fmlah5, "fmla v2.8h,v0.8h,v1.h[5]")
+VECF(t_fmlah6, "fmla v2.4h,v0.4h,v1.h[6]")
+VECF(t_fmlah7, "fmla v2.8h,v0.8h,v1.h[7]")
+VECF(t_fmls4h, "fmls v2.4h,v0.4h,v1.4h")
+VECF(t_fmls8h, "fmls v2.8h,v0.8h,v1.8h")
+VECF(t_fmlsh0, "fmls v2.4h,v0.4h,v1.h[0]")
+VECF(t_fmlsh1, "fmls v2.8h,v0.8h,v1.h[1]")
+VECF(t_fmlsh2, "fmls v2.4h,v0.4h,v1.h[2]")
+VECF(t_fmlsh3, "fmls v2.8h,v0.8h,v1.h[3]")
+VECF(t_fmlsh4, "fmls v2.4h,v0.4h,v1.h[4]")
+VECF(t_fmlsh5, "fmls v2.8h,v0.8h,v1.h[5]")
+VECF(t_fmlsh6, "fmls v2.4h,v0.4h,v1.h[6]")
+VECF(t_fmlsh7, "fmls v2.8h,v0.8h,v1.h[7]")
 F4(fmla, "fmla") F4(fmls, "fmls")
 F4(fadd, "fadd") F4(fsub, "fsub") F4(fmul, "fmul") F4(fmax, "fmax") F4(fmin, "fmin") F4(fmaxnm, "fmaxnm")
 F4(fminnm, "fminnm") F4(fcmeq, "fcmeq") F4(fcmge, "fcmge") F4(fcmgt, "fcmgt")
@@ -674,6 +694,10 @@ int main(void)
     R(fabs0); R(fabs1); R(fabs2); R(fneg0); R(fneg1); R(fneg2);
 #define RF(n) runf(#n, t_##n)
 #define RF4(n) RF(n##4s); RF(n##2s)
+    RF(fmla4h); RF(fmla8h); RF(fmlah0); RF(fmlah1); RF(fmlah2); RF(fmlah3);
+    RF(fmlah4); RF(fmlah5); RF(fmlah6); RF(fmlah7); RF(fmls4h); RF(fmls8h);
+    RF(fmlsh0); RF(fmlsh1); RF(fmlsh2); RF(fmlsh3); RF(fmlsh4); RF(fmlsh5);
+    RF(fmlsh6); RF(fmlsh7);
     RF4(fmla); RF4(fmls);
     RF(fmlae0); RF(fmlae1); RF(fmlae2); RF(fmlae3); RF(fmlse0); RF(fmlse1); RF(fmlse2); RF(fmlse3);
     RF4(fadd); RF4(fsub); RF4(fmul); RF4(fmax); RF4(fmin); RF4(fmaxnm); RF4(fminnm); RF4(fcmeq); RF4(fcmge); RF4(fcmgt);

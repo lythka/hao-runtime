@@ -18,6 +18,7 @@
  */
 #include "hao/cpu.h"
 #include "../oracle/fma_cases.h"
+#include "../oracle/fma16_cases.h"
 #include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
@@ -27,6 +28,18 @@
 #include <sys/mman.h>
 
 int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base);
+
+/* The unit/mutation build redirects only the translator's helper target to
+ * this counter. Production code is unchanged; result comparisons still run
+ * the real descriptor helper. This also tests declines whose final half
+ * result happens to be insensitive to a lost binary64 tail. */
+static unsigned vector_helper_calls;
+int jit_vector_helper(hao_cpu *c, uint64_t descriptor, uint64_t pc)
+{
+    vector_helper_calls++;
+    return a64_exec_helper(c, descriptor, pc);
+}
+
 
 static uint64_t seed = 0x9e3779b97f4a7c15ull;
 static uint64_t rnd(void) { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; }
@@ -249,16 +262,68 @@ int main(void)
                     if (k % 8 == 0) check(insn, 0x4e20d400u | rd << 16 | rn << 5 | rd, &in, live);
                 }
             }
+    /* Half fused forms: H:L:M, low Vm bank, all controls, aliases, ordinary
+     * and special inputs, exactness declines, and live NZCV. FZ16/AHP are
+     * compared with the existing helper, not claimed as native support. */
+    for (unsigned control = 0; control < 24; control++)
+        for (unsigned form = 0; form < 36; form++)
+            for (unsigned k = 0; k < 128; k++) {
+                unsigned q = form & 1, sub = (form >> 1) & 1;
+                int idx = form < 4 ? -1 : (int)((form - 4) >> 2);
+                unsigned rd = reg(), rn = reg(), rm = reg();
+                if (idx >= 0) rm &= 15;
+                if (k == 22) { rd = 0; rn = 1; rm = 2; }
+                hao_cpu in;
+                state(&in, rn, rm);
+                in.fpcr = control < 16 ? control << 22 :
+                    (control & 3) << 22 | (1u << (control < 20 ? 19 : 26));
+                for (unsigned lane = 0; lane < 8; lane++) {
+                    fma16_ops o = fma16_case(&seed, k < 22 ? k : k + lane);
+                    in.v[rd].h[lane] = o.c;
+                    in.v[rn].h[lane] = o.a;
+                    in.v[rm].h[lane] = o.b;
+                }
+                if (k == 22) {
+                    /* Earlier pairs round inexactly; only the last active
+                     * lane loses binary64 precision and must roll back. */
+                    for (unsigned l = 0; l < 8; l++) {
+                        in.v[0].h[l] = 0x3c00;
+                        in.v[1].h[l] = 0x3c00;
+                        in.v[2].h[l] = 0x0401;
+                    }
+                    in.v[0].h[q ? 7 : 3] = 0x7bff;
+                    in.v[1].h[q ? 7 : 3] = 0x0401;
+                }
+                if (idx >= 0 && k >= 22 && !(k % 4))
+                    for (unsigned l = 0; l < 8; l++) in.v[rm].h[l] = 0x3000 + l * 0x101;
+                uint32_t insn = idx < 0 ? 0x0e400c00u | sub << 23 :
+                    0x0f001000u | sub << 14 | (unsigned)(idx >> 2) << 11 |
+                    (unsigned)((idx >> 1) & 1) << 21 | (unsigned)(idx & 1) << 20;
+                insn |= q << 30 | rm << 16 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0;
+                    check(insn, 0, &in, live);
+                    if ((k == 22 && vector_helper_calls != 1) ||
+                        (k == 0 && control < 16 && vector_helper_calls != 0)) {
+                        if (fails++ < 20) printf("MISMATCH half admission %08x fpcr %x: %u helper calls\n", insn, in.fpcr, vector_helper_calls);
+                    }
+                    /* Adjacent FP32 code must rebuild its own constants. */
+                    if (k % 8 == 0) check(insn, 0x4e20d400u | rd << 16 | rn << 5 | rd, &in, live);
+                }
+            }
     /* A maximum-length block must fit the emitter's scratch/cache budget,
      * including both pairs of the largest fused translation. */
-    for (unsigned form = 0; form < 2; form++) {
+    for (unsigned form = 0; form < 6; form++) {
         hao_cpu in;
         state(&in, 1, 2);
         for (unsigned r = 0; r < 3; r++)
             for (unsigned lane = 0; lane < 4; lane++) in.v[r].f[lane] = 0.25f;
+        if (form >= 2) for (unsigned r = 0; r < 3; r++)
+            for (unsigned l = 0; l < 8; l++) in.v[r].h[l] = 0x3400;
         uint32_t code[98];
         code[0] = 0xeb01001fu;
-        for (unsigned k = 1; k <= 96; k++) code[k] = form ? 0x4fa21820u : 0x4e22cc20u;
+        for (unsigned k = 1; k <= 96; k++) code[k] = (uint32_t[]){0x4e22cc20u, 0x4fa21820u, 0x4e420c20u, 0x4f321820u, 0x4ec20c20u, 0x4f325820u}[form];
+        if (form >= 2) code[0] = code[1]; /* first block: 96 half expansions */
         code[97] = 0x9a818002u;
         static outcome a, b;
         run(&a, &in, code, 98, 0x7400000000ull, false);

@@ -426,7 +426,7 @@ void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm)
 }
 void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int x, uint8_t imm)
 {
-    if (op < 0x71 || op > 0x73 || (digit != 2 && digit != 4 && digit != 6) || (op == 0x73 && digit == 4)) { bad(b); return; }
+    if (op < 0x71 || op > 0x73 || (op == 0x73 ? (digit != 2 && digit != 3 && digit != 6 && digit != 7) : (digit != 2 && digit != 4 && digit != 6))) { bad(b); return; }
     uint8_t *start = b->p;
     enc_rr(b, P_66, 0, 0, OP2(0x0F, op), digit, x);
     if (b->p != start) xb_u8(b, imm);
