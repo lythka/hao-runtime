@@ -1,5 +1,45 @@
 # Runtime issues and measured scope
 
+## Categories on Swift class stubs
+
+A Swift class whose superclass comes from another module built with library
+evolution (resilient ancestry) has no entry in `__objc_classlist`. The
+compiler emits an ObjC class stub for it instead (`__objc_stublist`, isa 1),
+and puts an `@objc` extension on it in `__objc_catlist2` as a category on that
+stub. objc4 keeps such a category under the stub. libswiftCore finds the stub
+through the class descriptor (`TargetObjCResilientClassStubInfo`) and passes it
+to `_objc_realizeClassFromSwift`, which moves the category onto the realized
+class.
+
+hao never read `__objc_catlist2`. On 26A428 no app had such a category, but
+26B1xx apps do: one app's view controller got its `@objc` protocol
+conformance's six property accessors and two more methods from one. Those
+methods were missing, so `responds(to:)` and `conforms(to:)` were false and a
+protocol send ended the app with "unrecognized selector".
+
+hao now reads `__objc_catlist2` with `__objc_catlist`. A category on a stub is
+kept under the stub's address. It is attached when the guest's metadata
+initialization (`swift_getSingletonMetadata`, `swift_initClassMetadata2` and
+siblings) completes the class. The stub is found from the class's descriptor
+(`hao_swift_class_stub`, `src/swiftmeta.c`: the class's trailing objects as
+`type_descriptor` walks them, up to the stub info), as libswiftCore finds it.
+
+`tests/guest/stubcat.sh` builds a library-evolution NSObject subclass, and a
+program whose subclass of it has an `@objc` extension conforming to an `@objc`
+protocol. The script checks that the guest has `__objc_stublist` and
+`__objc_catlist2`. `responds(to:)`, `conforms(to:)`, protocol get and set, a
+method, KVC and a class method all equal native arm64 under JIT, `--interp`
+and AOT. Before the change the first send aborted with "unrecognized
+selector".
+
+Limits:
+- Only non-generic class descriptors are walked; generic classes have no
+  stubs.
+- Categories are attached only when hao sees the class completed through the
+  trapped metadata calls above. A class completed by another path keeps its
+  stub categories unattached; hao's other deferred categories have the same
+  limit.
+
 ## BOOL type codes passed to NSUnarchiver
 
 `@encode(BOOL)` is "B" on arm64 and "c" on x86_64, and the old non-keyed

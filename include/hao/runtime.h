@@ -470,6 +470,9 @@ void hao_fnslots_address_taken(hao_image *img, const uint64_t *fn, size_t nfn, u
  * enum-tag and resilient-accessor functions get island entries (once per string) */
 void hao_swiftmeta_layout_template(uint64_t ls);
 void hao_swiftmeta_image(hao_image *img);
+/* The ObjC class stub a non-generic Swift class descriptor in a guest image names
+ * (TargetObjCResilientClassStubInfo: a class with resilient ancestry), else 0. */
+uint64_t hao_swift_class_stub(uint64_t descriptor);
 void hao_swiftmeta_stats(void);
 /* The relative indirect(able) references of an image's Swift metadata whose
  * slot lies outside the image, by kind (hao_swiftmeta_slots, swiftmeta.c). */
