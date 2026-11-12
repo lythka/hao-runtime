@@ -1330,7 +1330,7 @@ static bool msgsend_varsniff(hao_thread *t, Class cls, SEL sel, IMP imp, const c
         }
     }
     __atomic_fetch_add(&hao_objcva_calls, 1, __ATOMIC_RELAXED);
-    if (!hao_varsniff_call(t, fn, ngp, nfp, hao_narrowret_kind_for_enc(enc), fmt, fk)) {
+    if (!hao_varsniff_call(t, fn, ngp, nfp, hao_narrowret_kind_for_enc(enc), fmt, fk, 0)) {
         __atomic_fetch_add(&hao_objcva_untyped, 1, __ATOMIC_RELAXED);
         if (hao_opt.bridge_check && !sig && hao_varsniff_imp_note(fn, 1))
             objcva_note(t, cls, sel, fn, "variadic slots untyped (no format): passed as integers");

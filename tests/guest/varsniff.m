@@ -42,6 +42,10 @@ int main(void)
     printf("cu    %s\n", b);
     SNPrintF(b, sizeof b, "null %.6a d %d s %s f %f", (void *)0, 5, "s", 1.25);
     printf("cu0   %s\n", b);
+    SNPrintF(b, sizeof b, "a=%a s=%s d=%d", (void *)0, "tail", 7);      /* bare %a of NULL: CoreUtils by family */
+    printf("cu0b  %s\n", b);
+    vs_format(b, sizeof b, "%a %d %a", 0x1p-1074, 3, 0x1p-1022);        /* subnormal and minimum normal: printf */
+    printf("hexsub %s\n", b);
     vs_scaled(0.25, b, sizeof b, "%s=%f,%d", "k", 1.75, 12);
     printf("fixfp %s\n", b);
     vs_five(1, 2, 3, 4, "%s %f %ld", "five", 5.5, 6L);

@@ -25,19 +25,18 @@
  *
  * %a is not one type across the formatters these functions use: printf reads a
  * double, CoreUtils' PrintF (LogPrintF, SNPrintF, ...) a pointer to a hardware or
- * network address (%.6a: six bytes; %##a: a sockaddr). When the format's family is
- * only assumed (no SDK attribute), such a slot goes by its value: an x86_64 user
- * pointer is below 2^47, which as a double is zero or a positive subnormal, and no
- * other double is, so those go to a GPR and the rest to an XMM. Zero is both a NULL
- * address and 0.0: it is an address when the conversion has a '#' flag or a precision,
- * which CoreUtils requires (a bare %a prints an error there), else a double. Left
- * wrong: printf's %#a or %.Na of exactly 0.0, or %a of a positive subnormal, when later
- * slots of the other class follow (they read one slot off).
+ * network address (%.6a: six bytes; %##a: a sockaddr). A function without an SDK
+ * format attribute takes its formatter family from fmtfamily_gen.inc (derived from
+ * which formatter its arguments reach): CoreUtils' %a/%A take a pointer, printf's and
+ * CFString's a double. A function the table does not list is assumed to be printf. No
+ * slot is typed by its value: a pointer and a double of the same bits cannot be told
+ * apart.
  *
  * The decoder accepts only the instructions such prologues contain and gives
  * up on anything else, so an unrecognised function stays bound as before.
  */
 #include "hao/runtime.h"
+#include "hao/gen_stamp.h"
 #include "hao/gmap.h"
 #include "hao/macho.h"
 #include "hao/opts.h"
@@ -233,7 +232,24 @@ static int guest_format_types(uint64_t a, char *ty, int max, char *kind, bool he
 
 /* One record per native function, never freed: its trap's argument. name is
  * the first import bound to it, for -vv trap traces. */
-typedef struct { uint64_t fn; uint8_t ngp, nfp; char narrow; const char *name; } vsniff;
+typedef struct { uint64_t fn; uint8_t ngp, nfp; char narrow; const char *name; char family; } vsniff;
+
+/* The formatter family of a native function without an SDK format attribute ('c' CoreUtils, 'p' printf,
+ * 'C' CFString), or 0 when unknown. */
+static const struct { const char *name; char family; } fmt_families[] = {
+#include "fmtfamily_gen.inc"
+};
+static char fmt_family(const char *name)
+{
+    size_t lo = 0, hi = sizeof fmt_families / sizeof *fmt_families;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        int c = strcmp(fmt_families[mid].name, name);
+        if (!c) return fmt_families[mid].family;
+        if (c < 0) lo = mid + 1; else hi = mid;
+    }
+    return 0;
+}
 static hao_gmap vs = HAO_GMAP_INIT(2, 1, 8, 24);   /* native fn -> vsniff *, under vs_lock */
 static pthread_mutex_t vs_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -242,7 +258,7 @@ static pthread_mutex_t vs_lock = PTHREAD_MUTEX_INITIALIZER;
  * fkind: its family when the SDK declares it ('p', 'C', ...: a format built at run time is typed too),
  * 0 when it is only the last fixed argument by convention (typed when it is a constant in a guest image).
  * Returns whether the slots were typed (from a format, or a scanf format's pointers). */
-bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow, int fmt, char fkind)
+bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow, int fmt, char fkind, char family)
 {
     hao_cpu *c = &t->cpu;
     hao_thunk_native_args(t);           /* guest function pointers and blocks among the fixed arguments */
@@ -295,8 +311,8 @@ bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow
     for (int k = 0; k < nslots; k++) {
         char ty_k = k < nt ? ty[k] : 'i';
         uint64_t s = sp[k];
-        if (ty_k == 'a' || ty_k == 'x')                /* sign and exponent 0: a pointer, or a zero or subnormal double */
-            ty_k = s >> 52 || (!s && ty_k == 'x') ? 'd' : 'i';
+        if (ty_k == 'a' || ty_k == 'x')                /* %a of an assumed family: by the function's family */
+            ty_k = family == 'c' ? 'i' : 'd';
         if (ty_k == 'd') {
             if (fi < 8) memcpy(xmm[fi++], &s, 8);
             else stk[ns++] = s;
@@ -327,7 +343,7 @@ bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow
 static void trap_varsniff(hao_thread *t, uint64_t rec)
 {
     const vsniff *v = (const vsniff *)(uintptr_t)rec;
-    hao_varsniff_call(t, v->fn, v->ngp, v->nfp, v->narrow, v->ngp - 1, 0);
+    hao_varsniff_call(t, v->fn, v->ngp, v->nfp, v->narrow, v->ngp - 1, 0, v->family);
 }
 
 /* ---- native ObjC method IMPs (objc.c trap_msgsend): the prologue verdict per IMP
@@ -442,7 +458,7 @@ bool hao_varsniff_bind(const char *name, uint64_t native, uint64_t *addr)
     if (fresh) {
         v = hao_alloc_check(malloc(sizeof *v), "native variadic functions");
         *v = (vsniff){native, (uint8_t)ngp, (uint8_t)nfp, hao_narrowret_kind_for_name(name),
-                      hao_alloc_check(strdup(name), "native variadic functions")};
+                      hao_alloc_check(strdup(name), "native variadic functions"), fmt_family(name)};
         s[1] = (uint64_t)(uintptr_t)v;
         hao_gmap_publish1(&vs, s, native);
     } else v = (vsniff *)(uintptr_t)s[1];
