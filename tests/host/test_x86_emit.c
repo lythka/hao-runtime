@@ -88,7 +88,7 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     {0x66, 0xDB, 0, 0, "pand"}, {0x66, 0xEB, 0, 0, "por"}, {0x66, 0x74, 0, 0, "pcmpeqb"}, {0x66, 0x75, 0, 0, "pcmpeqw"},
     {0x66, 0x76, 0, 0, "pcmpeqd"}, {0x66, 0x64, 0, 0, "pcmpgtb"}, {0x66, 0x65, 0, 0, "pcmpgtw"}, {0x66, 0x66, 0, 0, "pcmpgtd"},
     {0x66, 0xD8, 0, 0, "psubusb"}, {0x66, 0xD9, 0, 0, "psubusw"}, {0x66, 0xDE, 0, 0, "pmaxub"}, {0x66, 0xDA, 0, 0, "pminub"},
-    {0x66, 0xEE, 0, 0, "pmaxsw"}, {0x66, 0xEA, 0, 0, "pminsw"}, {0x66, 0xD5, 0, 0, "pmullw"}, {0x66, 0x60, 0, 0, "punpcklbw"},
+    {0x66, 0xEE, 0, 0, "pmaxsw"}, {0x66, 0xEA, 0, 0, "pminsw"}, {0x66, 0xD5, 0, 0, "pmullw"}, {0x66, 0xE5, 0, 0, "pmulhw"}, {0x66, 0xF4, 0, 0, "pmuludq"}, {0x66, 0x60, 0, 0, "punpcklbw"},
     {0x66, 0x62, 0, 0, "punpckldq"}, {0x66, 0x6F, 0, 0, "movdqa"}, {0xF3, 0x7E, 0, 0, "movq"}, {0x66, 0xF6, 0, 0, "psadbw"},
     {0x66, 0x68, 0, 0, "punpckhbw"}, {0x66, 0x69, 0, 0, "punpckhwd"}, {0x66, 0x6A, 0, 0, "punpckhdq"},
     /* vector floating point, widening, narrowing */
@@ -231,7 +231,7 @@ int main(int argc, char **argv)
             }
             /* SSSE3 / SSE4.1 / SSE4.2 (66 0F 38 xx, 66 0F 3A xx ib) */
             static const struct { uint8_t op; const char *mn; } s38[] = {
-                {0x20, "pmovsxbw"}, {0x23, "pmovsxwd"}, {0x25, "pmovsxdq"},
+                {0x28, "pmuldq"}, {0x0B, "pmulhrsw"}, {0x20, "pmovsxbw"}, {0x23, "pmovsxwd"}, {0x25, "pmovsxdq"},
                 {0x30, "pmovzxbw"}, {0x33, "pmovzxwd"}, {0x35, "pmovzxdq"},
                 {0x34, "pmovzxwq"}, {0x2B, "packusdw"}, {0x00, "pshufb"}, {0x1C, "pabsb"}, {0x1D, "pabsw"}, {0x1E, "pabsd"}, {0x29, "pcmpeqq"}, {0x37, "pcmpgtq"},
                 {0x38, "pminsb"}, {0x39, "pminsd"}, {0x3A, "pminuw"}, {0x3B, "pminud"}, {0x3C, "pmaxsb"}, {0x3D, "pmaxsd"},

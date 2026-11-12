@@ -320,7 +320,7 @@ in every engine. This exercises deterministic re-emission into the enlarged
 its control plus eight independent variants.
 
 `guest/helper-stats` checks dynamic decoder-group statistics in JIT and AOT:
-1000 each of untranslated reciprocal estimates, FABD and integer ADDP, plus
+1000 each of untranslated reciprocal estimates, FABD and integer SQADD, plus
 1000 subnormal FADD declines,
 with 1000 admitted FADDs excluded; N=0 subtracts startup calls. Without
 `--stats`, no group lines are printed.
@@ -375,3 +375,11 @@ addend sign and omits the reciprocal-square-root step's exact factor of 1/2;
 each must fail the complete-state test. The native instruction and ordinary
 coverage benchmark include all eleven forms. AOT coverage prints four
 decimal places to distinguish changes below one tenth of a percent.
+The integer-tail cases in `aot/jit_vector` cover widening add/subtract/multiply,
+accumulation, SHLL, saturating narrowing and QC, SQ(RD)MULH vector/by-element,
+REV, every SRI/SLI shift and scalar ADDP, including aliases and live NZCV.
+Scalar SIMD B/H memory checks include inaccessible pages and writeback.
+`guest/jitinsns` adds 229 native comparisons (FPSR included), and
+`guest/coverage-bench` adds 219 integer instruction loops. `aot/integer-mutations`
+also suppresses QC and selects the wrong wide operand half; each independent
+mutation must be caught after an unmodified control passes.

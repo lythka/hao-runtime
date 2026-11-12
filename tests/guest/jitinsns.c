@@ -777,8 +777,469 @@ VEC2(t_cov_sshl2d, "sshl v2.2d, v0.2d, v1.2d")
 
 #define R(n) run(#n, t_##n)
 #define RA(n) R(n##b); R(n##h); R(n##w); R(n##x)
+/* Integer tail, with FPSR.QC included in each checksum. */
+VEC2(t_tail_saddl0_0, "msr fpsr, xzr\nsaddl v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_saddl0_1, "msr fpsr, xzr\nsaddl v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_saddl0_2, "msr fpsr, xzr\nsaddl v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_saddl1_0, "msr fpsr, xzr\nsaddl2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_saddl1_1, "msr fpsr, xzr\nsaddl2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_saddl1_2, "msr fpsr, xzr\nsaddl2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_uaddl0_0, "msr fpsr, xzr\nuaddl v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_uaddl0_1, "msr fpsr, xzr\nuaddl v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_uaddl0_2, "msr fpsr, xzr\nuaddl v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_uaddl1_0, "msr fpsr, xzr\nuaddl2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_uaddl1_1, "msr fpsr, xzr\nuaddl2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_uaddl1_2, "msr fpsr, xzr\nuaddl2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_saddw0_0, "msr fpsr, xzr\nsaddw v2.8h, v0.8h, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_saddw0_1, "msr fpsr, xzr\nsaddw v2.4s, v0.4s, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_saddw0_2, "msr fpsr, xzr\nsaddw v2.2d, v0.2d, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_saddw1_0, "msr fpsr, xzr\nsaddw2 v2.8h, v0.8h, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_saddw1_1, "msr fpsr, xzr\nsaddw2 v2.4s, v0.4s, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_saddw1_2, "msr fpsr, xzr\nsaddw2 v2.2d, v0.2d, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_uaddw0_0, "msr fpsr, xzr\nuaddw v2.8h, v0.8h, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_uaddw0_1, "msr fpsr, xzr\nuaddw v2.4s, v0.4s, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_uaddw0_2, "msr fpsr, xzr\nuaddw v2.2d, v0.2d, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_uaddw1_0, "msr fpsr, xzr\nuaddw2 v2.8h, v0.8h, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_uaddw1_1, "msr fpsr, xzr\nuaddw2 v2.4s, v0.4s, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_uaddw1_2, "msr fpsr, xzr\nuaddw2 v2.2d, v0.2d, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_ssubl0_0, "msr fpsr, xzr\nssubl v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_ssubl0_1, "msr fpsr, xzr\nssubl v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_ssubl0_2, "msr fpsr, xzr\nssubl v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_ssubl1_0, "msr fpsr, xzr\nssubl2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_ssubl1_1, "msr fpsr, xzr\nssubl2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_ssubl1_2, "msr fpsr, xzr\nssubl2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_usubl0_0, "msr fpsr, xzr\nusubl v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_usubl0_1, "msr fpsr, xzr\nusubl v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_usubl0_2, "msr fpsr, xzr\nusubl v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_usubl1_0, "msr fpsr, xzr\nusubl2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_usubl1_1, "msr fpsr, xzr\nusubl2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_usubl1_2, "msr fpsr, xzr\nusubl2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_ssubw0_0, "msr fpsr, xzr\nssubw v2.8h, v0.8h, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_ssubw0_1, "msr fpsr, xzr\nssubw v2.4s, v0.4s, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_ssubw0_2, "msr fpsr, xzr\nssubw v2.2d, v0.2d, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_ssubw1_0, "msr fpsr, xzr\nssubw2 v2.8h, v0.8h, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_ssubw1_1, "msr fpsr, xzr\nssubw2 v2.4s, v0.4s, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_ssubw1_2, "msr fpsr, xzr\nssubw2 v2.2d, v0.2d, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_usubw0_0, "msr fpsr, xzr\nusubw v2.8h, v0.8h, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_usubw0_1, "msr fpsr, xzr\nusubw v2.4s, v0.4s, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_usubw0_2, "msr fpsr, xzr\nusubw v2.2d, v0.2d, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_usubw1_0, "msr fpsr, xzr\nusubw2 v2.8h, v0.8h, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_usubw1_1, "msr fpsr, xzr\nusubw2 v2.4s, v0.4s, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_usubw1_2, "msr fpsr, xzr\nusubw2 v2.2d, v0.2d, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_smull0_0, "msr fpsr, xzr\nsmull v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_smull0_1, "msr fpsr, xzr\nsmull v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_smull0_2, "msr fpsr, xzr\nsmull v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_smull1_0, "msr fpsr, xzr\nsmull2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_smull1_1, "msr fpsr, xzr\nsmull2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_smull1_2, "msr fpsr, xzr\nsmull2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_umull0_0, "msr fpsr, xzr\numull v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_umull0_1, "msr fpsr, xzr\numull v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_umull0_2, "msr fpsr, xzr\numull v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_umull1_0, "msr fpsr, xzr\numull2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_umull1_1, "msr fpsr, xzr\numull2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_umull1_2, "msr fpsr, xzr\numull2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_smlal0_0, "msr fpsr, xzr\nsmlal v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_smlal0_1, "msr fpsr, xzr\nsmlal v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_smlal0_2, "msr fpsr, xzr\nsmlal v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_smlal1_0, "msr fpsr, xzr\nsmlal2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_smlal1_1, "msr fpsr, xzr\nsmlal2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_smlal1_2, "msr fpsr, xzr\nsmlal2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_umlal0_0, "msr fpsr, xzr\numlal v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_umlal0_1, "msr fpsr, xzr\numlal v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_umlal0_2, "msr fpsr, xzr\numlal v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_umlal1_0, "msr fpsr, xzr\numlal2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_umlal1_1, "msr fpsr, xzr\numlal2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_umlal1_2, "msr fpsr, xzr\numlal2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_smlsl0_0, "msr fpsr, xzr\nsmlsl v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_smlsl0_1, "msr fpsr, xzr\nsmlsl v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_smlsl0_2, "msr fpsr, xzr\nsmlsl v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_smlsl1_0, "msr fpsr, xzr\nsmlsl2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_smlsl1_1, "msr fpsr, xzr\nsmlsl2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_smlsl1_2, "msr fpsr, xzr\nsmlsl2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_umlsl0_0, "msr fpsr, xzr\numlsl v2.8h, v0.8b, v1.8b\nmrs x2, fpsr")
+VEC2(t_tail_umlsl0_1, "msr fpsr, xzr\numlsl v2.4s, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_umlsl0_2, "msr fpsr, xzr\numlsl v2.2d, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_umlsl1_0, "msr fpsr, xzr\numlsl2 v2.8h, v0.16b, v1.16b\nmrs x2, fpsr")
+VEC2(t_tail_umlsl1_1, "msr fpsr, xzr\numlsl2 v2.4s, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_umlsl1_2, "msr fpsr, xzr\numlsl2 v2.2d, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqxtn0_0, "msr fpsr, xzr\nsqxtn v2.8b, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqxtn0_1, "msr fpsr, xzr\nsqxtn v2.4h, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqxtn0_2, "msr fpsr, xzr\nsqxtn v2.2s, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_sqxtn1_0, "msr fpsr, xzr\nsqxtn2 v2.16b, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqxtn1_1, "msr fpsr, xzr\nsqxtn2 v2.8h, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqxtn1_2, "msr fpsr, xzr\nsqxtn2 v2.4s, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_uqxtn0_0, "msr fpsr, xzr\nuqxtn v2.8b, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_uqxtn0_1, "msr fpsr, xzr\nuqxtn v2.4h, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_uqxtn0_2, "msr fpsr, xzr\nuqxtn v2.2s, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_uqxtn1_0, "msr fpsr, xzr\nuqxtn2 v2.16b, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_uqxtn1_1, "msr fpsr, xzr\nuqxtn2 v2.8h, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_uqxtn1_2, "msr fpsr, xzr\nuqxtn2 v2.4s, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_sqxtun0_0, "msr fpsr, xzr\nsqxtun v2.8b, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqxtun0_1, "msr fpsr, xzr\nsqxtun v2.4h, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqxtun0_2, "msr fpsr, xzr\nsqxtun v2.2s, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_sqxtun1_0, "msr fpsr, xzr\nsqxtun2 v2.16b, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqxtun1_1, "msr fpsr, xzr\nsqxtun2 v2.8h, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqxtun1_2, "msr fpsr, xzr\nsqxtun2 v2.4s, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_shll0_0, "msr fpsr, xzr\nshll v2.8h, v0.8b, #8\nmrs x2, fpsr")
+VEC2(t_tail_shll0_1, "msr fpsr, xzr\nshll v2.4s, v0.4h, #16\nmrs x2, fpsr")
+VEC2(t_tail_shll0_2, "msr fpsr, xzr\nshll v2.2d, v0.2s, #32\nmrs x2, fpsr")
+VEC2(t_tail_shll1_0, "msr fpsr, xzr\nshll2 v2.8h, v0.16b, #8\nmrs x2, fpsr")
+VEC2(t_tail_shll1_1, "msr fpsr, xzr\nshll2 v2.4s, v0.8h, #16\nmrs x2, fpsr")
+VEC2(t_tail_shll1_2, "msr fpsr, xzr\nshll2 v2.2d, v0.4s, #32\nmrs x2, fpsr")
+VEC2(t_tail_sri0_0_1, "msr fpsr, xzr\nsri v2.8b, v0.8b, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri0_0_4, "msr fpsr, xzr\nsri v2.8b, v0.8b, #4\nmrs x2, fpsr")
+VEC2(t_tail_sri0_0_8, "msr fpsr, xzr\nsri v2.8b, v0.8b, #8\nmrs x2, fpsr")
+VEC2(t_tail_sli0_0_0, "msr fpsr, xzr\nsli v2.8b, v0.8b, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli0_0_4, "msr fpsr, xzr\nsli v2.8b, v0.8b, #4\nmrs x2, fpsr")
+VEC2(t_tail_sli0_0_7, "msr fpsr, xzr\nsli v2.8b, v0.8b, #7\nmrs x2, fpsr")
+VEC2(t_tail_rev160_0, "msr fpsr, xzr\nrev16 v2.8b, v0.8b\nmrs x2, fpsr")
+VEC2(t_tail_rev320_0, "msr fpsr, xzr\nrev32 v2.8b, v0.8b\nmrs x2, fpsr")
+VEC2(t_tail_rev640_0, "msr fpsr, xzr\nrev64 v2.8b, v0.8b\nmrs x2, fpsr")
+VEC2(t_tail_sri0_1_1, "msr fpsr, xzr\nsri v2.4h, v0.4h, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri0_1_8, "msr fpsr, xzr\nsri v2.4h, v0.4h, #8\nmrs x2, fpsr")
+VEC2(t_tail_sri0_1_16, "msr fpsr, xzr\nsri v2.4h, v0.4h, #16\nmrs x2, fpsr")
+VEC2(t_tail_sli0_1_0, "msr fpsr, xzr\nsli v2.4h, v0.4h, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli0_1_8, "msr fpsr, xzr\nsli v2.4h, v0.4h, #8\nmrs x2, fpsr")
+VEC2(t_tail_sli0_1_15, "msr fpsr, xzr\nsli v2.4h, v0.4h, #15\nmrs x2, fpsr")
+VEC2(t_tail_rev320_1, "msr fpsr, xzr\nrev32 v2.4h, v0.4h\nmrs x2, fpsr")
+VEC2(t_tail_rev640_1, "msr fpsr, xzr\nrev64 v2.4h, v0.4h\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_0, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_1, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_2, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_3, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[3]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_4, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[4]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_5, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[5]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_6, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[6]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_1_7, "msr fpsr, xzr\nsqdmulh v2.4h, v0.4h, v1.h[7]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.4h\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_0, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_1, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_2, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_3, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[3]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_4, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[4]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_5, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[5]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_6, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[6]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_1_7, "msr fpsr, xzr\nsqrdmulh v2.4h, v0.4h, v1.h[7]\nmrs x2, fpsr")
+VEC2(t_tail_sri0_2_1, "msr fpsr, xzr\nsri v2.2s, v0.2s, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri0_2_16, "msr fpsr, xzr\nsri v2.2s, v0.2s, #16\nmrs x2, fpsr")
+VEC2(t_tail_sri0_2_32, "msr fpsr, xzr\nsri v2.2s, v0.2s, #32\nmrs x2, fpsr")
+VEC2(t_tail_sli0_2_0, "msr fpsr, xzr\nsli v2.2s, v0.2s, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli0_2_16, "msr fpsr, xzr\nsli v2.2s, v0.2s, #16\nmrs x2, fpsr")
+VEC2(t_tail_sli0_2_31, "msr fpsr, xzr\nsli v2.2s, v0.2s, #31\nmrs x2, fpsr")
+VEC2(t_tail_rev640_2, "msr fpsr, xzr\nrev64 v2.2s, v0.2s\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_2, "msr fpsr, xzr\nsqdmulh v2.2s, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_2_0, "msr fpsr, xzr\nsqdmulh v2.2s, v0.2s, v1.s[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_2_1, "msr fpsr, xzr\nsqdmulh v2.2s, v0.2s, v1.s[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_2_2, "msr fpsr, xzr\nsqdmulh v2.2s, v0.2s, v1.s[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh0_2_3, "msr fpsr, xzr\nsqdmulh v2.2s, v0.2s, v1.s[3]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_2, "msr fpsr, xzr\nsqrdmulh v2.2s, v0.2s, v1.2s\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_2_0, "msr fpsr, xzr\nsqrdmulh v2.2s, v0.2s, v1.s[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_2_1, "msr fpsr, xzr\nsqrdmulh v2.2s, v0.2s, v1.s[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_2_2, "msr fpsr, xzr\nsqrdmulh v2.2s, v0.2s, v1.s[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh0_2_3, "msr fpsr, xzr\nsqrdmulh v2.2s, v0.2s, v1.s[3]\nmrs x2, fpsr")
+VEC2(t_tail_sri1_0_1, "msr fpsr, xzr\nsri v2.16b, v0.16b, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri1_0_4, "msr fpsr, xzr\nsri v2.16b, v0.16b, #4\nmrs x2, fpsr")
+VEC2(t_tail_sri1_0_8, "msr fpsr, xzr\nsri v2.16b, v0.16b, #8\nmrs x2, fpsr")
+VEC2(t_tail_sli1_0_0, "msr fpsr, xzr\nsli v2.16b, v0.16b, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli1_0_4, "msr fpsr, xzr\nsli v2.16b, v0.16b, #4\nmrs x2, fpsr")
+VEC2(t_tail_sli1_0_7, "msr fpsr, xzr\nsli v2.16b, v0.16b, #7\nmrs x2, fpsr")
+VEC2(t_tail_rev161_0, "msr fpsr, xzr\nrev16 v2.16b, v0.16b\nmrs x2, fpsr")
+VEC2(t_tail_rev321_0, "msr fpsr, xzr\nrev32 v2.16b, v0.16b\nmrs x2, fpsr")
+VEC2(t_tail_rev641_0, "msr fpsr, xzr\nrev64 v2.16b, v0.16b\nmrs x2, fpsr")
+VEC2(t_tail_sri1_1_1, "msr fpsr, xzr\nsri v2.8h, v0.8h, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri1_1_8, "msr fpsr, xzr\nsri v2.8h, v0.8h, #8\nmrs x2, fpsr")
+VEC2(t_tail_sri1_1_16, "msr fpsr, xzr\nsri v2.8h, v0.8h, #16\nmrs x2, fpsr")
+VEC2(t_tail_sli1_1_0, "msr fpsr, xzr\nsli v2.8h, v0.8h, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli1_1_8, "msr fpsr, xzr\nsli v2.8h, v0.8h, #8\nmrs x2, fpsr")
+VEC2(t_tail_sli1_1_15, "msr fpsr, xzr\nsli v2.8h, v0.8h, #15\nmrs x2, fpsr")
+VEC2(t_tail_rev321_1, "msr fpsr, xzr\nrev32 v2.8h, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_rev641_1, "msr fpsr, xzr\nrev64 v2.8h, v0.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_0, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_1, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_2, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_3, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[3]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_4, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[4]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_5, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[5]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_6, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[6]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_1_7, "msr fpsr, xzr\nsqdmulh v2.8h, v0.8h, v1.h[7]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.8h\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_0, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_1, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_2, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_3, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[3]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_4, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[4]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_5, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[5]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_6, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[6]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_1_7, "msr fpsr, xzr\nsqrdmulh v2.8h, v0.8h, v1.h[7]\nmrs x2, fpsr")
+VEC2(t_tail_sri1_2_1, "msr fpsr, xzr\nsri v2.4s, v0.4s, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri1_2_16, "msr fpsr, xzr\nsri v2.4s, v0.4s, #16\nmrs x2, fpsr")
+VEC2(t_tail_sri1_2_32, "msr fpsr, xzr\nsri v2.4s, v0.4s, #32\nmrs x2, fpsr")
+VEC2(t_tail_sli1_2_0, "msr fpsr, xzr\nsli v2.4s, v0.4s, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli1_2_16, "msr fpsr, xzr\nsli v2.4s, v0.4s, #16\nmrs x2, fpsr")
+VEC2(t_tail_sli1_2_31, "msr fpsr, xzr\nsli v2.4s, v0.4s, #31\nmrs x2, fpsr")
+VEC2(t_tail_rev641_2, "msr fpsr, xzr\nrev64 v2.4s, v0.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_2, "msr fpsr, xzr\nsqdmulh v2.4s, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_2_0, "msr fpsr, xzr\nsqdmulh v2.4s, v0.4s, v1.s[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_2_1, "msr fpsr, xzr\nsqdmulh v2.4s, v0.4s, v1.s[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_2_2, "msr fpsr, xzr\nsqdmulh v2.4s, v0.4s, v1.s[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqdmulh1_2_3, "msr fpsr, xzr\nsqdmulh v2.4s, v0.4s, v1.s[3]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_2, "msr fpsr, xzr\nsqrdmulh v2.4s, v0.4s, v1.4s\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_2_0, "msr fpsr, xzr\nsqrdmulh v2.4s, v0.4s, v1.s[0]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_2_1, "msr fpsr, xzr\nsqrdmulh v2.4s, v0.4s, v1.s[1]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_2_2, "msr fpsr, xzr\nsqrdmulh v2.4s, v0.4s, v1.s[2]\nmrs x2, fpsr")
+VEC2(t_tail_sqrdmulh1_2_3, "msr fpsr, xzr\nsqrdmulh v2.4s, v0.4s, v1.s[3]\nmrs x2, fpsr")
+VEC2(t_tail_sri1_3_1, "msr fpsr, xzr\nsri v2.2d, v0.2d, #1\nmrs x2, fpsr")
+VEC2(t_tail_sri1_3_32, "msr fpsr, xzr\nsri v2.2d, v0.2d, #32\nmrs x2, fpsr")
+VEC2(t_tail_sri1_3_64, "msr fpsr, xzr\nsri v2.2d, v0.2d, #64\nmrs x2, fpsr")
+VEC2(t_tail_sli1_3_0, "msr fpsr, xzr\nsli v2.2d, v0.2d, #0\nmrs x2, fpsr")
+VEC2(t_tail_sli1_3_32, "msr fpsr, xzr\nsli v2.2d, v0.2d, #32\nmrs x2, fpsr")
+VEC2(t_tail_sli1_3_63, "msr fpsr, xzr\nsli v2.2d, v0.2d, #63\nmrs x2, fpsr")
+VEC2(t_tail_addpd, "msr fpsr, xzr\naddp d2, v0.2d\nmrs x2, fpsr")
+VEC2(t_tail_ldrb_imm, "msr fpsr, xzr\nldr b2, [x4, #2]\nmrs x2, fpsr")
+VEC2(t_tail_ldrb_post, "msr fpsr, xzr\nldr b2, [x4], #2\nmrs x2, fpsr")
+VEC2(t_tail_ldrb_pre, "msr fpsr, xzr\nldr b2, [x4, #2]!\nmrs x2, fpsr")
+VEC2(t_tail_ldrb_reg, "msr fpsr, xzr\nldr b2, [x4, x2]\nmrs x2, fpsr")
+VEC2(t_tail_strb, "msr fpsr, xzr\nstr b0, [x4, #32]\nldr q2, [x4, #32]\nmrs x2, fpsr")
+VEC2(t_tail_ldrh_imm, "msr fpsr, xzr\nldr h2, [x4, #2]\nmrs x2, fpsr")
+VEC2(t_tail_ldrh_post, "msr fpsr, xzr\nldr h2, [x4], #2\nmrs x2, fpsr")
+VEC2(t_tail_ldrh_pre, "msr fpsr, xzr\nldr h2, [x4, #2]!\nmrs x2, fpsr")
+VEC2(t_tail_ldrh_reg, "msr fpsr, xzr\nldr h2, [x4, x2]\nmrs x2, fpsr")
+VEC2(t_tail_strh, "msr fpsr, xzr\nstr h0, [x4, #32]\nldr q2, [x4, #32]\nmrs x2, fpsr")
+
 int main(void)
 {
+    R(tail_saddl0_0);
+    R(tail_saddl0_1);
+    R(tail_saddl0_2);
+    R(tail_saddl1_0);
+    R(tail_saddl1_1);
+    R(tail_saddl1_2);
+    R(tail_uaddl0_0);
+    R(tail_uaddl0_1);
+    R(tail_uaddl0_2);
+    R(tail_uaddl1_0);
+    R(tail_uaddl1_1);
+    R(tail_uaddl1_2);
+    R(tail_saddw0_0);
+    R(tail_saddw0_1);
+    R(tail_saddw0_2);
+    R(tail_saddw1_0);
+    R(tail_saddw1_1);
+    R(tail_saddw1_2);
+    R(tail_uaddw0_0);
+    R(tail_uaddw0_1);
+    R(tail_uaddw0_2);
+    R(tail_uaddw1_0);
+    R(tail_uaddw1_1);
+    R(tail_uaddw1_2);
+    R(tail_ssubl0_0);
+    R(tail_ssubl0_1);
+    R(tail_ssubl0_2);
+    R(tail_ssubl1_0);
+    R(tail_ssubl1_1);
+    R(tail_ssubl1_2);
+    R(tail_usubl0_0);
+    R(tail_usubl0_1);
+    R(tail_usubl0_2);
+    R(tail_usubl1_0);
+    R(tail_usubl1_1);
+    R(tail_usubl1_2);
+    R(tail_ssubw0_0);
+    R(tail_ssubw0_1);
+    R(tail_ssubw0_2);
+    R(tail_ssubw1_0);
+    R(tail_ssubw1_1);
+    R(tail_ssubw1_2);
+    R(tail_usubw0_0);
+    R(tail_usubw0_1);
+    R(tail_usubw0_2);
+    R(tail_usubw1_0);
+    R(tail_usubw1_1);
+    R(tail_usubw1_2);
+    R(tail_smull0_0);
+    R(tail_smull0_1);
+    R(tail_smull0_2);
+    R(tail_smull1_0);
+    R(tail_smull1_1);
+    R(tail_smull1_2);
+    R(tail_umull0_0);
+    R(tail_umull0_1);
+    R(tail_umull0_2);
+    R(tail_umull1_0);
+    R(tail_umull1_1);
+    R(tail_umull1_2);
+    R(tail_smlal0_0);
+    R(tail_smlal0_1);
+    R(tail_smlal0_2);
+    R(tail_smlal1_0);
+    R(tail_smlal1_1);
+    R(tail_smlal1_2);
+    R(tail_umlal0_0);
+    R(tail_umlal0_1);
+    R(tail_umlal0_2);
+    R(tail_umlal1_0);
+    R(tail_umlal1_1);
+    R(tail_umlal1_2);
+    R(tail_smlsl0_0);
+    R(tail_smlsl0_1);
+    R(tail_smlsl0_2);
+    R(tail_smlsl1_0);
+    R(tail_smlsl1_1);
+    R(tail_smlsl1_2);
+    R(tail_umlsl0_0);
+    R(tail_umlsl0_1);
+    R(tail_umlsl0_2);
+    R(tail_umlsl1_0);
+    R(tail_umlsl1_1);
+    R(tail_umlsl1_2);
+    R(tail_sqxtn0_0);
+    R(tail_sqxtn0_1);
+    R(tail_sqxtn0_2);
+    R(tail_sqxtn1_0);
+    R(tail_sqxtn1_1);
+    R(tail_sqxtn1_2);
+    R(tail_uqxtn0_0);
+    R(tail_uqxtn0_1);
+    R(tail_uqxtn0_2);
+    R(tail_uqxtn1_0);
+    R(tail_uqxtn1_1);
+    R(tail_uqxtn1_2);
+    R(tail_sqxtun0_0);
+    R(tail_sqxtun0_1);
+    R(tail_sqxtun0_2);
+    R(tail_sqxtun1_0);
+    R(tail_sqxtun1_1);
+    R(tail_sqxtun1_2);
+    R(tail_shll0_0);
+    R(tail_shll0_1);
+    R(tail_shll0_2);
+    R(tail_shll1_0);
+    R(tail_shll1_1);
+    R(tail_shll1_2);
+    R(tail_sri0_0_1);
+    R(tail_sri0_0_4);
+    R(tail_sri0_0_8);
+    R(tail_sli0_0_0);
+    R(tail_sli0_0_4);
+    R(tail_sli0_0_7);
+    R(tail_rev160_0);
+    R(tail_rev320_0);
+    R(tail_rev640_0);
+    R(tail_sri0_1_1);
+    R(tail_sri0_1_8);
+    R(tail_sri0_1_16);
+    R(tail_sli0_1_0);
+    R(tail_sli0_1_8);
+    R(tail_sli0_1_15);
+    R(tail_rev320_1);
+    R(tail_rev640_1);
+    R(tail_sqdmulh0_1);
+    R(tail_sqdmulh0_1_0);
+    R(tail_sqdmulh0_1_1);
+    R(tail_sqdmulh0_1_2);
+    R(tail_sqdmulh0_1_3);
+    R(tail_sqdmulh0_1_4);
+    R(tail_sqdmulh0_1_5);
+    R(tail_sqdmulh0_1_6);
+    R(tail_sqdmulh0_1_7);
+    R(tail_sqrdmulh0_1);
+    R(tail_sqrdmulh0_1_0);
+    R(tail_sqrdmulh0_1_1);
+    R(tail_sqrdmulh0_1_2);
+    R(tail_sqrdmulh0_1_3);
+    R(tail_sqrdmulh0_1_4);
+    R(tail_sqrdmulh0_1_5);
+    R(tail_sqrdmulh0_1_6);
+    R(tail_sqrdmulh0_1_7);
+    R(tail_sri0_2_1);
+    R(tail_sri0_2_16);
+    R(tail_sri0_2_32);
+    R(tail_sli0_2_0);
+    R(tail_sli0_2_16);
+    R(tail_sli0_2_31);
+    R(tail_rev640_2);
+    R(tail_sqdmulh0_2);
+    R(tail_sqdmulh0_2_0);
+    R(tail_sqdmulh0_2_1);
+    R(tail_sqdmulh0_2_2);
+    R(tail_sqdmulh0_2_3);
+    R(tail_sqrdmulh0_2);
+    R(tail_sqrdmulh0_2_0);
+    R(tail_sqrdmulh0_2_1);
+    R(tail_sqrdmulh0_2_2);
+    R(tail_sqrdmulh0_2_3);
+    R(tail_sri1_0_1);
+    R(tail_sri1_0_4);
+    R(tail_sri1_0_8);
+    R(tail_sli1_0_0);
+    R(tail_sli1_0_4);
+    R(tail_sli1_0_7);
+    R(tail_rev161_0);
+    R(tail_rev321_0);
+    R(tail_rev641_0);
+    R(tail_sri1_1_1);
+    R(tail_sri1_1_8);
+    R(tail_sri1_1_16);
+    R(tail_sli1_1_0);
+    R(tail_sli1_1_8);
+    R(tail_sli1_1_15);
+    R(tail_rev321_1);
+    R(tail_rev641_1);
+    R(tail_sqdmulh1_1);
+    R(tail_sqdmulh1_1_0);
+    R(tail_sqdmulh1_1_1);
+    R(tail_sqdmulh1_1_2);
+    R(tail_sqdmulh1_1_3);
+    R(tail_sqdmulh1_1_4);
+    R(tail_sqdmulh1_1_5);
+    R(tail_sqdmulh1_1_6);
+    R(tail_sqdmulh1_1_7);
+    R(tail_sqrdmulh1_1);
+    R(tail_sqrdmulh1_1_0);
+    R(tail_sqrdmulh1_1_1);
+    R(tail_sqrdmulh1_1_2);
+    R(tail_sqrdmulh1_1_3);
+    R(tail_sqrdmulh1_1_4);
+    R(tail_sqrdmulh1_1_5);
+    R(tail_sqrdmulh1_1_6);
+    R(tail_sqrdmulh1_1_7);
+    R(tail_sri1_2_1);
+    R(tail_sri1_2_16);
+    R(tail_sri1_2_32);
+    R(tail_sli1_2_0);
+    R(tail_sli1_2_16);
+    R(tail_sli1_2_31);
+    R(tail_rev641_2);
+    R(tail_sqdmulh1_2);
+    R(tail_sqdmulh1_2_0);
+    R(tail_sqdmulh1_2_1);
+    R(tail_sqdmulh1_2_2);
+    R(tail_sqdmulh1_2_3);
+    R(tail_sqrdmulh1_2);
+    R(tail_sqrdmulh1_2_0);
+    R(tail_sqrdmulh1_2_1);
+    R(tail_sqrdmulh1_2_2);
+    R(tail_sqrdmulh1_2_3);
+    R(tail_sri1_3_1);
+    R(tail_sri1_3_32);
+    R(tail_sri1_3_64);
+    R(tail_sli1_3_0);
+    R(tail_sli1_3_32);
+    R(tail_sli1_3_63);
+    R(tail_addpd);
+    R(tail_ldrb_imm);
+    R(tail_ldrb_post);
+    R(tail_ldrb_pre);
+    R(tail_ldrb_reg);
+    R(tail_strb);
+    R(tail_ldrh_imm);
+    R(tail_ldrh_post);
+    R(tail_ldrh_pre);
+    R(tail_ldrh_reg);
+    R(tail_strh);
+
     R(cov_zip18b);
     R(cov_zip116b);
     R(cov_zip14h);
