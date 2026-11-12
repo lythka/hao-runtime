@@ -139,6 +139,36 @@ produce respectively zero and 3,010 state mismatches. `make test` passes,
 including the full all-mode oracle with zero mismatches. Performance on Intel
 and application acceptance remain separate measurements.
 
+## Scalar indexed floating-point multiplication in translated code
+
+Scalar FMUL S/D and FMLA/FMLS S by element previously always called the
+interpreter. FMUL now admits zero/normal operands by integer masks, performs
+MULSS/MULSD under the guest MXCSR, and commits only a finite result outside
+the zero/subnormal/minimum-normal exponent region. Other results restore
+the pre-attempt MXCSR before calling the original descriptor helper. Exact
+zero results currently take that conservative decline as well.
+
+Single fused forms share the vector FP32 exact-double product, TwoSum and
+round-to-odd expansion, with admission and result checks limited to the
+one active lane. Indexed source loading follows H:L for S and H for D;
+Vm uses all five register bits, and the reserved D/L=1 encoding retains its
+helper. Upper 96/64 result bits are cleared, aliases read original values,
+and unused NaN lanes do not affect scalar admission. Double fused, half
+precision and FMULX indexed forms remain helpers. No new CPU feature,
+EFLAGS write, absolute address, TLS or allocation is used.
+
+The vector test adds 43,008 complete-state cases spanning all indices,
+high Vm, aliases, all 16 RMode/FZ/DN settings, full FPSR, random/special
+values and directed fused midpoint/underflow/overflow cases. Ordinary
+scalar operations with signaling NaNs in inactive lanes explicitly assert
+zero helper calls. The combined 607,814-case test passes with zero
+mismatches, and native instruction comparison agrees for JIT, interpreter,
+helpers-only and AOT (529 output lines). `make test` passes, including the
+all-mode 200,000-record oracle and 39,787 encoder cases. The shared FP32
+round-to-odd, negation and vector-index mutations are caught with a passing
+unmodified control. Intel performance acceptance remains separate from
+this correctness scope.
+
 
 ## Per-lane register shifts in translated code
 

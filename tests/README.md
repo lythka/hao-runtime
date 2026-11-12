@@ -353,3 +353,9 @@ Vector division cases cover .2S/.4S, aliases, full FPSR, all 16 FPCR controls
 and directed exact/subnormal results. The FP coverage mutation script also
 suppresses FDIV result admission; a directed exact tiny result asserts the
 required helper route even if its architectural bits happen to agree.
+
+The vector differential and native instruction tests also cover indexed
+scalar FMUL S/D and FMLA/FMLS S, every index, high source register numbers,
+aliases, upper clearing, FP special values and directed fused rounding.
+The full-state cases use all 16 RMode/FZ/DN settings and full FPSR;
+ordinary inputs with inactive signaling NaNs must remain inline.

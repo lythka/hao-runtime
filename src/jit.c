@@ -2574,8 +2574,12 @@ static void vfp_fma_odd(tctx *t, int a, int b, int c, int s, int e)
  * hold the upper input pair while xmm0/1/8 compute the lower one. */
 static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
 {
-    vld(t, 0, rn); vld(t, 1, rm); vld(t, 8, rd);
-    if (idx >= 0) x_sse_rri(&t->b, 0x66, 0x70, 1, 1, (uint8_t)(0x55 * idx));
+    bool scalar = BIT(insn, 28);
+    if (scalar) {
+        x_movd_ld(&t->b, 0, VR(rn)); x_movd_ld(&t->b, 1, velem(rm, 4, idx));
+        x_movd_ld(&t->b, 8, VR(rd));
+    } else { vld(t, 0, rn); vld(t, 1, rm); vld(t, 8, rd); }
+    if (!scalar && idx >= 0) x_sse_rri(&t->b, 0x66, 0x70, 1, 1, (uint8_t)(0x55 * idx));
     if (!Q) {
         x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
         x_sse_rr(&t->b, 0xF3, 0x7E, 0, 1, 1);
@@ -2627,9 +2631,16 @@ static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, 
      * .2S checks only the active pair and cvtpd2ps clears the upper half. */
     vones(t, 2); x_sse_shift_ri(&t->b, 0x72, 2, 2, 25); x_sse_shift_ri(&t->b, 0x72, 6, 2, 24);
     P(0xDB, 2, 9); P(0x76, 2, 5);
-    if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 2, 2);
+    if (scalar) {
+        x_sse_rr(&t->b, 0x66, 0x7E, 0, 2, RAX);
+        x_sse_rr(&t->b, 0x66, 0x6E, 0, 2, RAX);                 /* only the scalar result is active */
+    } else if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 2, 2);
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 2);
     size_t restore = jrcxnz32(t);
+    if (scalar) {
+        x_sse_rr(&t->b, 0x66, 0x7E, 0, 9, RAX);
+        x_sse_rr(&t->b, 0x66, 0x6E, 0, 9, RAX);                 /* clear all 96 upper bits */
+    }
     vst(t, rd, 9, Q);
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, restore, xb_len(&t->b));
@@ -3301,6 +3312,56 @@ static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
     return false;
 }
 
+/* Scalar FMUL by element, S and D. Admit ordinary operands on integer
+ * bits before SSE; reject tiny, minimum-normal or nonfinite results and
+ * restore MXCSR before the unchanged descriptor helper. Conservative zero
+ * declines keep the result check shared with underflow cases. */
+static void t_scalar_indexed_mul(tctx *t, uint32_t i, uint64_t pc, int dbl, int idx)
+{
+    unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    fp_load(t, 0, rn, dbl);
+    if (dbl) x_movq_ld(&t->b, 1, velem(rm, 8, idx));
+    else x_movd_ld(&t->b, 1, velem(rm, 4, idx));
+    if (dbl) vfp_constants64(t); else vfp_constants(t);
+    vzero(t, 4);
+    if (dbl) { vfp_special64(t, 0); vfp_special64(t, 1); }
+    else { vfp_special(t, 0); vfp_special(t, 1); }
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    x_sse_rr(&t->b, dbl ? 0xF2 : 0xF3, 0x59, 0, 0, 1);        /* mulsd / mulss */
+    vzero(t, 4);
+    if (dbl) vfp_special64(t, 0); else vfp_special(t, 0);
+    vconst(t, 3, dbl ? 0x7fe0000000000000ull : 0x7f000000ull, false);
+    P(0xDB, 3, 0);
+    if (dbl) P38(0x29, 3, 12); else P(0x76, 3, 5);
+    P(0xEB, 4, 3);
+    if (dbl) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 4, 4);
+    else {
+        x_sse_rr(&t->b, 0x66, 0x7E, 0, 4, RAX);
+        x_sse_rr(&t->b, 0x66, 0x6E, 0, 4, RAX);
+    }
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t restore = jrcxnz32(t);
+    fp_store(t, rd, 0);                                         /* scalar loads cleared inactive lanes */
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, restore, xb_len(&t->b)); x_ldmxcsr(&t->b, MXCSR_SLOT);
+    x_patch32(&t->b, decline, xb_len(&t->b));
+    helper_keep_flags(t, i, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
+}
+
+static bool t_scalar_indexed(tctx *t, uint32_t i, uint64_t pc)
+{
+    unsigned size = BITS(i, 23, 22), op = BITS(i, 15, 12);
+    if (BIT(i, 29) || (size != 2 && size != 3) || (op != 1 && op != 5 && op != 9)) return false;
+    if (size == 3 && (BIT(i, 21) || op != 9)) return false;       /* reserved L; double FMA remains a helper */
+    int idx = size == 3 ? (int)BIT(i, 11) : (int)(BIT(i, 11) << 1 | BIT(i, 21));
+    if (op == 9) t_scalar_indexed_mul(t, i, pc, size == 3, idx);
+    else t_vfp_fma(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), idx, 0, i, pc);
+    return true;
+}
+
 static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
 {
     if ((i & 0xFFBFFC00) == 0x7E30D800) {
@@ -3316,6 +3377,7 @@ static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
         x_movdqu_st(&t->b, VR(rd), 0);
         return true;
     }
+    if ((i & 0xDF000400) == 0x5F000000) return t_scalar_indexed(t, i, pc);
     if ((i & 0xDF800400) == 0x5F000400) return t_simd_shift(t, i, true);
     return false;
 }

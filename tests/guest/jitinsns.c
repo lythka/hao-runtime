@@ -440,6 +440,21 @@ VECF(t_fmaxnmv, "fmaxnmv s2, v0.4s")
 VECF(t_fminnmv, "fminnmv s2, v0.4s")
 VECF(t_fdiv2s, "fdiv v2.2s, v0.2s, v1.2s")
 VECF(t_fdiv4s, "fdiv v2.4s, v0.4s, v1.4s")
+VECF(t_cov_fmuls0, "fmul s2, s0, v17.s[0]")
+VECF(t_cov_fmuls1, "fmul s2, s0, v17.s[1]")
+VECF(t_cov_fmuls2, "fmul s2, s0, v17.s[2]")
+VECF(t_cov_fmuls3, "fmul s2, s0, v17.s[3]")
+VECF(t_cov_fmlas0, "fmla s2, s0, v17.s[0]")
+VECF(t_cov_fmlas1, "fmla s2, s0, v17.s[1]")
+VECF(t_cov_fmlas2, "fmla s2, s0, v17.s[2]")
+VECF(t_cov_fmlas3, "fmla s2, s0, v17.s[3]")
+VECF(t_cov_fmlss0, "fmls s2, s0, v17.s[0]")
+VECF(t_cov_fmlss1, "fmls s2, s0, v17.s[1]")
+VECF(t_cov_fmlss2, "fmls s2, s0, v17.s[2]")
+VECF(t_cov_fmlss3, "fmls s2, s0, v17.s[3]")
+VECF(t_cov_fmuld0, "fmul d2, d0, v17.d[0]")
+VECF(t_cov_fmuld1, "fmul d2, d0, v17.d[1]")
+
 /* round to integral: vector .4S/.2S/.2D and scalar S/D */
 #define FR(n, mn)                                                                       \
     VECF(t_##n##4s, mn " v2.4s, v0.4s") VECF(t_##n##2s, mn " v2.2s, v1.2s")             \
@@ -881,6 +896,20 @@ int main(void)
     RF(fmule0); RF(fmule1); RF(fmule2); RF(fmule3); RF(fchain); RF(fadd2d);
 #define RR(n) runr(#n, t_##n)
 #define RFR(n) RR(n##4s); RR(n##2s); RR(n##2d); RR(n##s); RR(n##d)
+    RF(cov_fmuls0);
+    RF(cov_fmuls1);
+    RF(cov_fmuls2);
+    RF(cov_fmuls3);
+    RF(cov_fmlas0);
+    RF(cov_fmlas1);
+    RF(cov_fmlas2);
+    RF(cov_fmlas3);
+    RF(cov_fmlss0);
+    RF(cov_fmlss1);
+    RF(cov_fmlss2);
+    RF(cov_fmlss3);
+    RR(cov_fmuld0);
+    RR(cov_fmuld1);
     RFR(frintn); RFR(frintm); RFR(frintp); RFR(frintz); RFR(frinta); RFR(frintx); RFR(frinti); RR(frchain);
     R(ld1a); R(ld1b); R(ld1c); R(ld1d); R(ld1e); R(ld1f); R(st1a); R(st1b); R(st1c); R(st1d); R(st1e);
     R(ld1r0); R(ld1r1); R(ld1r2); R(ld1r3); R(ld1r4); R(ld1r5);
