@@ -117,6 +117,30 @@ produce respectively zero and 3,010 state mismatches. `make test` passes,
 including the full all-mode oracle with zero mismatches. Performance on Intel
 and application acceptance remain separate measurements.
 
+
+## Per-lane register shifts in translated code
+
+USHL/SSHL .2S/.4S/.2D previously called the interpreter for each operation.
+They now split the vector into SSE lanes, extract only each shift operand's
+signed low byte, and combine left/right candidates without writing EFLAGS.
+Counts at or beyond the lane width produce zero for logical shifts and
+sign fill for signed right shifts, including -128. All lanes are staged
+before storing Vd, so source/count/destination aliases retain original
+operands; .2S clears the upper half. Byte and halfword register shifts,
+rounding and saturating forms retain helpers. No VEX, allocation, TLS or
+absolute addresses are introduced.
+
+The vector unit test checks all 256 signed-byte counts in every supported
+arrangement, random ignored count bits, aliases and live NZCV (12,288 new
+full-state cases). The combined 564,806-case test has zero mismatches.
+Native comparison agrees across JIT, interpreter, helpers-only and AOT
+(515 instruction-test output lines), and the encoder check passes 39,787
+encodings. Removing negative-count negation produces 4,618 mismatches;
+the unmodified mutation control passes. `make test` passes, including the
+all-mode 200,000-record oracle, unit, AOT and host gates. Performance acceptance on Intel
+remains separate from correctness and Rosetta observations.
+
+
 ## Inline FP16 FMLA/FMLS in translated code
 
 Vector FMLA/FMLS .4H/.8H, three-same and by element, emit an SSE2/SSE4

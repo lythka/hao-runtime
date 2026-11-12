@@ -730,6 +730,12 @@ VEC2(t_cov_uadalp2s, "uadalp v2.2s, v0.4h")
 VEC2(t_cov_uadalp4s, "uadalp v2.4s, v0.8h")
 VEC2(t_cov_uadalp1d, "uadalp v2.1d, v0.2s")
 VEC2(t_cov_uadalp2d, "uadalp v2.2d, v0.4s")
+VEC2(t_cov_ushl2s, "ushl v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_ushl4s, "ushl v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_ushl2d, "ushl v2.2d, v0.2d, v1.2d")
+VEC2(t_cov_sshl2s, "sshl v2.2s, v0.2s, v1.2s")
+VEC2(t_cov_sshl4s, "sshl v2.4s, v0.4s, v1.4s")
+VEC2(t_cov_sshl2d, "sshl v2.2d, v0.2d, v1.2d")
 
 #define R(n) run(#n, t_##n)
 #define RA(n) R(n##b); R(n##h); R(n##w); R(n##x)
@@ -806,6 +812,12 @@ int main(void)
     R(cov_uadalp4s);
     R(cov_uadalp1d);
     R(cov_uadalp2d);
+    R(cov_ushl2s);
+    R(cov_ushl4s);
+    R(cov_ushl2d);
+    R(cov_sshl2s);
+    R(cov_sshl4s);
+    R(cov_sshl2d);
     R(udiv); R(udivw); R(sdiv); R(sdivw);
     R(adc); R(adcw); R(adcs); R(adcsw); R(sbc); R(sbcw); R(sbcs); R(sbcsw); R(ngcs); R(add128);
     R(rbit); R(rbitw); R(rev16); R(rev16w); R(rev32); R(ctz);

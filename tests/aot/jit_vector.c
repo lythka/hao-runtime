@@ -280,6 +280,22 @@ int main(void)
                     }
                 }
             }
+    /* Every signed low-byte shift amount, random ignored count bits,
+     * lane widths, aliases, and NZCV liveness. Oversized shifts and the
+     * signed -128 corner must not wrap through an x86 integer shift. */
+    for (unsigned sz = 2; sz <= 3; sz++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned u = 0; u < 2; u++) for (unsigned byte = 0; byte < 256; byte++)
+            for (unsigned alias = 0; alias < 4; alias++) {
+                if (sz == 3 && !q) continue;
+                unsigned rd = reg(), rn = alias & 1 ? rd : reg(), rm = alias & 2 ? rn : reg();
+                hao_cpu in; state(&in, rn, rm);
+                in.v[rn].d[0] = rnd(); in.v[rn].d[1] = rnd();
+                in.v[rm].d[0] = rnd(); in.v[rm].d[1] = rnd();
+                for (unsigned b = 0; b < (q ? 16u : 8u); b += 1u << sz)
+                    in.v[rm].b[b] = (uint8_t)(byte + b * 7);
+                uint32_t i = 0x0e204400 | q << 30 | u << 29 | sz << 22 | rm << 16 | rn << 5 | rd;
+                check(i, 0, &in, false); check(i, 0, &in, true);
+            }
     /* Every fused form, lane index, high Vm, alias pattern and FPCR setting.
      * Directed near-ties detect removing the odd step; random bits alone
      * almost never land close enough to a binary32 midpoint. */
