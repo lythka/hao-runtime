@@ -1578,7 +1578,7 @@ an Intel CPU.
 | `fmadd s` (helper) | 44.3 | 36.9 | 43.3 | 37.9 |
 | `fdiv v.4s` (helper) | 88.3 | 85.1 | 84.2 | 81.1 |
 
-`tests/guest/fpscalar.sh` runs 147 instruction forms (the ones above, every
+`tests/guest/fpscalar.sh` runs 158 instruction forms (the ones above, every
 FCVT* rounding mode, fixed point, every FRINT*, compares, max/min, pairwise
 and NaN-selection cases, half-precision controls) over corner values, all
 pairs of them for two-operand forms, and random values, under each rounding
@@ -1592,12 +1592,9 @@ Remaining limitations:
   compares with zero and packed max/min still go through the helper; its
   dispatch is then most of their cost. (`FRINT*` is now inline: see "Table
   lookups, EXT, integer multiplies and round-to-integral" above.)
-- Inline SSE arithmetic that predates this change (FADD, FSUB, FMUL, FDIV,
-  FSQRT, FCVT single<->double, FCMP) differs from A64 in FPSR under FZ: a
-  flushed denormal operand does not raise IDC, and a result flushed to zero
-  raises IXC together with UFC where A64 raises UFC alone. Values agree. The
-  interpreter (`--interp`) is exact. `tests/guest/fpscalar.c` runs those
-  instructions with FZ clear.
+- Scalar arithmetic now checks operands before inline SSE execution. Cases
+  that could lose IDC or add IXC under FZ use the exact helper; the full
+  RMode/FZ/DN matrix is compared with native execution.
 - FPCR.AH, FIZ and NEP are not modelled; the test leaves them clear.
 - The packed tests for denormal lanes also send a lane equal to the minimum
   normal number to the helper (exact, slower).
@@ -2118,8 +2115,7 @@ native comparison covers all 44 arrangements, both distinct and aliased
 shift operands, all 256 low-byte counts, eleven boundary patterns and clear
 or preset FPSR (495,616 executions per engine). JIT, interpreter, helper-only
 and AOT outputs agree with native arm64. The translated engines were run
-under Rosetta; Intel execution and performance are not measured. Other
-unimplemented SIMD forms and JIT IEEE-flag differences remain separate gaps.
+under Rosetta; Intel execution and performance are not measured.
 
 Validation also passes `make check`, including `make test`, the sanitizer
 oracle and the guest/host manifest (92 passes, one expected failure and
@@ -2147,13 +2143,11 @@ both engines. Its full gate includes a targeted sweep of 1,024 candidate
 encodings per exception and fails if any entry records zero tolerated outcomes.
 This removes 20 previously stale unimplemented entries and one stale leniency
 entry, alongside newly implemented forms. A broad FCMEQ mask had also matched
-unrelated scalar FP instructions; it is replaced by the precise BFCVT gap that
-the sweep exposed. Reserved-encoding execution behavior is otherwise unchanged.
+unrelated scalar FP instructions, including BFCVT, which now has its own
+execution path. Reserved-encoding execution behavior is otherwise unchanged.
 
 The translated engines run under Rosetta; Intel behavior is not measured.
-FZ16/AHP and alternate FP controls are outside this comparison. Remaining
-unimplemented instructions retain explicit exceptions; JIT IEEE-flag differences
-remain separately reported until their inline paths are corrected.
+FZ16/AHP and alternate FP controls are outside this comparison.
 ## Saturating widening and rounding multiply-accumulate
 
 The interpreter lacked execution cases for SQDMLAL/SQDMLSL/SQDMULL and
@@ -2169,8 +2163,7 @@ counts fall from 4,036 to 2,362 with zero value or QC mismatches. A directed
 native comparison covers 222 forms and operand layouts, fourteen boundary
 patterns in each source and clear/preset FPSR (87,024 executions per engine).
 JIT, interpreter, helper-only and AOT outputs agree. Translated execution was
-under Rosetta; Intel execution and performance remain unmeasured. Other missing
-instruction groups and pre-existing JIT IEEE-flag differences remain separate.
+under Rosetta; Intel execution and performance remain unmeasured.
 ## Complex floating-point instructions
 
 FCADD and FCMLA had no interpreter execution path. Vector H/S/D FCADD and
@@ -2220,5 +2213,69 @@ established by these comparisons.
 
 On the same saved 200,000-record SIMD oracle corpus, these groups reduce
 known-unimplemented records from 4,036 to 3,236, with zero value/QC
-mismatches and zero interpreter IEEE-flag differences. Other decoder groups
-remain independently unimplemented on this branch.
+mismatches and zero interpreter IEEE-flag differences.
+
+
+## Exact scalar JIT exception flags
+
+Scalar SSE arithmetic under FZ can omit IDC for flushed inputs and add IXC
+when A64 reports only UFC for a flushed result. Integer operand checks now
+route denormals and potentially tiny arithmetic to the shared helper before
+SSE changes any exception flag. Normal arithmetic remains inline: add/sub
+exclude the low exponent range where cancellation can become tiny; mul/div
+admit a bounded exponent interval, zeros and nonfinite operands; sqrt,
+comparisons and widening reject subnormal inputs. Narrowing checks the
+single-precision normal boundary. The checks do not depend on cached FPCR
+controls, because native callees can change the shared MXCSR environment.
+
+The saved 200,000-record block corpus has 4,833 JIT flag differences without
+these checks: 4,776 missing IDC only, 55 extra IXC only and two with both.
+All 15 differences in the saved SIMD corpus are missing IDC. Both corpora
+now have zero interpreter or JIT value, QC or IEEE-flag differences. The
+158-form scalar comparison includes every touched S/D form, zero comparisons,
+admission boundaries, all sixteen RMode/FZ/DN settings and sticky flags;
+JIT, interpreter, forced helpers and AOT match native arm64. The oracle now
+fails on any IEEE-flag difference in every mode.
+
+With all interpreter groups combined, the same SIMD corpus's 4,036
+known-unimplemented records become zero; every one of its 34,309 native-ran
+records matches in both engines. All 111,051 native-ran records in the
+148,480-record targeted corpus also match, with zero flag differences. The
+known-unimplemented table is empty. Nine reserved-encoding exceptions remain;
+reserved execution behavior is outside this change. A deliberately stale
+implemented-instruction exception makes the full exception audit fail.
+
+Rosetta timings below are ns per instruction, minimum of seven interleaved
+runs of one million eight-instruction loop iterations, with the same
+interpreter on both sides. Native arm64 is a
+control, not an Intel performance prediction. Loops retain the instruction's
+dependency chain, so repeated multiply/divide can reach zero or infinity.
+
+| Form | Before | After | Native ARM |
+|---|---:|---:|---:|
+| fadd s | 3.54 | 3.50 | 0.55 |
+| fadd d | 3.54 | 3.54 | 0.56 |
+| fsub s | 3.51 | 3.60 | 0.56 |
+| fsub d | 3.52 | 3.62 | 0.56 |
+| fmul s | 3.50 | 3.56 | 0.83 |
+| fmul d | 3.48 | 3.57 | 0.81 |
+| fdiv s | 4.25 | 4.36 | 2.12 |
+| fdiv d | 4.78 | 4.86 | 2.63 |
+| fsqrt s | 6.24 | 6.30 | 2.62 |
+| fsqrt d | 6.94 | 6.95 | 3.36 |
+| fcvt ds | 6.76 | 6.76 | 0.80 |
+| fcvt sd | 32.60 | 33.00 | 0.80 |
+| fcmp s | 0.93 | 1.13 | 0.13 |
+| fcmp d | 0.87 | 1.16 | 0.13 |
+| fcmp s0 | 0.93 | 0.90 | 0.13 |
+| fcmp d0 | 0.87 | 0.91 | 0.13 |
+| fcmpe s | 0.96 | 1.13 | 0.13 |
+| fcmpe d | 0.88 | 1.11 | 0.13 |
+| fcmpe s0 | 0.92 | 0.91 | 0.13 |
+| fcmpe d0 | 0.86 | 0.93 | 0.13 |
+
+Large finite products/quotients and cancellation near the normal/subnormal
+boundary can use the slower helper even when a particular result would be
+safe inline. Register comparisons add about 0.2–0.3 ns in these Rosetta loops;
+other timings include host-load variation. Intel performance, FZ16/AHP,
+alternative FP controls and exception traps remain unmeasured or unsupported.

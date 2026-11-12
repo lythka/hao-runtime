@@ -132,6 +132,17 @@ enum { ES, ED, EH, EI32, EI64,
     X(fmaxv_4s, "fmaxv s0, v0.4s", ES)              X(faddp_2s, "faddp v0.2s, v0.2s, v1.2s", ES) \
     X(faddp_d, "faddp d0, v0.2d", ED)               X(fabd_s, "fabd s0, s0, s1", ES)           \
     /* NaN selection with two and three operands; arithmetic already inline */ \
+    X(fadd_d, "fadd d0, d0, d1", ED) \
+    X(fsub_s, "fsub s0, s0, s1", ES) \
+    X(fmul_d, "fmul d0, d0, d1", ED) \
+    X(fdiv_s, "fdiv s0, s0, s1", ES) \
+    X(fsqrt_d, "fsqrt d0, d0", ED) \
+    X(fcmp_d, "fcmp d0, d1", ED) \
+    X(fcmpe_s, "fcmpe s0, s1", ES) \
+    X(fcmp_s0, "fcmp s0, #0.0", ES) \
+    X(fcmp_d0, "fcmp d0, #0.0", ED) \
+    X(fcmpe_d, "fcmpe d0, d1", ED) \
+    X(fcmpe_s0, "fcmpe s0, #0.0", ES) \
     X(fadd_s, "fadd s0, s0, s1", ES)     X(fsub_d, "fsub d0, d0, d1", ED)      \
     X(fmul_s, "fmul s0, s0, s1", ES)     X(fdiv_d, "fdiv d0, d0, d1", ED)      \
     X(fnmul_s, "fnmul s0, s0, s1", ES)   X(fdiv_4s, "fdiv v0.4s, v0.4s, v1.4s", ES) \
@@ -159,6 +170,8 @@ static const struct { const char *name; opfn *fn; benchfn *bench; int kind; } op
 /* ------------------------------------------------------------- values */
 
 static const uint32_t s32[] = {
+    0x0c7fffff, 0x0c800000, 0x0c800001, 0x8c800001,
+    0x267fffff, 0x26800000, 0x26800001, 0x58800000, 0x58800001,
     0x00000000, 0x80000000, 0x00000001, 0x807fffff, 0x00800000, 0x80800001, 0x7f7fffff, 0xff7fffff,   /* zeros, denormals, min/max normal */
     0x7f800000, 0xff800000, 0x7fc00000, 0xffc00000, 0x7fc12345, 0x7f800001, 0xffa00000, 0x7fbfffff,   /* inf, quiet and signalling NaNs */
     0x3f800000, 0xbf800000, 0x3f000000, 0xbf000000, 0x3effffff, 0xbf000001, 0x3fc00000, 0xc0200000,   /* 1, .5, just below/above .5, 1.5, -2.5 */
@@ -168,6 +181,9 @@ static const uint32_t s32[] = {
     0x3e99999a, 0xbf7fffff, 0x33800000, 0x1e3ce508,                                                   /* .3, -(1-ulp), 2^-24, tiny */
 };
 static const uint64_t s64[] = {
+    0x035fffffffffffff, 0x0360000000000000, 0x0360000000000001, 0x8360000000000001,
+    0x20afffffffffffff, 0x20b0000000000000, 0x20b0000000000001, 0x5f30000000000000, 0x5f30000000000001,
+    0x380fffffffffffff, 0x3810000000000000, 0x3810000000000001,
     0x0000000000000000, 0x8000000000000000, 0x0000000000000001, 0x800fffffffffffff, 0x0010000000000000, 0x8010000000000001,
     0x7fefffffffffffff, 0xffefffffffffffff, 0x7ff0000000000000, 0xfff0000000000000, 0x7ff8000000000000, 0xfff8000000000000,
     0x7ff8000012345678, 0x7ff0000000000001, 0xfff4000000000000, 0x7ff7ffffffffffff,
@@ -192,12 +208,6 @@ static const uint64_t si[] = {
 };
 #define N(a) ((int)(sizeof a / sizeof *a))
 
-/* Arithmetic, FCVT and FCMP the translator has always emitted as SSE code
- * under the guest's MXCSR. Under FZ that code differs from A64 in FPSR only
- * (docs/ISSUES.md: a flushed denormal operand does not raise IDC, and a
- * result flushed to zero raises IXC with UFC). These instructions are here
- * for their NaN operands, which the helper resolves, and run with FZ clear. */
-static const char *const no_fz[] = {"fadd_s", "fsub_d", "fmul_s", "fdiv_d", "fsqrt_s", "fcvt_ds", "fcvt_sd", "fcmp_s", "fcmpe_d0"};
 
 static uint64_t rs;
 static uint64_t rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return rs; }
@@ -351,15 +361,12 @@ int main(int argc, char **argv)
     for (size_t o = 0; o < NOPS; o++) {
         if (only && strcmp(only, ops[o].name)) continue;
         int kind = ops[o].kind;
-        bool fz_ok = true;
-        for (int k = 0; k < N(no_fz); k++) if (!strcmp(no_fz[k], ops[o].name)) fz_ok = false;
         int ns = kind == ES ? N(s32) : kind == ED ? N(s64) : kind == EH ? N(s16) : N(si);
         int cases = ns * ns + random_cases;
         if (kind >= EI32) cases = ns + random_cases;
         if (kind >= EST) cases = 4 * random_cases;
         for (int cfg = 0; cfg < NCFG; cfg++) {
             if (only_cfg >= 0 && cfg != only_cfg) continue;
-            if (!fz_ok && (cfg & 4)) continue;
             uint64_t h = 1469598103934665603ull;
             rs = 0x9e3779b97f4a7c15ull ^ (o * 1000003u + (unsigned)cfg);
             for (int n = 0; n < cases; n++) {

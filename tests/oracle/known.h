@@ -9,9 +9,8 @@
 #include <stdint.h>
 typedef struct { uint32_t mask, value; const char *what; } known_enc;
 
-/* Valid on Apple silicon (M4), not implemented by hao: it reports UNDEF.
- * One entry per (mnemonic, decoder group), the bits common to every sample
- * of it in 2.4 million random simd-mode records, Rd/Rn/Q left free. */
+/* No native-executed exception remains in the tested instruction groups.
+ * Keep the empty table so any future exception must pass the hit audit. */
 static const known_enc known_unimpl[] = {
 };
 
