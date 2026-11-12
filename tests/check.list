@@ -80,7 +80,7 @@ translate	300	par	tests/translate/run.sh "$B" "$OUT"
 fuzz-smoke	600	par	make -s B="$B" fuzz-smoke
 guest/jitinsns	300	par	tests/guest/jitinsns.sh
 guest/fpscalar	600	par	tests/guest/fpscalar.sh
-aot/fmla-mutations	300	par	tests/aot/fmla_mutations.sh
+aot/fmla-mutations	600	par	tests/aot/fmla_mutations.sh
 guest/fmla-bench	300	par	tests/guest/fmla_bench.sh
 guest/state-bench	300	par	tests/guest/state_bench.sh
 aot/round16	180	par	make -s B="$B" "$B/test_round16" && timeout -s KILL 120 "$B/test_round16"

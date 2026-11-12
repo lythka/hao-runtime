@@ -82,7 +82,7 @@ static const struct { int pfx; uint8_t op; int w; int kind; const char *mn; } ss
     {0x66, 0x6E, 1, 1, "movq"}, {0x66, 0x6E, 0, 1, "movd"}, {0xF2, 0x2A, 1, 1, "cvtsi2sd"}, {0xF3, 0x2A, 1, 1, "cvtsi2ss"},
     {0x66, 0x7E, 0, 2, "movd"}, {0x66, 0x7E, 1, 2, "movq"},
     /* Advanced SIMD integer forms */
-    {0x66, 0xFC, 0, 0, "paddb"}, {0x66, 0xFD, 0, 0, "paddw"}, {0x66, 0xFE, 0, 0, "paddd"}, {0x66, 0xD4, 0, 0, "paddq"},
+    {0x66, 0xFC, 0, 0, "paddb"}, {0x66, 0xFD, 0, 0, "paddw"}, {0x66, 0xFE, 0, 0, "paddd"}, {0x66, 0xD4, 0, 0, "paddq"}, {0x66, 0xD3, 0, 0, "psrlq"}, {0x66, 0xF3, 0, 0, "psllq"},
     {0x66, 0xF8, 0, 0, "psubb"}, {0x66, 0xF9, 0, 0, "psubw"}, {0x66, 0xFA, 0, 0, "psubd"}, {0x66, 0xFB, 0, 0, "psubq"},
     {0x66, 0xDB, 0, 0, "pand"}, {0x66, 0xEB, 0, 0, "por"}, {0x66, 0x74, 0, 0, "pcmpeqb"}, {0x66, 0x75, 0, 0, "pcmpeqw"},
     {0x66, 0x76, 0, 0, "pcmpeqd"}, {0x66, 0x64, 0, 0, "pcmpgtb"}, {0x66, 0x65, 0, 0, "pcmpgtw"}, {0x66, 0x66, 0, 0, "pcmpgtd"},
@@ -208,7 +208,7 @@ int main(int argc, char **argv)
         begin(); x_psllq_ri(&B, a, 60); end("psllq xmm%d, 60", a);
         static const struct { uint8_t op; int digit; const char *mn; } sh[] = {
             {0x71, 2, "psrlw"}, {0x71, 4, "psraw"}, {0x71, 6, "psllw"}, {0x72, 2, "psrld"}, {0x72, 4, "psrad"},
-            {0x72, 6, "pslld"}, {0x73, 2, "psrlq"}, {0x73, 6, "psllq"},
+            {0x72, 6, "pslld"}, {0x73, 2, "psrlq"}, {0x73, 6, "psllq"}, {0x73, 3, "psrldq"}, {0x73, 7, "pslldq"},
         };
         for (unsigned k = 0; k < sizeof sh / sizeof *sh; k++) {
             begin(); x_sse_shift_ri(&B, sh[k].op, sh[k].digit, a, (uint8_t)(k + 1)); end("%s xmm%d, %u", sh[k].mn, a, k + 1);
@@ -227,7 +227,7 @@ int main(int argc, char **argv)
             }
             /* SSSE3 / SSE4.1 / SSE4.2 (66 0F 38 xx, 66 0F 3A xx ib) */
             static const struct { uint8_t op; const char *mn; } s38[] = {
-                {0x00, "pshufb"}, {0x1C, "pabsb"}, {0x1D, "pabsw"}, {0x1E, "pabsd"}, {0x29, "pcmpeqq"}, {0x37, "pcmpgtq"},
+                {0x34, "pmovzxwq"}, {0x2B, "packusdw"}, {0x00, "pshufb"}, {0x1C, "pabsb"}, {0x1D, "pabsw"}, {0x1E, "pabsd"}, {0x29, "pcmpeqq"}, {0x37, "pcmpgtq"},
                 {0x38, "pminsb"}, {0x39, "pminsd"}, {0x3A, "pminuw"}, {0x3B, "pminud"}, {0x3C, "pmaxsb"}, {0x3D, "pmaxsd"},
                 {0x3E, "pmaxuw"}, {0x3F, "pmaxud"}, {0x40, "pmulld"},
             };

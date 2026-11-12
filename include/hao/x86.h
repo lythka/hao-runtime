@@ -177,6 +177,7 @@ void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm);
 /* Vector shift by an immediate: 66 0F op /digit ib with op 0x71 (words), 0x72
  * (doublewords) or 0x73 (quadwords) and digit 2 (psrl), 4 (psra; not for
  * quadwords) or 6 (psll). */
+/* Packed lane shifts, plus 0x73 /3,/7 byte shifts (PSRLDQ/PSLLDQ). */
 void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int xmm, uint8_t imm);
 /* The 66 0F 38 xx (SSSE3/SSE4.1/SSE4.2: pshufb, pabs*, pmulld, pmin/pmax*,
  * pcmpeqq, pcmpgtq) and 66 0F 3A xx ib (palignr, round*) forms, register to

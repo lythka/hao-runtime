@@ -161,7 +161,7 @@ Not entries of `tests/check.list`:
 | `tests/fuzz/make_seeds.sh`, `tests/guest/bridgeunit_gen.py`, `tests/aot/patch.py` | generators and helpers, not tests |
 | `tests/guest/bench.c`, `tests/guest/vbench.c`, `tests/guest/vbench2.c` | timing programs for `hao --stats` and wall-time comparisons (`vbench`: single-precision vector arithmetic and LD1/ST1; `vbench2`: TBL/TBX, EXT, MUL/MLA/MLS, FRINT*, 64-bit compares, min/max, ABS), not tests |
 
-`make unit` runs `tests/aot/jit_vector.c`: 303,682 cases of the
+`make unit` runs `tests/aot/jit_vector.c`: 552,518 cases of the
 translated vector floating-point, FRINT* (vector and scalar), integer
 compare/min/max/multiply, TBL/TBX/EXT, shift/narrow/widen and LD1/ST1/LD1R
 encodings (with neighbouring encodings that stay with the helper), each
@@ -174,9 +174,18 @@ differ only in the bytes before the page end that the interpreter's
 by element, include directed near-ties, all four indices, high Vm registers,
 register aliases, all 16 FPCR settings, full FPSR comparisons and maximum
 96-instruction blocks (including the emitter's scratch capacity).
-`aot/fmla-mutations` builds private copies of the translator with the odd
-step, FMLS negation or indexed lane decode broken; each must produce a
-vector differential mismatch. `guest/fma32` and `guest/jitinsns` compare
+FP16 .4H/.8H adds all eight H:L:M indices with the restricted Vm bank,
+normal/subnormal/overflow boundaries, a late inexact pair after earlier
+admitted pairs, FZ16/AHP helper routing, and maximum-length blocks.
+The unit build redirects the descriptor helper through a counting wrapper
+and asserts that ordinary exact cases stay inline and a known inexact
+binary64 sum declines. This checks admission even when its lost low bits do
+not affect the final half result; production helper routing is unchanged.
+`aot/fmla-mutations` first requires an unmutated control to pass, then builds
+private copies with FP32 odd/negation/index logic or FP16 rounding increment,
+subnormal shift, H:L:M decode, exactness admission or product negation broken.
+Each must produce a result/state or admission mismatch. The exactness
+mutation is detected by helper routing, not by an assumed result difference. `guest/fma32` and `guest/jitinsns` compare
 native arm64 with JIT, interpreter, helpers-only and AOT, including these
 forms. `guest/fmla-bench` checks native result equality and reports ns/FMLA
 for three-same and by-element .4S/.8H, JIT/AOT; timings are informational,
@@ -301,3 +310,9 @@ inside each interval. `guest/fma16` checks 42 vector fused forms, including
 all indexed lanes and aliases, against native arm64 in JIT, interpreter,
 helpers-only and AOT, under the 16 RMode/FZ/DN settings. FZ16/AHP behavior is
 outside this native comparison: the existing interpreter does not model it.
+
+The FP16 guest also faults after ninety inline operations in a 96-instruction
+block and checks the recovered guest PC and live NZCV against native execution
+in every engine. This exercises deterministic re-emission into the enlarged
+256 KiB recovery buffer. The mutation manifest timeout is 600 seconds for
+its control plus eight independent variants.

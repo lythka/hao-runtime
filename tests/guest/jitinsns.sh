@@ -14,7 +14,7 @@ HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 set -e
 for a in arm64e arm64; do
-    clang -arch $a -O1 -o "$OUT/jitinsns.$a" "$here/jitinsns.c"
+    clang -arch $a -march=armv8.5-a+fp16 -O1 -o "$OUT/jitinsns.$a" "$here/jitinsns.c"
     codesign -s - -f "$OUT/jitinsns.$a" 2>/dev/null
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"

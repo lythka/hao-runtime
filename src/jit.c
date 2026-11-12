@@ -46,7 +46,7 @@
 static inline int64_t sext(uint64_t v, int bits) { return (int64_t)(v << (64 - bits)) >> (64 - bits); }
 
 #define MAX_BLOCK_INSNS 96
-#define MAX_BLOCK_BYTES (128u << 10)  /* includes 96 inline FP32 fused operations */
+#define MAX_BLOCK_BYTES (256u << 10)  /* includes 96 inline FP16 fused operations */
 #define CODE_MB_DEFAULT 256           /* translated-code space; HAO_JIT_CACHE_MB (1..1024) overrides */
 #define THUNK_AREA ((size_t)THUNK_SLOTS * 32)   /* 32-byte plain thunks */
 #define SIG_SLOT 64
@@ -2522,6 +2522,216 @@ static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, 
     t->vfp_consts = true;
 }
 
+/* The half path keeps input vectors in xmm8-10, the uncommitted result in
+ * xmm11, cumulative MXCSR flags in xmm12 and the ARM rounding mode in xmm13.
+ * xmm7 is zero. No instruction here changes EFLAGS. */
+static void vfp_half_widen(tctx *t, int dst, int src)
+{
+    P38(0x34, dst, src);                                         /* pmovzxwq: two half lanes */
+    vconst(t, 4, 0x7fff, true); P(0xDB, 4, dst);
+    P(0x6F, 5, 4); P38(0x29, 5, 7);                            /* zero magnitude */
+    x_sse_shift_ri(&t->b, 0x73, 2, dst, 15);
+    x_sse_shift_ri(&t->b, 0x73, 6, dst, 63);                     /* sign */
+    x_sse_shift_ri(&t->b, 0x73, 6, 4, 42);
+    vconst(t, 6, 1008ull << 52, true); P(0xD4, 4, 6);
+    P(0xDF, 5, 4); P(0xEB, dst, 5);                            /* signed zero or exact double */
+}
+
+/* q=xmm3, remainder=xmm4, midpoint=xmm5, sign=xmm1, tiny flag=xmm15.
+ * Accumulate MXCSR flags and increment q in the selected ARM mode. */
+static void vfp_half_increment(tctx *t, bool both)
+{
+    vconst(t, 6, 0x20, both); P(0xEB, 15, 6);                  /* IXC and optional UFC */
+    P(0x6F, 6, 4); P38(0x29, 6, 7); P(0xDF, 6, 15); P(0xEB, 12, 6);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 13, RCX);
+    size_t directed = jrcxnz32(t);
+    P(0x6F, 6, 4); P38(0x37, 6, 5);                           /* remainder > midpoint */
+    P38(0x29, 4, 5);
+    P(0x6F, 5, 3); x_sse_shift_ri(&t->b, 0x73, 6, 5, 63);
+    P38(0x37, 7, 5); P(0xDB, 4, 7); vzero(t, 7);             /* odd q && tie */
+    P(0xEB, 6, 4);
+    size_t increment = x_jmp32(&t->b);
+    x_patch32(&t->b, directed, xb_len(&t->b));
+    P(0x6F, 6, 1); x_sse_shift_ri(&t->b, 0x73, 2, 6, 15);
+    vconst(t, 5, 1, both); P(0xD4, 6, 5);                     /* positive -> RP, negative -> RM */
+    P38(0x29, 6, 13); P38(0x29, 4, 7); P(0xDF, 4, 6); P(0x6F, 6, 4);
+    x_patch32(&t->b, increment, xb_len(&t->b));
+    P(0xFB, 3, 6);                                             /* half rounding increment */
+}
+
+/* Both exponents are in [1009,1038]. Round the pair together, including
+ * overflow caused by the increment. Tiny/zero/large results use the scalar
+ * integer path below; neither path converts through binary32. */
+static void vfp_half_normal(tctx *t)
+{
+    P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x73, 2, 1, 63);
+    x_sse_shift_ri(&t->b, 0x73, 6, 1, 15);
+    vconst(t, 2, 0x7fffffffffffffffull, true); P(0xDB, 2, 0);
+    P(0x6F, 3, 2); x_sse_shift_ri(&t->b, 0x73, 2, 3, 42);
+    vconst(t, 6, 1008u << 10, true); P(0xFB, 3, 6);
+    vconst(t, 4, (1ull << 42) - 1, true); P(0xDB, 4, 2);
+    vconst(t, 5, 1ull << 41, true); vzero(t, 15);
+    vfp_half_increment(t, true);
+    vconst(t, 4, 0x7bff, true); P(0x6F, 5, 3); P38(0x37, 5, 4); /* overflow mask */
+    vconst(t, 6, 0x28, true); P(0xDB, 6, 5); P(0xEB, 12, 6);
+    P(0x6F, 6, 1); x_sse_shift_ri(&t->b, 0x73, 2, 6, 15);
+    vconst(t, 2, 1, true); P(0xD4, 6, 2); P38(0x29, 6, 13);
+    P(0x6F, 0, 13); P38(0x29, 0, 7); P(0xEB, 6, 0); P(0xDB, 6, 2);
+    P(0xD4, 4, 6); P(0xDB, 4, 5); P(0xDF, 5, 3); P(0xEB, 4, 5);
+    P(0x6F, 0, 4); P(0xEB, 0, 1);
+    x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0x88);                /* two half results in dwords */
+    P38(0x2B, 0, 7);                                          /* packusdw */
+    x_sse_shift_ri(&t->b, 0x73, 7, 0, 12);
+    x_sse_shift_ri(&t->b, 0x73, 3, 0, 12);                    /* keep just the two halfwords */
+}
+
+/* Low binary64 lane in xmm0 -> low half in xmm0, integer-only. Mirrors
+ * fp_round16_exact; xmm1-6/15 scratch, xmm7 zero, xmm12 flags, xmm13 mode.
+ * The high lane is irrelevant. Ordinary half products/sums cannot be
+ * binary64 subnormal or infinite, but all finite exponent ranges work. */
+static void vfp_half_round(tctx *t)
+{
+    P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x73, 2, 1, 63);
+    x_sse_shift_ri(&t->b, 0x73, 6, 1, 15);                       /* half sign */
+    vconst(t, 2, 0x7fffffffffffffffull, false); P(0xDB, 2, 0);
+    vzero(t, 3);
+    P(0x6F, 6, 2); P38(0x29, 6, 7);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 6, RCX);
+    size_t zero = jrcxnz32(t);
+    P(0x6F, 0, 2); x_sse_shift_ri(&t->b, 0x73, 2, 0, 52);      /* exponent */
+    vconst(t, 6, 1038, false); P(0x6F, 4, 0); P38(0x37, 4, 6);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 4, RCX);
+    size_t over = jrcxnz32(t);
+    vconst(t, 6, 1009, false); P38(0x37, 6, 0);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 6, RCX);
+    size_t tiny = jrcxnz32(t);
+    P(0x6F, 3, 2); x_sse_shift_ri(&t->b, 0x73, 2, 3, 42);
+    vconst(t, 6, 1008u << 10, false); P(0xFB, 3, 6);
+    vconst(t, 4, (1ull << 42) - 1, false); P(0xDB, 4, 2);
+    vconst(t, 5, 1ull << 41, false);
+    vzero(t, 15);
+    size_t normal = x_jmp32(&t->b);
+    x_patch32(&t->b, tiny, xb_len(&t->b));
+    vconst(t, 15, 0x10, false);                                 /* tininess BEFORE rounding */
+    vconst(t, 6, 998, false); P38(0x37, 6, 0);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 6, RCX);
+    size_t verytiny = jrcxnz32(t);
+    vconst(t, 6, 1051, false); P(0xFB, 6, 0);                    /* half subnormal shift */
+    vconst(t, 4, (1ull << 52) - 1, false); P(0xDB, 4, 2);
+    vconst(t, 5, 1ull << 52, false); P(0xEB, 4, 5);
+    P(0x6F, 3, 4); P(0xD3, 3, 6);                             /* q = mantissa >> shift */
+    P(0x6F, 5, 3); P(0xF3, 5, 6); P(0xFB, 4, 5);             /* remainder */
+    vconst(t, 5, 1, false); P(0xFB, 6, 5); P(0xF3, 5, 6);     /* midpoint */
+    size_t subnormal = x_jmp32(&t->b);
+    x_patch32(&t->b, verytiny, xb_len(&t->b));
+    vzero(t, 3); vconst(t, 4, 1, false); vconst(t, 5, 2, false);
+    x_patch32(&t->b, normal, xb_len(&t->b));
+    x_patch32(&t->b, subnormal, xb_len(&t->b));
+    vfp_half_increment(t, false);
+    vconst(t, 6, 0x7bff, false); P(0x6F, 4, 3); P38(0x37, 4, 6);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 4, RCX);
+    size_t rounded_over = jrcxnz32(t);
+    size_t rounded = x_jmp32(&t->b);
+    x_patch32(&t->b, over, xb_len(&t->b));
+    x_patch32(&t->b, rounded_over, xb_len(&t->b));
+    vconst(t, 6, 0x28, false); P(0xEB, 12, 6);                 /* OFC | IXC */
+    P(0x6F, 6, 1); x_sse_shift_ri(&t->b, 0x73, 2, 6, 15);
+    vconst(t, 5, 1, false); P(0xD4, 6, 5); P38(0x29, 6, 13);
+    P(0x6F, 4, 13); P38(0x29, 4, 7); P(0xEB, 6, 4); P(0xDB, 6, 5);
+    vconst(t, 3, 0x7bff, false); P(0xD4, 3, 6);                /* infinity or max finite */
+    x_patch32(&t->b, rounded, xb_len(&t->b));
+    x_patch32(&t->b, zero, xb_len(&t->b));
+    P(0x6F, 0, 3); P(0xEB, 0, 1);
+}
+
+static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
+{
+    vld(t, 8, rn); vld(t, 9, rm); vld(t, 10, rd);
+    if (idx >= 0) {
+        /* H:L:M selects H[0..7]; Rm has only four bits. */
+        x_sse_shift_ri(&t->b, 0x73, 3, 9, (uint8_t)(2 * idx));
+        x_sse_rri(&t->b, 0xF2, 0x70, 9, 9, 0);                 /* pshuflw */
+        x_sse_rri(&t->b, 0x66, 0x70, 9, 9, 0);                 /* broadcast low dword */
+    }
+    if (!Q) for (int r = 8; r <= 10; r++) x_sse_rr(&t->b, 0xF3, 0x7E, 0, r, r);
+    vzero(t, 7); vzero(t, 4);
+    vconst(t, 5, 0x7fff7fff7fff7fffull, true);
+    vconst(t, 6, 0x7c007c007c007c00ull, true);
+    for (int r = 8; r <= 10; r++) {
+        P(0x6F, 0, r); P(0xDB, 0, 6);
+        P(0x6F, 1, 0); P(0x75, 1, 7); P(0x75, 0, 6); P(0xEB, 4, 0);
+        P(0x6F, 0, r); P(0xDB, 0, 5); P(0x75, 0, 7); P(0xDF, 0, 1); P(0xEB, 4, 0);
+    }
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    x_movd_ld(&t->b, 13, xm(RBX, offsetof(hao_cpu, fpcr)));
+    vconst(t, 0, 0x03c00000, false); P(0xDF, 0, 13);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 0, RCX);
+    size_t control = jrcxnz32(t);
+    x_sse_shift_ri(&t->b, 0x73, 6, 13, 40);
+    x_sse_shift_ri(&t->b, 0x73, 2, 13, 62);                     /* ARM RMode */
+    P(0x6C, 13, 13);
+    if (sub) { vconst(t, 0, 0x8000800080008000ull, true); P(0xEF, 8, 0); } /* half FMLS negate */
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    x_movd_ld(&t->b, 0, MXCSR_SLOT);
+    vconst(t, 1, 0x6000, false); P(0xDF, 1, 0);
+    x_movd_st(&t->b, xm(RSP, 4), 1); x_ldmxcsr(&t->b, xm(RSP, 4)); /* RN for TwoSum */
+    vzero(t, 11); vzero(t, 12);
+    x_mov_ri(&t->b, R8, Q ? 4 : 2);
+    size_t loop = xb_len(&t->b);
+    vfp_half_widen(t, 0, 8); vfp_half_widen(t, 1, 9); vfp_half_widen(t, 2, 10);
+    P(0x59, 0, 1);                                            /* exact product p */
+    P(0x6F, 3, 0); P(0x58, 3, 2);                            /* RN sum s */
+    P(0x6F, 4, 3); P(0x5C, 4, 0);                            /* c' = s - p */
+    P(0x6F, 5, 3); P(0x5C, 5, 4);                            /* p' = s - c' */
+    P(0x6F, 6, 0); P(0x5C, 6, 5);
+    P(0x6F, 5, 2); P(0x5C, 5, 4); P(0x58, 6, 5);            /* TwoSum error */
+    x_sse_rri(&t->b, 0x66, 0xC2, 6, 7, 4);                    /* half exactness: error != 0 */
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 6);
+    size_t restore = jrcxnz32(t);
+    /* RN supplies the right zero sign except opposite signs under RM.
+     * For an exact zero, RM adds the sign of either term; +0 + +0 stays +0. */
+    P(0x6F, 14, 3);
+    P(0xEB, 0, 2); x_sse_shift_ri(&t->b, 0x73, 2, 0, 63);
+    x_sse_shift_ri(&t->b, 0x73, 6, 0, 63);
+    x_sse_rri(&t->b, 0x66, 0xC2, 3, 7, 0);                    /* exact zero, including -0 */
+    vconst(t, 4, 2, false); P38(0x29, 4, 13); P(0x6C, 4, 4);
+    P(0xDB, 0, 3); P(0xDB, 0, 4);
+    P(0xEB, 0, 14);
+    P(0x6F, 14, 0); P(0x6D, 14, 14);
+    vconst(t, 2, 0x7fffffffffffffffull, true); P(0xDB, 2, 0);
+    x_sse_shift_ri(&t->b, 0x73, 2, 2, 52);
+    vconst(t, 3, 1009, true); P38(0x37, 3, 2);
+    vconst(t, 4, 1038, true); P38(0x37, 2, 4); P(0xEB, 3, 2);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 3);
+    size_t scalar_round = jrcxnz32(t);
+    vfp_half_normal(t);
+    x_sse_shift_ri(&t->b, 0x73, 3, 11, 4);
+    x_sse_shift_ri(&t->b, 0x73, 7, 0, Q ? 12 : 4); P(0xEB, 11, 0);
+    size_t pair_done = x_jmp32(&t->b);
+    x_patch32(&t->b, scalar_round, xb_len(&t->b));
+    for (int lane = 0; lane < 2; lane++) {
+        if (lane) P(0x6F, 0, 14);
+        vfp_half_round(t);
+        x_sse_shift_ri(&t->b, 0x73, 3, 11, 2);
+        x_sse_shift_ri(&t->b, 0x73, 7, 0, Q ? 14 : 6);
+        P(0xEB, 11, 0);
+    }
+    x_patch32(&t->b, pair_done, xb_len(&t->b));
+    for (int r = 8; r <= 10; r++) x_sse_shift_ri(&t->b, 0x73, 3, r, 4);
+    x_lea(&t->b, 1, R8, xm(R8, -1)); x_mov_rr(&t->b, 1, RCX, R8);
+    size_t again = jrcxnz32(t); x_patch32(&t->b, again, loop);
+    P(0x6F, 0, 12); P(0x6D, 0, 0); P(0xEB, 12, 0);          /* combine pair flags */
+    x_movd_ld(&t->b, 0, MXCSR_SLOT); P(0xEB, 0, 12);
+    x_movd_st(&t->b, xm(RSP, 4), 0); x_ldmxcsr(&t->b, xm(RSP, 4));
+    vst(t, rd, 11, Q);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, restore, xb_len(&t->b)); x_ldmxcsr(&t->b, MXCSR_SLOT);
+    x_patch32(&t->b, decline, xb_len(&t->b)); x_patch32(&t->b, control, xb_len(&t->b));
+    helper_keep_flags(t, insn, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
+}
+
 /* three-same, floating point: the single-precision forms of t_vfp32 */
 static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
 {
@@ -2576,6 +2786,11 @@ static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
 {
     if (t_simd_indexed_int(t, i)) return true;
     unsigned op = BITS(i, 15, 12);
+    if (!BIT(i, 29) && BITS(i, 23, 22) == 0 && (op == 1 || op == 5)) {
+        unsigned half_idx = BIT(i, 11) << 2 | BIT(i, 21) << 1 | BIT(i, 20);
+        t_vfp_fma16(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 19, 16), (int)half_idx, BIT(i, 30), i, pc);
+        return true;
+    }
     if (BIT(i, 29) || BITS(i, 23, 22) != 2 || (op != 9 && op != 1 && op != 5)) return false;
     unsigned rm = BITS(i, 20, 16), idx = BIT(i, 11) << 1 | BIT(i, 21);
     if (op == 9) t_vfp32(t, VFP_MUL, BITS(i, 4, 0), BITS(i, 9, 5), rm, (int)idx, (int)BIT(i, 30), i, pc);
@@ -2819,6 +3034,10 @@ static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
     if ((i & 0x9F800400) == 0x0F000400) return t_simd_shift(t, i, false);
     if ((i & 0xBFE08400) == 0x2E000000) return t_simd_ext(t, i);
     if ((i & 0xBFE08C00) == 0x0E000000) return t_simd_tbl(t, i);
+    if ((i & 0xBF60FC00) == 0x0E400C00) {
+        t_vfp_fma16(t, BIT(i, 23), BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, BIT(i, 30), i, pc);
+        return true;
+    }
     if ((i & 0x9F000400) == 0x0F000000) return t_vfp_indexed(t, i, pc);
     return false;
 }

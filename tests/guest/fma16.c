@@ -1,6 +1,43 @@
 /* Native result and full-FPSR comparison for half vector fused forms. */
 #include "../oracle/fma16_cases.h"
 #include <stdio.h>
+#include <signal.h>
+#include <setjmp.h>
+#include <sys/ucontext.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define STRIP(f) ((uintptr_t)ptrauth_strip((void *)(f), ptrauth_key_function_pointer))
+#else
+#define STRIP(f) ((uintptr_t)(void *)(f))
+#endif
+static sigjmp_buf recovery;
+static volatile sig_atomic_t recovered;
+extern void fma16_fault(void);
+/* Exactly 96 guest instructions, so recovery re-emits a block containing
+ * ninety large half expansions, with NZCV live through the faulting load. */
+__attribute__((naked,noinline)) static void fault_probe(const uint16_t *v, uintptr_t bad)
+{
+    __asm__ volatile("ldr q0,[x0]\n movi v1.8h,#0\n cmp x0,x0\n"
+                     ".rept 90\n fmla v0.8h,v0.8h,v1.8h\n .endr\n"
+                     ".globl _fma16_fault\n _fma16_fault: ldr x2,[x1]\n csel x2,x0,x1,eq\n ret");
+}
+static void fault_handler(int sig, siginfo_t *info, void *context)
+{
+    ucontext_t *uc = context;
+    recovered = (uintptr_t)__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss) == STRIP(fma16_fault)
+        && (uc->uc_mcontext->__ss.__cpsr & 0xf0000000u) == 0x60000000u;
+    siglongjmp(recovery, 1);
+}
+static int check_recovery(void)
+{
+    struct sigaction sa = {0}; sa.sa_sigaction = fault_handler; sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+    const uint16_t v[8] = {0x3c00,0x3c00,0x3c00,0x3c00,0x3c00,0x3c00,0x3c00,0x3c00};
+    if (!sigsetjmp(recovery, 1)) fault_probe(v, 1);
+    printf("large-block PC/NZCV recovery %s\n", recovered ? "PASS" : "FAIL");
+    return !recovered;
+}
 #define RUN(I) __asm__ volatile("ldp q0,q1,[%[st]]\n ldr q2,[%[st],#32]\n msr fpcr,%[cr]\n msr fpsr,%[sr]\n" I "\n mrs %[so],fpsr\n msr fpcr,xzr\n str q0,[%[st]]" : [so] "=&r"(so) : [st] "r"(st), [cr] "r"(cr), [sr] "r"(sr) : "v0","v1","v2","memory")
 static unsigned run(unsigned f, uint16_t st[3][8], uint64_t cr, uint64_t sr)
 {
@@ -73,5 +110,5 @@ int main(void)
             }
         printf("form %u %016llx\n",f,(unsigned long long)h);
     }
-    return 0;
+    return check_recovery();
 }

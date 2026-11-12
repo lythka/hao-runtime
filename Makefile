@@ -232,9 +232,15 @@ $(B)/test_helper_descriptor: tests/aot/helper_descriptor.c $(B)/jit.o $(B)/stubs
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	codesign -s - -f $@
 
+# Only the unit build counts descriptor helper routing, including declines
+# whose result bits happen to equal the inadmissible inline attempt.
+$(B)/jit-vector.o: src/jit.c $(wildcard include/hao/*.h) $(MIN_STAMP)
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Da64_exec_helper=jit_vector_helper -c $< -o $@
+
 # Translated vector FP, shifts and structure loads/stores against the interpreter.
-$(B)/test_jit_vector: tests/aot/jit_vector.c tests/oracle/fma_cases.h $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
-	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
+$(B)/test_jit_vector: tests/aot/jit_vector.c tests/oracle/fma_cases.h tests/oracle/fma16_cases.h $(B)/jit-vector.o $(B)/stubs_oracle.o $(B)/libhaocore.a
+	$(CC) $(CFLAGS) -o $@ $< $(B)/jit-vector.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	codesign -s - -f $@
 
 $(B)/test_round16: tests/aot/round16.c $(B)/libhaocore.a
