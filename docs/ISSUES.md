@@ -1,5 +1,37 @@
 # Runtime issues and measured scope
 
+## Timing a process's start, PID 1 included
+
+Before the Data volume is mounted, a root process's log file
+(`/private/var/log/hao`) cannot be opened. That covers PID 1 and the programs
+launchd's boot tasks start. Their lines went only to the console, which nothing
+records on hardware, so nothing showed where PID 1 spent its time before
+launchd's first line. hao's log also had no timestamps.
+
+- Lines written while the log waits for its volume are now kept in memory
+  (256 KB). They are written to the file first when it opens, after a line that
+  counts them, and any bytes that did not fit are counted as lost.
+- With `HAO_DIAG_TIME` (boot argument `hao_diag_time=1`), each line starts with
+  `@SECONDS ` on the mach clock, and each startup step prints a `phase` line.
+  The exec time comes from the process's start time.
+- With the switch, a process other than PID 1 also sends its kept lines to the
+  unified log, which records them with the kernel's timestamps. A boot task
+  exits before the volume is mounted, so those are its only record.
+
+`tests/guest/diagtime.sh` checks:
+- a log whose parent directory appears only after the guest starts: the kept
+  phase lines come first, before the report that opened the log;
+- the phases in order, and the stamps;
+- that without the switch nothing changes.
+
+Limits:
+- PID 1's kept lines reach the file at its next diagnostics write after the
+  mount, at the latest with the periodic report of `hao_nx_stats=1` or
+  `hao_bridge_stats=1`.
+- A boot task's lines exist only in the unified log, and only with the switch.
+- Under the switch, each line a process other than PID 1 writes before the
+  mount waits for the unified log's drain, about 2 ms a line.
+
 ## Guest frameworks found by bundle identifier
 
 A guest framework is not a dyld image, so CoreFoundation never created its

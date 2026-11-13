@@ -201,6 +201,11 @@ void hao_diag_prefix(FILE *f);            /* "hao[prog:pid]: " */
  * line itself ("\n"). Not in signal handlers (stdio). */
 #define HAO_LOG(level, ...) do { if ((level) <= hao_verbose) hao_log_line(__VA_ARGS__); } while (0)
 void hao_log_line(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* HAO_DIAG_TIME startup phases (runtime.c): mark the front end's start, print exec/front/diag once the
+ * diagnostics channel is up, then one line per phase. No-ops without the switch. */
+void hao_phase_mark(void);
+void hao_phase_begin(void);
+void hao_phase(const char *what);
 /* hao's own bookkeeping got no memory (`what` names the table): one
  * diagnostic, then abort, never a table that silently lost an entry. Not in
  * signal handlers. hao_alloc_check: p, or hao_oom(what) when p is NULL. */

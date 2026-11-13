@@ -133,6 +133,8 @@ int main(void)
     CHECK(!o.diag_dir[0] && strstr(o.ignored, "HAO_DIAG_DIR"), "HAO_DIAG_DIR ignored in a guarded process");
     hao_opts_parse(&o, none, NULL, "hao_bridge_stats=1 hao_jit_helpers_only=1", false, HAO_ENV_SETUGID);
     CHECK(o.bridge_stats && o.jit_helpers_only, "boot arguments hao_bridge_stats=1 hao_jit_helpers_only=1 in every tier");
+    hao_opts_parse(&o, none, NULL, "hao_diag_time=1", true, HAO_ENV_GUARDED);
+    CHECK(o.diag_time, "boot argument hao_diag_time=1 in PID 1");
     char *e9[] = {"HAO_NO_CHAINX=1", "XHAO_NO_AOT=1", "HAO_NO_AO=1", NULL};
     hao_opts_parse(&o, e9, NULL, NULL, false, HAO_ENV_OPEN);
     CHECK(!o.no_chain && !o.no_aot, "environment names match exactly");

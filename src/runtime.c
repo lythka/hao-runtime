@@ -40,6 +40,8 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <mach/semaphore.h>
+#include <mach/mach_time.h>
+#include <libproc.h>
 #include <os/log.h>
 #include <mach-o/loader.h>
 
@@ -1092,6 +1094,56 @@ static dev_t diag_log_dev;        /* the log's identity: a program that closes d
 static ino_t diag_log_ino;        /* reuse the number for a file of its own, which hao must not write to */
 static char diag_dir[1024];
 static char diag_buf[16384];      /* hao_diag_file's line buffer */
+static bool diag_stamp;           /* HAO_DIAG_TIME: each line starts with "@<seconds of the mach clock> " */
+static mach_timebase_info_data_t diag_tb;
+
+/* Nanoseconds of the mach clock, the clock of the kernel's and the unified
+ * log's timestamps (mach_absolute_time and the timebase are async-signal-safe). */
+static uint64_t diag_now_ns(void)
+{
+    uint64_t t = mach_absolute_time();
+    if (!diag_tb.denom) mach_timebase_info(&diag_tb);
+    return diag_tb.numer == diag_tb.denom ? t : (uint64_t)((__uint128_t)t * diag_tb.numer / diag_tb.denom);
+}
+
+/* "@S.UUUUUU " into out (at least 32 bytes) without stdio: also from signal handlers. */
+static size_t diag_stamp_fmt(char *out, uint64_t ns)
+{
+    char d[24];
+    int k = 0;
+    uint64_t s = ns / 1000000000u, us = ns % 1000000000u / 1000u;
+    do { d[k++] = (char)('0' + s % 10); s /= 10; } while (s && k < 20);
+    size_t n = 0;
+    out[n++] = '@';
+    while (k) out[n++] = d[--k];
+    out[n++] = '.';
+    for (uint64_t p = 100000; p; p /= 10) out[n++] = (char)('0' + us / p % 10);
+    out[n++] = ' ';
+    return n;
+}
+
+/* Lines written while PID 1 (or another root process started by a boot task)
+ * waits for the Data volume, which the file lives on: the console has no
+ * recorder on hardware, so they are kept here and written to the file first
+ * when it opens (diag_log_fd). Reservations only grow: the first one that
+ * does not fit ends the kept bytes (pend_full), later ones are counted lost. */
+#define DIAG_PEND (256u << 10)
+static char diag_pend[DIAG_PEND];
+static uint64_t pend_res, pend_done, pend_full = DIAG_PEND, pend_lost;
+static int pend_closed;
+
+static void pend_put(const char *b, size_t n)
+{
+    if (__atomic_load_n(&pend_closed, __ATOMIC_ACQUIRE)) { __atomic_fetch_add(&pend_lost, n, __ATOMIC_RELAXED); return; }
+    uint64_t at = __atomic_fetch_add(&pend_res, n, __ATOMIC_ACQ_REL);
+    if (at + n <= DIAG_PEND) memcpy(diag_pend + at, b, n);
+    else {
+        uint64_t f = __atomic_load_n(&pend_full, __ATOMIC_RELAXED);
+        while (at < f && !__atomic_compare_exchange_n(&pend_full, &f, at, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
+        __atomic_fetch_add(&pend_lost, n, __ATOMIC_RELAXED);
+    }
+    __atomic_fetch_add(&pend_done, n, __ATOMIC_RELEASE);
+}
 
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[%s:%d]: ", getprogname(), (int)getpid()); }
 
@@ -1112,6 +1164,48 @@ void hao_log_line(const char *fmt, ...)
     va_start(ap, fmt);
     vfprintf(f, fmt, ap);
     va_end(ap);
+}
+
+/* Startup phases under HAO_DIAG_TIME (boot argument hao_diag_time=1): one
+ * line each, "phase NAME at S s (+MS ms)" on the mach clock, so a process's
+ * start can be laid against the kernel's log. hao_phase_mark records a time
+ * before the diagnostics channel exists (the front end); hao_phase_begin
+ * prints the exec (the kernel's start of this process, from its start time)
+ * and the marks. */
+static uint64_t phase_last, phase_front;
+
+void hao_phase_mark(void) { if (!phase_front) phase_front = diag_now_ns(); }
+
+static void phase_line(const char *what, uint64_t ns)
+{
+    if (phase_last && ns >= phase_last)
+        hao_log_line("phase %s at %llu.%06llu s (+%llu.%03llu ms)\n", what, (unsigned long long)(ns / 1000000000u),
+                     (unsigned long long)(ns % 1000000000u / 1000u), (unsigned long long)((ns - phase_last) / 1000000u),
+                     (unsigned long long)((ns - phase_last) % 1000000u / 1000u));
+    else
+        hao_log_line("phase %s at %llu.%06llu s\n", what, (unsigned long long)(ns / 1000000000u),
+                     (unsigned long long)(ns % 1000000000u / 1000u));
+    phase_last = ns;
+}
+
+void hao_phase(const char *what)
+{
+    if (hao_opt.diag_time) phase_line(what, diag_now_ns());
+}
+
+void hao_phase_begin(void)
+{
+    if (!hao_opt.diag_time) return;
+    uint64_t now = diag_now_ns();
+    struct proc_bsdinfo bi;
+    struct timeval tv;
+    if (proc_pidinfo(getpid(), PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi && gettimeofday(&tv, NULL) == 0) {
+        int64_t ago = ((int64_t)tv.tv_sec - (int64_t)bi.pbi_start_tvsec) * 1000000000 +
+                      ((int64_t)tv.tv_usec - (int64_t)bi.pbi_start_tvusec) * 1000;
+        if (ago >= 0 && (uint64_t)ago <= now) phase_line("exec", now - (uint64_t)ago);
+    }
+    if (phase_front) phase_line("front", phase_front);
+    phase_line("diag", now);
 }
 
 void hao_oom(const char *what)
@@ -1388,6 +1482,26 @@ static int diag_log_open(const char *dir, bool mk)
     return fd;
 }
 
+/* The kept lines, once, to the file just opened: writers that still see the
+ * retry state finish their copies first (at most 2 s). */
+static void pend_flush(int fd)
+{
+    int no = 0;
+    if (!__atomic_compare_exchange_n(&pend_closed, &no, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return;
+    for (int k = 0; k < 20000 && __atomic_load_n(&pend_done, __ATOMIC_ACQUIRE) != __atomic_load_n(&pend_res, __ATOMIC_ACQUIRE); k++)
+        nanosleep(&(struct timespec){0, 100000}, NULL);
+    uint64_t r = __atomic_load_n(&pend_res, __ATOMIC_ACQUIRE), f = __atomic_load_n(&pend_full, __ATOMIC_ACQUIRE);
+    uint64_t n = r < f ? r : f, lost = __atomic_load_n(&pend_lost, __ATOMIC_ACQUIRE);
+    if (!n && !lost) return;
+    char m[240];
+    int k = snprintf(m, sizeof m, "hao[%s:%d]: %llu bytes of lines kept from before the Data volume was mounted follow%s",
+                     getprogname(), (int)getpid(), (unsigned long long)n, lost ? "" : "\n");
+    if (lost && k > 0 && (size_t)k < sizeof m)
+        k += snprintf(m + k, sizeof m - (size_t)k, " (%llu bytes did not fit and are lost)\n", (unsigned long long)lost);
+    if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
+    if (n) diag_write_all(fd, diag_pend, (size_t)n);
+}
+
 static int diag_log_fd(void)
 {
     int fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
@@ -1402,20 +1516,30 @@ static int diag_log_fd(void)
     if (!__atomic_compare_exchange_n(&diag_log, &none, fd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         close(fd);   /* another thread opened it first */
         fd = none;
-    }
+    } else
+        pend_flush(fd);
     __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
     return fd;
 }
 
 /* The console, then the log (one write(2) for the whole buffer), else the
  * unified log. may_start: the caller may create the drain thread (it is not
- * a signal handler). */
-static void diag_write(const char *b, size_t n, bool may_start)
+ * a signal handler). While the log waits for the Data volume the bytes are
+ * kept (pend_put); with HAO_DIAG_TIME a process other than PID 1 also sends
+ * them to the unified log, which keeps a boot task's lines (it exits before
+ * the volume mounts) with the kernel's timestamps. */
+static void diag_emit(const char *b, size_t n, bool may_start)
 {
     if (!n) return;
     int e = errno;
     diag_write_all(diag_con, b, n);
     int fd = diag_log_fd();
+    if (fd < 0 && __atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
+        pend_put(b, n);
+        if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
+        errno = e;
+        return;
+    }
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || st.st_dev != diag_log_dev || st.st_ino != diag_log_ino)) {
         __atomic_store_n(&diag_log, -1, __ATOMIC_RELEASE);   /* closed by the program: no file from now on */
@@ -1437,6 +1561,32 @@ static void diag_write(const char *b, size_t n, bool may_start)
         }
     }
     errno = e;
+}
+
+/* diag_emit, each line starting with its time stamp under HAO_DIAG_TIME. A
+ * write is taken to start a line (stdio's line buffer and the report blocks
+ * write whole lines); a long one goes out in pieces that end at a newline. */
+static void diag_write(const char *b, size_t n, bool may_start)
+{
+    if (!diag_stamp) { diag_emit(b, n, may_start); return; }
+    char out[4096], st[32];
+    size_t sl = diag_stamp_fmt(st, diag_now_ns()), o = 0;
+    bool at_start = true;
+    for (size_t i = 0; i < n; i++) {
+        if (at_start) {
+            if (o + sl + 1 > sizeof out) { diag_emit(out, o, may_start); o = 0; }
+            memcpy(out + o, st, sl);
+            o += sl;
+            at_start = false;
+        }
+        if (o == sizeof out) { diag_emit(out, o, may_start); o = 0; }
+        out[o++] = b[i];
+        if (b[i] == '\n') {
+            at_start = true;
+            if (o > sizeof out - 256) { diag_emit(out, o, may_start); o = 0; }
+        }
+    }
+    diag_emit(out, o, may_start);
 }
 
 /* Async-signal-safe. */
@@ -1505,6 +1655,8 @@ void hao_diag_init(void)
     static int done;
     if (done++) return;
     bool crash = hao_bootarg_flag("hao_crash"), mk = false;
+    diag_stamp = hao_opt.diag_time;
+    if (diag_stamp) diag_now_ns();   /* the timebase, read outside any signal handler */
     if (crash && getpid() != 1) {
         int fd = open("/dev/console", O_WRONLY | O_NOCTTY | O_CLOEXEC);
         if (fd >= 0) diag_con = diag_high_fd(fd);
@@ -1526,7 +1678,7 @@ void hao_diag_init(void)
         pthread_atfork(NULL, NULL, uni_fork_child);
         if (diag_log < 0 && !diag_retry) uni_start();   /* a sandboxed process: the unified log from the start */
     }
-    if (diag_con == 2 && !diag_dir[0]) return;   /* stderr alone, as before */
+    if (diag_con == 2 && !diag_dir[0] && !diag_stamp) return;   /* stderr alone, as before */
     FILE *f = funopen(NULL, NULL, diag_fwrite, NULL, NULL);
     if (!f) return;
     setvbuf(f, diag_buf, _IOLBF, sizeof diag_buf);
