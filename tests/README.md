@@ -89,6 +89,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/callbacks | PASS | 10 | |
 | guest/cfnull | PASS | 1 | |
 | guest/diagtime | PASS | 1 | |
+| guest/logclient | PASS | 2 | `os_log_set_client_type` first thing in main in a program linked with GSS.framework: natively it traps when CoreFoundation's initializer has started libtrace (`__CF_USER_TEXT_ENCODING` unset, the control) and runs when it has not; under hao (JIT, `--interp`, AOT, and with `HAO_NX_STATS`' thread) the request is not applied and the program runs |
 | guest/chkstk | PASS | 1 | |
 | guest/cli | PASS | 3 | two cases need `HAO_FS` (expected SKIP without it); `sandbox-exec` |
 | guest/crypto | PASS | 1 | |

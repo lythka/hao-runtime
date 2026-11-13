@@ -1,5 +1,29 @@
 # Runtime issues and measured scope
 
+## os_log_set_client_type is not applied for guest code
+
+libsystem_trace's `os_log_set_client_type(type, flags)` ends the process
+(`_os_crash`) unless it is still pristine: not threaded
+(`pthread_is_threaded_np`), dispatch not multithreaded, and libtrace not
+started. A native program calls it first thing in main. A guest's main runs
+after hao's setup and the native initializers of the x86_64 libraries it binds
+to, so either can break that contract:
+- hao's own threads: `hao_bridge_stats=1` and `hao_nx_stats=1` start one each;
+- libtrace started by an initializer: CoreFoundation's logs when
+  `__CF_USER_TEXT_ENCODING` does not name the user.
+
+gssd called it and crash-looped (SIGILL every few seconds) on a boot with the
+stats switches. In 26B131 the only callers are GSS.framework's and
+Heimdal.framework's helpers: gssd, GSSCred and kcm.
+
+hao now answers a guest's call itself: the request is not applied, and `-v`
+prints it once. The process keeps libtrace's default client type, which is a
+known difference from native.
+
+`tests/guest/logclient.sh` checks the native traps (the control) and the
+pristine native run, then hao under JIT, `--interp` and AOT, and with a hao
+thread running. Before the change, all four hao modes ended with SIGILL.
+
 ## AOT caches installed block by block
 
 An AOT cache was installed whole. hao read the file, copied its code into the

@@ -769,3 +769,5 @@ tests/guest/valist.sh
 tests/guest/valist.swift
 
 contract.json
+tests/guest/logclient.c
+tests/guest/logclient.sh

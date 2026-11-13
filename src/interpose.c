@@ -326,6 +326,25 @@ static void trap_os_log_internal(hao_thread *t, uint64_t a)
     vlog((void *)(uintptr_t)c->x[0], (void *)(uintptr_t)c->x[1], (uint8_t)c->x[2], (const char *)(uintptr_t)c->x[3], va);
 }
 
+/* libsystem_trace SPI: void os_log_set_client_type(uint8_t type, uint32_t flags). It may be called only
+ * while the process is still pristine: it calls _os_crash (ud2 on x86_64, brk on arm64) when the process is
+ * threaded (pthread_is_threaded_np), dispatch is multithreaded, or libtrace has already initialized. A
+ * natively started program calls it first thing in main. A guest's main runs after the native initializers
+ * of the x86_64 libraries hao binds it to (GSS.framework's starts libtrace in a process that is not a
+ * platform binary, as hao is) and after hao's own setup (the hao_bridge_stats and hao_nx_stats threads),
+ * so the call cannot meet its contract here and would end the process. The guest's request is not
+ * applied: the process keeps libtrace's default client type. */
+static void trap_os_log_client_type(hao_thread *t, uint64_t a)
+{
+    (void)a;
+    static bool said;
+    if (!said) {
+        said = true;
+        HAO_LOG(1, "os_log_set_client_type(%u, %#x) not applied: native initializers and hao ran before the guest's main\n",
+                (unsigned)(uint8_t)t->cpu.x[0], (unsigned)(uint32_t)t->cpu.x[1]);
+    }
+}
+
 typedef const void *cfref;
 static cfref (*cf_fmt_args)(cfref alloc, cfref opts, cfref fmt, void *va);
 static void (*cf_log)(int32_t level, cfref fmt, ...);
@@ -841,6 +860,7 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
     {"_mmap", trap_vm, 0}, {"_mprotect", trap_vm, 1}, {"_munmap", trap_vm, 2},
     {"_CFLog", trap_cflog, 0},
     {"__os_log_internal", trap_os_log_internal, 0},
+    {"_os_log_set_client_type", trap_os_log_client_type, 0},
 };
 
 /* Name indexes (hao/bridge.h). The tables here are in source order (a
