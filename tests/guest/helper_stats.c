@@ -6,8 +6,8 @@ int main(int argc, char **argv)
     for (unsigned k = 0; k < n; k++)
         __asm__ volatile("movi v1.4s, #0\n"
                          "rbit v0.16b, v1.16b\n" /* deliberately untranslated */
-                         "fabd v0.4s, v1.4s, v1.4s\n" /* not FADDP */
-                         "sqadd v0.2d, v1.2d, v1.2d\n" /* deliberately untranslated integer */
+                         "fmla v0.2d, v1.2d, v1.2d\n" /* untranslated double fused */
+                         "uhadd v0.8b, v1.8b, v1.8b\n" /* untranslated halving add */
                          "movi v2.4s, #1\n"      /* subnormal: input decline */
                          "fadd v0.4s, v2.4s, v2.4s\n"
                          "fmov v3.4s, #1.0\n"

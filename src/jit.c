@@ -2751,7 +2751,7 @@ static void vfp_constants64(tctx *t)
     vones(t, 11); x_sse_shift_ri(&t->b, 0x73, 2, 11, 53); x_sse_shift_ri(&t->b, 0x73, 6, 11, 52); /* 0x7ff0000000000000 */
 }
 
-enum { VFP_ADD, VFP_SUB, VFP_MUL, VFP_DIV, VFP_MAX, VFP_MIN, VFP_EQ, VFP_GE, VFP_GT };
+enum { VFP_ADD, VFP_SUB, VFP_MUL, VFP_DIV, VFP_MAX, VFP_MIN, VFP_EQ, VFP_GE, VFP_GT, VFP_ABD };
 
 static void vfp_constants(tctx *t)
 {
@@ -2932,16 +2932,23 @@ static void t_vfp32(tctx *t, int op, unsigned rd, unsigned rn, unsigned rm, int 
 static void t_vfp_wide(tctx *t, int op, bool dbl, unsigned rd, unsigned rn, unsigned rm,
                        int Q, uint32_t insn, uint64_t pc)
 {
+    bool absolute = op == VFP_ABD;
+    bool scalar = absolute && BIT(insn, 28);
+    if (absolute) op = VFP_SUB;
     bool sqrt = op == 4;
     unsigned size = dbl ? 3 : 2;
     int zero = dbl ? 12 : 5, mag = dbl ? 10 : 6, exp = dbl ? 11 : 7;
-    vld(t, 0, rn);
+    if (scalar) fp_load(t, 0, rn, dbl); else vld(t, 0, rn);
     if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
-    if (!sqrt) vld(t, 1, rm); else vzero(t, 1);
+    if (scalar) fp_load(t, 1, rm, dbl);
+    else if (!sqrt) {
+        vld(t, 1, rm);
+        if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 1, 1);
+    } else vzero(t, 1);
     if (dbl) vfp_constants64(t); else vfp_constants(t);
     vzero(t, 4);
     if (dbl) { vfp_special64(t, 0); vfp_special64(t, 1); }
-    else vfp_special(t, 0);
+    else { vfp_special(t, 0); vfp_special(t, 1); }
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
     size_t decline = jrcxnz32(t);
     x_stmxcsr(&t->b, MXCSR_SLOT);
@@ -2954,6 +2961,8 @@ static void t_vfp_wide(tctx *t, int op, bool dbl, unsigned rd, unsigned rn, unsi
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
     size_t exact = jrcxnz32(t);                                  /* wide result admission */
     size_t store = xb_len(&t->b);
+    /* FABD clears the sign only after rounding and result admission. */
+    if (absolute) P(0xDB, 2, mag); /* FABD absolute result */
     vst(t, rd, 2, Q);
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, exact, xb_len(&t->b));
@@ -3539,6 +3548,10 @@ static bool t_vfp_zero(tctx *t, uint32_t i, uint64_t pc)
 static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 11);
+    if (U && op == 0x1a && size >= 2 && (!(size & 1) || Q)) {
+        t_vfp_wide(t, VFP_ABD, size & 1, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), Q, i, pc);
+        return true;
+    }
     if (U && op == 0x1a && size < 2 && (!(size & 1) || Q)) {
         t_vfp_pair_add(t, i, pc, false); return true;
     }
@@ -4034,6 +4047,11 @@ static bool t_scalar_indexed(tctx *t, uint32_t i, uint64_t pc)
 
 static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
 {
+    if ((i & 0xFFA0FC00) == 0x7EA0D400) {
+        t_vfp_wide(t, VFP_ABD, BIT(i, 22), BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), 1, i, pc);
+        return true;
+    }
+
     if ((i & 0xFF60FC00) == 0x5E20FC00) {
         t_vfp_fma(t, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, 0, i, pc);
         return true;

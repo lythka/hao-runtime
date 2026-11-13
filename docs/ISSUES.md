@@ -74,6 +74,22 @@ equal to `HAO_GEN_OS_BUILD`, the format equal to `HAO_GEN_FORMAT`) passes.
 
 Limits: a system older than 26B131 runs with tables describing 26B131 (`-v`
 says so); the earlier 26A428 tables are in git history.
+## FABD translation
+
+Scalar S/D and vector .2S/.4S/.2D FABD shared the helper despite the existing
+exact subtraction path. They now round subtraction before clearing its sign.
+Normal/zero inputs and admitted results execute inline; nonfinite/subnormal
+inputs and nonfinite or nonzero tiny results retain the helper, restoring
+MXCSR before a result decline.
+All 198 static sites are covered: overall coverage is 99.854081% -> 99.855657%
+(12,561,074 instructions), with generated code 656,950 -> 657,030 KiB.
+At 1,000 iterations the five-form workload's JIT/AOT helper calls are
+80,000 -> 0.
+30,720 directed FABD checks within 964,835 full-state cases and 1,270
+native ARM comparison hashes pass. The wrong-sign mutation is detected.
+`make check` passes, including `make test`,
+strict native/sanitizer oracles and 102 manifest passes (one known failure,
+three expected skips). Half FABD remains a helper.
 
 ## Categories on Swift class stubs
 
@@ -259,16 +275,14 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 3,781 untranslated sites remain implementation work,
+99.9319%. The other 3,583 untranslated sites remain implementation work,
 largest families first:
 - integer high/rounded narrowing (1,079)
 - SHA and PMULL (588)
-- integer dot/matrix products (358, including 80 SMMLA sites that the
-  interpreter also treats as UNDEF)
+- integer dot/matrix products (358, including 80 SMMLA sites)
 - integer reductions (277)
 - indexed widening multiply (240)
 - integer absolute differences (230)
-- FP absolute difference (198)
 - vector ADDP (123)
 - indexed double FMUL (102)
 - double vector comparisons (86)

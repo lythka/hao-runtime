@@ -391,6 +391,11 @@ static const uint64_t fpcrs[] = {0u << 22, 1u << 22, 2u << 22, 3u << 22, 4u << 2
         *fl = x3 ^ x7;                                                                  \
         return mix(out[0], out[1]);                                                     \
     }
+VECF(t_abd2s, "fabd v2.2s,v0.2s,v1.2s")
+VECF(t_abd4s, "fabd v2.4s,v0.4s,v1.4s")
+VECF(t_abd2d, "fabd v2.2d,v0.2d,v1.2d")
+VECF(t_abds, "fabd s2,s0,s1")
+VECF(t_abdd, "fabd d2,d0,d1")
 VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
 VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
 VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
@@ -1935,6 +1940,11 @@ int main(void)
     RF(fmule0); RF(fmule1); RF(fmule2); RF(fmule3); RF(fchain); RF(fadd2d);
 #define RR(n) runr(#n, t_##n)
 #define RFR(n) RR(n##4s); RR(n##2s); RR(n##2d); RR(n##s); RR(n##d)
+    RF(abd2s);
+    RF(abd4s);
+    RF(abd2d);
+    RF(abds);
+    RF(abdd);
     RF(cov_fmuls0);
     RF(cov_fmuls1);
     RF(cov_fmuls2);
