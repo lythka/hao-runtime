@@ -83,7 +83,11 @@ image works; those are tested on the target system.
   line with `@SECONDS ` on the mach clock, the clock of the kernel's and the
   unified log's timestamps, and prints one `phase NAME at S s (+MS ms)` line per
   startup step: exec, front, diag, bridge, jit, thunks, load, bound, then
-  `registered`/`aot` per image, and main.
+  `registered`/`aot` per image, and main. From diag on, each phase line is
+  followed by `usage NAME cpu_user_ms=U cpu_sys_ms=S pageins=P read_kb=R`: the
+  process's CPU time, page-ins and disk reads since the previous usage line
+  (the first counts from the exec), so a phase's wall time splits into CPU
+  and waiting.
 
 ## Conventions
 

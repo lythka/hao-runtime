@@ -49,6 +49,12 @@ launchd's first line. hao's log also had no timestamps.
 - With `HAO_DIAG_TIME` (boot argument `hao_diag_time=1`), each line starts with
   `@SECONDS ` on the mach clock, and each startup step prints a `phase` line.
   The exec time comes from the process's start time.
+- From the diag phase on, each phase line is followed by a `usage` line: user
+  and system CPU time, page-ins and kilobytes read from disk since the previous
+  one (proc_pid_rusage). The first covers the exec to diag, which includes
+  dyld and the initializers that run before hao's front end. In PID 1 that
+  stretch took 9.0 s on a first boot, against 20-200 ms in other processes,
+  and nothing else in hao can divide it.
 - With the switch, a process other than PID 1 also sends its kept lines to the
   unified log, which records them with the kernel's timestamps. A boot task
   exits before the volume is mounted, so those are its only record.
@@ -57,6 +63,7 @@ launchd's first line. hao's log also had no timestamps.
 - a log whose parent directory appears only after the guest starts: the kept
   phase lines come first, before the report that opened the log;
 - the phases in order, and the stamps;
+- one well-formed `usage` line after each phase from diag on, in the same order;
 - that without the switch nothing changes.
 
 Limits:

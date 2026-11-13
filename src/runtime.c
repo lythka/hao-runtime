@@ -1176,6 +1176,34 @@ static uint64_t phase_last, phase_front;
 
 void hao_phase_mark(void) { if (!phase_front) phase_front = diag_now_ns(); }
 
+/* After each phase from "diag" on, "usage NAME cpu_user_ms=U cpu_sys_ms=S
+ * pageins=P read_kb=R": this process's CPU time (getrusage), page-ins and
+ * bytes read from disk (proc_pid_rusage) since the previous usage line, and
+ * the first since the exec. The wall time a phase took less its CPU time is
+ * time spent waiting: for a page-in, a lock or the scheduler. (CPU time is
+ * taken from getrusage, in microseconds: proc_pid_rusage's is in the kernel's
+ * ticks, which under Rosetta are not the timebase this process is given.) */
+static struct rusage_info_v4 phase_ru;
+static uint64_t phase_cpu_u, phase_cpu_s;   /* ns */
+
+static void phase_usage(const char *what)
+{
+    struct rusage_info_v4 ru;
+    struct rusage r;
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&ru) != 0 || getrusage(RUSAGE_SELF, &r) != 0) return;
+    uint64_t cu = ((uint64_t)r.ru_utime.tv_sec * 1000000u + (uint64_t)r.ru_utime.tv_usec) * 1000u,
+             cs = ((uint64_t)r.ru_stime.tv_sec * 1000000u + (uint64_t)r.ru_stime.tv_usec) * 1000u;
+    uint64_t u = cu - phase_cpu_u, k = cs - phase_cpu_s;
+    phase_cpu_u = cu;
+    phase_cpu_s = cs;
+    hao_log_line("usage %s cpu_user_ms=%llu.%03llu cpu_sys_ms=%llu.%03llu pageins=%llu read_kb=%llu\n", what,
+                 (unsigned long long)(u / 1000000u), (unsigned long long)(u % 1000000u / 1000u),
+                 (unsigned long long)(k / 1000000u), (unsigned long long)(k % 1000000u / 1000u),
+                 (unsigned long long)(ru.ri_pageins - phase_ru.ri_pageins),
+                 (unsigned long long)((ru.ri_diskio_bytesread - phase_ru.ri_diskio_bytesread) / 1024u));
+    phase_ru = ru;
+}
+
 static void phase_line(const char *what, uint64_t ns)
 {
     if (phase_last && ns >= phase_last)
@@ -1190,7 +1218,9 @@ static void phase_line(const char *what, uint64_t ns)
 
 void hao_phase(const char *what)
 {
-    if (hao_opt.diag_time) phase_line(what, diag_now_ns());
+    if (!hao_opt.diag_time) return;
+    phase_line(what, diag_now_ns());
+    phase_usage(what);
 }
 
 void hao_phase_begin(void)
@@ -1206,6 +1236,7 @@ void hao_phase_begin(void)
     }
     if (phase_front) phase_line("front", phase_front);
     phase_line("diag", now);
+    phase_usage("diag");
 }
 
 void hao_oom(const char *what)
