@@ -2086,6 +2086,21 @@ static bool fault_act_get(fault_act *out)
  * SA_NODEFER) skips the diagnostics on that thread only */
 static pthread_t diag_busy[16];
 
+/* The fatal-fault report's own stack (hao_install_fault_handler maps it,
+ * with a guard page below): one, taken by one thread at a time; another
+ * thread's report meanwhile runs on its own stack, as before. */
+#define DIAG_STACK_SIZE (256u << 10)
+static void *diag_stack_top;
+static int diag_stack_busy;
+typedef struct { int sig; uint64_t addr; ucontext_t *uc; int crit; } fault_diag_args;
+extern void hao_call_on_stack(void (*fn)(void *), void *arg, void *top);
+static void fault_diag(int sig, uint64_t addr, ucontext_t *uc, int crit);
+static void fault_diag_on(void *p)
+{
+    const fault_diag_args *a = p;
+    fault_diag(a->sig, a->addr, a->uc, a->crit);
+}
+
 static int diag_claim(void)
 {
     pthread_t self = pthread_self();
@@ -2226,10 +2241,20 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
         if (hao_signal_forward(sig, si, ctx)) return;
     }
     hao_fault_act_note(HAO_ACT_GIVEUP, sig, addr, rip, uc, tok);
-    /* A fault inside these diagnostics (on this thread) skips them. */
+    /* A fault inside these diagnostics (on this thread) skips them. They
+     * run on a stack of their own when it is free: a fault deep in nested
+     * native->guest callbacks can leave this thread's stack (a 512 KB
+     * dispatch worker's) nearly used up, and the report would then overflow
+     * it and end the process with no report. */
     int slot = diag_claim();
     if (slot >= 0) {
-        fault_diag(sig, addr, uc, crit);
+        fault_diag_args a = {sig, addr, uc, crit};
+        int free_ = 0;
+        if (diag_stack_top && __atomic_compare_exchange_n(&diag_stack_busy, &free_, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+            hao_call_on_stack(fault_diag_on, &a, diag_stack_top);
+            __atomic_store_n(&diag_stack_busy, 0, __ATOMIC_RELEASE);
+        } else
+            fault_diag(sig, addr, uc, crit);
         __atomic_store_n(&diag_busy[slot], NULL, __ATOMIC_RELEASE);
     }
     /* The default action, certainly: the faulting instruction runs again and
@@ -2480,6 +2505,10 @@ void hao_install_fault_handler(void)
 {
     hao_signals_init();   /* the kernel's sigaction; the dispositions hao is about to replace */
     hao_diag_init();
+    if (!diag_stack_top) {
+        uint8_t *m = mmap(NULL, PAGE_SIZE + DIAG_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED && mprotect(m, PAGE_SIZE, PROT_NONE) == 0) diag_stack_top = m + PAGE_SIZE + DIAG_STACK_SIZE;
+    }
     if (hao_opt.nx_stats) {
         nx_stats = true;
         hao_nx_stats_atexit();

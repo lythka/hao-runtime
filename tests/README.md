@@ -89,6 +89,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/callbacks | PASS | 10 | |
 | guest/cfnull | PASS | 1 | |
 | guest/diagtime | PASS | 1 | |
+| guest/faultstack | PASS | 20 | a fatal native fault at each depth of nested native->guest callbacks on a 64 KB thread, until the stack overflows first: every run reports (`host fault`), the fault itself first unless its signal frame did not fit (`_sigtramp+0`). Before the report had its own stack, the depth where the frame fits but the report does not ended with no report |
 | guest/logclient | PASS | 2 | `os_log_set_client_type` first thing in main in a program linked with GSS.framework: natively it traps when CoreFoundation's initializer has started libtrace (`__CF_USER_TEXT_ENCODING` unset, the control) and runs when it has not; under hao (JIT, `--interp`, AOT, and with `HAO_NX_STATS`' thread) the request is not applied and the program runs |
 | guest/chkstk | PASS | 1 | |
 | guest/cli | PASS | 3 | two cases need `HAO_FS` (expected SKIP without it); `sandbox-exec` |

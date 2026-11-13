@@ -1,5 +1,32 @@
 # Runtime issues and measured scope
 
+## A fatal fault's report has a stack of its own
+
+A thread deep in nested native->guest callbacks can have little native stack
+left. One case is a 512 KB dispatch worker running Swift jobs. WallpaperAgent
+used one up in three callback levels; why it took so much is still open, and
+the frames between hao's are not walkable. A fatal fault there ran hao's
+report (`fault_diag`) on that same stack. The report overflowed it, and the
+process ended with SIGBUS and no report: no guest pc and no backtrace.
+
+The report now runs on a 256 KB stack of its own, mapped at startup with a
+guard page. One thread at a time uses it; another thread's report runs on its
+own stack, as before.
+
+Limits:
+- When the kernel cannot fit the signal frame for the fault, the handler never
+  sees it. The first report is then that overflow, at `_sigtramp+0`. Only a
+  handler on an alternate stack could see it, and hao's is not `SA_ONSTACK`
+  (`signals.c` gives the reasons).
+- After the report, the give-up path resumes on the thread's stack through
+  `sig_resume`, which has a 2.6 KB frame. On a nearly full stack that
+  overflows. The process then ends with SIGBUS instead of the fault's own
+  signal, after a second report.
+
+`tests/guest/faultstack.sh` faults in strlen at each callback depth on a 64 KB
+thread, under JIT and `--interp`, until the stack overflows before the fault.
+Every run must report. Before the change, depth 12 had no report.
+
 ## os_log_set_client_type is not applied for guest code
 
 libsystem_trace's `os_log_set_client_type(type, flags)` ends the process
