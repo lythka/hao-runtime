@@ -158,6 +158,8 @@ BENCH(addp_8h, "addp v2.8h,v0.8h,v1.8h", single)
 BENCH(addp_2s, "addp v2.2s,v0.2s,v1.2s", single)
 BENCH(addp_4s, "addp v2.4s,v0.4s,v1.4s", single)
 BENCH(addp_2d, "addp v2.2d,v0.2d,v1.2d", single)
+BENCH(fmul_2d_e0, "fmul v2.2d,v0.2d,v1.d[0]", double)
+BENCH(fmul_2d_e1, "fmul v2.2d,v0.2d,v1.d[1]", double)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -788,6 +790,8 @@ int main(int argc, char **argv)
     RUN(addp_2s);
     RUN(addp_4s);
     RUN(addp_2d);
+    RUN(fmul_2d_e0);
+    RUN(fmul_2d_e1);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);
