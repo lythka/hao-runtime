@@ -2549,30 +2549,43 @@ static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
     return true;
 }
 
-/* ADDV wraps in its source lane width. UADDLV over bytes uses PSADBW
- * against zero to sum each half, then combines the two wide sums. */
+/* ADDV wraps at source width; long sums widen before adding. Extrema
+ * reduce only active lanes. UADDLV bytes retains the PSADBW shortcut. */
 static bool t_simd_across(tctx *t, uint32_t i)
 {
-    unsigned Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    unsigned Q = BIT(i, 30), U = BIT(i, 29), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
     unsigned size = BITS(i, 23, 22), op = BITS(i, 16, 12);
-    if (op == 0x1b && !BIT(i, 29)) { /* ADDV, modulo the source lane width */
-        if (size == 3 || (size == 2 && !Q)) return false;
-        if (Q) vld(t, 0, rn); else x_movq_ld(&t->b, 0, VR(rn));
-        for (unsigned bytes = Q ? 8 : 4; bytes >= (1u << size); bytes >>= 1) {
-            P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x73, 3, 1, (uint8_t)bytes);
-            P(padd[size], 0, 1);                                  /* ADDV lane width */
-        }
-        vconst(t, 1, (1ull << (8u << size)) - 1, false); P(0xDB, 0, 1);
-        vst(t, rd, 0, 1);
-        return true;
+    if (size == 3 || (size == 2 && !Q)) return false;
+    if (op != 3 && op != 0x0a && op != 0x1a && !(op == 0x1b && !U)) return false;
+    if (Q) vld(t, 0, rn); else x_movq_ld(&t->b, 0, VR(rn));
+    if (op == 3 && U && !size) {                               /* UADDLV bytes */
+        vzero(t, 1); P(0xF6, 0, 1);                            /* psadbw */
+        if (Q) { x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0xEE); P(0xD4, 0, 1); }
+        vst(t, rd, 0, 0); return true;
     }
-    if (!BIT(i, 29) || BITS(i, 23, 22) || BITS(i, 16, 12) != 0x03) return false;
-    vld(t, 0, rn);
-    if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 0, 0);
-    vzero(t, 1);
-    P(0xF6, 0, 1);                                               /* psadbw */
-    if (Q) { x_sse_rri(&t->b, 0x66, 0x70, 1, 0, 0xEE); P(0xD4, 0, 1); }   /* add the upper half's sum */
-    vst(t, rd, 0, 0);
+    unsigned bytes = Q ? 8 : 4, result_size = size;
+    if (op == 3) {                                           /* SADDLV / UADDLV */
+        if (Q) { P(0x6F, 1, 0); vwiden(t, 1, size, U, 1); }
+        vwiden(t, 0, size, U, 0);                             /* widen before reduction */
+        if (Q) P(padd[size + 1], 0, 1);
+        result_size++; bytes = 8;
+    }
+    for (; bytes >= (1u << result_size); bytes >>= 1) {
+        P(0x6F, 1, 0); x_sse_shift_ri(&t->b, 0x73, 3, 1, (uint8_t)bytes);
+        if (op == 0x1b) P(padd[size], 0, 1);                                  /* ADDV lane width */
+        else if (op == 3) P(padd[result_size], 0, 1);
+        else {
+            bool max = op == 0x0a;
+            if (size == 0 && U) P(max ? 0xDE : 0xDA, 0, 1);
+            else if (size == 1 && !U) P(max ? 0xEE : 0xEA, 0, 1);
+            else {
+                uint8_t min = size == 0 ? 0x38 : size == 1 ? 0x3A : U ? 0x3B : 0x39;
+                P38(min + (max ? 4 : 0), 0, 1);               /* across-lanes extrema */
+            }
+        }
+    }
+    vconst(t, 1, result_size == 3 ? ~0ull : (1ull << (8u << result_size)) - 1, false);
+    P(0xDB, 0, 1); vst(t, rd, 0, 1);                          /* scalar result, upper lanes zero */
     return true;
 }
 

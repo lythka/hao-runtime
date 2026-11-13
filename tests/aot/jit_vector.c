@@ -836,6 +836,27 @@ int main(void)
                     }
                 }
 
+    /* All integer reductions and reserved neighbours. Negative-only
+     * maxima and positive-only minima must never see padded zero lanes. */
+    static const unsigned reduce_ops[] = {3, 0x0a, 0x1a, 0x1b, 2, 4, 0x0b, 0x19};
+    for (unsigned f = 0; f < 8; f++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned u = 0; u < 2; u++) for (unsigned size = 0; size < 4; size++)
+            for (unsigned k = 0; k < 128; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), es = 1u << size;
+                hao_cpu in; state(&in, rn, rn);
+                uint64_t sign = 1ull << (8 * es - 1), vals[] = {0, 1, sign - 1, sign, sign + 1, ~0ull, ~1ull};
+                for (unsigned e = 0; e < 16 / es; e++) {
+                    uint64_t v = k < 7 ? vals[k] : k < 14 ? vals[(k + e) % 7] : rnd();
+                    memcpy(&in.v[rn].b[e * es], &v, es);
+                }
+                uint32_t i = 0x0e300800u | q << 30 | u << 29 | size << 22 | reduce_ops[f] << 12 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0; check(i, 0, &in, live);
+                    if (f < 4 && !(f == 3 && u) && size < 3 && (size != 2 || q) && vector_helper_calls && fails++ < 20)
+                        printf("MISMATCH %08x: integer reduction used helper\n", i);
+                }
+            }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

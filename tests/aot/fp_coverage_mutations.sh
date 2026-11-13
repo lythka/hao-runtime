@@ -14,6 +14,8 @@ import sys
 s = Path('src/jit.c').read_text()
 s = s.replace('#include "jit-conversions.inc"', Path('src/jit-conversions.inc').read_text())
 mutations = {
+    'reduce-order': ('bool max = op == 0x0a;', 'bool max = op == 0x1a;'),
+    'reduce-widen': ('vwiden(t, 0, size, U, 0);                             /* widen before reduction */', 'vwiden(t, 0, size, !U, 0);'),
     'narrow-round': ('P(padd[wide], 0, 3); /* immediate narrowing round bit */', '/* wrong: omit narrowing round */'),
     'narrow-clamp': ('if (sat) vsaturate_narrow(t, size, unsrc, U);', '/* wrong: omit narrowing saturation */'),
     'fabd-sign': ('if (absolute) P(0xDB, 2, mag); /* FABD absolute result */', '/* wrong signed FABD result */'),
@@ -42,7 +44,7 @@ for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in ${MUTATIONS:-control narrow-round narrow-clamp fabd-sign pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition satadd-qc absdiff-order addhn-half addp-pairs indexed-double-lane double-compare-pred dot-groups matrix-order}; do
+for mutation in ${MUTATIONS:-control reduce-order reduce-widen narrow-round narrow-clamp fabd-sign pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition satadd-qc absdiff-order addhn-half addp-pairs indexed-double-lane double-compare-pred dot-groups matrix-order}; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \

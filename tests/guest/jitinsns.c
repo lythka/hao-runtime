@@ -523,6 +523,36 @@ VECF(t_nar_uqrshrn_s16_0_1, "uqrshrn h2,s0,#1")
 VECF(t_nar_uqrshrn_s16_0_16, "uqrshrn h2,s0,#16")
 VECF(t_nar_uqrshrn_s32_0_1, "uqrshrn s2,d0,#1")
 VECF(t_nar_uqrshrn_s32_0_32, "uqrshrn s2,d0,#32")
+VECF(t_red_saddlv_8b, "saddlv h2,v0.8b")
+VECF(t_red_saddlv_4h, "saddlv s2,v0.4h")
+VECF(t_red_saddlv_16b, "saddlv h2,v0.16b")
+VECF(t_red_saddlv_8h, "saddlv s2,v0.8h")
+VECF(t_red_saddlv_4s, "saddlv d2,v0.4s")
+VECF(t_red_uaddlv_8b, "uaddlv h2,v0.8b")
+VECF(t_red_uaddlv_4h, "uaddlv s2,v0.4h")
+VECF(t_red_uaddlv_16b, "uaddlv h2,v0.16b")
+VECF(t_red_uaddlv_8h, "uaddlv s2,v0.8h")
+VECF(t_red_uaddlv_4s, "uaddlv d2,v0.4s")
+VECF(t_red_smaxv_8b, "smaxv b2,v0.8b")
+VECF(t_red_smaxv_4h, "smaxv h2,v0.4h")
+VECF(t_red_smaxv_16b, "smaxv b2,v0.16b")
+VECF(t_red_smaxv_8h, "smaxv h2,v0.8h")
+VECF(t_red_smaxv_4s, "smaxv s2,v0.4s")
+VECF(t_red_umaxv_8b, "umaxv b2,v0.8b")
+VECF(t_red_umaxv_4h, "umaxv h2,v0.4h")
+VECF(t_red_umaxv_16b, "umaxv b2,v0.16b")
+VECF(t_red_umaxv_8h, "umaxv h2,v0.8h")
+VECF(t_red_umaxv_4s, "umaxv s2,v0.4s")
+VECF(t_red_sminv_8b, "sminv b2,v0.8b")
+VECF(t_red_sminv_4h, "sminv h2,v0.4h")
+VECF(t_red_sminv_16b, "sminv b2,v0.16b")
+VECF(t_red_sminv_8h, "sminv h2,v0.8h")
+VECF(t_red_sminv_4s, "sminv s2,v0.4s")
+VECF(t_red_uminv_8b, "uminv b2,v0.8b")
+VECF(t_red_uminv_4h, "uminv h2,v0.4h")
+VECF(t_red_uminv_16b, "uminv b2,v0.16b")
+VECF(t_red_uminv_8h, "uminv h2,v0.8h")
+VECF(t_red_uminv_4s, "uminv s2,v0.4s")
 VECF(t_abd2s, "fabd v2.2s,v0.2s,v1.2s")
 VECF(t_abd4s, "fabd v2.4s,v0.4s,v1.4s")
 VECF(t_abd2d, "fabd v2.2d,v0.2d,v1.2d")
@@ -2378,6 +2408,36 @@ int main(void)
     RF(nar_uqrshrn_s16_0_16);
     RF(nar_uqrshrn_s32_0_1);
     RF(nar_uqrshrn_s32_0_32);
+    RF(red_saddlv_8b);
+    RF(red_saddlv_4h);
+    RF(red_saddlv_16b);
+    RF(red_saddlv_8h);
+    RF(red_saddlv_4s);
+    RF(red_uaddlv_8b);
+    RF(red_uaddlv_4h);
+    RF(red_uaddlv_16b);
+    RF(red_uaddlv_8h);
+    RF(red_uaddlv_4s);
+    RF(red_smaxv_8b);
+    RF(red_smaxv_4h);
+    RF(red_smaxv_16b);
+    RF(red_smaxv_8h);
+    RF(red_smaxv_4s);
+    RF(red_umaxv_8b);
+    RF(red_umaxv_4h);
+    RF(red_umaxv_16b);
+    RF(red_umaxv_8h);
+    RF(red_umaxv_4s);
+    RF(red_sminv_8b);
+    RF(red_sminv_4h);
+    RF(red_sminv_16b);
+    RF(red_sminv_8h);
+    RF(red_sminv_4s);
+    RF(red_uminv_8b);
+    RF(red_uminv_4h);
+    RF(red_uminv_16b);
+    RF(red_uminv_8h);
+    RF(red_uminv_4s);
     RF(abd2s);
     RF(abd4s);
     RF(abd2d);
