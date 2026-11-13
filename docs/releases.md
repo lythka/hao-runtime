@@ -38,6 +38,29 @@ translations are `generate-locally` entries: their expected hashes and recipes
 are in the bundle, their bytes are not. The validator rejects such entries
 marked for shipping, and rejects extra objects.
 
+
+## Payload manifest
+
+`tools/hao-image-payload` writes `OUT/payload-manifest.json`. It is the
+contract between hao-runtime and the image builder, checked by the hao-assets
+`payload` check (vendored in `tools/hao-contract/`). It records:
+
+- `version`: `OSBUILD-COMMIT12`;
+- `commit`: the full commit;
+- `clean`: no local changes in the checkout;
+- `os_build` and `os_version`: from the root's `SystemVersion.plist`;
+- `cache_uuid`: the x86_64 shared cache the units match;
+- `units_version`: from `--units-version`, by default the units directory's
+  name;
+- `units_sha256`: the interface-unit set, as in `build.json`;
+- `layout_version`: the install layout `hao-install.py` reads, now 1;
+- `files`: the sha256 of every other file under `OUT`.
+
+The builder declares the OS build and layout version it expects, and refuses
+a manifest that is not clean, that differs from what it declares, or that
+lists a missing or changed file. `tests/tools/aotpayload.sh` checks a built
+payload's manifest with that checker, a changed file, and a dirty flag.
+
 ## Usage
 
 ```sh
