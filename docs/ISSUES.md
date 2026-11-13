@@ -1,48 +1,33 @@
 # Runtime issues and measured scope
 
-## Half fused multiply-add: subnormal lanes and wide spans
+## Half fused multiply-add in JIT and AOT
 
-`fp_vec16_muladd`, the C fast path for half FMLA/FMLS (vector and by element)
-that the JIT's helper and the interpreter use, declined a whole vector in two
-cases. Every lane then went through softfloat `fp_muladd`:
-- any subnormal half lane;
-- any lane whose product and addend needed more than 53 bits for their exact
-  sum, that is, a product far below its accumulator.
+Half FMLA/FMLS vector and indexed .4H/.8H forms now admit subnormal inputs
+and wide product/addend spans under round to nearest. Finite halves widen
+exactly to normal binary64; the product is exact, TwoSum rounds the sum to
+odd at 53 bits, and integer logic rounds once to binary16 with exact sticky
+flags. Indexed multipliers widen once per instruction. A late decline
+restores MXCSR before the helper; no partial destination is committed.
 
-Both are common in half-precision convolution. A profile of such a workload
-had about 58% of its active time in that fallback and its rounding.
+NaN/infinity, FZ16/AHP and inexact binary64 sums in directed rounding modes
+retain the C/reference path. Active-lane admission, aliases, signed zeros,
+live NZCV, full FPSR and adjacent FP32 constants are covered. The emitter
+bound is 320 KiB for a 96-instruction block, including signal recovery.
 
-Now:
-- Subnormal halves are converted exactly to binary64 (fraction × 2^-24, a
-  normal double).
-- Under round to nearest, each lane's sum is computed by `sum_odd`, rounded to
-  odd at 53 bits with Knuth's TwoSum, as `fma32_odd` does for single
-  precision. One rounding of that value to binary16 is the correctly rounded
-  result (53 ≥ 11 + 2), with the same flags: the value stays inexact when the
-  true sum is, and on the same side of the tininess threshold.
-- The other rounding modes keep the exact path and its 53-bit bound.
+1,054,947 complete-state comparisons and native ARM/JIT/interpreter/AOT
+half-FMA comparisons pass. Controls detect omitted round-to-odd and wrong
+subnormal widening; tiny-product vectors with clear FPSR isolate lost IXC.
+The 16 admitted benchmark forms remove 192,000 JIT/AOT helper calls at 1,000
+iterations; their forced-C control makes 256,000 calls. Twelve intentional
+fallback forms still make 192,000 calls in every build. Ordinary lanes were
+already admitted by the baseline JIT.
 
-Only infinities and NaNs decline in round to nearest.
-
-Validation:
-- A differential of the fast path against `fp_muladd` over 3,000,000 random
-  8-lane vectors, weighted toward subnormal, tiny and large halves, under all
-  16 RMode/FZ/DN settings, FMLA and FMLS: 2,334,980 vectors taken by the fast
-  path with no value or FPSR difference. The 665,020 declined vectors are
-  wide spans in other rounding modes.
-- `guest/fma16`, `guest/halfops`, `guest/extramisc` and `guest/widenfp`
-  equal native arm64.
-- The `simd` and `fma` oracle modes match native in the interpreter and the
-  JIT.
-
-Under Rosetta (information only), `fmla v.8h, v.8h, v.h[1]` in a JIT loop
-takes 234 → 86 ns for a wide span and 215 → 84 ns for a subnormal lane; an
-ordinary lane is unchanged at 56 ns.
-
-Limits:
-- The JIT still calls this helper for half FMLA by element; an inline form is
-  the next step.
-- Wide spans in directed rounding modes, and FZ16/AHP, still use softfloat.
+Static helper coverage stays 99.868562% (16,510 sites); this change widens
+runtime admission. Generated code is 657,124 -> 657,730 KiB for the same
+12,561,074-instruction program. Rosetta .8H indexed FMLA medians against a
+control that routes only half FMA through C are 86.45 -> 69.87 ns/op for
+ordinary lanes, 90.02 -> 68.94 for subnormals, and 89.62 -> 80.16 for wide
+spans. These include loop/reset/entry costs and are information only.
 
 ## Generated tables regenerated for 26B131, with generated.lock
 
@@ -715,115 +700,6 @@ the unmodified mutation control passes. `make test` passes, including the
 all-mode 200,000-record oracle, unit, AOT and host gates. Performance acceptance on Intel
 remains separate from correctness and Rosetta observations.
 
-
-## Inline FP16 FMLA/FMLS in translated code
-
-Vector FMLA/FMLS .4H/.8H, three-same and by element, emit an SSE2/SSE4
-expansion with integer admission over every active operand before floating
-arithmetic. Indexed half uses H:L:M and a four-bit Vm (V0..V15), including
-upper indexed lanes with a .4H destination. Aliases read the complete input
-before committing a result; .4H clears the destination's upper half.
-Other half operations, scalar fused forms and double precision stay helpers.
-
-The FPCR gate matches `fp_vec16_muladd`. Products are exact binary64; RN
-TwoSum detects whether their sums are exact. A nonzero error declines the
-whole instruction, restores the saved MXCSR and calls the original helper
-descriptor without committing results or flags from earlier pairs. Unlike
-the C helper's conservative span bound, this test can admit additional
-actually exact sums. It does not round to odd. Accepted zero sums receive
-the guest RM sign rule. Two normal-range lanes round together using integer
-masks; zero, tiny and large results use the same integer rules per lane.
-All four rounding modes and cumulative IXC/UFC/OFC match the C converter.
-On success, the guest MXCSR is restored with accumulated flags at commit.
-No EFLAGS writes, absolute addresses, VEX/AVX, F16C, TLS or allocations are
-introduced by the expansion.
-
-The block, oracle scratch and deterministic PC-recovery buffers share a
-256 KiB allowance. Maximum 96-instruction half blocks emit 244,562 to
-248,594 bytes, exceeding the preceding 128 KiB limit. Unit cases cover both
-signs of the operation and both forms at that length. A native guest test
-faults after ninety half operations in a 96-instruction block and verifies
-the exact guest PC and live NZCV recovered by re-emission, in JIT,
-interpreter, helpers-only and AOT. The wider allowance does not change
-architectural state at helper or AOT boundaries.
-
-The vector unit test checks 552,518 complete-state cases, including full
-FPSR, all 16 RMode/FZ/DN controls, FZ16/AHP declines, every indexed lane,
-register aliases, directed rounding boundaries and a late inexact pair
-following admitted pairs. The 42-form native half test has 43 output lines
-including recovery; the extended instruction test has 509 lines. All four
-engines match native. The encoder check covers 39,595 encodings.
-
-Mutation testing includes a passing unmodified control and independent
-FP16 rounding-increment, subnormal-shift, index-decode, exactness-admission
-and product-negation mutations, alongside the three existing FP32 mutations.
-Removing the exactness guard did not alter the sampled architectural
-results, so the unit-only build redirects the descriptor helper through a
-counter: a known inexact double sum must call it, and an ordinary exact
-case must stay inline. This directly tests the admission contract without
-assuming that every lost double tail changes a half result. Production
-helper routing is unchanged. The general `round_pack_mode` reference and
-the C helper's span test are unchanged.
-
-Replay of the same 200,000-record fma/simd/block corpora as 46054f7 has zero
-mismatches and unchanged IEEE-flag difference counts: interpreter 0/0/0,
-JIT 0/14/4,963. The nonzero counts are existing differences outside these
-fused-operation tests.
-
-The final full `make check` passes, including the all-mode oracle, sanitizer
-oracle, unit, AOT, guest, host and packaging gates: 78 manifest passes, one
-expected failure and three expected skips, with no unexpected failures or
-fork type-at crash. The mutation control passes and all eight mutations
-are caught. Separate `--stats` runs of four million half operations per
-form report 8,000,000 -> 0 helper calls for both JIT and AOT; the C-only
-build still makes 8,000,000. Measurements use separate uninstrumented runs.
-
-Final Rosetta comparison, median ns/FMLA .8H over seven interleaved runs per
-build and engine, sixteen million instructions per form per run:
-
-| Engine / form | Base 46054f7 | C rounding | Inline |
-| --- | --- | --- | --- |
-| JIT three-same | 118.621 | 55.537 | 55.502 |
-| JIT by element | 121.287 | 62.234 | 60.531 |
-| AOT three-same | 120.912 | 54.325 | 60.747 |
-| AOT by element | 127.737 | 61.150 | 60.996 |
-
-All runs produce the native checksum. The half accumulator resets every
-sixteen operations; that and loop/dispatch overhead are included. The C-only
-step was also measured independently before inline implementation (below).
-The incremental inline performance remains unresolved on this host: JIT
-three-same ranges are 52.666–62.424 ns for C-only and 54.535–62.688 inline;
-AOT three-same ranges are 52.811–60.766 and 54.438–62.255 respectively.
-The higher AOT three-same median is recorded, but overlapping ranges and
-uncontrolled host/Rosetta effects do not distinguish a persistent change
-from noise. Eliminating helper calls does not by itself establish a further
-throughput improvement over specialized C rounding.
-
-On Intel hardware the inline path is clearly faster. On an i5-3210M (26B131,
-a bundled hao, seven interleaved runs, sixteen million instructions per form),
-the median ns/FMLA .8H is:
-
-| Engine / form | c6657a0 | C rounding | Inline |
-| --- | --- | --- | --- |
-| JIT three-same | 329.3 | 177.9 | 95.3 |
-| JIT by element | 354.8 | 204.8 | 95.4 |
-| AOT three-same | not run | 178.5 | 95.1 |
-| AOT by element | not run | 204.1 | 94.6 |
-
-Inline run ranges (93.3–102.7) do not overlap the C-only ranges
-(176.3–246.8). FP32 FMLA stays at 18.7–21.3 in every build. Rosetta re-translates
-the inline expansion, so its timing does not predict Intel performance.
-
-Limits: FZ16/AHP retain the shared helper; their native correctness is
-covered by the half-control matrix below. Other controls outside the inline
-contract also retain helpers. Binary64-inexact sums and
-nonordinary inputs retain helpers. The expansion has substantial code size:
-the normal-input timing program grows from 53 KiB to 210 KiB of translated
-code. The recovery probe covers a synchronous fault after completed
-operations; every possible asynchronous interruption point is not
-exhaustively tested. The exactness admission is shown by helper routing,
-not by a result difference: no directed double-rounding value case exists
-yet. Application latency and release-image acceptance remain unmeasured.
 
 ## Half-precision FZ16 and alternative-format conversions
 

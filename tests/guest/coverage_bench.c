@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 typedef struct { uint64_t lo, hi; } vec;
 static const vec tail_a = {0x3f0000003f000000ull, 0x3f0000003f000000ull};
 static const vec tail_b = {0x3e8000003e800000ull, 0x3e8000003e800000ull};
@@ -30,6 +31,49 @@ static __attribute__((noinline)) vec name(unsigned long n) { \
         : "v0", "v1", "v2", "x9", "cc", "memory"); \
     return out; \
 }
+/* Reset the addend before each fused instruction so every measured lane
+ * retains its ordinary/subnormal/wide-span shape. Include exact FPSR in
+ * the checksum, and restore the caller's default control state. */
+#define HALF_FMA_BENCH(name, insn, a, b, c, control) \
+static __attribute__((noinline)) vec name(unsigned long n) { \
+    static const uint16_t data[3][8] = {{a,a,a,a,a,a,a,a},{b,b,b,b,b,b,b,b},{c,c,c,c,c,c,c,c}}; \
+    vec out; uint64_t sr; \
+    __asm__ volatile("ldp q0,q1,[%[data]]\nldr q3,[%[data],#32]\n" \
+        "msr fpcr,%[cr]\nmsr fpsr,xzr\n1:\n.rept 16\nmov v2.16b,v3.16b\n" insn "\n.endr\n" \
+        "subs %[n],%[n],#1\nb.ne 1b\nstr q2,[%[out]]\nmrs %[sr],fpsr\nmsr fpcr,xzr\n" \
+        : [n] "+&r"(n), [sr] "=&r"(sr) : [data] "r"(data), [out] "r"(&out), [cr] "r"((uint64_t)(control)) \
+        : "v0","v1","v2","v3","cc","memory"); \
+    out.hi ^= sr; return out; \
+}
+HALF_FMA_BENCH(f16_fmla_4h_tinyproduct, "fmla v2.4h,v0.4h,v1.h[7]", 0x0001, 0x0001, 0x7bff, 0)
+HALF_FMA_BENCH(f16_fmls_4h_tinyproduct, "fmls v2.4h,v0.4h,v1.h[7]", 0x0001, 0x0001, 0x7bff, 0)
+HALF_FMA_BENCH(f16_fmla_8h_tinyproduct, "fmla v2.8h,v0.8h,v1.h[7]", 0x0001, 0x0001, 0x7bff, 0)
+HALF_FMA_BENCH(f16_fmls_8h_tinyproduct, "fmls v2.8h,v0.8h,v1.h[7]", 0x0001, 0x0001, 0x7bff, 0)
+HALF_FMA_BENCH(f16_fmla_4h_normal, "fmla v2.4h,v0.4h,v1.h[7]", 0x3c01, 0x1001, 0x3c01, 0x0)
+HALF_FMA_BENCH(f16_fmla_4h_subnormal, "fmla v2.4h,v0.4h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x0)
+HALF_FMA_BENCH(f16_fmla_4h_wide, "fmla v2.4h,v0.4h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x0)
+HALF_FMA_BENCH(f16_fmla_4h_wide_rp, "fmla v2.4h,v0.4h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x400000)
+HALF_FMA_BENCH(f16_fmla_4h_fz16, "fmla v2.4h,v0.4h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x80000)
+HALF_FMA_BENCH(f16_fmla_4h_nan, "fmla v2.4h,v0.4h,v1.h[7]", 0x7c01, 0x3c00, 0x3c00, 0x0)
+HALF_FMA_BENCH(f16_fmls_4h_normal, "fmls v2.4h,v0.4h,v1.h[7]", 0x3c01, 0x1001, 0x3c01, 0x0)
+HALF_FMA_BENCH(f16_fmls_4h_subnormal, "fmls v2.4h,v0.4h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x0)
+HALF_FMA_BENCH(f16_fmls_4h_wide, "fmls v2.4h,v0.4h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x0)
+HALF_FMA_BENCH(f16_fmls_4h_wide_rp, "fmls v2.4h,v0.4h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x400000)
+HALF_FMA_BENCH(f16_fmls_4h_fz16, "fmls v2.4h,v0.4h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x80000)
+HALF_FMA_BENCH(f16_fmls_4h_nan, "fmls v2.4h,v0.4h,v1.h[7]", 0x7c01, 0x3c00, 0x3c00, 0x0)
+HALF_FMA_BENCH(f16_fmla_8h_normal, "fmla v2.8h,v0.8h,v1.h[7]", 0x3c01, 0x1001, 0x3c01, 0x0)
+HALF_FMA_BENCH(f16_fmla_8h_subnormal, "fmla v2.8h,v0.8h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x0)
+HALF_FMA_BENCH(f16_fmla_8h_wide, "fmla v2.8h,v0.8h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x0)
+HALF_FMA_BENCH(f16_fmla_8h_wide_rp, "fmla v2.8h,v0.8h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x400000)
+HALF_FMA_BENCH(f16_fmla_8h_fz16, "fmla v2.8h,v0.8h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x80000)
+HALF_FMA_BENCH(f16_fmla_8h_nan, "fmla v2.8h,v0.8h,v1.h[7]", 0x7c01, 0x3c00, 0x3c00, 0x0)
+HALF_FMA_BENCH(f16_fmls_8h_normal, "fmls v2.8h,v0.8h,v1.h[7]", 0x3c01, 0x1001, 0x3c01, 0x0)
+HALF_FMA_BENCH(f16_fmls_8h_subnormal, "fmls v2.8h,v0.8h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x0)
+HALF_FMA_BENCH(f16_fmls_8h_wide, "fmls v2.8h,v0.8h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x0)
+HALF_FMA_BENCH(f16_fmls_8h_wide_rp, "fmls v2.8h,v0.8h,v1.h[7]", 0x0401, 0x0401, 0x7bff, 0x400000)
+HALF_FMA_BENCH(f16_fmls_8h_fz16, "fmls v2.8h,v0.8h,v1.h[7]", 0x0001, 0x3c00, 0x0400, 0x80000)
+HALF_FMA_BENCH(f16_fmls_8h_nan, "fmls v2.8h,v0.8h,v1.h[7]", 0x7c01, 0x3c00, 0x3c00, 0x0)
+
 BENCH(abd2s, "fabd v2.2s,v0.2s,v1.2s", single)
 BENCH(abd4s, "fabd v2.4s,v0.4s,v1.4s", single)
 BENCH(abd2d, "fabd v2.2d,v0.2d,v1.2d", double)
@@ -710,9 +754,37 @@ int main(int argc, char **argv)
 {
     unsigned long n = argc > 1 ? strtoul(argv[1], 0, 0) : 50000;
     if (!n) return 2;
-#define RUN(name) do { uint64_t start = now(); vec v = name(n); uint64_t elapsed = now() - start; \
+#define RUN(name) do { if (argc > 2 && strncmp(#name, argv[2], strlen(argv[2]))) break; uint64_t start = now(); vec v = name(n); uint64_t elapsed = now() - start; \
     printf("%-18s %016llx:%016llx\n", #name, (unsigned long long)v.hi, (unsigned long long)v.lo); \
     fprintf(stderr, "%-18s %.6f ns/op\n", #name, (double)elapsed / (16.0 * n)); } while (0)
+    RUN(f16_fmla_4h_tinyproduct);
+    RUN(f16_fmls_4h_tinyproduct);
+    RUN(f16_fmla_8h_tinyproduct);
+    RUN(f16_fmls_8h_tinyproduct);
+    RUN(f16_fmla_4h_normal);
+    RUN(f16_fmla_4h_subnormal);
+    RUN(f16_fmla_4h_wide);
+    RUN(f16_fmla_4h_wide_rp);
+    RUN(f16_fmla_4h_fz16);
+    RUN(f16_fmla_4h_nan);
+    RUN(f16_fmls_4h_normal);
+    RUN(f16_fmls_4h_subnormal);
+    RUN(f16_fmls_4h_wide);
+    RUN(f16_fmls_4h_wide_rp);
+    RUN(f16_fmls_4h_fz16);
+    RUN(f16_fmls_4h_nan);
+    RUN(f16_fmla_8h_normal);
+    RUN(f16_fmla_8h_subnormal);
+    RUN(f16_fmla_8h_wide);
+    RUN(f16_fmla_8h_wide_rp);
+    RUN(f16_fmla_8h_fz16);
+    RUN(f16_fmla_8h_nan);
+    RUN(f16_fmls_8h_normal);
+    RUN(f16_fmls_8h_subnormal);
+    RUN(f16_fmls_8h_wide);
+    RUN(f16_fmls_8h_wide_rp);
+    RUN(f16_fmls_8h_fz16);
+    RUN(f16_fmls_8h_nan);
     RUN(tail_fmadd); RUN(tail_fmsub); RUN(tail_fnmadd); RUN(tail_fnmsub); RUN(tail_fnmul); RUN(tail_frecpss); RUN(tail_frecps2s); RUN(tail_frecps4s); RUN(tail_frsqrtss); RUN(tail_frsqrts2s); RUN(tail_frsqrts4s);
 
     RUN(abd2s); RUN(abd4s); RUN(abd2d); RUN(abds); RUN(abdd);
