@@ -13,13 +13,13 @@
 #            page each, so a fixed table sized for the worst case is dirtied
 #            whole (libhao's __DATA held 13 MB of them before).
 #   bigaot   the minimal guest with BIG_FNS functions of code it never
-#            runs, under AOT: the cache is installed whole (about twice its
-#            size), so its overhead is printed, not judged ("info"), and
+#            runs, under AOT: the cache is mapped and each block copied in
+#            when it first runs (jit.c aot_lazy), so the code it never runs
+#            costs its index only; printed, not judged ("info"), and
 #   limited  the same under HAO_AOT_LIMIT_KB=LIMIT_KB, standing in for a
 #            jetsam limit (modelmanagerd: 15 MB, a 19 MB cache): hao must
-#            skip the cache (one "not loaded under the process's memory
-#            limit" line), run the program translated, and stay in
-#            BUDGET_SPREAD (its 6000 function pointers get thunks at load).
+#            load the cache (lazily: it fits) and stay in BUDGET_SPREAD
+#            (its 6000 function pointers get thunks at load).
 # Each judged case fails when its overhead exceeds its budget (KB):
 #   BUDGET_C (2048), BUDGET_OBJC (2048), BUDGET_SPREAD (3072)
 # Every measured process, native and hao alike, runs with MallocMaxMagazines=
@@ -142,7 +142,7 @@ EOF
 # measure_mode: one measurement of case $cs in mode $m, into h and hpt
 measure_mode() {
     case $cs:$m in
-    limited:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_AOT_LIMIT_KB="$LIMIT_KB" "$MAPPED" "$OUT/$g.arm64e" $args) ;;
+    limited:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_AOT_LIMIT_KB="$LIMIT_KB" HAO_VERBOSE=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
     *:jit) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
     *:interp) set -- $(measure "$cs-$m" env HAO_NO_AOT=1 "$MAPPED" --interp "$OUT/$g.arm64e" $args) ;;
     bigaot:aot) set -- $(measure "$cs-$m" env HAO_CACHE="$OUT/aotc" HAO_VERBOSE=1 "$MAPPED" "$OUT/$g.arm64e" $args) ;;
@@ -185,7 +185,7 @@ for cs in c objc spread bigaot limited; do
         else
             ov=$((h - nat)); ptd=$((hpt - natpt))
             if [ "$want" != "$got" ]; then r="FAIL (output '$got', native '$want')"
-            elif [ $cs = limited ] && [ "$skipped" != 1 ]; then r="FAIL (the cache was not skipped under the limit)"
+            elif [ $cs = limited ] && { [ "$skipped" != 0 ] || [ "$loaded" = 0 ]; }; then r="FAIL (the cache was not loaded under the limit)"
             elif [ $cs = bigaot ] && [ "$loaded" = 0 ]; then r="FAIL (the cache was not loaded)"
             elif [ "$budget" = info ]; then r="info (cache $(ls -lS "$OUT/aotc" | awk 'NR == 2 { print int($5 / 1024) }') KB)"
             elif [ $ov -gt "$budget" ]; then r="FAIL (smallest of $tries)"

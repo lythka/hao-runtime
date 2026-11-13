@@ -103,6 +103,7 @@ struct hao_image {
     size_t nfnslots, capfnslots;
     void *jit_slot;             /* code-cache word holding `base` for PIC code */
     void *aot;                  /* loaded AOT cache (aot.c) */
+    void *aot_lazy;             /* its lazy install record (jit.c aot_lazy), or NULL when installed whole */
     /* executable memory for the image's Swift metadata island entries (swiftmeta.c), mapped right after the
      * image when it was reserved (hao_island_reserve): [isl_lo, isl_hi), bump-allocated from isl_next */
     uint64_t isl_lo, isl_hi, isl_next;
