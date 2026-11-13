@@ -206,6 +206,36 @@ BENCH(nar_uqrshrn_s16_0_1, "uqrshrn h2,s0,#1", shift64)
 BENCH(nar_uqrshrn_s16_0_16, "uqrshrn h2,s0,#16", shift64)
 BENCH(nar_uqrshrn_s32_0_1, "uqrshrn s2,d0,#1", shift64)
 BENCH(nar_uqrshrn_s32_0_32, "uqrshrn s2,d0,#32", shift64)
+BENCH(red_saddlv_8b, "saddlv h2,v0.8b", shift64)
+BENCH(red_saddlv_4h, "saddlv s2,v0.4h", shift64)
+BENCH(red_saddlv_16b, "saddlv h2,v0.16b", shift64)
+BENCH(red_saddlv_8h, "saddlv s2,v0.8h", shift64)
+BENCH(red_saddlv_4s, "saddlv d2,v0.4s", shift64)
+BENCH(red_uaddlv_8b, "uaddlv h2,v0.8b", shift64)
+BENCH(red_uaddlv_4h, "uaddlv s2,v0.4h", shift64)
+BENCH(red_uaddlv_16b, "uaddlv h2,v0.16b", shift64)
+BENCH(red_uaddlv_8h, "uaddlv s2,v0.8h", shift64)
+BENCH(red_uaddlv_4s, "uaddlv d2,v0.4s", shift64)
+BENCH(red_smaxv_8b, "smaxv b2,v0.8b", shift64)
+BENCH(red_smaxv_4h, "smaxv h2,v0.4h", shift64)
+BENCH(red_smaxv_16b, "smaxv b2,v0.16b", shift64)
+BENCH(red_smaxv_8h, "smaxv h2,v0.8h", shift64)
+BENCH(red_smaxv_4s, "smaxv s2,v0.4s", shift64)
+BENCH(red_umaxv_8b, "umaxv b2,v0.8b", shift64)
+BENCH(red_umaxv_4h, "umaxv h2,v0.4h", shift64)
+BENCH(red_umaxv_16b, "umaxv b2,v0.16b", shift64)
+BENCH(red_umaxv_8h, "umaxv h2,v0.8h", shift64)
+BENCH(red_umaxv_4s, "umaxv s2,v0.4s", shift64)
+BENCH(red_sminv_8b, "sminv b2,v0.8b", shift64)
+BENCH(red_sminv_4h, "sminv h2,v0.4h", shift64)
+BENCH(red_sminv_16b, "sminv b2,v0.16b", shift64)
+BENCH(red_sminv_8h, "sminv h2,v0.8h", shift64)
+BENCH(red_sminv_4s, "sminv s2,v0.4s", shift64)
+BENCH(red_uminv_8b, "uminv b2,v0.8b", shift64)
+BENCH(red_uminv_4h, "uminv h2,v0.4h", shift64)
+BENCH(red_uminv_16b, "uminv b2,v0.16b", shift64)
+BENCH(red_uminv_8h, "uminv h2,v0.8h", shift64)
+BENCH(red_uminv_4s, "uminv s2,v0.4s", shift64)
 BENCH(abd2s, "fabd v2.2s,v0.2s,v1.2s", single)
 BENCH(abd4s, "fabd v2.4s,v0.4s,v1.4s", single)
 BENCH(abd2d, "fabd v2.2d,v0.2d,v1.2d", double)
@@ -1051,6 +1081,36 @@ int main(int argc, char **argv)
     RUN(nar_uqrshrn_s16_0_16);
     RUN(nar_uqrshrn_s32_0_1);
     RUN(nar_uqrshrn_s32_0_32);
+    RUN(red_saddlv_8b);
+    RUN(red_saddlv_4h);
+    RUN(red_saddlv_16b);
+    RUN(red_saddlv_8h);
+    RUN(red_saddlv_4s);
+    RUN(red_uaddlv_8b);
+    RUN(red_uaddlv_4h);
+    RUN(red_uaddlv_16b);
+    RUN(red_uaddlv_8h);
+    RUN(red_uaddlv_4s);
+    RUN(red_smaxv_8b);
+    RUN(red_smaxv_4h);
+    RUN(red_smaxv_16b);
+    RUN(red_smaxv_8h);
+    RUN(red_smaxv_4s);
+    RUN(red_umaxv_8b);
+    RUN(red_umaxv_4h);
+    RUN(red_umaxv_16b);
+    RUN(red_umaxv_8h);
+    RUN(red_umaxv_4s);
+    RUN(red_sminv_8b);
+    RUN(red_sminv_4h);
+    RUN(red_sminv_16b);
+    RUN(red_sminv_8h);
+    RUN(red_sminv_4s);
+    RUN(red_uminv_8b);
+    RUN(red_uminv_4h);
+    RUN(red_uminv_16b);
+    RUN(red_uminv_8h);
+    RUN(red_uminv_4s);
     RUN(abd2s); RUN(abd4s); RUN(abd2d); RUN(abds); RUN(abdd);
     RUN(sqadd_8b);
     RUN(sqadd_16b);

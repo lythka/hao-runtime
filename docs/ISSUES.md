@@ -25,8 +25,8 @@ already admitted by the baseline JIT.
 Static helper coverage stays 99.868562% (16,510 sites); this change widens
 runtime admission. Generated code is 657,124 -> 657,730 KiB for the same
 12,561,074-instruction program. Rosetta .8H indexed FMLA medians against a
-control that routes only half FMA through C are 86.45 -> 69.87 ns/op for
-ordinary lanes, 90.02 -> 68.94 for subnormals, and 89.62 -> 80.16 for wide
+control that routes only half FMA through C are 70.62 -> 55.01 ns/op for
+ordinary lanes, 73.60 -> 54.76 for subnormals, and 74.80 -> 64.26 for wide
 spans. These include loop/reset/entry costs and are information only.
 
 ## Immediate right-shift narrowing
@@ -48,6 +48,32 @@ full-state cases. All 1,576 native instruction-comparison hashes match;
 wrong rounding and omitted saturation are detected by mutation controls.
 All valid operands execute inline; scalar SHRN/RSHRN and 128-bit input
 lanes remain undefined through the helper.
+
+## Integer across-lanes reductions
+
+SADDLV/UADDLV and SMAXV/UMAXV/SMINV/UMINV now execute inline for every
+allocated arrangement. Long sums widen before combining halves; extrema
+reduce only active lanes, without introducing zero padding into a signed
+maximum or unsigned minimum. Results clear every unused destination bit.
+The existing ADDV and byte UADDLV paths remain covered. Aliases, live NZCV,
+FPCR and complete FPSR are preserved.
+
+All 277 remaining static sites are covered: overall coverage is
+99.872336% -> 99.874541%, the tail is 16,036 -> 15,759, and generated code
+is 657,750 -> 657,754 KiB across 12,561,074 instructions. The 30-form
+workload at 1,000 iterations reduces JIT/AOT helpers from 448,000 to zero.
+32,768 directed cases within 1,179,875 passing full-state comparisons cover
+widths, signed/unsigned boundaries, aliases and reserved neighbours. All
+1,606 native instruction-comparison hashes match. Reversed extrema and
+incorrect widening are detected by independent mutation controls.
+The complete branch passes `make check`, including `make test`, all native
+and sanitizer oracle modes (zero IEEE-flag differences), and 104 manifest
+passes with one known failure and three expected skips. The combined directed
+workload reduces JIT/AOT helpers from 5,616,000 to 192,000; the remainder is
+the twelve intentional FP16 fallback forms, not unimplemented integer forms.
+Application/release-image acceptance and Intel performance remain separate.
+All valid integer operands execute inline; reserved .2S/.1D/.2D arrangements
+and the unallocated unsigned ADDV remain undefined through the helper.
 
 ## Generated tables regenerated for 26B131, with generated.lock
 
@@ -294,10 +320,9 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 1,488 untranslated sites remain implementation work,
+99.9319%. The other 1,211 untranslated sites remain implementation work,
 largest families first:
 - SHA and PMULL (588)
-- integer reductions (277)
 - indexed widening multiply (240)
 - scaled fixed-point conversions (77)
 - other integer scalar/count/reverse (76)
@@ -567,11 +592,9 @@ passes (756 state mismatches); the ZIP-order mutation remains detected
 (1,024 mismatches). The encoder check passes 40,171 encodings, including
 all six signed/unsigned widening operations.
 
-Reserved arrangements remain on the existing helper path; the across-lane
-interpreter's known reserved-encoding leniency is unchanged. Saturating
-pairwise forms, other across-lane operations and the interpreter reference
-are outside this change. Intel timing and application acceptance remain
-separate checks.
+Reserved arrangements remain undefined through the helper. Saturating
+pairwise forms and half floating-point reductions remain outside the integer
+translations. Intel timing and application acceptance remain separate checks.
 
 ## Inline SIMD lane permutes
 
