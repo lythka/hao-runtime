@@ -1,5 +1,39 @@
 # Runtime issues and measured scope
 
+## Guest frameworks found by bundle identifier
+
+A guest framework is not a dyld image, so CoreFoundation never created its
+bundle as it does for every framework dyld loads. As a result:
+- `CFBundleGetBundleWithIdentifier` and `+[NSBundle bundleWithIdentifier:]`
+  returned nil for it;
+- `Bundle.allFrameworks` did not list it.
+
+A framework that finds its own resources by its identifier then got no URL. An
+app-embedded framework that loads its Core Data model this way
+(`bundleWithIdentifier:` then `URLForResource:withExtension:`) stopped in a
+Swift `fatalError` ("unable to load model"). `Bundle(for:)` already worked:
+the identity library answers `class_getImageName` for guest classes.
+
+hao now creates the framework's `CFBundle` once, when it loads the framework's
+executable (`.../NAME.framework/[Versions/V/]NAME`), and keeps it. CF's tables
+then answer the identifier, and CF returns the same bundle to a native caller
+that opens it.
+
+`tests/guest/fwbundle.sh` checks a fat guest framework with a resource:
+- by identifier, its bundle and resource;
+- by class, for a plain, a resilient-ancestry, a generic and a pure Swift
+  class;
+- in `Bundle.allFrameworks`.
+
+JIT, `--interp` and AOT equal native arm64. Without the change, the identifier
+lookup is nil and `allFrameworks` misses the framework.
+
+Limits:
+- Only a framework's own executable registers its bundle. A loadable bundle
+  (`.bundle`) or a plain dylib inside a framework is not covered.
+- The bundle is created at load. A framework whose `Info.plist` is missing or
+  unreadable gets no bundle, as natively.
+
 ## Swift `__VaListBuilder` in arm64 guest code
 
 libswiftCore implements `__VaListBuilder`, behind `withVaList`,

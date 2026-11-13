@@ -111,6 +111,7 @@ guest/extramisc	300	par	tests/guest/extramisc.sh
 guest/i8mm	300	par	tests/guest/i8mm.sh
 guest/widenfp	300	par	tests/guest/widenfp.sh
 guest/bfdot	300	par	tests/guest/bfdot.sh
+guest/fwbundle	300	par	tests/guest/fwbundle.sh
 host/labels-race	300	par	tests/host/labels_race.sh
 guest/reserved-simd	300	par	tests/guest/reserved_simd.sh
 guest/valist	300	par	tests/guest/valist.sh
