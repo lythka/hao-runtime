@@ -19,6 +19,8 @@ mutations = {
     'half-tiny': ('vconst(t, 6, 1051, false);', 'vconst(t, 6, 1050, false);'),
     'half-index': ('half_idx = BIT(i, 11) << 2 | BIT(i, 21) << 1 | BIT(i, 20);', 'half_idx = BIT(i, 20) << 2 | BIT(i, 21) << 1 | BIT(i, 11);'),
     'half-exact': ('x_sse_rri(&t->b, 0x66, 0xC2, 6, 7, 4);                    /* half exactness: error != 0 */', 'vzero(t, 6);'),
+    'half-odd': ('P(0xD4, 3, 4);           /* half sum round to odd */', '/* wrong: lose half sum tail */'),
+    'half-subnormal': ('P(0x5C, 4, 6); /* exact half subnormal widening */', '/* wrong: do not normalize half subnormals */'),
     'half-negation': ('P(0xEF, 8, 0); } /* half FMLS negate */', 'P(0xEB, 8, 8); }'),
     'odd': ('P(0xD4, s, b);', 'P(0xEB, s, s);'),
     'negation': ('P(0xEF, 0, 2);                                  /* negate product exactly */', 'P(0xEB, 0, 0);'),
@@ -29,7 +31,7 @@ for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in control odd negation index half-round half-tiny half-index half-exact half-negation; do
+for mutation in ${MUTATIONS:-control odd negation index half-round half-tiny half-index half-exact half-negation half-odd half-subnormal}; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \

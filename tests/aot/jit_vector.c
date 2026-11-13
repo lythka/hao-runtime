@@ -966,6 +966,30 @@ int main(void)
                     if (k % 8 == 0) check(insn, 0x4e20d400u | rd << 16 | rn << 5 | rd, &in, live);
                 }
             }
+    /* A minimum subnormal product disappears completely in RN binary64
+     * beside a large exact half addend. Round-to-odd must retain IXC even
+     * though the final half value is unchanged. Every active lane has this
+     * shape, so unrelated inexact lanes cannot hide a missing flag. */
+    for (unsigned ctl = 0; ctl < 16; ctl++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned sub = 0; sub < 2; sub++) for (unsigned idx = 0; idx < 8; idx++)
+            for (unsigned signs = 0; signs < 4; signs++) for (unsigned sticky = 0; sticky < 2; sticky++) {
+                hao_cpu in; state(&in, 17, 15); in.fpcr = ctl << 22;
+                in.fpsr = sticky ? 0x0800009f : 0;
+                for (unsigned l = 0; l < 8; l++) {
+                    in.v[17].h[l] = l < (q ? 8u : 4u) ? 1 | ((signs & 1) << 15) : 0x7c01;
+                    in.v[31].h[l] = l < (q ? 8u : 4u) ? 0x7bff | ((signs >> 1) << 15) : 0x7c01;
+                    in.v[15].h[l] = 0x7c01;
+                }
+                in.v[15].h[idx] = 1;
+                uint32_t i = 0x0f001000u | q << 30 | sub << 14 | (idx >> 2) << 11 |
+                             ((idx >> 1) & 1) << 21 | (idx & 1) << 20 | 15 << 16 | 17 << 5 | 31;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0; check(i, 0, &in, live);
+                    if (vector_helper_calls != (unsigned)((ctl & 3) != 0) && fails++ < 20)
+                        printf("MISMATCH %08x: subnormal product admission\n", i);
+                }
+            }
+
     /* Half fused forms: H:L:M, low Vm bank, all controls, aliases, ordinary
      * and special inputs, exactness declines, and live NZCV. FZ16/AHP are
      * compared with the existing helper, not claimed as native support. */
@@ -989,7 +1013,7 @@ int main(void)
                 }
                 if (k == 22) {
                     /* Earlier pairs round inexactly; only the last active
-                     * lane loses binary64 precision and must roll back. */
+                     * lane loses binary64 precision: RN rounds to odd, directed modes roll back. */
                     for (unsigned l = 0; l < 8; l++) {
                         in.v[0].h[l] = 0x3c00;
                         in.v[1].h[l] = 0x3c00;
@@ -1007,7 +1031,13 @@ int main(void)
                 for (int live = 0; live < 2; live++) {
                     vector_helper_calls = 0;
                     check(insn, 0, &in, live);
-                    if ((k == 22 && vector_helper_calls != 1) ||
+                    bool finite = true;
+                    for (unsigned lane = 0; lane < (q ? 8u : 4u); lane++)
+                        finite &= (in.v[rd].h[lane] & 0x7c00) != 0x7c00 &&
+                                  (in.v[rn].h[lane] & 0x7c00) != 0x7c00 &&
+                                  (in.v[rm].h[idx < 0 ? lane : (unsigned)idx] & 0x7c00) != 0x7c00;
+                    if ((k == 22 && vector_helper_calls != (unsigned)(control >= 16 || (control & 3))) ||
+                        (control < 16 && !(control & 3) && finite && vector_helper_calls) ||
                         (k == 0 && control < 16 && vector_helper_calls != 0)) {
                         if (fails++ < 20) printf("MISMATCH half admission %08x fpcr %x: %u helper calls\n", insn, in.fpcr, vector_helper_calls);
                     }

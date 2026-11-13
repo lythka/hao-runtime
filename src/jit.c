@@ -47,7 +47,7 @@
 static inline int64_t sext(uint64_t v, int bits) { return (int64_t)(v << (64 - bits)) >> (64 - bits); }
 
 #define MAX_BLOCK_INSNS 96
-#define MAX_BLOCK_BYTES (256u << 10)  /* includes 96 inline FP16 fused operations */
+#define MAX_BLOCK_BYTES (320u << 10)  /* 96 finite FP16 fused operations, including round-to-odd */
 #define CODE_MB_DEFAULT 256           /* translated-code space; HAO_JIT_CACHE_MB (1..1024) overrides */
 #define THUNK_AREA ((size_t)THUNK_SLOTS * 32)   /* 32-byte plain thunks */
 #define SIG_SLOT 64
@@ -3223,6 +3223,23 @@ static void vfp_half_widen(tctx *t, int dst, int src)
     P(0xDF, 5, 4); P(0xEB, dst, 5);                            /* signed zero or exact double */
 }
 
+/* Widen finite halves, including subnormals, without host denormals.
+ * For exponent zero, (1.f * 2^-14) - 2^-14 is exactly fraction * 2^-24.
+ * The subtraction is exact even for zero; install the original sign last. */
+static void vfp_half_widen_finite(tctx *t, int dst, int src)
+{
+    P38(0x34, dst, src);
+    vconst(t, 4, 0x7fff, true); P(0xDB, 4, dst);
+    vconst(t, 5, 0x7c00, true); P(0xDB, 5, dst); P38(0x29, 5, 7);
+    vconst(t, 6, 0x400, true); P(0xDB, 6, 5); P(0xD4, 4, 6);
+    x_sse_shift_ri(&t->b, 0x73, 6, 4, 42);
+    vconst(t, 6, 1008ull << 52, true); P(0xD4, 4, 6);
+    vconst(t, 6, 1009ull << 52, true); P(0xDB, 6, 5);
+    P(0x5C, 4, 6); /* exact half subnormal widening */
+    x_sse_shift_ri(&t->b, 0x73, 2, dst, 15);
+    x_sse_shift_ri(&t->b, 0x73, 6, dst, 63); P(0xEB, dst, 4);
+}
+
 /* q=xmm3, remainder=xmm4, midpoint=xmm5, sign=xmm1, tiny flag=xmm15.
  * Accumulate MXCSR flags and increment q in the selected ARM mode. */
 static void vfp_half_increment(tctx *t, bool both)
@@ -3332,7 +3349,7 @@ static void vfp_half_round(tctx *t)
 
 #include "jit-conversions.inc"
 
-/* Round two exact binary64 results to H and append them to xmm11.
+/* Round two exact or round-to-odd binary64 results to H and append them to xmm11.
  * Shared by fused and ordinary half arithmetic. */
 static void vfp_half_pair_round(tctx *t, int Q)
 {
@@ -3358,6 +3375,10 @@ static void vfp_half_pair_round(tctx *t, int Q)
     x_patch32(&t->b, pair_done, xb_len(&t->b));
 }
 
+/* Finite half FMLA/FMLS, including indexed .4H/.8H. Binary64 products
+ * are exact. RN sums use TwoSum and round-to-odd; directed modes require
+ * an exact sum. Integer rounding publishes the architectural half flags.
+ * A late directed decline restores MXCSR and never commits partial lanes. */
 static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc)
 {
     vld(t, 8, rn); vld(t, 9, rm); vld(t, 10, rd);
@@ -3369,12 +3390,9 @@ static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm
     }
     if (!Q) for (int r = 8; r <= 10; r++) x_sse_rr(&t->b, 0xF3, 0x7E, 0, r, r);
     vzero(t, 7); vzero(t, 4);
-    vconst(t, 5, 0x7fff7fff7fff7fffull, true);
     vconst(t, 6, 0x7c007c007c007c00ull, true);
     for (int r = 8; r <= 10; r++) {
-        P(0x6F, 0, r); P(0xDB, 0, 6);
-        P(0x6F, 1, 0); P(0x75, 1, 7); P(0x75, 0, 6); P(0xEB, 4, 0);
-        P(0x6F, 0, r); P(0xDB, 0, 5); P(0x75, 0, 7); P(0xDF, 0, 1); P(0xEB, 4, 0);
+        P(0x6F, 0, r); P(0xDB, 0, 6); P(0x75, 0, 6); P(0xEB, 4, 0);
     }
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
     size_t decline = jrcxnz32(t);
@@ -3390,19 +3408,35 @@ static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm
     x_movd_ld(&t->b, 0, MXCSR_SLOT);
     vconst(t, 1, 0x6000, false); P(0xDF, 1, 0);
     x_movd_st(&t->b, xm(RSP, 4), 1); x_ldmxcsr(&t->b, xm(RSP, 4)); /* RN for TwoSum */
+    if (idx >= 0) vfp_half_widen_finite(t, 9, 9); /* one exact indexed multiplier */
     vzero(t, 11); vzero(t, 12);
     x_mov_ri(&t->b, R8, Q ? 4 : 2);
     size_t loop = xb_len(&t->b);
-    vfp_half_widen(t, 0, 8); vfp_half_widen(t, 1, 9); vfp_half_widen(t, 2, 10);
+    vfp_half_widen_finite(t, 0, 8);
+    if (idx >= 0) P(0x6F, 1, 9); else vfp_half_widen_finite(t, 1, 9);
+    vfp_half_widen_finite(t, 2, 10);
     P(0x59, 0, 1);                                            /* exact product p */
     P(0x6F, 3, 0); P(0x58, 3, 2);                            /* RN sum s */
     P(0x6F, 4, 3); P(0x5C, 4, 0);                            /* c' = s - p */
     P(0x6F, 5, 3); P(0x5C, 5, 4);                            /* p' = s - c' */
     P(0x6F, 6, 0); P(0x5C, 6, 5);
     P(0x6F, 5, 2); P(0x5C, 5, 4); P(0x58, 6, 5);            /* TwoSum error */
+    P(0x6F, 5, 6);
     x_sse_rri(&t->b, 0x66, 0xC2, 6, 7, 4);                    /* half exactness: error != 0 */
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 6);
-    size_t restore = jrcxnz32(t);
+    size_t inexact = jrcxnz32(t), exact = x_jmp32(&t->b);
+    x_patch32(&t->b, inexact, xb_len(&t->b));
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 13, RCX);
+    size_t restore = jrcxnz32(t);                              /* directed wide span */
+    P(0x6F, 4, 3); P(0xEF, 4, 5);
+    x_sse_shift_ri(&t->b, 0x72, 4, 4, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, 4, 4, 0xF5);                /* sum/error signs differ */
+    vconst(t, 5, 1, true); P(0xEB, 4, 5);                     /* -1 or +1 */
+    P(0x6F, 1, 3); x_sse_shift_ri(&t->b, 0x73, 6, 1, 63);
+    x_sse_shift_ri(&t->b, 0x72, 4, 1, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, 1, 1, 0xF5);                /* sum odd */
+    P(0xDF, 1, 6); P(0xDB, 4, 1); P(0xD4, 3, 4);           /* half sum round to odd */
+    x_patch32(&t->b, exact, xb_len(&t->b));
     /* RN supplies the right zero sign except opposite signs under RM.
      * For an exact zero, RM adds the sign of either term; +0 + +0 stays +0. */
     P(0x6F, 14, 3);
@@ -3413,7 +3447,7 @@ static void t_vfp_fma16(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm
     P(0xDB, 0, 3); P(0xDB, 0, 4);
     P(0xEB, 0, 14);
     vfp_half_pair_round(t, Q);
-    for (int r = 8; r <= 10; r++) x_sse_shift_ri(&t->b, 0x73, 3, r, 4);
+    for (int r = 8; r <= 10; r++) if (idx < 0 || r != 9) x_sse_shift_ri(&t->b, 0x73, 3, r, 4);
     x_lea(&t->b, 1, R8, xm(R8, -1)); x_mov_rr(&t->b, 1, RCX, R8);
     size_t again = jrcxnz32(t); x_patch32(&t->b, again, loop);
     P(0x6F, 0, 12); P(0x6D, 0, 0); P(0xEB, 12, 0);          /* combine pair flags */
