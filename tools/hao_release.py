@@ -85,7 +85,7 @@ def role_for(name):
     if name in RUNTIME_FILES: return 'runtime'
     if name.startswith('root/usr/lib/hao/if/') or name in {'root/usr/lib/hao/trusted-cdhashes', ASYNC_LIBRARY, ASYNC_DESCRIPTOR}: return 'compatibility'
     if name.startswith('root/usr/lib/hao/aot/') and name.endswith('.aot'): return 'aot'
-    if (name in HELPERS or name.startswith(('HaoExec.kext/', 'embed/stubs/', 'replace/'))
+    if (name in HELPERS or name.startswith(('HaoExec.kext/', 'embed/stubs/', 'embed/skeletons/', 'replace/'))
             or name == 'embed/manifest.json'): return 'image'
     if name in {'build.json', 'aot.json', 'trust.log', 'embed/embed.log', 'embed/identity.log'} or name.startswith(('embed/identity/', 'census/')): return 'record'
     raise Invalid('unrecognized payload file: ' + name)
