@@ -105,6 +105,33 @@ for n in os.listdir(d):
     assert os.path.relpath(os.path.join(d, n), p) in json.load(open(os.path.join(p, 'build.json')))['files'], 'hash of ' + n
 PY
 
+# payload-manifest.json: the runtime -> patcher contract, checked by the vendored hao-assets checker with the
+# OS build the payload's build.json names and install layout 1; one changed file and a dirty flag are refused
+python3 -I - "$repo" "$P" <<'PY' && pass "A payload-manifest.json passes the hao-assets payload check; a changed file and a dirty build are refused" || bad "A payload-manifest.json"
+import json, os, runpy, shutil, sys, tempfile
+repo, p = sys.argv[1:]
+check = runpy.run_path(os.path.join(repo, 'tools/hao-contract/hao_contract.py'))['check_payload']
+m = json.load(open(os.path.join(p, 'payload-manifest.json')))
+b = json.load(open(os.path.join(p, 'build.json')))
+c = {'manifest': os.path.join(p, 'payload-manifest.json'), 'os_build': b['release']['build'], 'layout_version': 1}
+dirty = ['payload: built from a dirty tree'] if b['hao_dirty'] else []   # a checkout with local edits builds a dirty payload
+assert check(repo, c) == dirty, check(repo, c)
+assert m['commit'].startswith(b['hao_commit']) and len(m['commit']) == 40 and m['clean'] == (not b['hao_dirty'])
+assert set(m['files']) == {os.path.relpath(os.path.join(d, n), p) for d, _, ns in os.walk(p) for n in ns} - {'payload-manifest.json'}
+t = tempfile.mkdtemp()
+q = os.path.join(t, 'pay')
+shutil.copytree(p, q, symlinks=True)
+with open(os.path.join(q, 'build.json'), 'a') as f:
+    f.write(' ')
+c2 = dict(c, manifest=os.path.join(q, 'payload-manifest.json'))
+assert check(repo, c2) == dirty + ['payload: build.json does not match its sha256'], check(repo, c2)
+mm = dict(m, clean=False)
+json.dump(mm, open(c2['manifest'], 'w'))
+assert 'payload: built from a dirty tree' in check(repo, c2)
+assert any('OS build' in e for e in check(repo, dict(c, os_build='0A000')))
+shutil.rmtree(t)
+PY
+
 # every cache is bound to its program's cdhash (computed independently by tools/hao-trust-list)
 okc=1
 for f in sbin/launchd usr/libexec/xpcproxy usr/bin/prog; do

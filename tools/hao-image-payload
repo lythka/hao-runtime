@@ -1,6 +1,6 @@
 #!/bin/bash
 # hao-image-payload [--no-embed | --translate TLIST] [--macos-min VER] [--require-dyld-fix]
-#                   [--x86-cache X86_DYLD_DIR] [--coverage-report SUMMARY.json] [--units DIR]
+#                   [--x86-cache X86_DYLD_DIR] [--coverage-report SUMMARY.json] [--units DIR [--units-version NAME]]
 #                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR] OUT ROOT [LIST]
 #   Build the hao payload for one macOS release image from its System root
 #   (e.g. a read-only mount of the IPSW's filesystem image):
@@ -20,6 +20,12 @@
 #                                                 PID-1 boot-spec fix, if that dyld needs it)
 #     OUT/hao-install.py, OUT/hao_fat.py, OUT/hao_codesig.py (run by the image builder)
 #     OUT/build.json                             (release, mode, inputs and hashes)
+#     OUT/payload-manifest.json                  (the runtime -> patcher contract, hao-assets "payload" check:
+#                                                 version, commit, clean, os_build, cache_uuid, units_version,
+#                                                 units_sha256, layout_version and the sha256 of every other
+#                                                 file under OUT; --units-version names the unit set, default
+#                                                 the --units directory's name; layout_version is the install
+#                                                 layout hao-install.py reads, bumped when that changes)
 #     OUT/census/summary.json                    (--coverage-report: supplied offline summary;
 #                                                 build.json bridge_census)
 #     OUT/root/usr/lib/hao/if/<uuid>             (--units DIR: the interface units in DIR, one per
@@ -86,7 +92,7 @@
 #   Nothing else here is tied to one release.
 set -euo pipefail
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2; }
-TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= X86C= AOT=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
+TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= UNITS_VERSION= X86C= AOT=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --translate) [ $# -ge 2 ] || usage; TLIST=$2; shift 2 ;;
@@ -96,6 +102,7 @@ while [ $# -gt 0 ]; do
         --coverage-report) [ $# -ge 2 ] || usage; COVERAGE=$2; shift 2 ;;
         --x86-cache) [ $# -ge 2 ] || usage; X86C=$2; shift 2 ;;
         --units) [ $# -ge 2 ] || usage; UNITS=$2; shift 2 ;;
+        --units-version) [ $# -ge 2 ] || usage; UNITS_VERSION=$2; shift 2 ;;
         --async-provider) [ $# -ge 2 ] || usage; ASYNC_PROVIDER=$2; shift 2 ;;
         --aot) AOT=1; shift ;;
         --aot-list) [ $# -ge 2 ] || usage; ALIST=$2; AOT=1; shift 2 ;;
@@ -442,9 +449,10 @@ for p in errors[:20]:
 sys.exit(1 if errors else 0)
 EOF
 fi
-python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" <<'EOF'
+[ -n "$UNITS_VERSION" ] || { [ -z "$UNITS" ] || UNITS_VERSION=$(basename "$UNITS"); }
+python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" "$UNITS_VERSION" <<'EOF'
 import datetime, hashlib, json, os, plistlib, struct, subprocess, sys
-out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min = sys.argv[1:]
+out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min, units_version = sys.argv[1:]
 census = os.path.join(out, 'census', 'summary.json')
 census = json.load(open(census)) if os.path.exists(census) else None
 aot = os.path.join(out, 'aot.json')
@@ -546,6 +554,20 @@ json.dump({'unit': 'hao-image-payload', 'revision': 10, 'date': datetime.date.to
            'aot': aot,
            'files': files, 'hao_source_sha256': hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()},
           open(os.path.join(out, 'build.json'), 'w'), indent=1)
+# The runtime -> patcher contract (hao-assets hao_contract.py "payload"): the patcher refuses a manifest that is
+# not clean, names another OS build or layout version than it declares, or lists a file that is missing or changed.
+# LAYOUT_VERSION is the install layout hao-install.py reads (root/, replace/, embed/, HaoExec.kext and the helper
+# scripts at OUT's top level); bump it when that layout changes.
+LAYOUT_VERSION = 1
+full = subprocess.run(['git', '-C', h, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+listed = {os.path.relpath(os.path.join(b, n), out) for b, _, ns in os.walk(out) for n in ns} - {'payload-manifest.json'}
+json.dump({'version': '%s-%s' % (ver['ProductBuildVersion'], full[:12]), 'commit': full, 'clean': not dirty,
+           'os_build': ver['ProductBuildVersion'], 'os_version': ver['ProductVersion'],
+           'cache_uuid': (units or {}).get('x86_cache_uuid') or m.get('x86_cache_uuid'),
+           'units_version': units_version or None, 'units_sha256': units['sha256'] if units else None,
+           'layout_version': LAYOUT_VERSION,
+           'files': {r: files[r] if r in files else sha(os.path.join(out, r)) for r in sorted(listed)}},
+          open(os.path.join(out, 'payload-manifest.json'), 'w'), indent=1, sort_keys=True)
 print('build.json:', ver['ProductVersion'], ver['ProductBuildVersion'], mode, 'minos', minos(os.path.join(h, bdir, 'hao')),
       len(m['files']), 'embedded;',
       sum(any(b['slot'] == -1 and 'file' in b for b in e.get('bound', [])) for e in m['files']), "bind their bundle's Info.plist;",
