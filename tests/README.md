@@ -147,6 +147,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/objcvascope | PASS | 2 | |
 | guest/stubcat | PASS | 20 | an `@objc` extension on a Swift class with resilient ancestry (a category on its ObjC class stub, `__objc_catlist2`): responds, conforms, protocol dispatch, KVC and a class method equal native arm64 under JIT, `--interp` and AOT. Without attaching, the setter is an unrecognized selector (the control) |
 | guest/unarchbool | PASS | 3 | NSUnarchiver decoding with arm64's `@encode(BOOL)` ("B") of archives holding 'c' and 'B': value, array, struct, multiple values, a struct named with a 'B', no size; native arm64 output under JIT, `--interp` and AOT. Without the conversion, an archived 'c' throws NSArchiverArchiveInconsistency (the control) |
+| guest/valist | PASS | 10 | Swift's `__VaListBuilder` as guest code inlines it with the arm64 layout: `withVaList` into `vsnprintf`, a list whose storage grows, `String(format:)`, an empty list and 2,000 builders made and released equal native arm64 under JIT, `--interp` and AOT. Without `src/valist_builder.c` the first growth aborts on the unresolved `deallocStorage` (the control) |
 | host/runtime | PASS | 2 | |
 | host/chain | PASS | 6 | |
 | host/commpage | PASS | 1 | |

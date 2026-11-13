@@ -540,6 +540,9 @@ void hao_objc_prepare_generic_class(uint64_t metadata);
 void hao_swift_objects_args(hao_thread *t);
 void hao_swift_objects_result(hao_thread *t, uint64_t target, uint64_t indirect);
 bool hao_swift_objects_interpose(const char *name, uint64_t *addr);
+/* valist_builder.c: Swift's __VaListBuilder with the arm64 semantics guest code inlines */
+bool hao_valist_builder_interpose(const char *name, uint64_t *addr);
+extern uint64_t hao_vb_metadata_calls, hao_vb_va_lists, hao_vb_deallocs, hao_vb_destroyed;
 void hao_swift_objects_fork_child(void);
 void hao_swift_objects_stats(void);
 

@@ -287,6 +287,7 @@ void hao_runtime_interpose_names(hao_name_fn cb, void *ctx);
 void hao_signal_interpose_names(hao_name_fn cb, void *ctx);
 void hao_callbacks_interpose_names(hao_name_fn cb, void *ctx);
 void hao_swift_objects_interpose_names(hao_name_fn cb, void *ctx);
+void hao_valist_builder_interpose_names(hao_name_fn cb, void *ctx);
 void hao_gss_interpose_names(hao_name_fn cb, void *ctx);
 void hao_libm_interpose_names(hao_name_fn cb, void *ctx);
 void hao_swiftmeta_interpose_names(hao_name_fn cb, void *ctx);

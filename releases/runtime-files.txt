@@ -748,6 +748,7 @@ tests/aot/integer_mutations.sh
 tests/aot/fp_coverage_mutations.sh
 tests/aot/register_shift_mutations.sh
 src/jit-conversions.inc
+src/valist_builder.c
 
 tests/aot/structure_mutations.sh
 tests/aot/wide_fp_mutations.sh
@@ -759,5 +760,7 @@ tests/aot/aes_profile.c
 tests/aot/aes_profile.sh
 tests/guest/reserved_simd.c
 tests/guest/reserved_simd.sh
+tests/guest/valist.sh
+tests/guest/valist.swift
 
 contract.json

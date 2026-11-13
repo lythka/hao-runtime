@@ -943,6 +943,7 @@ static const struct {
     {hao_signal_interpose, hao_signal_interpose_names},
     {hao_callbacks_interpose, hao_callbacks_interpose_names},
     {hao_swift_objects_interpose, hao_swift_objects_interpose_names},
+    {hao_valist_builder_interpose, hao_valist_builder_interpose_names},
     {hao_gss_interpose, hao_gss_interpose_names},
     {hao_libm_interpose, hao_libm_interpose_names},
     {hao_swiftmeta_interpose, hao_swiftmeta_interpose_names},
