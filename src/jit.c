@@ -2178,6 +2178,45 @@ static void vset_qc(tctx *t, int mask)
     x_patch8(&t->b, clean, xb_len(&t->b));
 }
 
+/* Saturating add/sub: detect overflow on the wrapping result, select the
+ * endpoint, then accumulate QC from active lanes only. All operations keep
+ * host EFLAGS live and read both sources before publishing an aliased Vd. */
+static void t_simd_satadd(tctx *t, uint32_t i, bool scalar)
+{
+    unsigned size = BITS(i, 23, 22), Q = BIT(i, 30), U = BIT(i, 29);
+    bool sub = BIT(i, 13);
+    vld(t, 0, BITS(i, 9, 5)); vld(t, 1, BITS(i, 20, 16));
+    P(0x6F, 2, 0); P(sub ? psub[size] : padd[size], 2, 1);
+    if (U && size < 2) {
+        /* Native saturating byte/word operations; compare against wrapping. */
+        P(0x6F, 9, 0); P((sub ? 0xD8 : 0xDC) + size, 9, 1);
+        P(0x6F, 8, 9); vcmpeq(t, size, 8, 2); vnot(t, 8, 4);
+        P(0x6F, 2, 9);
+    } else {
+        if (U) {
+            P(0x6F, 8, sub ? 1 : 0); P(0x6F, 9, sub ? 0 : 2);
+            vbias(t, size, 8, 9, 4); vcmpgt(t, size, 8, 9);
+            if (sub) vzero(t, 9); else vones(t, 9);
+        } else {
+            P(0x6F, 8, 0); P(0xEF, 8, 1);
+            P(0x6F, 9, 0); P(0xEF, 9, 2);
+            if (sub) P(0xDB, 8, 9); else P(0xDF, 8, 9);
+            vzero(t, 9); vcmpgt(t, size, 9, 8); P(0x6F, 8, 9);
+            vzero(t, 9); vcmpgt(t, size, 9, 0);
+            static const uint64_t maximum[] = {0x7f7f7f7f7f7f7f7full, 0x7fff7fff7fff7fffull,
+                0x7fffffff7fffffffull, 0x7fffffffffffffffull};
+            vconst(t, 4, maximum[size], true); P(0xEF, 9, 4);
+        }
+        P(0xDB, 9, 8); P(0x6F, 4, 8); P(0xDF, 4, 2); P(0xEB, 9, 4); P(0x6F, 2, 9);
+    }
+    if (scalar) {
+        vconst(t, 4, size == 3 ? ~0ull : (1ull << (8u << size)) - 1, false);
+        P(0xDB, 8, 4); P(0xDB, 2, 4);
+    } else if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 8, 8);
+    vset_qc(t, 8); /* saturating add/sub active overflow */
+    vst(t, BITS(i, 4, 0), 2, scalar ? 1 : Q);
+}
+
 /* SQ(RD)MULH: doubled signed products, optionally rounded, saturate only
  * for min * min. PMULHRSW gives the rounded halfword result except that
  * one overflow; full signed dword products fit PMULDQ's qword lanes. */
@@ -2265,6 +2304,7 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
         return true;
     }
     if (size == 3 && !Q) return false;
+    if (op == 1 || op == 5) { t_simd_satadd(t, i, false); return true; }
     if (op == 8 && size >= 2) {
         t_simd_register_shift(t, rd, rn, rm, size, Q, U);
         return true;
@@ -4050,6 +4090,9 @@ static bool t_simd_scalar(tctx *t, uint32_t i, uint64_t pc)
     if ((i & 0xFFA0FC00) == 0x7EA0D400) {
         t_vfp_wide(t, VFP_ABD, BIT(i, 22), BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), 1, i, pc);
         return true;
+    }
+    if ((i & 0xDF20DC00) == 0x5E200C00) {
+        t_simd_satadd(t, i, true); return true;
     }
 
     if ((i & 0xFF60FC00) == 0x5E20FC00) {

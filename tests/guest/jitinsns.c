@@ -396,6 +396,50 @@ VECF(t_abd4s, "fabd v2.4s,v0.4s,v1.4s")
 VECF(t_abd2d, "fabd v2.2d,v0.2d,v1.2d")
 VECF(t_abds, "fabd s2,s0,s1")
 VECF(t_abdd, "fabd d2,d0,d1")
+VECF(t_sqadd_8b, "sqadd v2.8b,v0.8b,v1.8b")
+VECF(t_sqadd_16b, "sqadd v2.16b,v0.16b,v1.16b")
+VECF(t_sqadd_4h, "sqadd v2.4h,v0.4h,v1.4h")
+VECF(t_sqadd_8h, "sqadd v2.8h,v0.8h,v1.8h")
+VECF(t_sqadd_2s, "sqadd v2.2s,v0.2s,v1.2s")
+VECF(t_sqadd_4s, "sqadd v2.4s,v0.4s,v1.4s")
+VECF(t_sqadd_2d, "sqadd v2.2d,v0.2d,v1.2d")
+VECF(t_sqadd_b, "sqadd b2,b0,b1")
+VECF(t_sqadd_h, "sqadd h2,h0,h1")
+VECF(t_sqadd_s, "sqadd s2,s0,s1")
+VECF(t_sqadd_d, "sqadd d2,d0,d1")
+VECF(t_uqadd_8b, "uqadd v2.8b,v0.8b,v1.8b")
+VECF(t_uqadd_16b, "uqadd v2.16b,v0.16b,v1.16b")
+VECF(t_uqadd_4h, "uqadd v2.4h,v0.4h,v1.4h")
+VECF(t_uqadd_8h, "uqadd v2.8h,v0.8h,v1.8h")
+VECF(t_uqadd_2s, "uqadd v2.2s,v0.2s,v1.2s")
+VECF(t_uqadd_4s, "uqadd v2.4s,v0.4s,v1.4s")
+VECF(t_uqadd_2d, "uqadd v2.2d,v0.2d,v1.2d")
+VECF(t_uqadd_b, "uqadd b2,b0,b1")
+VECF(t_uqadd_h, "uqadd h2,h0,h1")
+VECF(t_uqadd_s, "uqadd s2,s0,s1")
+VECF(t_uqadd_d, "uqadd d2,d0,d1")
+VECF(t_sqsub_8b, "sqsub v2.8b,v0.8b,v1.8b")
+VECF(t_sqsub_16b, "sqsub v2.16b,v0.16b,v1.16b")
+VECF(t_sqsub_4h, "sqsub v2.4h,v0.4h,v1.4h")
+VECF(t_sqsub_8h, "sqsub v2.8h,v0.8h,v1.8h")
+VECF(t_sqsub_2s, "sqsub v2.2s,v0.2s,v1.2s")
+VECF(t_sqsub_4s, "sqsub v2.4s,v0.4s,v1.4s")
+VECF(t_sqsub_2d, "sqsub v2.2d,v0.2d,v1.2d")
+VECF(t_sqsub_b, "sqsub b2,b0,b1")
+VECF(t_sqsub_h, "sqsub h2,h0,h1")
+VECF(t_sqsub_s, "sqsub s2,s0,s1")
+VECF(t_sqsub_d, "sqsub d2,d0,d1")
+VECF(t_uqsub_8b, "uqsub v2.8b,v0.8b,v1.8b")
+VECF(t_uqsub_16b, "uqsub v2.16b,v0.16b,v1.16b")
+VECF(t_uqsub_4h, "uqsub v2.4h,v0.4h,v1.4h")
+VECF(t_uqsub_8h, "uqsub v2.8h,v0.8h,v1.8h")
+VECF(t_uqsub_2s, "uqsub v2.2s,v0.2s,v1.2s")
+VECF(t_uqsub_4s, "uqsub v2.4s,v0.4s,v1.4s")
+VECF(t_uqsub_2d, "uqsub v2.2d,v0.2d,v1.2d")
+VECF(t_uqsub_b, "uqsub b2,b0,b1")
+VECF(t_uqsub_h, "uqsub h2,h0,h1")
+VECF(t_uqsub_s, "uqsub s2,s0,s1")
+VECF(t_uqsub_d, "uqsub d2,d0,d1")
 VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
 VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
 VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
@@ -1945,6 +1989,50 @@ int main(void)
     RF(abd2d);
     RF(abds);
     RF(abdd);
+    RF(sqadd_8b);
+    RF(sqadd_16b);
+    RF(sqadd_4h);
+    RF(sqadd_8h);
+    RF(sqadd_2s);
+    RF(sqadd_4s);
+    RF(sqadd_2d);
+    RF(sqadd_b);
+    RF(sqadd_h);
+    RF(sqadd_s);
+    RF(sqadd_d);
+    RF(uqadd_8b);
+    RF(uqadd_16b);
+    RF(uqadd_4h);
+    RF(uqadd_8h);
+    RF(uqadd_2s);
+    RF(uqadd_4s);
+    RF(uqadd_2d);
+    RF(uqadd_b);
+    RF(uqadd_h);
+    RF(uqadd_s);
+    RF(uqadd_d);
+    RF(sqsub_8b);
+    RF(sqsub_16b);
+    RF(sqsub_4h);
+    RF(sqsub_8h);
+    RF(sqsub_2s);
+    RF(sqsub_4s);
+    RF(sqsub_2d);
+    RF(sqsub_b);
+    RF(sqsub_h);
+    RF(sqsub_s);
+    RF(sqsub_d);
+    RF(uqsub_8b);
+    RF(uqsub_16b);
+    RF(uqsub_4h);
+    RF(uqsub_8h);
+    RF(uqsub_2s);
+    RF(uqsub_4s);
+    RF(uqsub_2d);
+    RF(uqsub_b);
+    RF(uqsub_h);
+    RF(uqsub_s);
+    RF(uqsub_d);
     RF(cov_fmuls0);
     RF(cov_fmuls1);
     RF(cov_fmuls2);

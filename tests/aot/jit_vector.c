@@ -661,6 +661,31 @@ int main(void)
             }
         }
 
+    /* Saturating add/sub: boundary bits, all sizes, scalar and both vector
+     * widths; aliasing, upper clearing, live flags and preexisting QC. */
+    for (unsigned scalar = 0; scalar < 2; scalar++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned u = 0; u < 2; u++) for (unsigned sub = 0; sub < 2; sub++)
+            for (unsigned size = 0; size < 4; size++) for (unsigned k = 0; k < 96; k++) {
+                if (scalar && !q) continue;
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                hao_cpu in; state(&in, rn, rm);
+                uint64_t sign = 1ull << ((8u << size) - 1);
+                uint64_t vals[] = {0, 1, sign - 1, sign, sign + 1, ~0ull, ~1ull};
+                unsigned es = 1u << size;
+                for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16 / es; e++) {
+                    uint64_t v = k < 49 ? vals[r == rm ? k / 7 : k % 7] : rnd();
+                    memcpy(&in.v[r].b[e * es], &v, es);
+                }
+                uint32_t i = (scalar ? 0x5e200c00 : 0x0e200c00) | q << 30 | u << 29 |
+                             size << 22 | sub << 13 | rm << 16 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0; check(i, 0, &in, live);
+                    if ((scalar || size != 3 || q) && vector_helper_calls) {
+                        if (fails++ < 20) printf("MISMATCH %08x: saturating add/sub used helper\n", i);
+                    }
+                }
+            }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

@@ -35,6 +35,50 @@ BENCH(abd4s, "fabd v2.4s,v0.4s,v1.4s", single)
 BENCH(abd2d, "fabd v2.2d,v0.2d,v1.2d", double)
 BENCH(abds, "fabd s2,s0,s1", single)
 BENCH(abdd, "fabd d2,d0,d1", double)
+BENCH(sqadd_8b, "sqadd v2.8b,v0.8b,v1.8b", single)
+BENCH(sqadd_16b, "sqadd v2.16b,v0.16b,v1.16b", single)
+BENCH(sqadd_4h, "sqadd v2.4h,v0.4h,v1.4h", single)
+BENCH(sqadd_8h, "sqadd v2.8h,v0.8h,v1.8h", single)
+BENCH(sqadd_2s, "sqadd v2.2s,v0.2s,v1.2s", single)
+BENCH(sqadd_4s, "sqadd v2.4s,v0.4s,v1.4s", single)
+BENCH(sqadd_2d, "sqadd v2.2d,v0.2d,v1.2d", single)
+BENCH(sqadd_b, "sqadd b2,b0,b1", single)
+BENCH(sqadd_h, "sqadd h2,h0,h1", single)
+BENCH(sqadd_s, "sqadd s2,s0,s1", single)
+BENCH(sqadd_d, "sqadd d2,d0,d1", single)
+BENCH(uqadd_8b, "uqadd v2.8b,v0.8b,v1.8b", single)
+BENCH(uqadd_16b, "uqadd v2.16b,v0.16b,v1.16b", single)
+BENCH(uqadd_4h, "uqadd v2.4h,v0.4h,v1.4h", single)
+BENCH(uqadd_8h, "uqadd v2.8h,v0.8h,v1.8h", single)
+BENCH(uqadd_2s, "uqadd v2.2s,v0.2s,v1.2s", single)
+BENCH(uqadd_4s, "uqadd v2.4s,v0.4s,v1.4s", single)
+BENCH(uqadd_2d, "uqadd v2.2d,v0.2d,v1.2d", single)
+BENCH(uqadd_b, "uqadd b2,b0,b1", single)
+BENCH(uqadd_h, "uqadd h2,h0,h1", single)
+BENCH(uqadd_s, "uqadd s2,s0,s1", single)
+BENCH(uqadd_d, "uqadd d2,d0,d1", single)
+BENCH(sqsub_8b, "sqsub v2.8b,v0.8b,v1.8b", single)
+BENCH(sqsub_16b, "sqsub v2.16b,v0.16b,v1.16b", single)
+BENCH(sqsub_4h, "sqsub v2.4h,v0.4h,v1.4h", single)
+BENCH(sqsub_8h, "sqsub v2.8h,v0.8h,v1.8h", single)
+BENCH(sqsub_2s, "sqsub v2.2s,v0.2s,v1.2s", single)
+BENCH(sqsub_4s, "sqsub v2.4s,v0.4s,v1.4s", single)
+BENCH(sqsub_2d, "sqsub v2.2d,v0.2d,v1.2d", single)
+BENCH(sqsub_b, "sqsub b2,b0,b1", single)
+BENCH(sqsub_h, "sqsub h2,h0,h1", single)
+BENCH(sqsub_s, "sqsub s2,s0,s1", single)
+BENCH(sqsub_d, "sqsub d2,d0,d1", single)
+BENCH(uqsub_8b, "uqsub v2.8b,v0.8b,v1.8b", single)
+BENCH(uqsub_16b, "uqsub v2.16b,v0.16b,v1.16b", single)
+BENCH(uqsub_4h, "uqsub v2.4h,v0.4h,v1.4h", single)
+BENCH(uqsub_8h, "uqsub v2.8h,v0.8h,v1.8h", single)
+BENCH(uqsub_2s, "uqsub v2.2s,v0.2s,v1.2s", single)
+BENCH(uqsub_4s, "uqsub v2.4s,v0.4s,v1.4s", single)
+BENCH(uqsub_2d, "uqsub v2.2d,v0.2d,v1.2d", single)
+BENCH(uqsub_b, "uqsub b2,b0,b1", single)
+BENCH(uqsub_h, "uqsub h2,h0,h1", single)
+BENCH(uqsub_s, "uqsub s2,s0,s1", single)
+BENCH(uqsub_d, "uqsub d2,d0,d1", single)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -542,6 +586,50 @@ int main(int argc, char **argv)
     RUN(tail_fmadd); RUN(tail_fmsub); RUN(tail_fnmadd); RUN(tail_fnmsub); RUN(tail_fnmul); RUN(tail_frecpss); RUN(tail_frecps2s); RUN(tail_frecps4s); RUN(tail_frsqrtss); RUN(tail_frsqrts2s); RUN(tail_frsqrts4s);
 
     RUN(abd2s); RUN(abd4s); RUN(abd2d); RUN(abds); RUN(abdd);
+    RUN(sqadd_8b);
+    RUN(sqadd_16b);
+    RUN(sqadd_4h);
+    RUN(sqadd_8h);
+    RUN(sqadd_2s);
+    RUN(sqadd_4s);
+    RUN(sqadd_2d);
+    RUN(sqadd_b);
+    RUN(sqadd_h);
+    RUN(sqadd_s);
+    RUN(sqadd_d);
+    RUN(uqadd_8b);
+    RUN(uqadd_16b);
+    RUN(uqadd_4h);
+    RUN(uqadd_8h);
+    RUN(uqadd_2s);
+    RUN(uqadd_4s);
+    RUN(uqadd_2d);
+    RUN(uqadd_b);
+    RUN(uqadd_h);
+    RUN(uqadd_s);
+    RUN(uqadd_d);
+    RUN(sqsub_8b);
+    RUN(sqsub_16b);
+    RUN(sqsub_4h);
+    RUN(sqsub_8h);
+    RUN(sqsub_2s);
+    RUN(sqsub_4s);
+    RUN(sqsub_2d);
+    RUN(sqsub_b);
+    RUN(sqsub_h);
+    RUN(sqsub_s);
+    RUN(sqsub_d);
+    RUN(uqsub_8b);
+    RUN(uqsub_16b);
+    RUN(uqsub_4h);
+    RUN(uqsub_8h);
+    RUN(uqsub_2s);
+    RUN(uqsub_4s);
+    RUN(uqsub_2d);
+    RUN(uqsub_b);
+    RUN(uqsub_h);
+    RUN(uqsub_s);
+    RUN(uqsub_d);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);
