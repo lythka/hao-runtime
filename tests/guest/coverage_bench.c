@@ -79,6 +79,54 @@ BENCH(uqsub_b, "uqsub b2,b0,b1", single)
 BENCH(uqsub_h, "uqsub h2,h0,h1", single)
 BENCH(uqsub_s, "uqsub s2,s0,s1", single)
 BENCH(uqsub_d, "uqsub d2,d0,d1", single)
+BENCH(sabd_8b, "sabd v2.8b,v0.8b,v1.8b", single)
+BENCH(sabd_4h, "sabd v2.4h,v0.4h,v1.4h", single)
+BENCH(sabd_2s, "sabd v2.2s,v0.2s,v1.2s", single)
+BENCH(sabd_16b, "sabd v2.16b,v0.16b,v1.16b", single)
+BENCH(sabd_8h, "sabd v2.8h,v0.8h,v1.8h", single)
+BENCH(sabd_4s, "sabd v2.4s,v0.4s,v1.4s", single)
+BENCH(uabd_8b, "uabd v2.8b,v0.8b,v1.8b", single)
+BENCH(uabd_4h, "uabd v2.4h,v0.4h,v1.4h", single)
+BENCH(uabd_2s, "uabd v2.2s,v0.2s,v1.2s", single)
+BENCH(uabd_16b, "uabd v2.16b,v0.16b,v1.16b", single)
+BENCH(uabd_8h, "uabd v2.8h,v0.8h,v1.8h", single)
+BENCH(uabd_4s, "uabd v2.4s,v0.4s,v1.4s", single)
+BENCH(saba_8b, "saba v2.8b,v0.8b,v1.8b", single)
+BENCH(saba_4h, "saba v2.4h,v0.4h,v1.4h", single)
+BENCH(saba_2s, "saba v2.2s,v0.2s,v1.2s", single)
+BENCH(saba_16b, "saba v2.16b,v0.16b,v1.16b", single)
+BENCH(saba_8h, "saba v2.8h,v0.8h,v1.8h", single)
+BENCH(saba_4s, "saba v2.4s,v0.4s,v1.4s", single)
+BENCH(uaba_8b, "uaba v2.8b,v0.8b,v1.8b", single)
+BENCH(uaba_4h, "uaba v2.4h,v0.4h,v1.4h", single)
+BENCH(uaba_2s, "uaba v2.2s,v0.2s,v1.2s", single)
+BENCH(uaba_16b, "uaba v2.16b,v0.16b,v1.16b", single)
+BENCH(uaba_8h, "uaba v2.8h,v0.8h,v1.8h", single)
+BENCH(uaba_4s, "uaba v2.4s,v0.4s,v1.4s", single)
+BENCH(sabdl_8h, "sabdl v2.8h,v0.8b,v1.8b", single)
+BENCH(sabdl_4s, "sabdl v2.4s,v0.4h,v1.4h", single)
+BENCH(sabdl_2d, "sabdl v2.2d,v0.2s,v1.2s", single)
+BENCH(sabdl2_8h, "sabdl2 v2.8h,v0.16b,v1.16b", single)
+BENCH(sabdl2_4s, "sabdl2 v2.4s,v0.8h,v1.8h", single)
+BENCH(sabdl2_2d, "sabdl2 v2.2d,v0.4s,v1.4s", single)
+BENCH(uabdl_8h, "uabdl v2.8h,v0.8b,v1.8b", single)
+BENCH(uabdl_4s, "uabdl v2.4s,v0.4h,v1.4h", single)
+BENCH(uabdl_2d, "uabdl v2.2d,v0.2s,v1.2s", single)
+BENCH(uabdl2_8h, "uabdl2 v2.8h,v0.16b,v1.16b", single)
+BENCH(uabdl2_4s, "uabdl2 v2.4s,v0.8h,v1.8h", single)
+BENCH(uabdl2_2d, "uabdl2 v2.2d,v0.4s,v1.4s", single)
+BENCH(sabal_8h, "sabal v2.8h,v0.8b,v1.8b", single)
+BENCH(sabal_4s, "sabal v2.4s,v0.4h,v1.4h", single)
+BENCH(sabal_2d, "sabal v2.2d,v0.2s,v1.2s", single)
+BENCH(sabal2_8h, "sabal2 v2.8h,v0.16b,v1.16b", single)
+BENCH(sabal2_4s, "sabal2 v2.4s,v0.8h,v1.8h", single)
+BENCH(sabal2_2d, "sabal2 v2.2d,v0.4s,v1.4s", single)
+BENCH(uabal_8h, "uabal v2.8h,v0.8b,v1.8b", single)
+BENCH(uabal_4s, "uabal v2.4s,v0.4h,v1.4h", single)
+BENCH(uabal_2d, "uabal v2.2d,v0.2s,v1.2s", single)
+BENCH(uabal2_8h, "uabal2 v2.8h,v0.16b,v1.16b", single)
+BENCH(uabal2_4s, "uabal2 v2.4s,v0.8h,v1.8h", single)
+BENCH(uabal2_2d, "uabal2 v2.2d,v0.4s,v1.4s", single)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -630,6 +678,54 @@ int main(int argc, char **argv)
     RUN(uqsub_h);
     RUN(uqsub_s);
     RUN(uqsub_d);
+    RUN(sabd_8b);
+    RUN(sabd_4h);
+    RUN(sabd_2s);
+    RUN(sabd_16b);
+    RUN(sabd_8h);
+    RUN(sabd_4s);
+    RUN(uabd_8b);
+    RUN(uabd_4h);
+    RUN(uabd_2s);
+    RUN(uabd_16b);
+    RUN(uabd_8h);
+    RUN(uabd_4s);
+    RUN(saba_8b);
+    RUN(saba_4h);
+    RUN(saba_2s);
+    RUN(saba_16b);
+    RUN(saba_8h);
+    RUN(saba_4s);
+    RUN(uaba_8b);
+    RUN(uaba_4h);
+    RUN(uaba_2s);
+    RUN(uaba_16b);
+    RUN(uaba_8h);
+    RUN(uaba_4s);
+    RUN(sabdl_8h);
+    RUN(sabdl_4s);
+    RUN(sabdl_2d);
+    RUN(sabdl2_8h);
+    RUN(sabdl2_4s);
+    RUN(sabdl2_2d);
+    RUN(uabdl_8h);
+    RUN(uabdl_4s);
+    RUN(uabdl_2d);
+    RUN(uabdl2_8h);
+    RUN(uabdl2_4s);
+    RUN(uabdl2_2d);
+    RUN(sabal_8h);
+    RUN(sabal_4s);
+    RUN(sabal_2d);
+    RUN(sabal2_8h);
+    RUN(sabal2_4s);
+    RUN(sabal2_2d);
+    RUN(uabal_8h);
+    RUN(uabal_4s);
+    RUN(uabal_2d);
+    RUN(uabal2_8h);
+    RUN(uabal2_4s);
+    RUN(uabal2_2d);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);

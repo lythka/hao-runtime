@@ -2146,15 +2146,32 @@ static void vwiden(tctx *t, int r, unsigned size, unsigned U, unsigned Q)
     P38((uint8_t)(ops[size] + (U ? 0x10 : 0)), r, r);
 }
 
+/* Absolute difference in the original signed/unsigned order; subtracting
+ * first and applying signed ABS would lose the top bit for extreme inputs. */
+static void vabsdiff(tctx *t, unsigned size, bool unsign)
+{
+    P(0x6F, 2, 1); P(0x6F, 3, 0);
+    if (unsign) {
+        static const uint64_t signs[] = {0x8080808080808080ull, 0x8000800080008000ull,
+            0x8000000080000000ull, 0x8000000000000000ull};
+        vconst(t, 4, signs[size], true); P(0xEF, 2, 4); P(0xEF, 3, 4);
+    }
+    vcmpgt(t, size, 2, 3); /* absolute difference ordering */
+    P(psub[size], 0, 1); P(0xEF, 0, 2); P(psub[size], 0, 2);
+}
+
 static bool t_simd_three_diff(tctx *t, uint32_t i)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 12);
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
-    if (size == 3 || (op > 3 && op != 8 && op != 10 && op != 12)) return false;
+    if (size == 3 || (op > 3 && op != 5 && op != 7 && op != 8 && op != 10 && op != 12)) return false;
     vld(t, 0, rn); vld(t, 1, rm);
     if (!(op == 1 || op == 3)) vwiden(t, 0, size, U, Q);
     vwiden(t, 1, size, U, Q);
-    if (op <= 3) P(op < 2 ? padd[size + 1] : psub[size + 1], 0, 1);
+    if (op == 5 || op == 7) {
+        vabsdiff(t, size + 1, false); /* widened inputs fit signed lanes */
+        if (op == 5) { vld(t, 1, rd); P(padd[size + 1], 0, 1); }
+    } else if (op <= 3) P(op < 2 ? padd[size + 1] : psub[size + 1], 0, 1);
     else {
         if (size == 0) P(0xD5, 0, 1);
         else if (size == 1) P38(0x40, 0, 1);
@@ -2315,6 +2332,11 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
         return true;
     }
     switch (op) {
+    case 0x0e: case 0x0f:
+        if (size == 3) return false;
+        vld(t, 0, rn); vld(t, 1, rm); vabsdiff(t, size, U);
+        if (op == 0x0f) { vld(t, 1, rd); P(padd[size], 0, 1); }
+        break;
     case 0x10:                                                   /* ADD / SUB */
         vld(t, 0, rn); vld(t, 1, rm);
         P(U ? psub[size] : padd[size], 0, 1);

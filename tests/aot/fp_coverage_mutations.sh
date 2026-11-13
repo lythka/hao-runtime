@@ -16,6 +16,7 @@ s = s.replace('#include "jit-conversions.inc"', Path('src/jit-conversions.inc').
 mutations = {
     'fabd-sign': ('if (absolute) P(0xDB, 2, mag); /* FABD absolute result */', '/* wrong signed FABD result */'),
     'satadd-qc': ('vset_qc(t, 8); /* saturating add/sub active overflow */', '/* wrong: no saturation flag */'),
+    'absdiff-order': ('vcmpgt(t, size, 2, 3); /* absolute difference ordering */', 'vcmpgt(t, size, 3, 2); /* wrong ordering */'),
     'scalar-fused-sign': ('if (three && BIT(insn, 21)) P(0xEF, 8, 2);', 'if (false) P(0xEF, 8, 2);'),
     'rsqrt-scale': ('P(0x59, 9, 2); if (Q) P(0x59, 13, 2);', '/* deliberately omit reciprocal square-root scale */'),
 
@@ -33,7 +34,7 @@ for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in ${MUTATIONS:-control fabd-sign pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition satadd-qc}; do
+for mutation in ${MUTATIONS:-control fabd-sign pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition satadd-qc absdiff-order}; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
