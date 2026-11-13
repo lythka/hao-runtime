@@ -113,3 +113,4 @@ guest/widenfp	300	par	tests/guest/widenfp.sh
 guest/bfdot	300	par	tests/guest/bfdot.sh
 host/labels-race	300	par	tests/host/labels_race.sh
 guest/reserved-simd	300	par	tests/guest/reserved_simd.sh
+guest/valist	300	par	tests/guest/valist.sh

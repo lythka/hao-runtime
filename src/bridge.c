@@ -1879,6 +1879,11 @@ void hao_bridge_stats(void)
     fprintf(f, "formats fixed=%llu untyped=%llu; signatures refused=%llu; ", (unsigned long long)__atomic_load_n(&hao_fmt_fixed, __ATOMIC_RELAXED),
             (unsigned long long)__atomic_load_n(&hao_fmt_untyped, __ATOMIC_RELAXED),
             (unsigned long long)__atomic_load_n(&hao_abi_refused, __ATOMIC_RELAXED));
+    fprintf(f, "va_list builders made=%llu va_lists=%llu deallocs=%llu destroyed=%llu; ",
+            (unsigned long long)__atomic_load_n(&hao_vb_metadata_calls, __ATOMIC_RELAXED),
+            (unsigned long long)__atomic_load_n(&hao_vb_va_lists, __ATOMIC_RELAXED),
+            (unsigned long long)__atomic_load_n(&hao_vb_deallocs, __ATOMIC_RELAXED),
+            (unsigned long long)__atomic_load_n(&hao_vb_destroyed, __ATOMIC_RELAXED));
     fprintf(f, "unarchiver BOOL strings=%llu unconverted=%llu; ", (unsigned long long)__atomic_load_n(&hao_objc_bool_strings, __ATOMIC_RELAXED),
             (unsigned long long)__atomic_load_n(&hao_objc_bool_unconverted, __ATOMIC_RELAXED));
     /* native variadic ObjC methods objc_msgSend reached by their prologue (objc.c msgsend_varsniff) */

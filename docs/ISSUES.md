@@ -1,5 +1,50 @@
 # Runtime issues and measured scope
 
+## Swift `__VaListBuilder` in arm64 guest code
+
+libswiftCore implements `__VaListBuilder`, behind `withVaList`,
+`String(format:)` with `CVarArg` arguments and `getVaList`, per architecture:
+- On arm64 a `va_list` is a pointer to a word buffer. The class holds that
+  buffer: in the 27.x arm64e libswiftCore, the allocated word count is at
+  offset 32, the storage at 40, and the instance is 48 bytes.
+- On x86_64 it is a SysV register-save structure, with another layout and no
+  `deallocStorage(wordCount:storage:)`.
+
+Most of the class is `@inlinable`, so guest code allocates the object and
+writes its fields with the arm64 layout. It imports only the metadata
+accessor, `va_list()` and `deallocStorage`.
+
+Bound to x86_64 libswiftCore:
+- `deallocStorage` stayed unresolved, and the first list long enough to grow
+  aborted;
+- `va_list()` read x86_64 fields;
+- releasing the object ran the x86_64 destroyer over arm64 fields.
+
+`src/valist_builder.c` answers the three imports with the arm64 semantics:
+- `va_list()` returns the storage, or an empty word, which is the arm64
+  `va_list` the bridge converts for native calls;
+- `deallocStorage` is `swift_slowDealloc(storage, wordCount * 8, 7)`;
+- the accessor returns a copy of the x86_64 class metadata, made once, with
+  instance size 48 and a destroyer that frees the storage and then the object,
+  as the arm64 deinit does.
+
+The x86_64 class that native code uses is unchanged. `--stats` prints the
+builders made, `va_list`s, deallocs and destroyed objects.
+
+`tests/guest/valist.sh` checks `withVaList` into `vsnprintf`, a 40-word list
+that grows, `String(format:)` with mixed arguments, an empty list, and 2,000
+builders made and released: JIT, `--interp` and AOT equal native arm64. Before
+the change all three aborted on the unresolved `deallocStorage`.
+
+Limits:
+- `getVaList(_:)` is not inlinable. It runs in x86_64 libswiftCore and returns
+  an x86_64 `va_list`, which is not converted: a guest that passes it to a
+  native function gets the wrong arguments.
+- The metadata copy is not registered with the ObjC runtime. The builder is
+  internal to the stdlib and is not sent ObjC messages.
+- The offsets were read from the 27.x arm64e libswiftCore. A libswiftCore with
+  another layout needs them checked again.
+
 ## Half fused multiply-add in JIT and AOT
 
 Half FMLA/FMLS vector and indexed .4H/.8H forms now admit subnormal inputs

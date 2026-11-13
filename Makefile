@@ -41,7 +41,7 @@ CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
 RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
 RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
-RT += src/async_contract.c
+RT += src/async_contract.c src/valist_builder.c
 RT += src/swiftvalue/Recipe.c src/swiftvalue/Enum.c src/swiftvalue/Common.c src/swiftvalue/Aggregate.c
 RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c
 RT_O := $(patsubst src/%.c,$(B)/%.o,$(RT)) $(B)/bridge_x86_64.o
