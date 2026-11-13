@@ -764,6 +764,27 @@ int main(void)
             if (k < 8) { check(i | 1u << 21, 0, &in, true); check(i & ~(1u << 30), 0, &in, true); }
         }
 
+    /* Double compares, register and zero forms: all controls, NaNs,
+     * subnormals, signed zeros, register aliases and helper admission. */
+    static const uint32_t cmpd_forms[] = {0x4e60e400, 0x6e60e400, 0x6ee0e400,
+        0x4ee0c800, 0x6ee0c800, 0x4ee0d800, 0x6ee0d800, 0x4ee0e800};
+    for (unsigned f = 0; f < 8; f++) for (unsigned ctl = 0; ctl < 16; ctl++)
+        for (unsigned k = 0; k < 128; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm); in.fpcr = ctl << 22;
+            for (unsigned r = 0; r < 32; r++) for (int e = 0; e < 2; e++) in.v[r].d[e] = dval();
+            if (k < 4) {
+                in.v[rn].d[0] = 0x3ff0000000000000ull; in.v[rn].d[1] = 0xbff0000000000000ull;
+                in.v[rm].d[0] = 0x4000000000000000ull; in.v[rm].d[1] = 0x8000000000000000ull;
+            }
+            uint32_t i = cmpd_forms[f] | rn << 5 | rd | (f < 3 ? rm << 16 : 0);
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k < 4 && vector_helper_calls && fails++ < 20)
+                    printf("MISMATCH %08x: double compare used helper\n", i);
+            }
+        }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

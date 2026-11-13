@@ -3619,7 +3619,9 @@ static bool t_vfp_reduce(tctx *t, uint32_t i, uint64_t pc)
  * signed-zero cases. Special lanes retain the interpreter's NaN/IDC rules. */
 static bool t_vfp_zero(tctx *t, uint32_t i, uint64_t pc)
 {
-    unsigned key = i & 0xBFFFFC00, Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    unsigned key = i & 0xBFBFFC00, Q = BIT(i, 30), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
+    bool dbl = BIT(i, 22);
+    if (dbl && !Q) return false;
     int pred, swap;
     switch (key) {
     case 0x0EA0C800: pred = 1; swap = 1; break; /* FCMGT */
@@ -3630,16 +3632,35 @@ static bool t_vfp_zero(tctx *t, uint32_t i, uint64_t pc)
     default: return false;
     }
     if (Q) vld(t, 0, rn); else x_movq_ld(&t->b, 0, VR(rn));
-    vfp_constants(t); vzero(t, 4); vfp_special(t, 0);
+    if (dbl) vfp_constants64(t); else vfp_constants(t);
+    vzero(t, 4);
+    if (dbl) vfp_special64(t, 0); else vfp_special(t, 0);
     x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
     size_t decline = jrcxnz32(t);
-    if (swap) { vzero(t, 1); x_sse_rri(&t->b, 0, 0xC2, 1, 0, (uint8_t)pred); }
-    else { P(0x6F, 1, 0); x_sse_rri(&t->b, 0, 0xC2, 1, 5, (uint8_t)pred); }
+    if (swap) { vzero(t, 1); x_sse_rri(&t->b, dbl ? 0x66 : 0, 0xC2, 1, 0, (uint8_t)pred); }
+    else { P(0x6F, 1, 0); x_sse_rri(&t->b, dbl ? 0x66 : 0, 0xC2, 1, dbl ? 12 : 5, (uint8_t)pred); }
     vst(t, rd, 1, (int)Q);
     size_t done = x_jmp32(&t->b);
     x_patch32(&t->b, decline, xb_len(&t->b)); helper_keep_flags(t, i, pc);
     x_patch32(&t->b, done, xb_len(&t->b));
     return true;
+}
+
+/* Ordered double comparisons admit normal/zero lanes using integer bits.
+ * NaNs and denormals retain the interpreter's IOC/IDC and DN/FZ handling. */
+static void t_vfp_compare64(tctx *t, int op, uint32_t i, uint64_t pc)
+{
+    vld(t, 0, BITS(i, 9, 5)); vld(t, 1, BITS(i, 20, 16));
+    vfp_constants64(t); vzero(t, 4); vfp_special64(t, 0); vfp_special64(t, 1);
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 4);
+    size_t decline = jrcxnz32(t);
+    P(0x6F, 2, op == VFP_EQ ? 0 : 1);
+    x_sse_rri(&t->b, 0x66, 0xC2, 2, op == VFP_EQ ? 1 : 0,
+              op == VFP_EQ ? 0 : op == VFP_GE ? 2 : 1); /* double compare predicate */
+    vst(t, BITS(i, 4, 0), 2, 1);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, decline, xb_len(&t->b)); helper_keep_flags(t, i, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
 }
 
 /* three-same, floating point: the single-precision forms of t_vfp32 */
@@ -3657,6 +3678,9 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
         int wide_op;
         if (!Q) return false;                                   /* .1D reserved */
         switch (U << 6 | (size >> 1) << 5 | (op & 7)) {
+        case 0x04: case 0x44: case 0x64:
+            t_vfp_compare64(t, !U ? VFP_EQ : size & 2 ? VFP_GT : VFP_GE, i, pc);
+            return true;
         case 0x02: wide_op = VFP_ADD; break;
         case 0x22: wide_op = VFP_SUB; break;
         case 0x43: wide_op = VFP_MUL; break;
