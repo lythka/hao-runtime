@@ -686,6 +686,27 @@ int main(void)
                 }
             }
 
+    /* Absolute differences: signed extreme distance, unsigned order,
+     * accumulation wraparound, high-half selection and every register alias. */
+    for (unsigned lng = 0; lng < 2; lng++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned u = 0; u < 2; u++) for (unsigned acc = 0; acc < 2; acc++)
+            for (unsigned size = 0; size < 3; size++) for (unsigned k = 0; k < 96; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                hao_cpu in; state(&in, rn, rm);
+                unsigned es = 1u << size; uint64_t sign = 1ull << (8 * es - 1);
+                uint64_t vals[] = {0, 1, sign - 1, sign, sign + 1, ~0ull, ~1ull};
+                for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16 / es; e++) {
+                    uint64_t v = k < 49 ? vals[r == rm ? k / 7 : k % 7] : rnd();
+                    memcpy(&in.v[r].b[e * es], &v, es);
+                }
+                uint32_t i = (lng ? 0x0e200000 | (acc ? 5 : 7) << 12 : 0x0e200400 | (14 + acc) << 11) |
+                             q << 30 | u << 29 | size << 22 | rm << 16 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0; check(i, 0, &in, live);
+                    if (vector_helper_calls && fails++ < 20) printf("MISMATCH %08x: absolute difference used helper\n", i);
+                }
+            }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.
