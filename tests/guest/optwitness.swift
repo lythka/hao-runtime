@@ -146,6 +146,23 @@ func spareCases() {
     }
     run2("G17", [(G17.c0(C(5)), nil), (.c16(C(6)), .some(nil)), (.c9(C(7)), nil), (.c4(C(8)), .some(.some(C(9))))], n17)
     optionalSpareCases()
+    singlePayloadCases()
+}
+
+// Guest enums with one payload case whose empty cases are the payload's extra inhabitants (an Array's
+// buffer word, a class reference): ControlCenter's ControlCenterDisplayableGridSizes shape (8 bytes,
+// 0x7ffffffd inhabitants), beside a C?? in a tuple the native tuple witnesses take whole.
+enum GArr { case custom([Int]), compact, regular }
+enum GObj { case object(C), none, other, third }
+func singlePayloadCases() {
+    run2("GArr", [(GArr.compact, nil), (.regular, .some(nil)), (.custom([1, 2]), nil), (.regular, .some(.some(C(4)))),
+                  (.custom([]), .some(nil))]) {
+        switch $0 { case .custom(let a): return "custom\(a)"; case .compact: return "compact"; case .regular: return "regular" }
+    }
+    run2("GObj", [(GObj.none, nil), (.object(C(1)), .some(nil)), (.third, .some(.some(C(2)))), (.other, nil)]) {
+        switch $0 { case .object(let c): return "object(\(c.n))"; case .none: return "none"; case .other: return "other"
+                    case .third: return "third" }
+    }
 }
 
 // An Optional over a 17-byte guest spare-bit enum: its tag and its extra inhabitants lie in a class

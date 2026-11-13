@@ -32,7 +32,9 @@ static const witnesses *vwt(const void *type) { return ((const witnesses *const 
  * largest payload size in *maximum. Returns the payload case count, or zero.
  * Says nothing about the layout. */
 enum { MAX_EMPTY = 1u << 16 };
-static int direct_cases(const void *type, unsigned field_kind, const void **payloads, unsigned *empty_out, uint64_t *maximum)
+/* The same with LEAST payload cases at the least (direct_cases: 2). */
+static int enum_cases(const void *type, unsigned field_kind, unsigned least, const void **payloads, unsigned *empty_out,
+                      uint64_t *maximum)
 {
     kind_fn *kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");
     resolve_fn *resolve = dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInContext2");
@@ -43,7 +45,7 @@ static int direct_cases(const void *type, unsigned field_kind, const void **payl
     /* Context kind Enum=18, generic flag bit7. */
     unsigned count = u32(desc + 20) & 0xffffff;
     unsigned empty = u32(desc + 24);
-    if ((u32(desc) & 0x1f) != 0x12 || count < 2 || count > HAO_SV_MAX_ENUM_PAYLOADS || empty > MAX_EMPTY ||
+    if ((u32(desc) & 0x1f) != 0x12 || count < least || count > HAO_SV_MAX_ENUM_PAYLOADS || empty > MAX_EMPTY ||
         v->size < 2 || v->size > 4096) return 0;
     const char *fields = relative(desc + 16);
     /* Direct cases only, ordinary 12-byte records. */
@@ -76,6 +78,10 @@ static int direct_cases(const void *type, unsigned field_kind, const void **payl
     *empty_out = empty;
     *maximum = largest;
     return (int)count;
+}
+static int direct_cases(const void *type, unsigned field_kind, const void **payloads, unsigned *empty_out, uint64_t *maximum)
+{
+    return enum_cases(type, field_kind, 2, payloads, empty_out, maximum);
 }
 
 int enum_inline_payloads(const void *type, const void **payloads)
@@ -463,6 +469,25 @@ static int guest_spare_bit_case(const void *type, const unsigned char *value, fi
     return 1;
 }
 
+/* A guest-defined enum with one payload case whose empty cases are the
+ * payload's first extra inhabitants (GenEnum.cpp SinglePayloadEnumImplStrategy
+ * with no extra tag bits: the enum is the payload's size, and the payload's
+ * inhabitants left over are the enum's). Its witnesses are arm64 code. */
+int guest_single_payload_enum(const void *type, const void **payload, unsigned *empty)
+{
+    const char *desc = type ? ((const void *const *)type)[1] : NULL;
+    if (!desc || !hao_image_for_addr((uint64_t)(uintptr_t)desc)) return 0;
+    const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
+    uint64_t maximum;
+    unsigned e;
+    if (enum_cases(type, 2, 1, payloads, &e, &maximum) != 1 || !e) return 0;
+    const witnesses *v = vwt(type), *p = vwt(payloads[0]);
+    if (v->size != p->size || p->extra < e || v->extra != p->extra - e) return 0;
+    *payload = payloads[0];
+    *empty = e;
+    return 1;
+}
+
 int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out)
 {
     guest_spare_layout g;
@@ -473,6 +498,11 @@ int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out)
 int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out)
 {
     (void)type; (void)k; (void)out;
+    return 0;
+}
+int guest_single_payload_enum(const void *type, const void **payload, unsigned *empty)
+{
+    (void)type; (void)payload; (void)empty;
     return 0;
 }
 #endif

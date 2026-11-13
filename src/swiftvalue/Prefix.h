@@ -23,6 +23,7 @@
 #define tag_byte_layout hao_sv_tag_byte_layout
 #define spare_bit_xi hao_sv_spare_bit_xi
 #define guest_spare_bit_xi hao_sv_guest_spare_bit_xi
+#define guest_single_payload_enum hao_sv_guest_single_payload_enum
 #define translated_nil_type hao_sv_translated_nil_type
 #define mpenum_lookup hao_sv_mpenum_lookup
 #define archdiff_lookup hao_sv_archdiff_lookup

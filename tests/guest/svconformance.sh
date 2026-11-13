@@ -1,8 +1,9 @@
 #!/bin/sh
 # A published Swift value holding a class-bound existential whose conformance is the guest's
-# (tests/guest/svconformance.swift) must be refused by the walker, whether the witness table is in the
-# guest image (a static conformance) or instantiated on the heap (a generic one): only a conformance
-# whose descriptor lies in no guest image is native (src/swiftvalue/Common.c class_existential_value).
+# (tests/guest/svconformance.swift): to a native protocol it must be refused by the walker, whether the
+# witness table is in the guest image (a static conformance) or instantiated on the heap (a generic
+# one): only a conformance whose descriptor lies in no guest image is native. To a guest protocol, which
+# native code cannot name, it is admitted (src/swiftvalue/Recipe.c, live existentials).
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/svconformance.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -19,7 +20,12 @@ timeout -s KILL "$T" "$HAO" "$OUT/svconformance" "$LIB" >"$OUT/out" 2>"$OUT/err"
 cat "$OUT/out"
 fail=0
 [ $rc = 0 ] || fail=1
-grep -qx 'static walk -1' "$OUT/out" || fail=1
-grep -qx 'generic walk -1' "$OUT/out" || fail=1
+grep -qx 'native static walk refused' "$OUT/out" || fail=1
+grep -qx 'native generic walk refused' "$OUT/out" || fail=1
+grep -qx 'static walk admitted' "$OUT/out" || fail=1
+grep -qx 'generic walk admitted' "$OUT/out" || fail=1
+grep -qx 'opaque small walk admitted' "$OUT/out" || fail=1
+grep -qx 'opaque big walk admitted' "$OUT/out" || fail=1
+grep -qx 'opaque native walk refused' "$OUT/out" || fail=1
 [ $fail = 0 ] && echo "svconformance: PASS" || { tail -3 "$OUT/err"; echo "svconformance: FAIL"; }
 exit $fail

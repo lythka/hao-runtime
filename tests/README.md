@@ -122,7 +122,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/nojit | PASS | 5 | |
 | guest/objcimp | PASS | 4 | |
 | guest/objcva | PASS | 3 | |
-| guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals, also beside guest multi-payload enums (tag byte with several empty cases, spare-bit tags decoded from the image's layout record, and Optionals over 17-byte spare-bit enums whose nil is one of the enum's inhabitants), and `Data??` whose nils are translated between the architectures' spare-bit encodings; see below |
+| guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals, also beside guest multi-payload enums (tag byte with several empty cases, spare-bit tags decoded from the image's layout record, Optionals over 17-byte spare-bit enums whose nil is one of the enum's inhabitants, and single-payload enums whose empty cases are their payload's inhabitants), and `Data??` whose nils are translated between the architectures' spare-bit encodings; see below |
 | guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below. Under heavy parallel load one `oslogswift` mode can miss its records; it passes alone |
 | guest/signals | PASS | 36 | |
 | guest/sret-forward | PASS | 3 | |
@@ -131,7 +131,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/svarchdiff | PASS | 1 | the walker on guest values holding Swift.Float16 (declared differently by architecture, frozen): refused; its Float16 refusals are checked only where this host's libswiftCore is the build `src/archdiff_gen.inc` describes |
 | guest/mkgeometry | PASS | 2 | MapKit geometry functions passing or returning 32-byte HFAs (MKMapRect, MKCoordinateRegion) by value, including two without a header: native arm64 results under JIT, `--interp`, helpers-only and AOT; the six rows `src/aggspi_gen.inc` added for them fail without them |
 | guest/optdata | PASS | 30 | Foundation.Data? arguments and result of a native Swift library through interface-unit kind D: native arm64 results under JIT, `--interp`, helpers-only and AOT; without the unit a nil argument arrives as an empty Data (the control) |
-| guest/svconformance | PASS | 2 | |
+| guest/svconformance | PASS | 2 | published existentials: a guest conformance to a native protocol (class-bound and opaque) refused, a guest protocol's existential with guest conformances admitted |
 | guest/swift-object-callbacks | PASS | 5 | |
 | guest/swiftlate | PASS | 4 | |
 | guest/swiftls | PASS | 5 | |
