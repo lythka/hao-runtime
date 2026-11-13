@@ -104,6 +104,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/fork | PASS | 45 | |
 | guest/fpscalar | PASS | 55 | |
 | guest/fullcache | PASS | 6 | |
+| guest/fwbundle | PASS | 20 | a guest framework finds its bundle by identifier (`bundleWithIdentifier:` then a resource), by class (plain, resilient-ancestry, generic and pure Swift classes) and in `Bundle.allFrameworks`: equal to native arm64 under JIT, `--interp` and AOT. Without the framework's CFBundle the identifier lookup is nil (the control) |
 | guest/gss | PASS | 1 | |
 | guest/heapprobe | PASS | 1 | |
 | guest/hfasret | PASS | 2 | |

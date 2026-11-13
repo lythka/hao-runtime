@@ -2562,6 +2562,40 @@ static hao_image *load_cache_image(hao_image *loader, const char *path)
     return im;
 }
 
+/* A guest framework is not a dyld image, so CoreFoundation never makes its
+ * bundle: CFBundleGetBundleWithIdentifier and +[NSBundle bundleWithIdentifier:]
+ * miss it, and a framework that finds its own resources by its identifier
+ * (EngagementCollector: bundleWithIdentifier: then URLForResource:withExtension:
+ * for its Core Data model) gets nil. Natively CF creates the bundle of every
+ * loaded framework. Create it once when the framework's executable is loaded
+ * (path .../NAME.framework/[Versions/V/]NAME) and keep it: CF's tables then
+ * answer the identifier. CF returns the existing bundle for a URL it already
+ * knows (a framework native code opened as a bundle). */
+static void register_framework_bundle(const char *rp)
+{
+    static void *(*url_create)(void *, const uint8_t *, long, unsigned char);
+    static void *(*bundle_create)(void *, void *);
+    static void (*release)(const void *);
+    const char *fw = strstr(rp, ".framework/");
+    if (!fw) return;
+    const char *slash = fw;
+    while (slash > rp && slash[-1] != '/') slash--;
+    size_t nlen = (size_t)(fw - slash), dlen = (size_t)(fw - rp) + strlen(".framework");
+    const char *exe = strrchr(rp, '/') + 1;
+    if (strlen(exe) != nlen || strncmp(exe, slash, nlen)) return;     /* not the framework's own executable */
+    if (!url_create) {
+        url_create = dlsym(RTLD_DEFAULT, "CFURLCreateFromFileSystemRepresentation");
+        bundle_create = dlsym(RTLD_DEFAULT, "CFBundleCreate");
+        release = dlsym(RTLD_DEFAULT, "CFRelease");
+    }
+    if (!url_create || !bundle_create || !release) return;
+    void *url = url_create(NULL, (const uint8_t *)rp, (long)dlen, 1);
+    if (!url) return;
+    void *bundle = bundle_create(NULL, url);   /* kept: guest images stay resident */
+    release(url);
+    if (hao_verbose > 1) fprintf(stderr, "hao: framework bundle %.*s %s\n", (int)dlen, rp, bundle ? "registered" : "not created");
+}
+
 static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
 {
     char path[2048], rp[PATH_MAX];
@@ -2590,6 +2624,7 @@ static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
         glibs[slot].img = NULL;
         return NULL;
     }
+    register_framework_bundle(rp);
     if (hao_verbose)
         fprintf(stderr, "hao: loaded guest dylib %s at %#llx%s%s%s\n", rp, (unsigned long long)im->base,
                 im->libval_route[0] ? " (code signature: " : "", im->libval_route, im->libval_route[0] ? ")" : "");
