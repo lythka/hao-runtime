@@ -1,5 +1,41 @@
 # Runtime issues and measured scope
 
+## Optionals over guest spare-bit enums
+
+The Swift value walk (`src/swiftvalue/Recipe.c` `collect_inner`) had no rule
+for an Optional whose payload is a guest-defined multi-payload enum with its
+tag in the payloads' spare bits, when the Optional's nil is one of that
+enum's extra inhabitants. 9e983eb taught the walk to decode such an enum's
+cases (Enum.c `guest_spare_bit_case`), but an Optional over one still fell
+through to the last rule and was refused. A refusal drops the whole value's
+plan: the nil of a sibling nested Optional then reached native witnesses in
+the arm64 encoding, and `swift_retain` faulted at 0x8 inside
+`tuple_initializeWithCopy`. ControlCenter on 26B131 crashed this way on
+opening a module's list (`Optional<ControlCenterUI.ModuleStackListDisclosureControl>`,
+17 bytes, 0x3ffd inhabitants), from builds that walk the values it publishes.
+
+The Optional's nil is the enum's XI k, k the inhabitants inner Optionals
+consumed, computed from the image's `__swift5_mpenum` record (Enum.c
+`guest_spare_bit_xi`, over the same layout checks as the case decoder). The
+enum's witnesses are arm64 code and read the encoding guest code wrote, so
+that nil needs no patch; a deeper XI is an outer Optional's nil and is
+refused; any other value is walked as the enum's case. The search for the
+enum behind an Optional's inhabitants (through Optionals and the field with
+the most inhabitants) is now one function, `xi_carrier`, shared with the
+tag-byte and translated spare-bit rules.
+
+`tests/guest/optwitness.swift` adds `(E?, C??)` tuples, E a 17-byte enum
+of `(C, Int, Bool)` payloads: two cases (0x3ffe inhabitants on arm64, the
+Optional 0x3ffd: ControlCenter's shape), three, or two and an empty case
+(0x3ffd), copied, destroyed and assigned through the native tuple
+witnesses. Before the change JIT, `--interp` and AOT crashed in
+`swift_retain`; after it every line equals native arm64.
+
+Limits: an Optional over such an enum held inside a native struct is not
+covered: the enum's witnesses would then be reached through native code
+that may read the Optional inline. Enums whose tag needs extra tag bits
+after the payload are decoded by neither rule and are still refused.
+
 ## Float HFAs on the arm64 stack at their natural size
 
 Once v0-v7 are taken, an HFA argument goes to the stack. AAPCS64 rounds its

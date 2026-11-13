@@ -44,6 +44,12 @@ int tag_byte_layout(const void *type, uint64_t *tag_offset, unsigned *tags);
  * the AREA bytes into OUT. Returns 0 for a layout that needs extra tag bits. */
 int spare_bit_xi(const unsigned char *spare, uint64_t area, unsigned payload_cases, unsigned empty,
                  uint32_t k, unsigned char *out);
+/* Extra inhabitant K of a guest-defined multi-payload enum whose tag lies in
+ * its payloads' spare bits (Enum.c guest_spare_bit_case's layout, from the
+ * image's __swift5_mpenum record, checked against the live witness table),
+ * in its arm64 encoding: the enum's size in bytes into OUT. Returns 0 when
+ * TYPE is not such an enum or K is not below its inhabitant count. */
+int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out);
 /* The same with ROW in place of the type's table row (NULL: none), for tests
  * of the row rules on types the tables do not list. */
 int discover_fixed_enum_case_row(const void *type, const void *value, fixed_enum_case *out, const mpenum_row *row);
