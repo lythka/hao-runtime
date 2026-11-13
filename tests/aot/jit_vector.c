@@ -743,6 +743,27 @@ int main(void)
             }
         }
 
+    /* Indexed vector double FMUL: both D lanes, high Vm, all aliases,
+     * inactive special inputs, tiny results, controls and live NZCV. */
+    for (unsigned idx = 0; idx < 2; idx++) for (unsigned ctl = 0; ctl < 16; ctl++)
+        for (unsigned k = 0; k < 192; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm); in.fpcr = ctl << 22;
+            for (unsigned r = 0; r < 32; r++) for (int e = 0; e < 2; e++) in.v[r].d[e] = dval();
+            if (k < 4) {
+                in.v[rn].d[0] = in.v[rn].d[1] = 0x4000000000000000ull;
+                in.v[rm].d[idx] = 0x3fe0000000000000ull;
+                if (rn != rm) in.v[rm].d[1 - idx] = 0x7ff0000000000001ull;
+            }
+            uint32_t i = 0x4fc09000 | idx << 11 | rm << 16 | rn << 5 | rd;
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k < 4 && vector_helper_calls && fails++ < 20)
+                    printf("MISMATCH %08x: indexed double FMUL used helper\n", i);
+            }
+            if (k < 8) { check(i | 1u << 21, 0, &in, true); check(i & ~(1u << 30), 0, &in, true); }
+        }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

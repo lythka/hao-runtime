@@ -19,6 +19,7 @@ mutations = {
     'absdiff-order': ('vcmpgt(t, size, 2, 3); /* absolute difference ordering */', 'vcmpgt(t, size, 3, 2); /* wrong ordering */'),
     'addhn-half': ('0x71 + size, 2, 0, 8u << size); /* high-half add/sub */', '0x71 + size, 2, 0, 7u << size); /* wrong half */'),
     'addp-pairs': ('P38(size == 1 ? 0x01 : 0x02, 0, 1); /* ADDP adjacent pairs */', 'P38(size == 1 ? 0x05 : 0x06, 0, 1); /* wrong: pair subtraction */'),
+    'indexed-double-lane': ('BIT(insn, 11) ? 0xEE : 0x44); /* indexed D broadcast */', 'BIT(insn, 11) ? 0x44 : 0xEE); /* wrong lane */'),
     'scalar-fused-sign': ('if (three && BIT(insn, 21)) P(0xEF, 8, 2);', 'if (false) P(0xEF, 8, 2);'),
     'rsqrt-scale': ('P(0x59, 9, 2); if (Q) P(0x59, 13, 2);', '/* deliberately omit reciprocal square-root scale */'),
 
@@ -36,7 +37,7 @@ for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in ${MUTATIONS:-control fabd-sign pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition satadd-qc absdiff-order addhn-half addp-pairs}; do
+for mutation in ${MUTATIONS:-control fabd-sign pair-order division-result scalar-fused-sign rsqrt-scale conversion-round half-subtract fpcr-rounding fccmp-condition satadd-qc absdiff-order addhn-half addp-pairs indexed-double-lane}; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \

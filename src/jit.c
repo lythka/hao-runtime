@@ -3041,6 +3041,8 @@ static void t_vfp_wide(tctx *t, int op, bool dbl, unsigned rd, unsigned rn, unsi
         vld(t, 1, rm);
         if (!Q) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 1, 1);
     } else vzero(t, 1);
+    if (op == VFP_MUL && (insn & 0x9F000400) == 0x0F000000)
+        x_sse_rri(&t->b, 0x66, 0x70, 1, 1, BIT(insn, 11) ? 0xEE : 0x44); /* indexed D broadcast */
     if (dbl) vfp_constants64(t); else vfp_constants(t);
     vzero(t, 4);
     if (dbl) { vfp_special64(t, 0); vfp_special64(t, 1); }
@@ -3722,6 +3724,10 @@ static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
         unsigned half_idx = BIT(i, 11) << 2 | BIT(i, 21) << 1 | BIT(i, 20);
         if (op == 9) t_vfp_arith16(t, HALF_MUL, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 19, 16), (int)half_idx, BIT(i, 30), false, i, pc);
         else t_vfp_fma16(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 19, 16), (int)half_idx, BIT(i, 30), i, pc);
+        return true;
+    }
+    if (!BIT(i, 29) && BITS(i, 23, 22) == 3 && op == 9 && BIT(i, 30) && !BIT(i, 21)) {
+        t_vfp_wide(t, VFP_MUL, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), 1, i, pc);
         return true;
     }
     if (BIT(i, 29) || BITS(i, 23, 22) != 2 || (op != 9 && op != 1 && op != 5)) return false;

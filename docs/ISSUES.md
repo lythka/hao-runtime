@@ -150,6 +150,22 @@ native ARM comparison hashes pass; wrong translations are detected by the
 mutation controls. `make check` passes, including `make test`, strict native
 and sanitizer oracles, and 102 manifest passes (one known failure and three
 expected skips). Scalar ADDP is unchanged; reserved vector .1D remains on the helper.
+## Indexed double vector multiply
+
+Vector indexed FMUL .2D broadcasts the selected D lane before applying the
+existing packed-double multiply admission and MXCSR rollback. The unused
+source lane cannot introduce exceptions or force a decline; high Vm indices,
+aliases, live NZCV and sticky FPSR retain their original semantics.
+All 102 static sites are covered: overall coverage is 99.854081% ->
+99.854893% across 12,561,074 instructions; generated code
+is 656,950 -> 656,983 KiB. At 1,000 iterations the directed
+workload's JIT/AOT helper calls are 32,000 -> 0.
+12,800 directed checks within 946,915 full-state cases and 1,267
+native ARM comparison hashes pass; wrong translations are detected by the
+mutation controls. `make check` passes, including `make test`, strict native
+and sanitizer oracles, and 102 manifest passes (one known failure and three
+expected skips). Nonfinite/subnormal inputs and nonfinite or nonzero tiny results retain the helper;
+reserved L and .1D encodings and double FMA are unchanged.
 
 ## Categories on Swift class stubs
 
@@ -335,10 +351,9 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 2,508 untranslated sites remain implementation work,
+99.9319%. The other 2,406 untranslated sites remain implementation work,
 largest families first:
 - SHA and PMULL (588)
-- indexed double FMUL (102)
 - double vector comparisons (86)
 - scaled fixed-point conversions (77)
 - a long tail of smaller forms
