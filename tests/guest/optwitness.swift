@@ -145,6 +145,35 @@ func spareCases() {
                         .c15(let c), .c16(let c): return "\(String(describing: g).split(separator: "(")[0]) \(c.n)" }
     }
     run2("G17", [(G17.c0(C(5)), nil), (.c16(C(6)), .some(nil)), (.c9(C(7)), nil), (.c4(C(8)), .some(.some(C(9))))], n17)
+    optionalSpareCases()
+}
+
+// An Optional over a 17-byte guest spare-bit enum: its tag and its extra inhabitants lie in a class
+// pointer's and a Bool's spare bits (on arm64 0x3ffe inhabitants for two payload cases, ControlCenter's
+// ModuleStackListDisclosureControl shape; 0x3ffd for three, or two and an empty case), and the
+// Optional's nil is the enum's first extra inhabitant.
+enum G2B { case a(C, Int, Bool), b(C, Int, Bool) }
+enum G3B { case a(C, Int, Bool), b(C, Int, Bool), c(C, Int, Bool) }
+enum G2BE { case a(C, Int, Bool), b(C, Int, Bool), none }
+func optionalSpareCases() {
+    let s2b = { (g: G2B?) -> String in
+        switch g { case nil: return "nil"; case .a(let c, let i, let b)?: return "a(\(c.n) \(i) \(b))"
+                   case .b(let c, let i, let b)?: return "b(\(c.n) \(i) \(b))" }
+    }
+    run2("G2B?", [(G2B?.none, nil), (.a(C(1), 2, true), .some(nil)), (.b(C(3), 4, false), nil), (nil, .some(.some(C(5)))),
+                  (nil, .some(nil))], s2b)
+    let s3 = { (g: G3B?) -> String in
+        switch g { case nil: return "nil"; case .a(let c, let i, let b)?: return "a(\(c.n) \(i) \(b))"
+                   case .b(let c, let i, let b)?: return "b(\(c.n) \(i) \(b))"; case .c(let c, let i, let b)?: return "c(\(c.n) \(i) \(b))" }
+    }
+    run2("G3B?", [(G3B?.none, nil), (.a(C(1), 2, true), .some(nil)), (.c(C(3), 4, false), nil), (nil, .some(.some(C(5)))),
+                  (.b(C(6), -7, true), .some(.some(C(8))))], s3)
+    let s2 = { (g: G2BE?) -> String in
+        switch g { case nil: return "nil"; case .a(let c, let i, let b)?: return "a(\(c.n) \(i) \(b))"
+                   case .b(let c, let i, let b)?: return "b(\(c.n) \(i) \(b))"; case .none?: return "none" }
+    }
+    run2("G2BE?", [(G2BE?.none, nil), (.some(.none), .some(nil)), (.a(C(1), 2, true), nil), (nil, .some(.some(C(3)))),
+                   (.b(C(4), 5, false), .some(nil))], s2)
 }
 
 final class Holder {

@@ -399,54 +399,81 @@ static int guest_spare_mask(hao_image *image, const char *desc, unsigned char *s
  * (tests/guest/optwitness.swift) through native tuple witnesses: pointer
  * tags with an empty case, tags in a Bool's spare bits with empty cases, and
  * a 17-case enum whose tag needs bit 2. */
-static int guest_spare_bit_case(const void *type, const unsigned char *value, fixed_enum_case *out)
+typedef struct {
+    const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
+    unsigned char spare[8 * HAO_SV_SPARE_WORDS];
+    uint64_t area, used, tags, tag_bits;
+    unsigned empty;
+    int count;
+} guest_spare_layout;
+/* TYPE's layout as described above, checked against its live value witness
+ * table; 0 when TYPE is not such a guest enum. */
+static int guest_spare_layout_of(const void *type, guest_spare_layout *g)
 {
     const char *desc = ((const void *const *)type)[1];
     hao_image *image = desc ? hao_image_for_addr((uint64_t)(uintptr_t)desc) : NULL;
     if (!image) return 0;
-    const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
-    unsigned empty;
-    uint64_t maximum;
-    int count = direct_cases(type, 3, payloads, &empty, &maximum);
+    g->count = direct_cases(type, 3, g->payloads, &g->empty, &g->area);
     const witnesses *v = vwt(type);
-    if (!count || !maximum || maximum > 8 * HAO_SV_SPARE_WORDS || v->size != maximum) return 0;
-    unsigned char spare[8 * HAO_SV_SPARE_WORDS], tag[8 * HAO_SV_SPARE_WORDS] = {0};
-    if (!guest_spare_mask(image, desc, spare, maximum)) return 0;
-    uint64_t bits = 8 * maximum, spares = 0;
-    for (uint64_t i = 0; i < bits; ++i) spares += bit_at(spare, i);
-    uint64_t used = bits - spares;
-    uint64_t empty_tags = !empty ? 0 : used >= 32 ? 1 : (empty + (UINT64_C(1) << used) - 1) >> used;
-    uint64_t tags = (uint64_t)count + empty_tags, tag_bits = 0;
-    while ((UINT64_C(1) << tag_bits) < tags) ++tag_bits;
-    if (!tag_bits) tag_bits = 1;
-    if (!spares || tag_bits > spares) return 0;
-    uint64_t xi = spares >= 31 ? 0x7fffffff : (UINT64_C(1) << spares) - tags;
+    if (g->count <= 0 || !g->area || g->area > 8 * HAO_SV_SPARE_WORDS || v->size != g->area) return 0;
+    if (!guest_spare_mask(image, desc, g->spare, g->area)) return 0;
+    uint64_t bits = 8 * g->area, spares = 0;
+    for (uint64_t i = 0; i < bits; ++i) spares += bit_at(g->spare, i);
+    g->used = bits - spares;
+    uint64_t empty_tags = !g->empty ? 0 : g->used >= 32 ? 1 : (g->empty + (UINT64_C(1) << g->used) - 1) >> g->used;
+    g->tags = (uint64_t)g->count + empty_tags;
+    g->tag_bits = 0;
+    while ((UINT64_C(1) << g->tag_bits) < g->tags) ++g->tag_bits;
+    if (!g->tag_bits) g->tag_bits = 1;
+    if (!spares || g->tag_bits > spares) return 0;
+    uint64_t xi = spares >= 31 ? 0x7fffffff : (UINT64_C(1) << spares) - g->tags;
     if (xi > 0x7fffffff) xi = 0x7fffffff;
-    if (v->extra != xi) return 0;
-    for (uint64_t i = bits, need = tag_bits; i-- > 0 && need;)
-        if (bit_at(spare, i)) { tag[i >> 3] |= (unsigned char)(1u << (i & 7)); --need; }
+    return v->extra == xi;
+}
+
+static int guest_spare_bit_case(const void *type, const unsigned char *value, fixed_enum_case *out)
+{
+    guest_spare_layout g;
+    if (!guest_spare_layout_of(type, &g)) return 0;
+    uint64_t bits = 8 * g.area;
+    unsigned char tag[8 * HAO_SV_SPARE_WORDS] = {0};
+    for (uint64_t i = bits, need = g.tag_bits; i-- > 0 && need;)
+        if (bit_at(g.spare, i)) { tag[i >> 3] |= (unsigned char)(1u << (i & 7)); --need; }
     uint64_t t = 0;
     for (uint64_t i = 0, k = 0; i < bits; ++i)
         if (bit_at(tag, i)) t |= (uint64_t)bit_at(value, i) << k++;
-    if (t >= tags) return 0;
+    if (t >= g.tags) return 0;
     out->spare = 1;
-    if (t >= (uint64_t)count) {
+    if (t >= (uint64_t)g.count) {
         uint64_t index = 0;
-        for (uint64_t i = 0, k = 0; i < bits && k < 32 && k < used; ++i)
-            if (!bit_at(spare, i)) index |= (uint64_t)bit_at(value, i) << k++;
-        uint64_t e = used >= 32 ? index : (t - (uint64_t)count) << used | index;
-        if (e >= empty) return 0;
+        for (uint64_t i = 0, k = 0; i < bits && k < 32 && k < g.used; ++i)
+            if (!bit_at(g.spare, i)) index |= (uint64_t)bit_at(value, i) << k++;
+        uint64_t e = g.used >= 32 ? index : (t - (uint64_t)g.count) << g.used | index;
+        if (e >= g.empty) return 0;
         out->payload = NULL;   /* an empty case: nothing to walk */
-        out->tag = (uint32_t)(count + e);
+        out->tag = (uint32_t)(g.count + e);
         return 1;
     }
-    memcpy(out->copy, value, (size_t)maximum);
+    memcpy(out->copy, value, (size_t)g.area);
     memcpy(out->mask, tag, sizeof tag);
     unsigned char *copy = (unsigned char *)out->copy;
-    for (uint64_t b = 0; b < maximum; ++b) copy[b] &= (unsigned char)~tag[b];
-    out->payload = payloads[t];
+    for (uint64_t b = 0; b < g.area; ++b) copy[b] &= (unsigned char)~tag[b];
+    out->payload = g.payloads[t];
     out->tag = (uint32_t)t;
     return 1;
+}
+
+int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out)
+{
+    guest_spare_layout g;
+    if (!type || !out || !guest_spare_layout_of(type, &g) || k >= vwt(type)->extra) return 0;
+    return spare_bit_xi(g.spare, g.area, (unsigned)g.count, g.empty, k, out);
+}
+#else
+int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out)
+{
+    (void)type; (void)k; (void)out;
+    return 0;
 }
 #endif
 

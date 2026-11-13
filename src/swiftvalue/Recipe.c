@@ -351,106 +351,84 @@ static int function_xi_word(reflection *r, const void *type, uint64_t *offset)
     return 0;
 }
 
+/* The enum (kind 0x201) whose extra inhabitants TYPE's are: TYPE itself, or
+ * through Optionals and the first field with the most inhabitants of a
+ * struct or tuple (with KNOWN, a struct only where r->known_layout admits
+ * it), each step checked against the value witness tables. *OFFSET is the
+ * enum's offset in TYPE. */
+static const void *xi_carrier(reflection *r, const void *type, int known, uint64_t *offset)
+{
+    uint64_t at = 0;
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uintptr_t kind = r->kind(type);
+        if (!v->extra) return NULL;
+        if (kind == 0x201) { *offset = at; return type; }
+        if (kind == 0x202 && m[1] == r->optional) {
+            if (vwt(m[2])->extra != v->extra + 1) return NULL;
+            type = m[2];
+            continue;
+        }
+        if (kind != 0x200 && kind != 0x301) return NULL;
+        if (known && kind == 0x200 && r->known_layout && !r->known_layout(type)) return NULL;
+        intptr_t count = r->count(type);
+        if (count < 1 || count > 64) return NULL;
+        const void *best = NULL;
+        intptr_t best_at = -1;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type,i,&info);
+            intptr_t o = r->offset(type,i);
+            if (info.free_name) info.free_name(info.name);
+            if (!child || o < 0 || (uint64_t)o + vwt(child)->size > v->size) return NULL;
+            if (!best || vwt(child)->extra > vwt(best)->extra) { best = child; best_at = o; }
+        }
+        if (vwt(best)->extra != v->extra) return NULL;
+        at += (uint64_t)best_at;
+        type = best;
+    }
+    return NULL;
+}
+
 /* The offset of the tag byte that supplies TYPE's extra inhabitants, when
  * they come from a multi-payload enum with one extra tag byte and no spare
- * bit (Enum.c tag_byte_layout): through Optionals and the first field with
- * the most inhabitants of a struct or tuple, each step checked against the
- * value witness tables, as function_xi_word. The enum's inhabitants are the
- * byte's values 255, 254, ... on both architectures (measured for
+ * bit (Enum.c tag_byte_layout), found by xi_carrier. The enum's inhabitants
+ * are the byte's values 255, 254, ... on both architectures (measured for
  * IndexPath, whose storage is such an enum, and String / (String, String)
  * enums), so an Optional over such a type has the same nil on both. *XI is
  * the enum's inhabitant count. */
 static int tag_byte_xi(reflection *r, const void *type, uint64_t *offset, uint32_t *xi)
 {
-    uint64_t at = 0;
-    for (unsigned depth = 0; depth < 16; ++depth) {
-        const void *const *m = type;
-        const witnesses *v = vwt(type);
-        uintptr_t kind = r->kind(type);
-        if (!v->extra || v->extra > 255) return 0;
-        if (kind == 0x201) {
-            uint64_t tag_at;
-            unsigned tags;
-            if (!tag_byte_layout(type, &tag_at, &tags)) return 0;
-            *offset = at + tag_at;
-            *xi = v->extra;
-            return 1;
-        }
-        if (kind == 0x202 && m[1] == r->optional) {
-            if (vwt(m[2])->extra != v->extra + 1) return 0;
-            type = m[2];
-            continue;
-        }
-        if (kind != 0x200 && kind != 0x301) return 0;
-        intptr_t count = r->count(type);
-        if (count < 1 || count > 64) return 0;
-        const void *best = NULL;
-        intptr_t best_at = -1;
-        for (intptr_t i = 0; i < count; ++i) {
-            field_info info = {0};
-            const void *child = r->field(type,i,&info);
-            intptr_t o = r->offset(type,i);
-            if (info.free_name) info.free_name(info.name);
-            if (!child || o < 0 || (uint64_t)o + vwt(child)->size > v->size) return 0;
-            if (!best || vwt(child)->extra > vwt(best)->extra) { best = child; best_at = o; }
-        }
-        if (vwt(best)->extra != v->extra) return 0;
-        at += (uint64_t)best_at;
-        type = best;
-    }
-    return 0;
+    uint64_t at, tag_at;
+    unsigned tags;
+    const void *e = xi_carrier(r, type, 0, &at);
+    if (!e || vwt(e)->extra > 255 || !tag_byte_layout(e, &tag_at, &tags)) return 0;
+    *offset = at + tag_at;
+    *xi = vwt(e)->extra;
+    return 1;
 }
 
 /* The native spare-bit enum whose extra inhabitants TYPE's are, when the
  * mpenum table (row format 2) says they differ between arm64 and x86_64 and
- * gives both layouts' masks: through Optionals and the first field with the
- * most inhabitants of a struct or tuple (a struct only where known_layout
- * admits it), each step checked against the value witness tables. The row
- * must apply (live XI count = its x86_64 one; a payload that is not loadable
- * gives a tag byte instead) and use no extra tag bits on either side.
- * *OFFSET is the enum's offset in TYPE. */
+ * gives both layouts' masks, found by xi_carrier (a struct only where
+ * known_layout admits it). The row must apply (live XI count = its x86_64
+ * one; a payload that is not loadable gives a tag byte instead) and use no
+ * extra tag bits on either side. *OFFSET is the enum's offset in TYPE. */
 typedef struct { const void *type; uint64_t offset; mpenum_row row; } xi_enum;
 static int translated_xi_enum(reflection *r, const void *type, xi_enum *out)
 {
-    uint64_t at = 0;
-    for (unsigned depth = 0; depth < 16; ++depth) {
-        const void *const *m = type;
-        const witnesses *v = vwt(type);
-        uintptr_t kind = r->kind(type);
-        if (!v->extra) return 0;
-        if (kind == 0x201) {
-            mpenum_row row;
-            if (!mpenum_type(type, &row) || (row.flags & MPENUM_XI) || row.xi != v->extra ||
-                row.x86_extra_bits || row.arm_extra_bits || !row.mask_bytes || !row.x86_mask || !row.arm_mask ||
-                v->size < 8 || v->size > 8 * HAO_SV_SPARE_WORDS ||
-                (uint64_t)row.mask_offset + row.mask_bytes > v->size) return 0;
-            *out = (xi_enum){type, at, row};
-            return 1;
-        }
-        if (kind == 0x202 && m[1] == r->optional) {
-            if (vwt(m[2])->extra != v->extra + 1) return 0;
-            type = m[2];
-            continue;
-        }
-        if (kind != 0x200 && kind != 0x301) return 0;
-        if (kind == 0x200 && r->known_layout && !r->known_layout(type)) return 0;
-        intptr_t count = r->count(type);
-        if (count < 1 || count > 64) return 0;
-        const void *best = NULL;
-        intptr_t best_at = -1;
-        for (intptr_t i = 0; i < count; ++i) {
-            field_info info = {0};
-            const void *child = r->field(type,i,&info);
-            intptr_t o = r->offset(type,i);
-            if (info.free_name) info.free_name(info.name);
-            if (!child || o < 0 || (uint64_t)o + vwt(child)->size > v->size) return 0;
-            if (!best || vwt(child)->extra > vwt(best)->extra) { best = child; best_at = o; }
-        }
-        if (vwt(best)->extra != v->extra) return 0;
-        at += (uint64_t)best_at;
-        type = best;
-    }
-    return 0;
+    uint64_t at;
+    mpenum_row row;
+    const void *e = xi_carrier(r, type, 1, &at);
+    if (!e) return 0;
+    const witnesses *v = vwt(e);
+    if (!mpenum_type(e, &row) || (row.flags & MPENUM_XI) || row.xi != v->extra ||
+        row.x86_extra_bits || row.arm_extra_bits || !row.mask_bytes || !row.x86_mask || !row.arm_mask ||
+        v->size < 8 || v->size > 8 * HAO_SV_SPARE_WORDS ||
+        (uint64_t)row.mask_offset + row.mask_bytes > v->size) return 0;
+    *out = (xi_enum){e, at, row};
+    return 1;
 }
 
 /* XI K of E on both architectures (Enum.c spare_bit_xi over each row mask). */
@@ -649,6 +627,32 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             }
             free(scratch);   /* a nil owns no payload */
             return ok;
+        }
+        /* A payload whose inhabitants are a guest enum's whose tag lies in
+         * its payloads' spare bits (Enum.c guest_spare_bit_case's layout,
+         * decoded from the image's record). Its witnesses are arm64 code and
+         * read the arm64 encoding guest code wrote, so this Optional's nil,
+         * the enum's XI k (k the inhabitants inner Optionals consumed), needs
+         * no patch: it is inactive. A deeper XI is an outer Optional's nil,
+         * no value of this one. Anything else is a present payload, walked as
+         * the enum's case. Without this rule the Optional is refused, and the
+         * whole value with it: a sibling's nil then reaches native witnesses
+         * in the arm64 encoding (swift_retain(0x1)). */
+        uint64_t guest_at;
+        const void *guest_enum;
+        if (m[1] == r->optional && payload->extra && v->extra + 1 == payload->extra &&
+            (guest_enum = xi_carrier(r,m[2],0,&guest_at)) && vwt(guest_enum)->extra >= payload->extra &&
+            guest_at + vwt(guest_enum)->size <= payload->size) {
+            uint64_t size = vwt(guest_enum)->size;
+            uint32_t k = vwt(guest_enum)->extra - payload->extra;
+            unsigned char nil[8 * HAO_SV_SPARE_WORDS];
+            if (guest_spare_bit_xi(guest_enum,k,nil)) {
+                const unsigned char *found = value + guest_at;
+                if (!memcmp(found,nil,(size_t)size)) return 1;      /* inactive payload remains opaque */
+                for (uint32_t j = k + 1; j < vwt(guest_enum)->extra && j < k + 9; ++j)
+                    if (guest_spare_bit_xi(guest_enum,j,nil) && !memcmp(found,nil,(size_t)size)) return 0;
+                return collect(r,m[2],value,base,out,capacity,used,depth + 1);
+            }
         }
         /* No payload extra inhabitants: Swift's single-payload enum layout
          * adds a trailing 0/1 tag. Admit POD payloads only, and still walk a
