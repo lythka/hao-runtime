@@ -521,6 +521,14 @@ VECF(t_addp_4s, "addp v2.4s,v0.4s,v1.4s")
 VECF(t_addp_2d, "addp v2.2d,v0.2d,v1.2d")
 VECF(t_fmul_2d_e0, "fmul v2.2d,v0.2d,v17.d[0]")
 VECF(t_fmul_2d_e1, "fmul v2.2d,v0.2d,v17.d[1]")
+VECF(t_fcmeq_2d, "fcmeq v2.2d,v0.2d,v1.2d")
+VECF(t_fcmge_2d, "fcmge v2.2d,v0.2d,v1.2d")
+VECF(t_fcmgt_2d, "fcmgt v2.2d,v0.2d,v1.2d")
+VECF(t_fcmeq_2d_zero, "fcmeq v2.2d,v0.2d,#0.0")
+VECF(t_fcmge_2d_zero, "fcmge v2.2d,v0.2d,#0.0")
+VECF(t_fcmgt_2d_zero, "fcmgt v2.2d,v0.2d,#0.0")
+VECF(t_fcmle_2d_zero, "fcmle v2.2d,v0.2d,#0.0")
+VECF(t_fcmlt_2d_zero, "fcmlt v2.2d,v0.2d,#0.0")
 VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
 VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
 VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
@@ -2195,6 +2203,14 @@ int main(void)
     RF(addp_2d);
     RF(fmul_2d_e0);
     RF(fmul_2d_e1);
+    RF(fcmeq_2d);
+    RF(fcmge_2d);
+    RF(fcmgt_2d);
+    RF(fcmeq_2d_zero);
+    RF(fcmge_2d_zero);
+    RF(fcmgt_2d_zero);
+    RF(fcmle_2d_zero);
+    RF(fcmlt_2d_zero);
     RF(cov_fmuls0);
     RF(cov_fmuls1);
     RF(cov_fmuls2);

@@ -160,6 +160,14 @@ BENCH(addp_4s, "addp v2.4s,v0.4s,v1.4s", single)
 BENCH(addp_2d, "addp v2.2d,v0.2d,v1.2d", single)
 BENCH(fmul_2d_e0, "fmul v2.2d,v0.2d,v1.d[0]", double)
 BENCH(fmul_2d_e1, "fmul v2.2d,v0.2d,v1.d[1]", double)
+BENCH(fcmeq_2d, "fcmeq v2.2d,v0.2d,v1.2d", double)
+BENCH(fcmge_2d, "fcmge v2.2d,v0.2d,v1.2d", double)
+BENCH(fcmgt_2d, "fcmgt v2.2d,v0.2d,v1.2d", double)
+BENCH(fcmeq_2d_zero, "fcmeq v2.2d,v0.2d,#0.0", double)
+BENCH(fcmge_2d_zero, "fcmge v2.2d,v0.2d,#0.0", double)
+BENCH(fcmgt_2d_zero, "fcmgt v2.2d,v0.2d,#0.0", double)
+BENCH(fcmle_2d_zero, "fcmle v2.2d,v0.2d,#0.0", double)
+BENCH(fcmlt_2d_zero, "fcmlt v2.2d,v0.2d,#0.0", double)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -792,6 +800,14 @@ int main(int argc, char **argv)
     RUN(addp_2d);
     RUN(fmul_2d_e0);
     RUN(fmul_2d_e1);
+    RUN(fcmeq_2d);
+    RUN(fcmge_2d);
+    RUN(fcmgt_2d);
+    RUN(fcmeq_2d_zero);
+    RUN(fcmge_2d_zero);
+    RUN(fcmgt_2d_zero);
+    RUN(fcmle_2d_zero);
+    RUN(fcmlt_2d_zero);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);

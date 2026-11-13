@@ -166,6 +166,21 @@ mutation controls. `make check` passes, including `make test`, strict native
 and sanitizer oracles, and 102 manifest passes (one known failure and three
 expected skips). Nonfinite/subnormal inputs and nonfinite or nonzero tiny results retain the helper;
 reserved L and .1D encodings and double FMA are unchanged.
+## Double vector comparisons
+
+FCMEQ/FCMGE/FCMGT .2D and all five .2D zero comparisons now use integer
+input admission followed by ordered packed-double predicates. Register
+aliases, signed zeros, live NZCV and sticky FPSR are preserved.
+All 86 static sites are covered: overall coverage is 99.854081% ->
+99.854766% across 12,561,074 instructions; generated code
+is 656,950 -> 656,964 KiB. At 1,000 iterations the directed
+workload's JIT/AOT helper calls are 128,000 -> 0.
+32,768 directed checks within 966,883 full-state cases and 1,273
+native ARM comparison hashes pass; wrong translations are detected by the
+mutation controls. `make check` passes, including `make test`, strict native
+and sanitizer oracles, and 102 manifest passes (one known failure and three
+expected skips). Nonfinite and subnormal inputs retain interpreter IOC/IDC and DN/FZ behavior;
+reserved .1D encodings remain on the helper.
 
 ## Categories on Swift class stubs
 
@@ -351,10 +366,9 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 2,406 untranslated sites remain implementation work,
+99.9319%. The other 2,320 untranslated sites remain implementation work,
 largest families first:
 - SHA and PMULL (588)
-- double vector comparisons (86)
 - scaled fixed-point conversions (77)
 - a long tail of smaller forms
 
