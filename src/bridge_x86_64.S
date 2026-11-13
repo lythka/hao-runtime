@@ -523,6 +523,32 @@ _hao_sig_call_native:
     .cfi_endproc
 
 /*
+ * void hao_call_on_stack(void (*fn)(void *), void *arg, void *top): fn(arg)
+ * with rsp at top (aligned down to 16), then back on the caller's stack.
+ * runtime.c runs a fatal fault's diagnostics on a stack of their own there.
+ */
+    .globl _hao_call_on_stack
+    .private_extern _hao_call_on_stack
+    .p2align 4
+_hao_call_on_stack:
+    .cfi_startproc
+    pushq %rbp
+    .cfi_def_cfa_offset 16
+    .cfi_offset %rbp, -16
+    movq  %rsp, %rbp
+    .cfi_def_cfa_register %rbp
+    andq  $-16, %rdx
+    movq  %rdx, %rsp
+    movq  %rdi, %rax
+    movq  %rsi, %rdi
+    callq *%rax
+    movq  %rbp, %rsp
+    popq  %rbp
+    .cfi_def_cfa %rsp, 8
+    retq
+    .cfi_endproc
+
+/*
  * hao_fault_entry / hao_abort_entry(sig, info, uctx): what the kernel has
  * installed for on_fault (SIGSEGV/SIGBUS) and on_abort (SIGILL/SIGTRAP/
  * SIGABRT under the diagnostics log). _sigtramp calls a handler with the
