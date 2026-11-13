@@ -29,6 +29,26 @@ control that routes only half FMA through C are 86.45 -> 69.87 ns/op for
 ordinary lanes, 90.02 -> 68.94 for subnormals, and 89.62 -> 80.16 for wide
 spans. These include loop/reset/entry costs and are information only.
 
+## Immediate right-shift narrowing
+
+SHRN/RSHRN, SQSHRUN/SQRSHRUN, SQSHRN/SQRSHRN and UQSHRN/UQRSHRN
+now share shifting, rounding and saturation in JIT/AOT, including both vector
+halves and allocated scalar forms. Rounding adds the discarded top bit after
+the wide shift, so unsigned carry is retained. The clamp is shared with
+SQXTN/UQXTN/SQXTUN; only active lanes contribute to sticky QC. Aliased
+sources are read before the 2 forms preserve the destination low half.
+
+All 474 static sites are covered: overall coverage is 99.868562% ->
+99.872336%, the tail is 16,510 -> 16,036, and generated code is
+657,730 -> 657,750 KiB across 12,561,074 instructions. The 132-form workload
+at 1,000 iterations reduces JIT/AOT helpers from 1,920,000 to zero.
+92,160 directed cases cover every shift, saturation/rounding boundaries,
+reserved encodings, aliases, full FPSR and live NZCV within 1,147,107 passing
+full-state cases. All 1,576 native instruction-comparison hashes match;
+wrong rounding and omitted saturation are detected by mutation controls.
+All valid operands execute inline; scalar SHRN/RSHRN and 128-bit input
+lanes remain undefined through the helper.
+
 ## Generated tables regenerated for 26B131, with generated.lock
 
 All 16 `src/*_gen.inc` tables are now generator output for one stated set of
@@ -274,10 +294,9 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 1,962 untranslated sites remain implementation work,
+99.9319%. The other 1,488 untranslated sites remain implementation work,
 largest families first:
 - SHA and PMULL (588)
-- shift-by-immediate narrowing (474)
 - integer reductions (277)
 - indexed widening multiply (240)
 - scaled fixed-point conversions (77)

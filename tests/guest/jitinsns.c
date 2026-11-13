@@ -391,6 +391,138 @@ static const uint64_t fpcrs[] = {0u << 22, 1u << 22, 2u << 22, 3u << 22, 4u << 2
         *fl = x3 ^ x7;                                                                  \
         return mix(out[0], out[1]);                                                     \
     }
+VECF(t_nar_shrn_v8_0_1, "shrn v2.8b,v0.8h,#1")
+VECF(t_nar_shrn_v8_0_8, "shrn v2.8b,v0.8h,#8")
+VECF(t_nar_shrn_v8_1_1, "shrn2 v2.16b,v0.8h,#1")
+VECF(t_nar_shrn_v8_1_8, "shrn2 v2.16b,v0.8h,#8")
+VECF(t_nar_shrn_v16_0_1, "shrn v2.4h,v0.4s,#1")
+VECF(t_nar_shrn_v16_0_16, "shrn v2.4h,v0.4s,#16")
+VECF(t_nar_shrn_v16_1_1, "shrn2 v2.8h,v0.4s,#1")
+VECF(t_nar_shrn_v16_1_16, "shrn2 v2.8h,v0.4s,#16")
+VECF(t_nar_shrn_v32_0_1, "shrn v2.2s,v0.2d,#1")
+VECF(t_nar_shrn_v32_0_32, "shrn v2.2s,v0.2d,#32")
+VECF(t_nar_shrn_v32_1_1, "shrn2 v2.4s,v0.2d,#1")
+VECF(t_nar_shrn_v32_1_32, "shrn2 v2.4s,v0.2d,#32")
+VECF(t_nar_rshrn_v8_0_1, "rshrn v2.8b,v0.8h,#1")
+VECF(t_nar_rshrn_v8_0_8, "rshrn v2.8b,v0.8h,#8")
+VECF(t_nar_rshrn_v8_1_1, "rshrn2 v2.16b,v0.8h,#1")
+VECF(t_nar_rshrn_v8_1_8, "rshrn2 v2.16b,v0.8h,#8")
+VECF(t_nar_rshrn_v16_0_1, "rshrn v2.4h,v0.4s,#1")
+VECF(t_nar_rshrn_v16_0_16, "rshrn v2.4h,v0.4s,#16")
+VECF(t_nar_rshrn_v16_1_1, "rshrn2 v2.8h,v0.4s,#1")
+VECF(t_nar_rshrn_v16_1_16, "rshrn2 v2.8h,v0.4s,#16")
+VECF(t_nar_rshrn_v32_0_1, "rshrn v2.2s,v0.2d,#1")
+VECF(t_nar_rshrn_v32_0_32, "rshrn v2.2s,v0.2d,#32")
+VECF(t_nar_rshrn_v32_1_1, "rshrn2 v2.4s,v0.2d,#1")
+VECF(t_nar_rshrn_v32_1_32, "rshrn2 v2.4s,v0.2d,#32")
+VECF(t_nar_sqshrun_v8_0_1, "sqshrun v2.8b,v0.8h,#1")
+VECF(t_nar_sqshrun_v8_0_8, "sqshrun v2.8b,v0.8h,#8")
+VECF(t_nar_sqshrun_v8_1_1, "sqshrun2 v2.16b,v0.8h,#1")
+VECF(t_nar_sqshrun_v8_1_8, "sqshrun2 v2.16b,v0.8h,#8")
+VECF(t_nar_sqshrun_v16_0_1, "sqshrun v2.4h,v0.4s,#1")
+VECF(t_nar_sqshrun_v16_0_16, "sqshrun v2.4h,v0.4s,#16")
+VECF(t_nar_sqshrun_v16_1_1, "sqshrun2 v2.8h,v0.4s,#1")
+VECF(t_nar_sqshrun_v16_1_16, "sqshrun2 v2.8h,v0.4s,#16")
+VECF(t_nar_sqshrun_v32_0_1, "sqshrun v2.2s,v0.2d,#1")
+VECF(t_nar_sqshrun_v32_0_32, "sqshrun v2.2s,v0.2d,#32")
+VECF(t_nar_sqshrun_v32_1_1, "sqshrun2 v2.4s,v0.2d,#1")
+VECF(t_nar_sqshrun_v32_1_32, "sqshrun2 v2.4s,v0.2d,#32")
+VECF(t_nar_sqrshrun_v8_0_1, "sqrshrun v2.8b,v0.8h,#1")
+VECF(t_nar_sqrshrun_v8_0_8, "sqrshrun v2.8b,v0.8h,#8")
+VECF(t_nar_sqrshrun_v8_1_1, "sqrshrun2 v2.16b,v0.8h,#1")
+VECF(t_nar_sqrshrun_v8_1_8, "sqrshrun2 v2.16b,v0.8h,#8")
+VECF(t_nar_sqrshrun_v16_0_1, "sqrshrun v2.4h,v0.4s,#1")
+VECF(t_nar_sqrshrun_v16_0_16, "sqrshrun v2.4h,v0.4s,#16")
+VECF(t_nar_sqrshrun_v16_1_1, "sqrshrun2 v2.8h,v0.4s,#1")
+VECF(t_nar_sqrshrun_v16_1_16, "sqrshrun2 v2.8h,v0.4s,#16")
+VECF(t_nar_sqrshrun_v32_0_1, "sqrshrun v2.2s,v0.2d,#1")
+VECF(t_nar_sqrshrun_v32_0_32, "sqrshrun v2.2s,v0.2d,#32")
+VECF(t_nar_sqrshrun_v32_1_1, "sqrshrun2 v2.4s,v0.2d,#1")
+VECF(t_nar_sqrshrun_v32_1_32, "sqrshrun2 v2.4s,v0.2d,#32")
+VECF(t_nar_sqshrn_v8_0_1, "sqshrn v2.8b,v0.8h,#1")
+VECF(t_nar_sqshrn_v8_0_8, "sqshrn v2.8b,v0.8h,#8")
+VECF(t_nar_sqshrn_v8_1_1, "sqshrn2 v2.16b,v0.8h,#1")
+VECF(t_nar_sqshrn_v8_1_8, "sqshrn2 v2.16b,v0.8h,#8")
+VECF(t_nar_sqshrn_v16_0_1, "sqshrn v2.4h,v0.4s,#1")
+VECF(t_nar_sqshrn_v16_0_16, "sqshrn v2.4h,v0.4s,#16")
+VECF(t_nar_sqshrn_v16_1_1, "sqshrn2 v2.8h,v0.4s,#1")
+VECF(t_nar_sqshrn_v16_1_16, "sqshrn2 v2.8h,v0.4s,#16")
+VECF(t_nar_sqshrn_v32_0_1, "sqshrn v2.2s,v0.2d,#1")
+VECF(t_nar_sqshrn_v32_0_32, "sqshrn v2.2s,v0.2d,#32")
+VECF(t_nar_sqshrn_v32_1_1, "sqshrn2 v2.4s,v0.2d,#1")
+VECF(t_nar_sqshrn_v32_1_32, "sqshrn2 v2.4s,v0.2d,#32")
+VECF(t_nar_sqrshrn_v8_0_1, "sqrshrn v2.8b,v0.8h,#1")
+VECF(t_nar_sqrshrn_v8_0_8, "sqrshrn v2.8b,v0.8h,#8")
+VECF(t_nar_sqrshrn_v8_1_1, "sqrshrn2 v2.16b,v0.8h,#1")
+VECF(t_nar_sqrshrn_v8_1_8, "sqrshrn2 v2.16b,v0.8h,#8")
+VECF(t_nar_sqrshrn_v16_0_1, "sqrshrn v2.4h,v0.4s,#1")
+VECF(t_nar_sqrshrn_v16_0_16, "sqrshrn v2.4h,v0.4s,#16")
+VECF(t_nar_sqrshrn_v16_1_1, "sqrshrn2 v2.8h,v0.4s,#1")
+VECF(t_nar_sqrshrn_v16_1_16, "sqrshrn2 v2.8h,v0.4s,#16")
+VECF(t_nar_sqrshrn_v32_0_1, "sqrshrn v2.2s,v0.2d,#1")
+VECF(t_nar_sqrshrn_v32_0_32, "sqrshrn v2.2s,v0.2d,#32")
+VECF(t_nar_sqrshrn_v32_1_1, "sqrshrn2 v2.4s,v0.2d,#1")
+VECF(t_nar_sqrshrn_v32_1_32, "sqrshrn2 v2.4s,v0.2d,#32")
+VECF(t_nar_uqshrn_v8_0_1, "uqshrn v2.8b,v0.8h,#1")
+VECF(t_nar_uqshrn_v8_0_8, "uqshrn v2.8b,v0.8h,#8")
+VECF(t_nar_uqshrn_v8_1_1, "uqshrn2 v2.16b,v0.8h,#1")
+VECF(t_nar_uqshrn_v8_1_8, "uqshrn2 v2.16b,v0.8h,#8")
+VECF(t_nar_uqshrn_v16_0_1, "uqshrn v2.4h,v0.4s,#1")
+VECF(t_nar_uqshrn_v16_0_16, "uqshrn v2.4h,v0.4s,#16")
+VECF(t_nar_uqshrn_v16_1_1, "uqshrn2 v2.8h,v0.4s,#1")
+VECF(t_nar_uqshrn_v16_1_16, "uqshrn2 v2.8h,v0.4s,#16")
+VECF(t_nar_uqshrn_v32_0_1, "uqshrn v2.2s,v0.2d,#1")
+VECF(t_nar_uqshrn_v32_0_32, "uqshrn v2.2s,v0.2d,#32")
+VECF(t_nar_uqshrn_v32_1_1, "uqshrn2 v2.4s,v0.2d,#1")
+VECF(t_nar_uqshrn_v32_1_32, "uqshrn2 v2.4s,v0.2d,#32")
+VECF(t_nar_uqrshrn_v8_0_1, "uqrshrn v2.8b,v0.8h,#1")
+VECF(t_nar_uqrshrn_v8_0_8, "uqrshrn v2.8b,v0.8h,#8")
+VECF(t_nar_uqrshrn_v8_1_1, "uqrshrn2 v2.16b,v0.8h,#1")
+VECF(t_nar_uqrshrn_v8_1_8, "uqrshrn2 v2.16b,v0.8h,#8")
+VECF(t_nar_uqrshrn_v16_0_1, "uqrshrn v2.4h,v0.4s,#1")
+VECF(t_nar_uqrshrn_v16_0_16, "uqrshrn v2.4h,v0.4s,#16")
+VECF(t_nar_uqrshrn_v16_1_1, "uqrshrn2 v2.8h,v0.4s,#1")
+VECF(t_nar_uqrshrn_v16_1_16, "uqrshrn2 v2.8h,v0.4s,#16")
+VECF(t_nar_uqrshrn_v32_0_1, "uqrshrn v2.2s,v0.2d,#1")
+VECF(t_nar_uqrshrn_v32_0_32, "uqrshrn v2.2s,v0.2d,#32")
+VECF(t_nar_uqrshrn_v32_1_1, "uqrshrn2 v2.4s,v0.2d,#1")
+VECF(t_nar_uqrshrn_v32_1_32, "uqrshrn2 v2.4s,v0.2d,#32")
+VECF(t_nar_sqshrun_s8_0_1, "sqshrun b2,h0,#1")
+VECF(t_nar_sqshrun_s8_0_8, "sqshrun b2,h0,#8")
+VECF(t_nar_sqshrun_s16_0_1, "sqshrun h2,s0,#1")
+VECF(t_nar_sqshrun_s16_0_16, "sqshrun h2,s0,#16")
+VECF(t_nar_sqshrun_s32_0_1, "sqshrun s2,d0,#1")
+VECF(t_nar_sqshrun_s32_0_32, "sqshrun s2,d0,#32")
+VECF(t_nar_sqrshrun_s8_0_1, "sqrshrun b2,h0,#1")
+VECF(t_nar_sqrshrun_s8_0_8, "sqrshrun b2,h0,#8")
+VECF(t_nar_sqrshrun_s16_0_1, "sqrshrun h2,s0,#1")
+VECF(t_nar_sqrshrun_s16_0_16, "sqrshrun h2,s0,#16")
+VECF(t_nar_sqrshrun_s32_0_1, "sqrshrun s2,d0,#1")
+VECF(t_nar_sqrshrun_s32_0_32, "sqrshrun s2,d0,#32")
+VECF(t_nar_sqshrn_s8_0_1, "sqshrn b2,h0,#1")
+VECF(t_nar_sqshrn_s8_0_8, "sqshrn b2,h0,#8")
+VECF(t_nar_sqshrn_s16_0_1, "sqshrn h2,s0,#1")
+VECF(t_nar_sqshrn_s16_0_16, "sqshrn h2,s0,#16")
+VECF(t_nar_sqshrn_s32_0_1, "sqshrn s2,d0,#1")
+VECF(t_nar_sqshrn_s32_0_32, "sqshrn s2,d0,#32")
+VECF(t_nar_sqrshrn_s8_0_1, "sqrshrn b2,h0,#1")
+VECF(t_nar_sqrshrn_s8_0_8, "sqrshrn b2,h0,#8")
+VECF(t_nar_sqrshrn_s16_0_1, "sqrshrn h2,s0,#1")
+VECF(t_nar_sqrshrn_s16_0_16, "sqrshrn h2,s0,#16")
+VECF(t_nar_sqrshrn_s32_0_1, "sqrshrn s2,d0,#1")
+VECF(t_nar_sqrshrn_s32_0_32, "sqrshrn s2,d0,#32")
+VECF(t_nar_uqshrn_s8_0_1, "uqshrn b2,h0,#1")
+VECF(t_nar_uqshrn_s8_0_8, "uqshrn b2,h0,#8")
+VECF(t_nar_uqshrn_s16_0_1, "uqshrn h2,s0,#1")
+VECF(t_nar_uqshrn_s16_0_16, "uqshrn h2,s0,#16")
+VECF(t_nar_uqshrn_s32_0_1, "uqshrn s2,d0,#1")
+VECF(t_nar_uqshrn_s32_0_32, "uqshrn s2,d0,#32")
+VECF(t_nar_uqrshrn_s8_0_1, "uqrshrn b2,h0,#1")
+VECF(t_nar_uqrshrn_s8_0_8, "uqrshrn b2,h0,#8")
+VECF(t_nar_uqrshrn_s16_0_1, "uqrshrn h2,s0,#1")
+VECF(t_nar_uqrshrn_s16_0_16, "uqrshrn h2,s0,#16")
+VECF(t_nar_uqrshrn_s32_0_1, "uqrshrn s2,d0,#1")
+VECF(t_nar_uqrshrn_s32_0_32, "uqrshrn s2,d0,#32")
 VECF(t_abd2s, "fabd v2.2s,v0.2s,v1.2s")
 VECF(t_abd4s, "fabd v2.4s,v0.4s,v1.4s")
 VECF(t_abd2d, "fabd v2.2d,v0.2d,v1.2d")
@@ -2114,6 +2246,138 @@ int main(void)
     RF(fmule0); RF(fmule1); RF(fmule2); RF(fmule3); RF(fchain); RF(fadd2d);
 #define RR(n) runr(#n, t_##n)
 #define RFR(n) RR(n##4s); RR(n##2s); RR(n##2d); RR(n##s); RR(n##d)
+    RF(nar_shrn_v8_0_1);
+    RF(nar_shrn_v8_0_8);
+    RF(nar_shrn_v8_1_1);
+    RF(nar_shrn_v8_1_8);
+    RF(nar_shrn_v16_0_1);
+    RF(nar_shrn_v16_0_16);
+    RF(nar_shrn_v16_1_1);
+    RF(nar_shrn_v16_1_16);
+    RF(nar_shrn_v32_0_1);
+    RF(nar_shrn_v32_0_32);
+    RF(nar_shrn_v32_1_1);
+    RF(nar_shrn_v32_1_32);
+    RF(nar_rshrn_v8_0_1);
+    RF(nar_rshrn_v8_0_8);
+    RF(nar_rshrn_v8_1_1);
+    RF(nar_rshrn_v8_1_8);
+    RF(nar_rshrn_v16_0_1);
+    RF(nar_rshrn_v16_0_16);
+    RF(nar_rshrn_v16_1_1);
+    RF(nar_rshrn_v16_1_16);
+    RF(nar_rshrn_v32_0_1);
+    RF(nar_rshrn_v32_0_32);
+    RF(nar_rshrn_v32_1_1);
+    RF(nar_rshrn_v32_1_32);
+    RF(nar_sqshrun_v8_0_1);
+    RF(nar_sqshrun_v8_0_8);
+    RF(nar_sqshrun_v8_1_1);
+    RF(nar_sqshrun_v8_1_8);
+    RF(nar_sqshrun_v16_0_1);
+    RF(nar_sqshrun_v16_0_16);
+    RF(nar_sqshrun_v16_1_1);
+    RF(nar_sqshrun_v16_1_16);
+    RF(nar_sqshrun_v32_0_1);
+    RF(nar_sqshrun_v32_0_32);
+    RF(nar_sqshrun_v32_1_1);
+    RF(nar_sqshrun_v32_1_32);
+    RF(nar_sqrshrun_v8_0_1);
+    RF(nar_sqrshrun_v8_0_8);
+    RF(nar_sqrshrun_v8_1_1);
+    RF(nar_sqrshrun_v8_1_8);
+    RF(nar_sqrshrun_v16_0_1);
+    RF(nar_sqrshrun_v16_0_16);
+    RF(nar_sqrshrun_v16_1_1);
+    RF(nar_sqrshrun_v16_1_16);
+    RF(nar_sqrshrun_v32_0_1);
+    RF(nar_sqrshrun_v32_0_32);
+    RF(nar_sqrshrun_v32_1_1);
+    RF(nar_sqrshrun_v32_1_32);
+    RF(nar_sqshrn_v8_0_1);
+    RF(nar_sqshrn_v8_0_8);
+    RF(nar_sqshrn_v8_1_1);
+    RF(nar_sqshrn_v8_1_8);
+    RF(nar_sqshrn_v16_0_1);
+    RF(nar_sqshrn_v16_0_16);
+    RF(nar_sqshrn_v16_1_1);
+    RF(nar_sqshrn_v16_1_16);
+    RF(nar_sqshrn_v32_0_1);
+    RF(nar_sqshrn_v32_0_32);
+    RF(nar_sqshrn_v32_1_1);
+    RF(nar_sqshrn_v32_1_32);
+    RF(nar_sqrshrn_v8_0_1);
+    RF(nar_sqrshrn_v8_0_8);
+    RF(nar_sqrshrn_v8_1_1);
+    RF(nar_sqrshrn_v8_1_8);
+    RF(nar_sqrshrn_v16_0_1);
+    RF(nar_sqrshrn_v16_0_16);
+    RF(nar_sqrshrn_v16_1_1);
+    RF(nar_sqrshrn_v16_1_16);
+    RF(nar_sqrshrn_v32_0_1);
+    RF(nar_sqrshrn_v32_0_32);
+    RF(nar_sqrshrn_v32_1_1);
+    RF(nar_sqrshrn_v32_1_32);
+    RF(nar_uqshrn_v8_0_1);
+    RF(nar_uqshrn_v8_0_8);
+    RF(nar_uqshrn_v8_1_1);
+    RF(nar_uqshrn_v8_1_8);
+    RF(nar_uqshrn_v16_0_1);
+    RF(nar_uqshrn_v16_0_16);
+    RF(nar_uqshrn_v16_1_1);
+    RF(nar_uqshrn_v16_1_16);
+    RF(nar_uqshrn_v32_0_1);
+    RF(nar_uqshrn_v32_0_32);
+    RF(nar_uqshrn_v32_1_1);
+    RF(nar_uqshrn_v32_1_32);
+    RF(nar_uqrshrn_v8_0_1);
+    RF(nar_uqrshrn_v8_0_8);
+    RF(nar_uqrshrn_v8_1_1);
+    RF(nar_uqrshrn_v8_1_8);
+    RF(nar_uqrshrn_v16_0_1);
+    RF(nar_uqrshrn_v16_0_16);
+    RF(nar_uqrshrn_v16_1_1);
+    RF(nar_uqrshrn_v16_1_16);
+    RF(nar_uqrshrn_v32_0_1);
+    RF(nar_uqrshrn_v32_0_32);
+    RF(nar_uqrshrn_v32_1_1);
+    RF(nar_uqrshrn_v32_1_32);
+    RF(nar_sqshrun_s8_0_1);
+    RF(nar_sqshrun_s8_0_8);
+    RF(nar_sqshrun_s16_0_1);
+    RF(nar_sqshrun_s16_0_16);
+    RF(nar_sqshrun_s32_0_1);
+    RF(nar_sqshrun_s32_0_32);
+    RF(nar_sqrshrun_s8_0_1);
+    RF(nar_sqrshrun_s8_0_8);
+    RF(nar_sqrshrun_s16_0_1);
+    RF(nar_sqrshrun_s16_0_16);
+    RF(nar_sqrshrun_s32_0_1);
+    RF(nar_sqrshrun_s32_0_32);
+    RF(nar_sqshrn_s8_0_1);
+    RF(nar_sqshrn_s8_0_8);
+    RF(nar_sqshrn_s16_0_1);
+    RF(nar_sqshrn_s16_0_16);
+    RF(nar_sqshrn_s32_0_1);
+    RF(nar_sqshrn_s32_0_32);
+    RF(nar_sqrshrn_s8_0_1);
+    RF(nar_sqrshrn_s8_0_8);
+    RF(nar_sqrshrn_s16_0_1);
+    RF(nar_sqrshrn_s16_0_16);
+    RF(nar_sqrshrn_s32_0_1);
+    RF(nar_sqrshrn_s32_0_32);
+    RF(nar_uqshrn_s8_0_1);
+    RF(nar_uqshrn_s8_0_8);
+    RF(nar_uqshrn_s16_0_1);
+    RF(nar_uqshrn_s16_0_16);
+    RF(nar_uqshrn_s32_0_1);
+    RF(nar_uqshrn_s32_0_32);
+    RF(nar_uqrshrn_s8_0_1);
+    RF(nar_uqrshrn_s8_0_8);
+    RF(nar_uqrshrn_s16_0_1);
+    RF(nar_uqrshrn_s16_0_16);
+    RF(nar_uqrshrn_s32_0_1);
+    RF(nar_uqrshrn_s32_0_32);
     RF(abd2s);
     RF(abd4s);
     RF(abd2d);
