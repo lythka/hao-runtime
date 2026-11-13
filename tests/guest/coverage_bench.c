@@ -30,6 +30,11 @@ static __attribute__((noinline)) vec name(unsigned long n) { \
         : "v0", "v1", "v2", "x9", "cc", "memory"); \
     return out; \
 }
+BENCH(abd2s, "fabd v2.2s,v0.2s,v1.2s", single)
+BENCH(abd4s, "fabd v2.4s,v0.4s,v1.4s", single)
+BENCH(abd2d, "fabd v2.2d,v0.2d,v1.2d", double)
+BENCH(abds, "fabd s2,s0,s1", single)
+BENCH(abdd, "fabd d2,d0,d1", double)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -536,6 +541,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "%-18s %.6f ns/op\n", #name, (double)elapsed / (16.0 * n)); } while (0)
     RUN(tail_fmadd); RUN(tail_fmsub); RUN(tail_fnmadd); RUN(tail_fnmsub); RUN(tail_fnmul); RUN(tail_frecpss); RUN(tail_frecps2s); RUN(tail_frecps4s); RUN(tail_frsqrtss); RUN(tail_frsqrts2s); RUN(tail_frsqrts4s);
 
+    RUN(abd2s); RUN(abd4s); RUN(abd2d); RUN(abds); RUN(abdd);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);
