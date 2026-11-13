@@ -785,6 +785,28 @@ int main(void)
             }
         }
 
+    /* Signed, unsigned and mixed byte products; all selected four-byte
+     * groups, matrix rows/columns, accumulator wraparound and aliases. */
+    static const uint32_t dot_forms[] = {0x0e809400, 0x2e809400, 0x0e809c00,
+        0x0f80e000, 0x2f80e000, 0x0f80f000, 0x0f00f000,
+        0x0e80a400, 0x2e80a400, 0x0e80ac00};
+    for (unsigned f = 0; f < 10; f++) for (unsigned q = 0; q < 2; q++)
+        for (unsigned idx = 0; idx < (f >= 3 && f < 7 ? 4u : 1u); idx++)
+            for (unsigned k = 0; k < 128; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                hao_cpu in; state(&in, rn, rm);
+                static const uint8_t vals[] = {0, 1, 127, 128, 129, 254, 255};
+                for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16; e++)
+                    in.v[r].b[e] = k < 49 ? vals[r == rm ? k / 7 : k % 7] : (uint8_t)rnd();
+                uint32_t i = dot_forms[f] | q << 30 | (idx / 2) << 11 | (idx % 2) << 21 |
+                             rm << 16 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0; check(i, 0, &in, live);
+                    if ((f < 7 || q) && vector_helper_calls && fails++ < 20)
+                        printf("MISMATCH %08x: dot/matrix product used helper\n", i);
+                }
+            }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

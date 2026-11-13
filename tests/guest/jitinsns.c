@@ -529,6 +529,47 @@ VECF(t_fcmge_2d_zero, "fcmge v2.2d,v0.2d,#0.0")
 VECF(t_fcmgt_2d_zero, "fcmgt v2.2d,v0.2d,#0.0")
 VECF(t_fcmle_2d_zero, "fcmle v2.2d,v0.2d,#0.0")
 VECF(t_fcmlt_2d_zero, "fcmlt v2.2d,v0.2d,#0.0")
+VECF(t_sdot0_0, ".inst 0x0e819402")
+VECF(t_sdot1_0, ".inst 0x4e819402")
+VECF(t_udot0_0, ".inst 0x2e819402")
+VECF(t_udot1_0, ".inst 0x6e819402")
+VECF(t_usdot0_0, ".inst 0x0e819c02")
+VECF(t_usdot1_0, ".inst 0x4e819c02")
+VECF(t_sdot_e0_0, ".inst 0x0f81e002")
+VECF(t_sdot_e0_1, ".inst 0x0fa1e002")
+VECF(t_sdot_e0_2, ".inst 0x0f81e802")
+VECF(t_sdot_e0_3, ".inst 0x0fa1e802")
+VECF(t_sdot_e1_0, ".inst 0x4f81e002")
+VECF(t_sdot_e1_1, ".inst 0x4fa1e002")
+VECF(t_sdot_e1_2, ".inst 0x4f81e802")
+VECF(t_sdot_e1_3, ".inst 0x4fa1e802")
+VECF(t_udot_e0_0, ".inst 0x2f81e002")
+VECF(t_udot_e0_1, ".inst 0x2fa1e002")
+VECF(t_udot_e0_2, ".inst 0x2f81e802")
+VECF(t_udot_e0_3, ".inst 0x2fa1e802")
+VECF(t_udot_e1_0, ".inst 0x6f81e002")
+VECF(t_udot_e1_1, ".inst 0x6fa1e002")
+VECF(t_udot_e1_2, ".inst 0x6f81e802")
+VECF(t_udot_e1_3, ".inst 0x6fa1e802")
+VECF(t_usdot_e0_0, ".inst 0x0f81f002")
+VECF(t_usdot_e0_1, ".inst 0x0fa1f002")
+VECF(t_usdot_e0_2, ".inst 0x0f81f802")
+VECF(t_usdot_e0_3, ".inst 0x0fa1f802")
+VECF(t_usdot_e1_0, ".inst 0x4f81f002")
+VECF(t_usdot_e1_1, ".inst 0x4fa1f002")
+VECF(t_usdot_e1_2, ".inst 0x4f81f802")
+VECF(t_usdot_e1_3, ".inst 0x4fa1f802")
+VECF(t_sudot_e0_0, ".inst 0x0f01f002")
+VECF(t_sudot_e0_1, ".inst 0x0f21f002")
+VECF(t_sudot_e0_2, ".inst 0x0f01f802")
+VECF(t_sudot_e0_3, ".inst 0x0f21f802")
+VECF(t_sudot_e1_0, ".inst 0x4f01f002")
+VECF(t_sudot_e1_1, ".inst 0x4f21f002")
+VECF(t_sudot_e1_2, ".inst 0x4f01f802")
+VECF(t_sudot_e1_3, ".inst 0x4f21f802")
+VECF(t_smmla1_0, ".inst 0x4e81a402")
+VECF(t_ummla1_0, ".inst 0x6e81a402")
+VECF(t_usmmla1_0, ".inst 0x4e81ac02")
 VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
 VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
 VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
@@ -2211,6 +2252,47 @@ int main(void)
     RF(fcmgt_2d_zero);
     RF(fcmle_2d_zero);
     RF(fcmlt_2d_zero);
+    RF(sdot0_0);
+    RF(sdot1_0);
+    RF(udot0_0);
+    RF(udot1_0);
+    RF(usdot0_0);
+    RF(usdot1_0);
+    RF(sdot_e0_0);
+    RF(sdot_e0_1);
+    RF(sdot_e0_2);
+    RF(sdot_e0_3);
+    RF(sdot_e1_0);
+    RF(sdot_e1_1);
+    RF(sdot_e1_2);
+    RF(sdot_e1_3);
+    RF(udot_e0_0);
+    RF(udot_e0_1);
+    RF(udot_e0_2);
+    RF(udot_e0_3);
+    RF(udot_e1_0);
+    RF(udot_e1_1);
+    RF(udot_e1_2);
+    RF(udot_e1_3);
+    RF(usdot_e0_0);
+    RF(usdot_e0_1);
+    RF(usdot_e0_2);
+    RF(usdot_e0_3);
+    RF(usdot_e1_0);
+    RF(usdot_e1_1);
+    RF(usdot_e1_2);
+    RF(usdot_e1_3);
+    RF(sudot_e0_0);
+    RF(sudot_e0_1);
+    RF(sudot_e0_2);
+    RF(sudot_e0_3);
+    RF(sudot_e1_0);
+    RF(sudot_e1_1);
+    RF(sudot_e1_2);
+    RF(sudot_e1_3);
+    RF(smmla1_0);
+    RF(ummla1_0);
+    RF(usmmla1_0);
     RF(cov_fmuls0);
     RF(cov_fmuls1);
     RF(cov_fmuls2);

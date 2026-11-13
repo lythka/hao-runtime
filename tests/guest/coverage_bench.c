@@ -168,6 +168,47 @@ BENCH(fcmge_2d_zero, "fcmge v2.2d,v0.2d,#0.0", double)
 BENCH(fcmgt_2d_zero, "fcmgt v2.2d,v0.2d,#0.0", double)
 BENCH(fcmle_2d_zero, "fcmle v2.2d,v0.2d,#0.0", double)
 BENCH(fcmlt_2d_zero, "fcmlt v2.2d,v0.2d,#0.0", double)
+BENCH(sdot0_0, ".inst 0x0e819402", single)
+BENCH(sdot1_0, ".inst 0x4e819402", single)
+BENCH(udot0_0, ".inst 0x2e819402", single)
+BENCH(udot1_0, ".inst 0x6e819402", single)
+BENCH(usdot0_0, ".inst 0x0e819c02", single)
+BENCH(usdot1_0, ".inst 0x4e819c02", single)
+BENCH(sdot_e0_0, ".inst 0x0f81e002", single)
+BENCH(sdot_e0_1, ".inst 0x0fa1e002", single)
+BENCH(sdot_e0_2, ".inst 0x0f81e802", single)
+BENCH(sdot_e0_3, ".inst 0x0fa1e802", single)
+BENCH(sdot_e1_0, ".inst 0x4f81e002", single)
+BENCH(sdot_e1_1, ".inst 0x4fa1e002", single)
+BENCH(sdot_e1_2, ".inst 0x4f81e802", single)
+BENCH(sdot_e1_3, ".inst 0x4fa1e802", single)
+BENCH(udot_e0_0, ".inst 0x2f81e002", single)
+BENCH(udot_e0_1, ".inst 0x2fa1e002", single)
+BENCH(udot_e0_2, ".inst 0x2f81e802", single)
+BENCH(udot_e0_3, ".inst 0x2fa1e802", single)
+BENCH(udot_e1_0, ".inst 0x6f81e002", single)
+BENCH(udot_e1_1, ".inst 0x6fa1e002", single)
+BENCH(udot_e1_2, ".inst 0x6f81e802", single)
+BENCH(udot_e1_3, ".inst 0x6fa1e802", single)
+BENCH(usdot_e0_0, ".inst 0x0f81f002", single)
+BENCH(usdot_e0_1, ".inst 0x0fa1f002", single)
+BENCH(usdot_e0_2, ".inst 0x0f81f802", single)
+BENCH(usdot_e0_3, ".inst 0x0fa1f802", single)
+BENCH(usdot_e1_0, ".inst 0x4f81f002", single)
+BENCH(usdot_e1_1, ".inst 0x4fa1f002", single)
+BENCH(usdot_e1_2, ".inst 0x4f81f802", single)
+BENCH(usdot_e1_3, ".inst 0x4fa1f802", single)
+BENCH(sudot_e0_0, ".inst 0x0f01f002", single)
+BENCH(sudot_e0_1, ".inst 0x0f21f002", single)
+BENCH(sudot_e0_2, ".inst 0x0f01f802", single)
+BENCH(sudot_e0_3, ".inst 0x0f21f802", single)
+BENCH(sudot_e1_0, ".inst 0x4f01f002", single)
+BENCH(sudot_e1_1, ".inst 0x4f21f002", single)
+BENCH(sudot_e1_2, ".inst 0x4f01f802", single)
+BENCH(sudot_e1_3, ".inst 0x4f21f802", single)
+BENCH(smmla1_0, ".inst 0x4e81a402", single)
+BENCH(ummla1_0, ".inst 0x6e81a402", single)
+BENCH(usmmla1_0, ".inst 0x4e81ac02", single)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -808,6 +849,47 @@ int main(int argc, char **argv)
     RUN(fcmgt_2d_zero);
     RUN(fcmle_2d_zero);
     RUN(fcmlt_2d_zero);
+    RUN(sdot0_0);
+    RUN(sdot1_0);
+    RUN(udot0_0);
+    RUN(udot1_0);
+    RUN(usdot0_0);
+    RUN(usdot1_0);
+    RUN(sdot_e0_0);
+    RUN(sdot_e0_1);
+    RUN(sdot_e0_2);
+    RUN(sdot_e0_3);
+    RUN(sdot_e1_0);
+    RUN(sdot_e1_1);
+    RUN(sdot_e1_2);
+    RUN(sdot_e1_3);
+    RUN(udot_e0_0);
+    RUN(udot_e0_1);
+    RUN(udot_e0_2);
+    RUN(udot_e0_3);
+    RUN(udot_e1_0);
+    RUN(udot_e1_1);
+    RUN(udot_e1_2);
+    RUN(udot_e1_3);
+    RUN(usdot_e0_0);
+    RUN(usdot_e0_1);
+    RUN(usdot_e0_2);
+    RUN(usdot_e0_3);
+    RUN(usdot_e1_0);
+    RUN(usdot_e1_1);
+    RUN(usdot_e1_2);
+    RUN(usdot_e1_3);
+    RUN(sudot_e0_0);
+    RUN(sudot_e0_1);
+    RUN(sudot_e0_2);
+    RUN(sudot_e0_3);
+    RUN(sudot_e1_0);
+    RUN(sudot_e1_1);
+    RUN(sudot_e1_2);
+    RUN(sudot_e1_3);
+    RUN(smmla1_0);
+    RUN(ummla1_0);
+    RUN(usmmla1_0);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);

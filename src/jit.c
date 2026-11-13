@@ -4067,6 +4067,48 @@ static bool t_simd_permute(tctx *t, uint32_t i)
     return true;
 }
 
+/* Byte dot/matrix products use exact signed-word intermediates, including
+ * zero-extended unsigned bytes. PMADDWD cannot overflow with byte inputs;
+ * only the architectural dword accumulator wraps. */
+static bool t_simd_dot(tctx *t, uint32_t i)
+{
+    bool matrix = (i & 0x9FE0FC00) == 0x0E80A400 || (i & 0xBFE0FC00) == 0x0E80AC00;
+    bool dot = (i & 0x9FE0FC00) == 0x0E809400;
+    bool indexed = (i & 0x9FC0F400) == 0x0F80E000;
+    bool mixed = (i & 0xBFE0FC00) == 0x0E809C00;
+    bool mixed_index = (i & 0xBF40F400) == 0x0F00F000;
+    if (!matrix && !dot && !indexed && !mixed && !mixed_index) return false;
+    unsigned Q = BIT(i, 30), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16), rd = BITS(i, 4, 0);
+    if (matrix && !Q) return false;
+    bool au = matrix ? BIT(i, 29) || BIT(i, 11) : mixed || (mixed_index ? BIT(i, 23) : BIT(i, 29));
+    bool bu = matrix ? BIT(i, 29) : (mixed || mixed_index) ? !au : au;
+    if (matrix) {
+        vld(t, 8, rn); P(0x6F, 9, 8); x_sse_shift_ri(&t->b, 0x73, 3, 9, 8);
+        vld(t, 10, rm); P(0x6F, 11, 10); x_sse_shift_ri(&t->b, 0x73, 3, 11, 8);
+        P38(au ? 0x30 : 0x20, 8, 8); P38(au ? 0x30 : 0x20, 9, 9);
+        P38(bu ? 0x30 : 0x20, 10, 10); P38(bu ? 0x30 : 0x20, 11, 11);
+        for (int row = 0; row < 2; row++) {
+            P(0x6F, 0, 8 + row); P(0x6F, 1, 0);
+            P(0xF5, 0, 10); P(0xF5, 1, 11);
+            P38(0x02, 0, 1); P38(0x02, 0, 0);
+            if (!row) P(0x6F, 2, 0);
+            else P(0x6C, 2, 0); /* matrix row ordering */
+        }
+        P(0x6F, 0, 2);
+    } else {
+        vld(t, 0, rn); vld(t, 1, rm);
+        if (indexed || mixed_index)
+            x_sse_rri(&t->b, 0x66, 0x70, 1, 1, 0x55 * (BIT(i, 11) * 2 + BIT(i, 21)));
+        P(0x6F, 2, 0); P(0x6F, 3, 1);
+        x_sse_shift_ri(&t->b, 0x73, 3, 2, 8); x_sse_shift_ri(&t->b, 0x73, 3, 3, 8);
+        P38(au ? 0x30 : 0x20, 0, 0); P38(au ? 0x30 : 0x20, 2, 2);
+        P38(bu ? 0x30 : 0x20, 1, 1); P38(bu ? 0x30 : 0x20, 3, 3);
+        P(0xF5, 0, 1); P(0xF5, 2, 3); P38(0x02, 0, 2); /* four-byte dot groups */
+    }
+    vld(t, 1, rd); P(0xFE, 0, 1); vst(t, rd, 0, Q);
+    return true;
+}
+
 static bool t_simd_integer_indexed(tctx *t, uint32_t i)
 {
     unsigned size = BITS(i, 23, 22), op = BITS(i, 15, 12), U = BIT(i, 29);
@@ -4081,6 +4123,8 @@ static bool t_simd_integer_indexed(tctx *t, uint32_t i)
  * earlier group of that decoder). */
 static bool t_simd(tctx *t, uint32_t i, uint64_t pc)
 {
+    if (t_simd_dot(t, i)) return true;
+
     if ((i & 0x9F200C00) == 0x0E200000) return t_simd_three_diff(t, i);
 
     if ((i & 0xFF3E0C00) == 0x4E280800) return t_aes(t, i);
