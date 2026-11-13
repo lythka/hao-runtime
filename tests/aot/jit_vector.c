@@ -807,6 +807,35 @@ int main(void)
                 }
             }
 
+    /* Every immediate narrowing shift, both halves and scalar saturation.
+     * The values straddle saturation and rounding boundaries, including
+     * unsigned 64-bit carry and inactive lanes that would otherwise set QC. */
+    for (unsigned scalar = 0; scalar < 2; scalar++) for (unsigned q = scalar; q < 2; q++)
+        for (unsigned u = 0; u < 2; u++) for (unsigned op = 0x10; op <= 0x13; op++)
+            for (unsigned size = 0; size < 4; size++)
+                for (unsigned sh = 1; sh <= (8u << size); sh++) for (unsigned k = 0; k < 16; k++) {
+                    unsigned rd = reg(), rn = k & 1 ? rd : reg(), bits = 8u << size;
+                    hao_cpu in; state(&in, rn, rn);
+                    unsigned es = size < 3 ? 2u << size : 8;
+                    uint64_t max = bits == 64 ? ~0ull : (1ull << bits) - 1, sign = 1ull << (es * 8 - 1);
+                    unsigned shift = sh & 63;
+                    uint64_t half = 1ull << (sh - 1);
+                    uint64_t vals[] = {0, 1, ~0ull, sign - 1, sign, sign + 1,
+                        half - 1, half, half + 1, max << shift, (max << shift) + half,
+                        (max + 1) << shift, (max >> 1) << shift, ((max >> 1) << shift) + half,
+                        -(1ull << (bits - 1)) << shift, rnd()};
+                    for (unsigned e = 0; e < 16 / es; e++) {
+                        uint64_t v = vals[(k + e) % 16]; memcpy(&in.v[rn].b[e * es], &v, es);
+                    }
+                    uint32_t i = (scalar ? 0x5f000400u : 0x0f000400u) | q << 30 | u << 29 |
+                                 (2 * bits - sh) << 16 | op << 11 | rn << 5 | rd;
+                    for (int live = 0; live < 2; live++) {
+                        vector_helper_calls = 0; check(i, 0, &in, live);
+                        if (size < 3 && !(scalar && op < 0x12 && !u) && vector_helper_calls && fails++ < 20)
+                            printf("MISMATCH %08x: immediate narrowing used helper\n", i);
+                    }
+                }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

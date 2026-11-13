@@ -2425,6 +2425,29 @@ static bool t_vfp_absneg(tctx *t, uint32_t i);
 static bool t_vfp_rint_vec(tctx *t, uint32_t i, uint64_t pc);
 static bool t_vfp_estimate(tctx *t, uint32_t i, uint64_t pc, bool scalar);
 
+/* Clamp wide lanes before narrowing. Comparing against the unclamped value
+ * records QC exactly; callers zero inactive scalar lanes before entry. */
+static void vsaturate_narrow(tctx *t, unsigned size, bool unsrc, bool undst)
+{
+    unsigned bits = 8u << size, wide = size + 1;
+    uint64_t max = (1ull << (bits - !undst)) - 1;
+    uint64_t min = undst ? 0 : ~max;
+    if (wide == 1) { max *= 0x0001000100010001ull; min = (min & 0xffff) * 0x0001000100010001ull; }
+    if (wide == 2) { max *= 0x0000000100000001ull; min = (min & 0xffffffff) * 0x0000000100000001ull; }
+    P(0x6F, 8, 0);
+    vconst(t, 1, max, true); P(0x6F, 2, 0);
+    if (unsrc) {
+        vconst(t, 3, wide == 1 ? 0x8000800080008000ull : wide == 2 ? 0x8000000080000000ull : 0x8000000000000000ull, true);
+        P(0xEF, 2, 3); P(0xEF, 1, 3); vcmpgt(t, wide, 2, 1); P(0xEF, 1, 3);
+    } else vcmpgt(t, wide, 2, 1);
+    P(0xDB, 1, 2); P(0xDF, 2, 0); P(0xEB, 1, 2); P(0x6F, 0, 1); /* min(x,max) */
+    if (!unsrc) {
+        vconst(t, 1, min, true); P(0x6F, 2, 1); vcmpgt(t, wide, 2, 0);
+        P(0xDB, 1, 2); P(0xDF, 2, 0); P(0xEB, 1, 2); P(0x6F, 0, 1); /* max(x,min) */
+    }
+    vcmpeq(t, wide, 8, 0); vnot(t, 8, 2); vset_qc(t, 8);
+}
+
 static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 16, 12);
@@ -2451,24 +2474,8 @@ static bool t_simd_two_misc(tctx *t, uint32_t i, uint64_t pc)
     }
     if (op == 0x14 || (op == 0x12 && U)) { /* SQXTN / UQXTN / SQXTUN */
         if (size == 3) return false;
-        unsigned bits = 8u << size, wide = size + 1;
-        bool unsrc = op == 0x14 && U, undst = U;
-        uint64_t max = (1ull << (bits - !undst)) - 1;
-        uint64_t min = undst ? 0 : ~max;
-        if (wide == 1) { max *= 0x0001000100010001ull; min = (min & 0xffff) * 0x0001000100010001ull; }
-        if (wide == 2) { max *= 0x0000000100000001ull; min = (min & 0xffffffff) * 0x0000000100000001ull; }
-        vld(t, 0, rn); P(0x6F, 8, 0);
-        vconst(t, 1, max, true); P(0x6F, 2, 0);
-        if (unsrc) {
-            vconst(t, 3, wide == 1 ? 0x8000800080008000ull : wide == 2 ? 0x8000000080000000ull : 0x8000000000000000ull, true);
-            P(0xEF, 2, 3); P(0xEF, 1, 3); vcmpgt(t, wide, 2, 1); P(0xEF, 1, 3);
-        } else vcmpgt(t, wide, 2, 1);
-        P(0xDB, 1, 2); P(0xDF, 2, 0); P(0xEB, 1, 2); P(0x6F, 0, 1); /* min(x,max) */
-        if (!unsrc) {
-            vconst(t, 1, min, true); P(0x6F, 2, 1); vcmpgt(t, wide, 2, 0);
-            P(0xDB, 1, 2); P(0xDF, 2, 0); P(0xEB, 1, 2); P(0x6F, 0, 1); /* max(x,min) */
-        }
-        vcmpeq(t, wide, 8, 0); vnot(t, 8, 2); vset_qc(t, 8);
+        vld(t, 0, rn);
+        vsaturate_narrow(t, size, op == 0x14 && U, U);
         vnarrow(t, 1 << size); vst_narrow(t, rd, Q);
         return true;
     }
@@ -2690,12 +2697,30 @@ static bool t_simd_shift(tctx *t, uint32_t i, bool scalar)
         vst(t, rd, 0, 1);
         return true;
     }
-    if (!scalar && op == 0x10 && !U) {                           /* SHRN: es is the destination lane size */
-        if (es == 8) return false;                               /* unallocated */
+    if (op >= 0x10 && op <= 0x13) {                          /* immediate narrowing */
+        if (es == 8 || (scalar && op < 0x12 && !U)) return false;
+        unsigned size = (unsigned)__builtin_ctz((unsigned)es), wide = size + 1;
+        bool sat = U || op >= 0x12, unsrc = !sat || (U && op >= 0x12);
         vld(t, 0, rn);
-        x_sse_shift_ri(&t->b, es == 1 ? 0x71 : es == 2 ? 0x72 : 0x73, 2, 0, (uint8_t)rsh);
-        vnarrow(t, es);
-        vst_narrow(t, rd, (int)Q);
+        if (scalar) {
+            vconst(t, 1, es == 4 ? ~0ull : (1ull << (16 * es)) - 1, false);
+            P(0xDB, 0, 1);
+        }
+        if (op & 1) P(0x6F, 3, 0);
+        if (!unsrc && es == 4) {
+            vzero(t, 1); P38(0x37, 1, 0);                     /* signed qword shift */
+            x_sse_shift_ri(&t->b, 0x73, 2, 0, (uint8_t)rsh);
+            x_sse_shift_ri(&t->b, 0x73, 6, 1, (uint8_t)(64 - rsh)); P(0xEB, 0, 1);
+        } else x_sse_shift_ri(&t->b, (uint8_t)(0x71 + size), unsrc ? 2 : 4, 0, (uint8_t)rsh);
+        if (op & 1) {
+            /* Add the discarded top bit after shifting: no wide-lane carry is lost. */
+            x_sse_shift_ri(&t->b, (uint8_t)(0x71 + size), 2, 3, (uint8_t)(rsh - 1));
+            static const uint64_t ones[] = {0x0001000100010001ull, 0x0000000100000001ull, 1};
+            vconst(t, 2, ones[size], true); P(0xDB, 3, 2);
+            P(padd[wide], 0, 3); /* immediate narrowing round bit */
+        }
+        if (sat) vsaturate_narrow(t, size, unsrc, U);
+        vnarrow(t, es); vst_narrow(t, rd, scalar ? 0 : (int)Q);
         return true;
     }
     if (scalar ? es != 8 : (es == 8 && !Q)) return false;
