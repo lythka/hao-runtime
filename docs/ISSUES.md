@@ -74,113 +74,36 @@ equal to `HAO_GEN_OS_BUILD`, the format equal to `HAO_GEN_FORMAT`) passes.
 
 Limits: a system older than 26B131 runs with tables describing 26B131 (`-v`
 says so); the earlier 26A428 tables are in git history.
-## FABD translation
+## SIMD tail translations
 
-Scalar S/D and vector .2S/.4S/.2D FABD shared the helper despite the existing
-exact subtraction path. They now round subtraction before clearing its sign.
-Normal/zero inputs and admitted results execute inline; nonfinite/subnormal
-inputs and nonfinite or nonzero tiny results retain the helper, restoring
-MXCSR before a result decline.
-All 198 static sites are covered: overall coverage is 99.854081% -> 99.855657%
-(12,561,074 instructions), with generated code 656,950 -> 657,030 KiB.
-At 1,000 iterations the five-form workload's JIT/AOT helper calls are
-80,000 -> 0.
-30,720 directed FABD checks within 964,835 full-state cases and 1,270
-native ARM comparison hashes pass. The wrong-sign mutation is detected.
-`make check` passes, including `make test`,
-strict native/sanitizer oracles and 102 manifest passes (one known failure,
-three expected skips). Half FABD remains a helper.
-## Saturating integer add/sub
+Shared packed arithmetic now covers these families in JIT and AOT. Sources
+are staged before aliased destinations; scalar and short-vector writes clear
+inactive lanes. Integer saturation preserves sticky QC, and all paths
+preserve live NZCV and the complete FPSR.
 
-SQADD/UQADD/SQSUB/UQSUB now use packed wrapping arithmetic, overflow masks
-and exact endpoint selection for scalar B/H/S/D and legal vector widths.
-Only active lanes contribute to sticky FPSR.QC; live NZCV and other FPSR
-bits survive. Sources are staged before an aliased destination is stored.
-All 77 static sites are covered: overall coverage is 99.854081% ->
-99.854694% across 12,561,074 instructions; generated code
-is 656,950 -> 656,956 KiB. At 1,000 iterations the directed
-workload's JIT/AOT helper calls are 704,000 -> 0.
-9,216 directed checks within 943,331 full-state cases and 1,309
-native ARM comparison hashes pass; wrong translations are detected by the
-mutation controls. `make check` passes, including `make test`, strict native
-and sanitizer oracles, and 102 manifest passes (one known failure and three
-expected skips). Reserved vector .1D forms remain on the helper.
-## Integer absolute differences
+| Family | Static helper sites before -> after | Implementation and remaining limits |
+|---|---:|---|
+| FABD S/D, scalar and vector | 198 -> 0 | Round subtraction before clearing its sign; special/tiny cases and half FABD retain helpers |
+| SQADD/UQADD/SQSUB/UQSUB | 77 -> 0 | Wrapping arithmetic, overflow masks and exact saturation endpoints |
+| SABD/UABD/SABA/UABA and long forms | 230 -> 0 | Compare in original signed/unsigned order before subtraction; widen before long arithmetic |
+| ADDHN/RADDHN/SUBHN/RSUBHN | 645 -> 0 | Wide modular arithmetic and rounding before high-half selection; preserve low destination for the 2 forms |
+| Vector ADDP | 123 -> 0 | Adjacent pair sums in B/H/S/D, modulo lane width |
+| Indexed FMUL .2D | 102 -> 0 | Broadcast the selected lane before input admission; special/tiny cases retain helpers |
+| Double vector compares | 86 -> 0 | Ordered register and zero predicates; nonfinite/subnormal inputs retain helpers |
+| Integer dot and matrix products | 358 -> 0 | Exact byte-to-word products and dword sums; signed/unsigned/mixed forms, including I8MM |
 
-SABD/UABD/SABA/UABA and their long forms compare in the original signed
-or unsigned order before taking the difference; signed ABS of a wrapped
-subtraction would lose extreme distances. Widening precedes long subtraction,
-accumulation wraps, and source-half selection and aliases preserve operands.
-All 230 static sites are covered: overall coverage is 99.854081% ->
-99.855912% across 12,561,074 instructions; generated code
-is 656,950 -> 656,954 KiB. At 1,000 iterations the directed
-workload's JIT/AOT helper calls are 768,000 -> 0.
-9,216 directed checks within 943,331 full-state cases and 1,313
-native ARM comparison hashes pass; wrong translations are detected by the
-mutation controls. `make check` passes, including `make test`, strict native
-and sanitizer oracles, and 102 manifest passes (one known failure and three
-expected skips). Reserved 64-bit same-width forms remain on the helper.
-## High-half add/sub narrowing
+Reserved encodings remain on the helper. All integer operands in the listed
+valid forms execute inline. FP result declines restore MXCSR before fallback.
+No instructions beyond x86-64-v2 are required.
 
-ADDHN/RADDHN/SUBHN/RSUBHN now add or subtract at the wide lane width,
-apply the optional rounding increment modulo that width, then select the
-high half. The 2 forms preserve the old destination low half, including
-source aliases; other forms clear the upper half. FPSR and NZCV are unchanged.
-All 645 static sites are covered: overall coverage is 99.854081% ->
-99.859216% across 12,561,074 instructions; generated code
-is 656,950 -> 656,965 KiB. At 1,000 iterations the directed
-workload's JIT/AOT helper calls are 384,000 -> 0.
-4,608 directed checks within 938,723 full-state cases and 1,289
-native ARM comparison hashes pass; wrong translations are detected by the
-mutation controls. `make check` passes, including `make test`, strict native
-and sanitizer oracles, and 102 manifest passes (one known failure and three
-expected skips). Shift-by-immediate narrowing is unchanged.
-## Vector pairwise integer add
-
-Vector ADDP now forms adjacent pairs from both source vectors, using packed
-horizontal addition for H/S, unpack/add for D, and masked word addition
-for B. Wrapping arithmetic, source aliases and inactive-lane clearing
-preserve complete architectural state.
-All 123 static sites are covered: overall coverage is 99.854081% ->
-99.855060% across 12,561,074 instructions; generated code
-is 656,950 -> 656,950 KiB. At 1,000 iterations the directed
-workload's JIT/AOT helper calls are 112,000 -> 0.
-2,048 directed checks within 936,163 full-state cases and 1,272
-native ARM comparison hashes pass; wrong translations are detected by the
-mutation controls. `make check` passes, including `make test`, strict native
-and sanitizer oracles, and 102 manifest passes (one known failure and three
-expected skips). Scalar ADDP is unchanged; reserved vector .1D remains on the helper.
-## Indexed double vector multiply
-
-Vector indexed FMUL .2D broadcasts the selected D lane before applying the
-existing packed-double multiply admission and MXCSR rollback. The unused
-source lane cannot introduce exceptions or force a decline; high Vm indices,
-aliases, live NZCV and sticky FPSR retain their original semantics.
-All 102 static sites are covered: overall coverage is 99.854081% ->
-99.854893% across 12,561,074 instructions; generated code
-is 656,950 -> 656,983 KiB. At 1,000 iterations the directed
-workload's JIT/AOT helper calls are 32,000 -> 0.
-12,800 directed checks within 946,915 full-state cases and 1,267
-native ARM comparison hashes pass; wrong translations are detected by the
-mutation controls. `make check` passes, including `make test`, strict native
-and sanitizer oracles, and 102 manifest passes (one known failure and three
-expected skips). Nonfinite/subnormal inputs and nonfinite or nonzero tiny results retain the helper;
-reserved L and .1D encodings and double FMA are unchanged.
-## Double vector comparisons
-
-FCMEQ/FCMGE/FCMGT .2D and all five .2D zero comparisons now use integer
-input admission followed by ordered packed-double predicates. Register
-aliases, signed zeros, live NZCV and sticky FPSR are preserved.
-All 86 static sites are covered: overall coverage is 99.854081% ->
-99.854766% across 12,561,074 instructions; generated code
-is 656,950 -> 656,964 KiB. At 1,000 iterations the directed
-workload's JIT/AOT helper calls are 128,000 -> 0.
-32,768 directed checks within 966,883 full-state cases and 1,273
-native ARM comparison hashes pass; wrong translations are detected by the
-mutation controls. `make check` passes, including `make test`, strict native
-and sanitizer oracles, and 102 manifest passes (one known failure and three
-expected skips). Nonfinite and subnormal inputs retain interpreter IOC/IDC and DN/FZ behavior;
-reserved .1D encodings remain on the helper.
+Across 12,561,074 instructions, the combined static helper tail is
+18,329 -> 16,510 (99.854081% -> 99.868562% coverage); generated code is
+656,950 -> 657,124 KiB. The eight directed workloads remove 2,864,000 JIT/AOT
+helper calls at 1,000 iterations; these counts do not measure application use.
+1,046,755 full-state comparisons pass, alongside native ARM/JIT/interpreter/AOT
+checks and each family's mutation controls. `make check` passes: 104 manifest
+passes, one known failure and three expected skips, with zero unexpected
+failures. Native and sanitizer oracles have zero IEEE-flag differences.
 
 ## Categories on Swift class stubs
 
@@ -366,11 +289,19 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 2,320 untranslated sites remain implementation work,
+99.9319%. The other 1,962 untranslated sites remain implementation work,
 largest families first:
 - SHA and PMULL (588)
+- shift-by-immediate narrowing (474)
+- integer reductions (277)
+- indexed widening multiply (240)
 - scaled fixed-point conversions (77)
-- a long tail of smaller forms
+- other integer scalar/count/reverse (76)
+- integer halving add (63)
+- other register shifts (59)
+- single-lane/replicate structures (58)
+- SQSHLU (18), half scalar move/compare (12), double FNMUL (12),
+  double numeric min/max (8)
 
 ## MapKit 32-byte HFA functions in the aggregate-by-value table
 
