@@ -127,6 +127,30 @@ BENCH(uabal_2d, "uabal v2.2d,v0.2s,v1.2s", single)
 BENCH(uabal2_8h, "uabal2 v2.8h,v0.16b,v1.16b", single)
 BENCH(uabal2_4s, "uabal2 v2.4s,v0.8h,v1.8h", single)
 BENCH(uabal2_2d, "uabal2 v2.2d,v0.4s,v1.4s", single)
+BENCH(addhn_8b, "addhn v2.8b,v0.8h,v1.8h", single)
+BENCH(addhn_4h, "addhn v2.4h,v0.4s,v1.4s", single)
+BENCH(addhn_2s, "addhn v2.2s,v0.2d,v1.2d", single)
+BENCH(addhn2_16b, "addhn2 v2.16b,v0.8h,v1.8h", single)
+BENCH(addhn2_8h, "addhn2 v2.8h,v0.4s,v1.4s", single)
+BENCH(addhn2_4s, "addhn2 v2.4s,v0.2d,v1.2d", single)
+BENCH(raddhn_8b, "raddhn v2.8b,v0.8h,v1.8h", single)
+BENCH(raddhn_4h, "raddhn v2.4h,v0.4s,v1.4s", single)
+BENCH(raddhn_2s, "raddhn v2.2s,v0.2d,v1.2d", single)
+BENCH(raddhn2_16b, "raddhn2 v2.16b,v0.8h,v1.8h", single)
+BENCH(raddhn2_8h, "raddhn2 v2.8h,v0.4s,v1.4s", single)
+BENCH(raddhn2_4s, "raddhn2 v2.4s,v0.2d,v1.2d", single)
+BENCH(subhn_8b, "subhn v2.8b,v0.8h,v1.8h", single)
+BENCH(subhn_4h, "subhn v2.4h,v0.4s,v1.4s", single)
+BENCH(subhn_2s, "subhn v2.2s,v0.2d,v1.2d", single)
+BENCH(subhn2_16b, "subhn2 v2.16b,v0.8h,v1.8h", single)
+BENCH(subhn2_8h, "subhn2 v2.8h,v0.4s,v1.4s", single)
+BENCH(subhn2_4s, "subhn2 v2.4s,v0.2d,v1.2d", single)
+BENCH(rsubhn_8b, "rsubhn v2.8b,v0.8h,v1.8h", single)
+BENCH(rsubhn_4h, "rsubhn v2.4h,v0.4s,v1.4s", single)
+BENCH(rsubhn_2s, "rsubhn v2.2s,v0.2d,v1.2d", single)
+BENCH(rsubhn2_16b, "rsubhn2 v2.16b,v0.8h,v1.8h", single)
+BENCH(rsubhn2_8h, "rsubhn2 v2.8h,v0.4s,v1.4s", single)
+BENCH(rsubhn2_4s, "rsubhn2 v2.4s,v0.2d,v1.2d", single)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -726,6 +750,30 @@ int main(int argc, char **argv)
     RUN(uabal2_8h);
     RUN(uabal2_4s);
     RUN(uabal2_2d);
+    RUN(addhn_8b);
+    RUN(addhn_4h);
+    RUN(addhn_2s);
+    RUN(addhn2_16b);
+    RUN(addhn2_8h);
+    RUN(addhn2_4s);
+    RUN(raddhn_8b);
+    RUN(raddhn_4h);
+    RUN(raddhn_2s);
+    RUN(raddhn2_16b);
+    RUN(raddhn2_8h);
+    RUN(raddhn2_4s);
+    RUN(subhn_8b);
+    RUN(subhn_4h);
+    RUN(subhn_2s);
+    RUN(subhn2_16b);
+    RUN(subhn2_8h);
+    RUN(subhn2_4s);
+    RUN(rsubhn_8b);
+    RUN(rsubhn_4h);
+    RUN(rsubhn_2s);
+    RUN(rsubhn2_16b);
+    RUN(rsubhn2_8h);
+    RUN(rsubhn2_4s);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);

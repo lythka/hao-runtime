@@ -707,6 +707,27 @@ int main(void)
                 }
             }
 
+    /* High narrowing arithmetic: wide carry/borrow, rounding carry,
+     * source aliases and preservation of the destination's low half. */
+    for (unsigned q = 0; q < 2; q++) for (unsigned round = 0; round < 2; round++)
+        for (unsigned sub = 0; sub < 2; sub++) for (unsigned size = 0; size < 3; size++)
+            for (unsigned k = 0; k < 96; k++) {
+                unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+                hao_cpu in; state(&in, rn, rm);
+                unsigned es = 2u << size; uint64_t half = 1ull << (4 * es - 1);
+                uint64_t vals[] = {0, 1, half - 1, half, half + 1, ~0ull, ~1ull};
+                for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16 / es; e++) {
+                    uint64_t v = k < 49 ? vals[r == rm ? k / 7 : k % 7] : rnd();
+                    memcpy(&in.v[r].b[e * es], &v, es);
+                }
+                uint32_t i = 0x0e204000 | q << 30 | round << 29 | size << 22 | sub << 13 |
+                             rm << 16 | rn << 5 | rd;
+                for (int live = 0; live < 2; live++) {
+                    vector_helper_calls = 0; check(i, 0, &in, live);
+                    if (vector_helper_calls && fails++ < 20) printf("MISMATCH %08x: high narrowing used helper\n", i);
+                }
+            }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.
