@@ -79,6 +79,11 @@ image works; those are tested on the target system.
   arrived by faulting on a non-executable guest page, and prints them at exit.
 - On a target system, the boot arguments `hao_crash=1` and `hao_nx_stats=1`
   send the same diagnostics to the console and `/private/var/log/hao`.
+- `HAO_DIAG_TIME=1` (boot argument `hao_diag_time=1`) starts each diagnostics
+  line with `@SECONDS ` on the mach clock, the clock of the kernel's and the
+  unified log's timestamps, and prints one `phase NAME at S s (+MS ms)` line per
+  startup step: exec, front, diag, bridge, jit, thunks, load, bound, then
+  `registered`/`aot` per image, and main.
 
 ## Conventions
 

@@ -40,6 +40,7 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"no_varsniff", offsetof(hao_opts_t, no_varsniff), BOOT_DEV},
     {"no_libval", offsetof(hao_opts_t, no_libval), BOOT_NO},
     {"bridge_stats", offsetof(hao_opts_t, bridge_stats), BOOT_YES},
+    {"diag_time", offsetof(hao_opts_t, diag_time), BOOT_YES},
     {"no_ifunits", offsetof(hao_opts_t, no_ifunits), BOOT_DEV},
     {"no_swift_thunks", offsetof(hao_opts_t, no_swift_thunks), BOOT_DEV},
     {"no_swift_values", offsetof(hao_opts_t, no_swift_values), BOOT_DEV},

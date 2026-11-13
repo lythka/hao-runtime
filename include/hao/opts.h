@@ -21,6 +21,8 @@ typedef struct {
     bool nx_stats, crash_trace, jit_helpers_only, no_aot, no_chain, no_msgsend, no_closures, no_swiftreg,
          no_block_thunks, no_fixup_thunks, no_struct_thunks, aot_learn, no_jit_memory, bridge_check, bridge_abort,
          no_varsniff, no_libval, bridge_stats, no_ifunits, no_swift_thunks, no_thunks, no_swift_values,
+         diag_time,              /* HAO_DIAG_TIME: diagnostics lines stamped with the mach clock, and startup phase
+                                    lines (runtime.c hao_phase) */
          native_libcxx,          /* HAO_NATIVE_LIBCXX: libc++ stays native (no guest libc++ from the arm64e cache) */
          sigreturn_kernel,       /* HAO_SIGRETURN_KERNEL: hao's signal handlers return through __sigreturn (signals.c) */
          sigreturn_user,         /* HAO_SIGRETURN_USER: resume in user space under Rosetta too (tests; signals.c) */
@@ -49,7 +51,7 @@ extern hao_opts_t hao_opt;
  *
  * Boot arguments are set by root and apply in every tier, so only these are
  * read: in every process hao_nx_stats=1, hao_crash_trace=1,
- * hao_bridge_stats=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1;
+ * hao_bridge_stats=1, hao_diag_time=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1;
  * in PID 1 also hao=FLAGS (v, V, i, s) and hao_verbose=N. No boot argument
  * turns a check off (there is no hao_no_libval and no hao=u). A build with
  * HAO_TEST_SWITCHES defined also reads the bring-up knobs that change

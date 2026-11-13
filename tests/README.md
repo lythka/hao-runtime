@@ -88,6 +88,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/callback-routes | PASS | 2 | |
 | guest/callbacks | PASS | 10 | |
 | guest/cfnull | PASS | 1 | |
+| guest/diagtime | PASS | 1 | |
 | guest/chkstk | PASS | 1 | |
 | guest/cli | PASS | 3 | two cases need `HAO_FS` (expected SKIP without it); `sandbox-exec` |
 | guest/crypto | PASS | 1 | |

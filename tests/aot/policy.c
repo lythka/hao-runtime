@@ -64,7 +64,7 @@ static void test_tiers(void)
                                       "HAO_SIGRETURN_KERNEL", "HAO_NO_PROBE", "HAO_WATCHDOG", "HAO_JIT_CACHE_MB", NULL};
     /* the same code by another engine, and printing: guarded too, never set-ID */
     static const char *guarded[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", "HAO_VERBOSE",
-                                    "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", NULL};
+                                    "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME", NULL};
     static const char *test_only[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
                                       "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", NULL};
     for (const char **s = open_only; *s; s++) {

@@ -94,7 +94,14 @@ void hao_guest_image_init(hao_image *img)
     hao_objc_register_image(img);
     hao_blocks_register_image(img);
     hao_fnslots_image(img);
-    if (hao_use_jit) hao_aot_load(img);
+    /* HAO_DIAG_TIME: "registered NAME" covers the steps above and the previous image's initializers */
+    char what[160];
+    const char *base = strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path;
+    if (hao_opt.diag_time) { snprintf(what, sizeof what, "registered %s", base); hao_phase(what); }
+    if (hao_use_jit) {
+        hao_aot_load(img);
+        if (hao_opt.diag_time) { snprintf(what, sizeof what, "aot %s", base); hao_phase(what); }
+    }
     hao_thread *t = hao_current();
     g_progvars.mh = hao_main_image ? hao_main_image->base : img->base;
     g_progvars.argc = (uint64_t)(uintptr_t)_NSGetArgc();
@@ -265,6 +272,7 @@ static int aot_main(int argc, char **argv)
  */
 int hao_cli_main(int argc, char **argv, char **envp)
 {
+    hao_phase_mark();
     if (argc >= 3 && !strcmp(argv[1], "--aot")) return aot_main(argc, argv);
     /* HAO_EXEC is stage 1's hand-off to stage 2, which stage 1 runs with
      * argv[0] = the program: it is the absolute path stage 1 made of that
@@ -418,6 +426,7 @@ static void pid1_report(void)
 int hao_self_main(int argc, char **argv, char **envp, char **apple)
 {
     char exe[1100], vpath[MAXPATHLEN], self[64];
+    hao_phase_mark();
     int pid1 = getpid() == 1;
     if (pid1) pid1_setup();
     uint32_t esz = sizeof exe;
@@ -527,18 +536,22 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
     hao_fork_init();
 
     hao_install_fault_handler();
+    hao_phase_begin();
     extern void hao_commpage_init(void);
     hao_commpage_init();
     if (hao_opt.watchdog) { signal(SIGALRM, watchdog); alarm(hao_opt.watchdog); }
     hao_bridge_init();            /* plan table, interface units, hao_bridge_stats */
+    hao_phase("bridge");
     /* The code cache (translated code and the native-callable thunks) is
      * mapped before the guest runs, also for --interp: a sandbox the guest
      * applies later may deny dynamic code. Without it hao_use_jit drops to 0. */
     hao_jit_init();
+    hao_phase("jit");
     /* images with Swift metadata are mapped with room for their island entries (macho.c) */
     hao_island_reserve = !hao_opt.no_swift_thunks && hao_have_thunks();
     /* generated thunk pairs: before the main image sets library validation */
     hao_thunks_init();
+    hao_phase("thunks");
 
     /* Publish the resolver before loading: a native initializer can query a
      * just-mapped guest dependency before its application entry point runs. */
@@ -551,6 +564,7 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
     if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
     hao_image *img = hao_load_main_image(path, fd, err, sizeof err);
     if (!img) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "%s\n", err); return 126; }
+    hao_phase("load");
     /* PATH is absolute and unresolved, as dyld presents the main executable */
     extern char hao_guest_exec_path[1024], hao_guest_image_path[1024];
     snprintf(hao_guest_exec_path, sizeof hao_guest_exec_path, "%s", path);
@@ -589,7 +603,9 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
     g_apple[0] = exe_path;
 
     /* guest dylibs bottom-up, then the main executable */
+    hao_phase("bound");
     hao_run_initializers();
+    hao_phase("main");
     uint64_t args[4] = {(uint64_t)argc, (uint64_t)(uintptr_t)argv, (uint64_t)(uintptr_t)envp, (uint64_t)(uintptr_t)g_apple};
     uint64_t rc = hao_call_guest(hao_current(), img->entry, args, 4);
     exit((int)rc);

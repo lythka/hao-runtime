@@ -367,6 +367,8 @@ tests/guest/callbacks.sh
 tests/guest/cbstructs.m
 tests/guest/cfnull.c
 tests/guest/cfnull.sh
+tests/guest/diagtime.c
+tests/guest/diagtime.sh
 tests/guest/chkstk.c
 tests/guest/chkstk.sh
 tests/guest/cli.sh
