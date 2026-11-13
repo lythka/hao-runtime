@@ -1,5 +1,46 @@
 # Runtime issues and measured scope
 
+## Guest single-payload enums and guest-protocol existentials in the value walk
+
+After 9dce413 ControlCenter still refused two kinds of value at every
+start, each dropping the whole value's plan (a sibling nil then reaches
+native witnesses in the arm64 encoding, as in the entry below):
+
+- `ControlCenterApp.ControlCenterDisplayableGridSizes`: a guest enum with
+  one payload case whose empty cases are the payload's extra inhabitants
+  (8 bytes, 0x7ffffffd: a reference payload and two empty cases). The walk
+  decoded only multi-payload enums. Now (Recipe.c `collect_inner`, Enum.c
+  `guest_single_payload_enum`) a guest enum with one payload case, no extra
+  tag bits and the payload's inhabitants left over is decided from the
+  word `selected()` finds for the payload: empty case e is that word equal
+  to c + e on arm64 (c the inhabitants the payload consumed itself), with
+  no patch, since the enum's witnesses are arm64 code; the next eight
+  values are an outer Optional's nils and are refused; anything else is
+  the payload, walked.
+- `any ControlCenterApp.ControlCenterDisplayable`: a live existential in a
+  published value needed every witness table and conformance descriptor in
+  no guest image (7be71ac), and this one is a guest protocol with guest
+  conformances. Native code cannot name a guest protocol, so it never calls
+  through its tables; it only copies the container. Now an existential whose
+  protocols are all Swift protocols defined in a guest image (the protocol
+  references after the existential metadata's count, no ObjC protocol, no
+  superclass constraint) admits guest tables. A native protocol's table must
+  still be native.
+
+`tests/guest/optwitness.swift` adds `(E, C??)` tuples for guest enums with
+an `[Int]` or a class payload and two or three empty cases: JIT, `--interp`
+and AOT crashed in `swift_retain` at 0x8 on 9dce413, and all 227 lines equal
+native arm64 after. `tests/guest/svconformance` keeps refusing guest
+conformances to native protocols (`Identifiable & AnyObject`, static and
+generic; `CustomStringConvertible` in an opaque existential) and now admits
+a guest protocol's existential, class-bound and opaque (all refused on
+9dce413).
+
+Limits: a guest single-payload enum whose payload `selected()` does not plan
+(a payload whose inhabitants are not a pointer-like word) is still refused,
+and so is one with extra tag bits. The existential rule does not walk the
+boxed value, as before.
+
 ## Optionals over guest spare-bit enums
 
 The Swift value walk (`src/swiftvalue/Recipe.c` `collect_inner`) had no rule

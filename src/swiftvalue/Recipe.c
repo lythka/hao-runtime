@@ -689,6 +689,26 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     }
     if (kind == 0x201) {
         if (common_leaf_value(type,value)) return 1;
+        /* A guest enum with one payload case whose empty cases are the
+         * payload's first extra inhabitants (Enum.c guest_single_payload_enum),
+         * when selected() finds the word that carries them: there XI k is the
+         * word k on arm64 (k from the inhabitants the payload's own Optionals
+         * consumed). The enum's witnesses are arm64 code and read the
+         * encoding guest code wrote, so an empty case needs no patch and has
+         * no payload; the next inhabitants are an outer Optional's nils, no
+         * value of this type; anything else is the payload, walked. Without
+         * this rule the enum is refused, and the whole value with it. */
+        const void *single;
+        unsigned empty_cases;
+        empty_plan inner;
+        if (guest_single_payload_enum(type,&single,&empty_cases) && selected(r,single,&inner,0) &&
+            inner.offset <= v->size - 8) {
+            uint64_t word, first = inner.consumed;
+            memcpy(&word,value + inner.offset,8);
+            if (word >= first && word < first + empty_cases) return 1;
+            if (word >= first + empty_cases && word < first + empty_cases + 8) return 0;
+            return collect(r,single,value,base,out,capacity,used,depth + 1);
+        }
         enum_case_plan active;
         if (discover_enum_case(type,value,&active))
             return !active.payload || collect(r,active.payload,value,base,out,capacity,used,depth + 1);
@@ -719,14 +739,26 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             uint64_t bits; memcpy(&bits,value,8);
             return bits >= 4096 && !(bits & 7);
         }
-        uint32_t flags; memcpy(&flags,(const char *)type + 8,4);
+        uint32_t flags, protocols; memcpy(&flags,(const char *)type + 8,4); memcpy(&protocols,(const char *)type + 12,4);
         uint64_t tables = flags & 0xffffff, first = (flags & 0x80000000u) ? 32 : 8;
         if ((flags & 0x3f000000u) || first + 8 * tables > v->size) return 0;
+        /* Every protocol a Swift protocol defined in a guest image
+         * (TargetExistentialTypeMetadata: kind, flags, protocol count, then
+         * the superclass constraint if flag bit 30, then the protocol
+         * references, bit 0 set for an ObjC protocol): native code cannot
+         * name such a protocol, so it never calls through these tables; it
+         * only copies the container. Then a guest conformance's table is
+         * admitted. A native protocol's table must stay native. */
+        int guest_protocols = protocols && protocols <= 64 && !(flags & 0x40000000u);
+        for (uint32_t i = 0; guest_protocols && i < protocols; ++i) {
+            uint64_t ref; memcpy(&ref,(const char *)type + 16 + 8 * i,8);
+            if ((ref & 1) || !hao_image_for_addr(ref)) guest_protocols = 0;
+        }
         for (uint64_t i = 0; i < tables; ++i) {
             uint64_t table, conformance = 0;
             memcpy(&table,value + first + 8 * i,8);
-            if (!table || hao_image_for_addr(table) || !hao_probe_read8(table,&conformance) ||
-                !conformance || hao_image_for_addr(conformance)) return 0;
+            if (!table || !hao_probe_read8(table,&conformance) || !conformance) return 0;
+            if (!guest_protocols && (hao_image_for_addr(table) || hao_image_for_addr(conformance))) return 0;
         }
         return 1;
     }

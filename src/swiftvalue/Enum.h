@@ -50,6 +50,10 @@ int spare_bit_xi(const unsigned char *spare, uint64_t area, unsigned payload_cas
  * in its arm64 encoding: the enum's size in bytes into OUT. Returns 0 when
  * TYPE is not such an enum or K is not below its inhabitant count. */
 int guest_spare_bit_xi(const void *type, uint32_t k, unsigned char *out);
+/* A guest-defined enum with one payload case whose *EMPTY empty cases are
+ * the payload's first extra inhabitants (no extra tag bits): its payload
+ * type into *PAYLOAD. Returns 0 for any other enum. */
+int guest_single_payload_enum(const void *type, const void **payload, unsigned *empty);
 /* The same with ROW in place of the type's table row (NULL: none), for tests
  * of the row rules on types the tables do not list. */
 int discover_fixed_enum_case_row(const void *type, const void *value, fixed_enum_case *out, const mpenum_row *row);
