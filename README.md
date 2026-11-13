@@ -17,8 +17,8 @@ This repository builds:
 
 With these, macOS 27, whose userspace ships ARM-only, boots through Setup
 Assistant to the desktop on a **13-inch 2012 MacBook Pro (MacBookPro9,2)**.
-The current tested release is 27.2.1 (26B131); 27.0 (26A428) was the earlier
-target, and the generated interface tables still come from it.
+The current tested release is 27.2.1 (26B131), which the generated interface
+tables describe; 27.0 (26A428) was the earlier target.
 
 ## Read first
 
@@ -104,7 +104,8 @@ hao is installed into a macOS System volume as a payload:
 
 - `tools/hao-image-payload` builds the payload from a System root: runtime,
   launcher, embedded stubs, interface units (checked against the target's
-  x86_64 shared cache), trusted cdhash list and optional AOT caches.
+  x86_64 shared cache), trusted cdhash list and optional AOT caches, with a
+  `payload-manifest.json` that the image builder checks before using it.
 - `tools/hao-install.py` installs the payload into a System volume.
 - `kext/` holds HaoExec and `kext/stamp_identity.py`, which stamps it for the
   target kernel.
