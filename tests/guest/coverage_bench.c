@@ -151,6 +151,13 @@ BENCH(rsubhn_2s, "rsubhn v2.2s,v0.2d,v1.2d", single)
 BENCH(rsubhn2_16b, "rsubhn2 v2.16b,v0.8h,v1.8h", single)
 BENCH(rsubhn2_8h, "rsubhn2 v2.8h,v0.4s,v1.4s", single)
 BENCH(rsubhn2_4s, "rsubhn2 v2.4s,v0.2d,v1.2d", single)
+BENCH(addp_8b, "addp v2.8b,v0.8b,v1.8b", single)
+BENCH(addp_16b, "addp v2.16b,v0.16b,v1.16b", single)
+BENCH(addp_4h, "addp v2.4h,v0.4h,v1.4h", single)
+BENCH(addp_8h, "addp v2.8h,v0.8h,v1.8h", single)
+BENCH(addp_2s, "addp v2.2s,v0.2s,v1.2s", single)
+BENCH(addp_4s, "addp v2.4s,v0.4s,v1.4s", single)
+BENCH(addp_2d, "addp v2.2d,v0.2d,v1.2d", single)
 BENCH(tail_fcvtn_4h, "fcvtn v2.4h,v0.4s", single)
 BENCH(tail_fcvtn_2s, "fcvtn v2.2s,v0.2d", double)
 BENCH(tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s", single)
@@ -774,6 +781,13 @@ int main(int argc, char **argv)
     RUN(rsubhn2_16b);
     RUN(rsubhn2_8h);
     RUN(rsubhn2_4s);
+    RUN(addp_8b);
+    RUN(addp_16b);
+    RUN(addp_4h);
+    RUN(addp_8h);
+    RUN(addp_2s);
+    RUN(addp_4s);
+    RUN(addp_2d);
     RUN(tail_fcvtn_4h);
     RUN(tail_fcvtn_2s);
     RUN(tail_fcvtn2_8h);

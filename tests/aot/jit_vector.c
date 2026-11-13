@@ -728,6 +728,21 @@ int main(void)
                 }
             }
 
+    /* ADDP pair ordering, wraparound, high registers and source aliases. */
+    for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned k = 0; k < 128; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm);
+            for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16; e++)
+                in.v[r].b[e] = k < 8 ? (uint8_t)(r * 17 + e * (k + 1)) : (uint8_t)rnd();
+            uint32_t i = 0x0e20bc00 | q << 30 | size << 22 | rm << 16 | rn << 5 | rd;
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if ((size != 3 || q) && vector_helper_calls && fails++ < 20)
+                    printf("MISMATCH %08x: vector ADDP used helper\n", i);
+            }
+        }
+
     half_arithmetic_cases();
 
     /* Every AES round/column transform, high registers and aliases.

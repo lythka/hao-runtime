@@ -2344,6 +2344,27 @@ static bool t_simd_three_same(tctx *t, uint32_t i)
         t_simd_mulhigh(t, rd, rn, rm, size, Q, U, -1);
         return true;
     }
+    if (op == 0x17) {
+        if (U) return false;
+        vld(t, 0, rn); vld(t, 1, rm);
+        if (size == 1 || size == 2) {
+            P38(size == 1 ? 0x01 : 0x02, 0, 1); /* ADDP adjacent pairs */
+            if (!Q) x_sse_rri(&t->b, 0x66, 0x70, 0, 0, 0x88);
+        } else if (size == 3) {
+            P(0x6F, 2, 0); P(0x6C, 0, 1); P(0x6D, 2, 1); P(0xD4, 0, 2);
+        } else {
+            /* Pair bytes as words, add modulo 256 and pack. */
+            if (!Q) P(0x6C, 0, 1);
+            vconst(t, 4, 0x00ff00ff00ff00ffull, true);
+            P(0x6F, 2, 0); x_sse_shift_ri(&t->b, 0x71, 2, 2, 8);
+            P(0xFD, 0, 2); P(0xDB, 0, 4);
+            if (Q) {
+                P(0x6F, 2, 1); x_sse_shift_ri(&t->b, 0x71, 2, 2, 8);
+                P(0xFD, 1, 2); P(0xDB, 1, 4); P(0x67, 0, 1);
+            } else P(0x67, 0, 0);
+        }
+        vst(t, rd, 0, Q); return true;
+    }
     switch (op) {
     case 0x0e: case 0x0f:
         if (size == 3) return false;

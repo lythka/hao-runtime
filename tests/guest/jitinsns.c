@@ -512,6 +512,13 @@ VECF(t_rsubhn_2s, "rsubhn v2.2s,v0.2d,v1.2d")
 VECF(t_rsubhn2_16b, "rsubhn2 v2.16b,v0.8h,v1.8h")
 VECF(t_rsubhn2_8h, "rsubhn2 v2.8h,v0.4s,v1.4s")
 VECF(t_rsubhn2_4s, "rsubhn2 v2.4s,v0.2d,v1.2d")
+VECF(t_addp_8b, "addp v2.8b,v0.8b,v1.8b")
+VECF(t_addp_16b, "addp v2.16b,v0.16b,v1.16b")
+VECF(t_addp_4h, "addp v2.4h,v0.4h,v1.4h")
+VECF(t_addp_8h, "addp v2.8h,v0.8h,v1.8h")
+VECF(t_addp_2s, "addp v2.2s,v0.2s,v1.2s")
+VECF(t_addp_4s, "addp v2.4s,v0.4s,v1.4s")
+VECF(t_addp_2d, "addp v2.2d,v0.2d,v1.2d")
 VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
 VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
 VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
@@ -2177,6 +2184,13 @@ int main(void)
     RF(rsubhn2_16b);
     RF(rsubhn2_8h);
     RF(rsubhn2_4s);
+    RF(addp_8b);
+    RF(addp_16b);
+    RF(addp_4h);
+    RF(addp_8h);
+    RF(addp_2s);
+    RF(addp_4s);
+    RF(addp_2d);
     RF(cov_fmuls0);
     RF(cov_fmuls1);
     RF(cov_fmuls2);
