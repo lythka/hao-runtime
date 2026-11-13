@@ -743,10 +743,12 @@ static const uint8_t *arm64_get_arg(hao_cpu *c, aapcs_state *st, const htype *t,
         if (st->nsrn + t->hfa <= 8) {
             for (int k = 0; k < t->hfa; k++) memcpy(dst + k * esz, &c->v[st->nsrn++], (size_t)esz);
         } else {
+            /* Apple: an HFA on the stack takes its natural size and alignment, not
+             * AAPCS64's multiple of 8 (a {float,float,float} takes 12 bytes) */
             st->nsrn = 8;
             st->nsaa = (st->nsaa + (uint64_t)t->align - 1) & ~((uint64_t)t->align - 1);
             memcpy(dst, sp + st->nsaa, (size_t)t->size);
-            st->nsaa += ((uint64_t)t->size + 7) & ~7ull;
+            st->nsaa += (uint64_t)t->size;
         }
         return dst;
     }
@@ -792,7 +794,7 @@ static uint16_t arm64_code_slots(const hsig *s)
             if (st.nsrn + t->hfa <= 8) st.nsrn += t->hfa;
             else {
                 st.nsrn = 8;
-                st.nsaa = ((st.nsaa + (uint64_t)t->align - 1) & ~((uint64_t)t->align - 1)) + (((uint64_t)t->size + 7) & ~7ull);
+                st.nsaa = ((st.nsaa + (uint64_t)t->align - 1) & ~((uint64_t)t->align - 1)) + (uint64_t)t->size;
             }
             continue;
         }
@@ -1047,11 +1049,12 @@ static void run_guest_with_args(uint64_t guest, hsig *s, const uint8_t *const *a
             else { st.nsaa = (st.nsaa + 7) & ~7ull; memcpy(stack + st.nsaa, &ptr, 8); st.nsaa += 8; }
         } else if (a->kind == 's' && a->hfa) {
             /* an HFA that does not fit in v0-v7 goes to the stack and exhausts only the vector
-             * registers (AAPCS64 C.3, as arm64_get_arg does); later integers still use x registers */
+             * registers (AAPCS64 C.3, as arm64_get_arg does); later integers still use x registers.
+             * Apple packs it at its natural size and alignment, as arm64_get_arg reads it */
             st.nsrn = 8;
             st.nsaa = (st.nsaa + (uint64_t)a->align - 1) & ~((uint64_t)a->align - 1);
             memcpy(stack + st.nsaa, v, (size_t)a->size);
-            st.nsaa += ((uint64_t)a->size + 7) & ~7ull;
+            st.nsaa += (uint64_t)a->size;
         } else {
             int nregs = (a->size + 7) / 8;
             if (st.ngrn + nregs <= 8) {

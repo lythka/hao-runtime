@@ -63,6 +63,19 @@ int main(void)
             return a1 + b + c + d + e + f + g + h + i + j + k + l;
         });
         printf("mix12 block returned %ld\n", r);
+
+        /* float HFAs on the stack (stackhelper.h): a native method, then a guest block called natively */
+        double hs = [s hfa:1 d1:2 d2:3 d3:4 d4:5 d5:6 d6:7 d7:8 a:(SHF3){1.25f, 2.25f, 3.25f} b:(SHF3){4.5f, 5.5f, 6.5f}
+                         c:(SHF1){7.75f} d:(SHF1){8.75f} e:9.5f f:(SHF3){10.25f, 11.25f, 12.25f} n:-13 buf:buf];
+        printf("hfa method: %s sum=%g\n", buf, hs);
+        double hr = sh_call_hfa(^double(double d0, double d1, double d2, double d3, double d4, double d5, double d6,
+                                        double d7, SHF3 a2, SHF3 b2, SHF1 c2, SHF1 dd2, float e2, SHF3 f2, int n2) {
+            printf("hfa block: %g %g %g %g %g %g %g %g | %g %g %g | %g %g %g | %g | %g | %g | %g %g %g | %d\n", d0, d1, d2,
+                   d3, d4, d5, d6, d7, a2.x, a2.y, a2.z, b2.x, b2.y, b2.z, c2.v, dd2.v, e2, f2.x, f2.y, f2.z, n2);
+            return d0 + d7 + a2.x + 2 * a2.z + 3 * b2.x + 4 * b2.z + 5 * c2.v + 6 * dd2.v + 7 * e2 + 8 * f2.x + 9 * f2.z
+                   + 10 * n2;
+        });
+        printf("hfa block returned %g\n", hr);
     }
     return 0;
 }

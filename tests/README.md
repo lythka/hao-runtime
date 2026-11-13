@@ -126,7 +126,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below. Under heavy parallel load one `oslogswift` mode can miss its records; it passes alone |
 | guest/signals | PASS | 36 | |
 | guest/sret-forward | PASS | 3 | |
-| guest/stackargs | PASS | 2 | |
+| guest/stackargs | PASS | 2 | integer, float and float-HFA arguments on the arm64 stack, packed at their natural size, both to a native method and from native code to a guest block |
 | guest/stackguard | PASS | 1 | |
 | guest/svarchdiff | PASS | 1 | the walker on guest values holding Swift.Float16 (declared differently by architecture, frozen): refused; its Float16 refusals are checked only where this host's libswiftCore is the build `src/archdiff_gen.inc` describes |
 | guest/mkgeometry | PASS | 2 | MapKit geometry functions passing or returning 32-byte HFAs (MKMapRect, MKCoordinateRegion) by value, including two without a header: native arm64 results under JIT, `--interp`, helpers-only and AOT; the six rows `src/aggspi_gen.inc` added for them fail without them |
