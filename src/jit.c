@@ -4569,17 +4569,22 @@ static void *translate(uint64_t pc)
 static uint8_t loc_buf[MAX_BLOCK_BYTES];
 static int loc_busy;
 
+static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc);
+
 bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
 {
     if (!cache || a < (uint64_t)(uintptr_t)cache || a >= (uint64_t)(uintptr_t)cache_end) return false;
-    uint32_t n = __atomic_load_n(&rmap_n, __ATOMIC_ACQUIRE);
-    if (!n || rmap[0].code > a) return false;
-    uint32_t lo = 0, hi = n - 1;               /* last entry with code <= a */
-    while (lo < hi) {
-        uint32_t mid = lo + (hi - lo + 1) / 2;
-        if (rmap[mid].code <= a) lo = mid; else hi = mid - 1;
+    uint64_t code, pc;
+    if (!aot_lazy_locate(a, &code, &pc)) {
+        uint32_t n = __atomic_load_n(&rmap_n, __ATOMIC_ACQUIRE);
+        if (!n || rmap[0].code > a) return false;
+        uint32_t lo = 0, hi = n - 1;               /* last entry with code <= a */
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo + 1) / 2;
+            if (rmap[mid].code <= a) lo = mid; else hi = mid - 1;
+        }
+        code = rmap[lo].code, pc = rmap[lo].pc;
     }
-    uint64_t code = rmap[lo].code, pc = rmap[lo].pc;
     hao_image *im = hao_image_for_code(pc);
     if (!im || __atomic_exchange_n(&loc_busy, 1, __ATOMIC_ACQUIRE)) return false;
     static uint32_t insns[MAX_BLOCK_INSNS], off[MAX_BLOCK_INSNS + 1];
@@ -4793,6 +4798,18 @@ static uint8_t *aot_read_all(int fd, uint64_t size)
 
 static void aot_free_all(uint8_t *buf, uint64_t size) { if (buf) munmap(buf, size ? (size_t)size : 1); }
 
+/* The file mapped read-only: its clean pages are file-backed, so they do
+ * not count in the process's footprint, and a lazy install (aot_lazy) keeps
+ * the mapping for the life of the process. Cache files are replaced by
+ * rename, never rewritten in place (aot_generate), so the mapped inode stays
+ * whole. NULL: fall back to reading it (aot_read_all). */
+static uint8_t *aot_map_file(int fd, uint64_t size)
+{
+    if (!size || size > HAO_AOT_MAX_FILE) return NULL;
+    void *m = mmap(NULL, (size_t)size, PROT_READ, MAP_PRIVATE, fd, 0);
+    return m == MAP_FAILED ? NULL : m;
+}
+
 /* ---- the code identity of a mapped image */
 
 /* [a, a+len) lies in one mapped segment of the image */
@@ -4979,6 +4996,159 @@ static bool aot_install(hao_image *im, const hao_aot_view *v, char *why, size_t 
     return code != NULL;
 }
 
+/* Lazy install. Copying a whole blob in costs about twice the file however
+ * little of the program runs; kernelmanagerd's 13 MB cache did not fit its
+ * 25 MB limit, so it ran translated as it went. Instead the blob's place in
+ * the code cache is reserved (untouched pages cost nothing) with its base
+ * slot written, the file stays mapped, and a block is copied in and entered
+ * in the translation table when the program first needs it: a table miss,
+ * through aot_lazy_take, before the JIT would translate. The blob's direct
+ * links stay valid between copied blocks (one layout); a link to a block
+ * not yet copied is cut back to its exit stub (rel32 0, exit_direct's
+ * unchained form), and the dispatcher chains it once the target is in, as
+ * for JIT blocks. hao_jit_locate finds a copied block through its record
+ * (the reverse map is append-only by address). Writers hold jit_lock;
+ * hao_jit_locate reads the records without it. */
+typedef struct {
+    hao_image *im;
+    uint8_t *dst;              /* the blob's reserved place in the code cache */
+    uint64_t cs;
+    const uint8_t *file;       /* the mapped file, kept */
+    uint64_t file_size;
+    hao_aot_view v;
+    uint32_t nb, nl;
+    uint32_t *by_guest;        /* block indices by guest_off */
+    uint8_t *filled;           /* per block: copied in (atomic: hao_jit_locate reads it) */
+} aot_lazy;
+#define AOT_LAZY_MAX 4096
+static aot_lazy *lazy_recs[AOT_LAZY_MAX];
+static uint32_t lazy_n;        /* published with release */
+static uint64_t st_aot_lazy_bytes, st_aot_lazy_blobs;
+
+static int aot_cmp_guest(void *ents, const void *a, const void *b)
+{
+    const hao_aot_ent *e = ents;
+    uint32_t x = e[*(const uint32_t *)a].guest_off, y = e[*(const uint32_t *)b].guest_off;
+    return x < y ? -1 : x > y;
+}
+
+/* A lazy install's memory: the index, the fill bytes and the table entries
+ * its blocks will take (the code copied in grows with use, as the JIT's). */
+static uint64_t aot_lazy_cost(uint32_t nb) { return (uint64_t)nb * (sizeof(uint32_t) + 1 + sizeof(tentry)); }
+
+/* Can v be installed lazily: blocks start past the base slot, links are in
+ * site order, each link's site and target lie in the blob. */
+static bool aot_lazy_ok(const hao_aot_view *v)
+{
+    uint32_t nb = v->hdr->nblocks, nl = v->hdr->nlinks;
+    uint64_t cs = v->hdr->code_size;
+    if (!nb || v->ents[0].code_off < 8) return false;
+    for (uint32_t k = 0; k < nl; k++) {
+        const hao_aot_link *l = &v->links[k];
+        if ((uint64_t)l->site + 4 > cs || l->target >= nb || (k && l->site <= v->links[k - 1].site)) return false;
+    }
+    return true;
+}
+
+/* Reserve and record. Called with the file mapped; on success the mapping
+ * belongs to the record. */
+static bool aot_lazy_install(hao_image *im, const hao_aot_view *v, const uint8_t *file, uint64_t file_size, char *why, size_t n)
+{
+    uint32_t nb = v->hdr->nblocks;
+    aot_lazy *z = calloc(1, sizeof *z);
+    uint32_t *by = malloc((size_t)nb * sizeof *by);
+    uint8_t *filled = calloc(nb, 1);
+    if (!z || !by || !filled) { free(z); free(by); free(filled); snprintf(why, n, "out of memory for its index"); return false; }
+    for (uint32_t k = 0; k < nb; k++) by[k] = k;
+    qsort_r(by, nb, sizeof *by, (void *)v->ents, aot_cmp_guest);
+    *z = (aot_lazy){im, NULL, v->hdr->code_size, file, file_size, *v, nb, v->hdr->nlinks, by, filled};
+    bool ok = false;
+    size_t avail = 0;
+    hao_crit_enter();
+    pthread_mutex_lock(&jit_lock);
+    uint32_t i = lazy_n;
+    uint8_t *code = NULL;
+    if (i < AOT_LAZY_MAX && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) code = cache_alloc((size_t)z->cs);
+    if (code) {
+        memcpy(code, &im->base, 8);       /* the base slot */
+        z->dst = code;
+        __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
+        im->aot = code;
+        lazy_recs[i] = z;
+        __atomic_store_n(&lazy_n, i + 1, __ATOMIC_RELEASE);
+        __atomic_store_n(&im->aot_lazy, z, __ATOMIC_RELEASE);
+        st_aot_lazy_blobs++;
+        ok = true;
+    } else
+        avail = cache_ptr < cache_end ? (size_t)(cache_end - cache_ptr) : 0;
+    pthread_mutex_unlock(&jit_lock);
+    hao_crit_leave();
+    if (!ok) {
+        if (i >= AOT_LAZY_MAX) snprintf(why, n, "more than %u lazily installed caches", AOT_LAZY_MAX);
+        else snprintf(why, n, "needs %llu KB of code space, code cache has %zu KB free", (unsigned long long)(z->cs >> 10), avail >> 10);
+        free(by); free(filled); free(z);
+    }
+    return ok;
+}
+
+/* jit_lock held. The AOT block for pc, copied in and entered now if it was
+ * not yet, or NULL when pc's image has no lazy blob or no block there. */
+static void *aot_lazy_take(uint64_t pc)
+{
+    hao_image *im = hao_image_for_code(pc);
+    aot_lazy *z = im ? __atomic_load_n(&im->aot_lazy, __ATOMIC_ACQUIRE) : NULL;
+    if (!z || pc < im->base || pc - im->base > UINT32_MAX) return NULL;
+    uint32_t go = (uint32_t)(pc - im->base), lo = 0, hi = z->nb;
+    while (lo < hi) {
+        uint32_t m = lo + (hi - lo) / 2;
+        if (z->v.ents[z->by_guest[m]].guest_off < go) lo = m + 1; else hi = m;
+    }
+    if (lo == z->nb || z->v.ents[z->by_guest[lo]].guest_off != go) return NULL;
+    uint32_t i = z->by_guest[lo];
+    uint32_t a = z->v.ents[i].code_off, e = i + 1 < z->nb ? z->v.ents[i + 1].code_off : (uint32_t)z->cs;
+    uint8_t *code = z->dst + a;
+    if (!z->filled[i]) {
+        memcpy(code, z->v.code + a, e - a);
+        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);   /* before the cut test: a link to itself stays */
+        lo = 0, hi = z->nl;
+        while (lo < hi) {
+            uint32_t m = lo + (hi - lo) / 2;
+            if (z->v.links[m].site < a) lo = m + 1; else hi = m;
+        }
+        for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
+            if (!z->filled[z->v.links[k].target]) {
+                int32_t unlinked = 0;
+                memcpy(z->dst + z->v.links[k].site, &unlinked, 4);
+            }
+        st_aot_blocks++;
+        st_aot_lazy_bytes += e - a;
+    }
+    if (!insert(pc, code)) { cache_exhausted(); return NULL; }
+    return code;
+}
+
+/* For hao_jit_locate, without locks: the copied AOT block holding host pc a. */
+static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc)
+{
+    uint32_t n = __atomic_load_n(&lazy_n, __ATOMIC_ACQUIRE);
+    for (uint32_t r = 0; r < n; r++) {
+        const aot_lazy *z = lazy_recs[r];
+        uint64_t d = (uint64_t)(uintptr_t)z->dst;
+        if (a < d || a >= d + z->cs) continue;
+        uint32_t off = (uint32_t)(a - d), lo = 0, hi = z->nb;   /* last block with code_off <= off */
+        if (z->v.ents[0].code_off > off) return false;
+        while (hi - lo > 1) {
+            uint32_t m = lo + (hi - lo) / 2;
+            if (z->v.ents[m].code_off <= off) lo = m; else hi = m;
+        }
+        if (!__atomic_load_n(&z->filled[lo], __ATOMIC_ACQUIRE)) return false;
+        *code = d + z->v.ents[lo].code_off;
+        *pc = z->im->base + z->v.ents[lo].guest_off;
+        return true;
+    }
+    return false;
+}
+
 /* Load the AOT cache for `im` from the first trusted directory that has a
  * valid one. Never called with jit_lock held (image loads, not translate). */
 /* The process's footprint and its memory limit, as the kernel's
@@ -5013,21 +5183,20 @@ bool hao_footprint_limit(uint64_t *footprint, uint64_t *limit)
     return footprint_ledger(footprint, limit) && *limit < (uint64_t)INT64_MAX;
 }
 
-/* An AOT cache is installed whole: the file is read (transiently), its code
- * copied into the code cache and every block entered in the translation
- * table and the reverse map, about twice the file's size however little of
- * the program runs. modelmanagerd's 27.0 cache is 19 MB, past its 15 MB
- * jetsam limit before main. Under a memory limit a cache is loaded only
- * when that cost fits in half of what the limit leaves; otherwise the
- * program is translated as it runs (the JIT's memory grows with use).
- * HAO_AOT_LIMIT_KB (tests, open tier) stands in for the kernel's limit. */
-static bool aot_fits(uint64_t file_size, char *why, size_t n)
+/* Under a memory limit a cache is loaded only when what it costs fits in
+ * half of what the limit leaves; otherwise the program is translated as it
+ * runs (the JIT's memory grows with use). A lazy install costs its index and
+ * table entries (aot_lazy_cost), well under the file. Installed whole (the
+ * fallback when a blob cannot go lazily), it costs about twice the file:
+ * modelmanagerd's 27.0 cache is 19 MB, past its 15 MB jetsam limit before
+ * main. HAO_AOT_LIMIT_KB (tests, open tier) stands in for the kernel's limit. */
+static bool aot_fits(uint64_t cost, char *why, size_t n)
 {
     uint64_t fp, limit;
     if (!footprint_ledger(&fp, &limit)) return true;
     if (hao_opt.aot_limit_kb) limit = (uint64_t)hao_opt.aot_limit_kb << 10;
     if (limit >= (uint64_t)INT64_MAX) return true;
-    uint64_t cost = 2 * file_size + file_size / 4, left = limit > fp ? limit - fp : 0;
+    uint64_t left = limit > fp ? limit - fp : 0;
     if (cost <= left / 2) return true;
     snprintf(why, n, "not loaded under the process's memory limit: it needs about %llu KB, the limit is %llu KB, "
              "the footprint %llu KB; translated as it runs",
@@ -5060,14 +5229,10 @@ bool hao_aot_load(hao_image *im)
             aot_reject(dirs[d].path, name, "this image is not code signed; a system cache directory serves signed code only");
             continue;
         }
-        if (!aot_fits((uint64_t)st.st_size, why, sizeof why)) {
-            close(fd);
-            __atomic_fetch_add(&st_aot_rejected, 1, __ATOMIC_RELAXED);
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "AOT cache %s/%s %s\n", dirs[d].path, name, why);
-            return false;
-        }
-        uint8_t *buf = aot_read_all(fd, (uint64_t)st.st_size);
+        uint64_t fsz = (uint64_t)st.st_size;
+        bool mapped = true;
+        uint8_t *buf = aot_map_file(fd, fsz);
+        if (!buf) { mapped = false; buf = aot_read_all(fd, fsz); }
         close(fd);
         if (!buf) { aot_reject(dirs[d].path, name, st.st_size > (off_t)HAO_AOT_MAX_FILE ? "too large" : "cannot read it"); continue; }
         hao_aot_view v;
@@ -5085,13 +5250,25 @@ bool hao_aot_load(hao_image *im)
                 }
             }
         }
-        bool ok = r == 0 && aot_install(im, &v, why, sizeof why);
-        uint32_t nb = ok ? v.hdr->nblocks : 0;
-        uint64_t cs = ok ? v.hdr->code_size : 0;
-        aot_free_all(buf, (uint64_t)st.st_size);
+        if (r != 0) { aot_free_all(buf, fsz); aot_reject(dirs[d].path, name, why); continue; }
+        uint32_t nb = v.hdr->nblocks;
+        uint64_t cs = v.hdr->code_size;
+        bool lazy = mapped && aot_lazy_ok(&v);
+        /* the memory check, then the install: a cache that does not fit is
+         * not tried from another directory (the next would cost the same) */
+        if (!aot_fits(lazy ? aot_lazy_cost(nb) : 2 * fsz + fsz / 4, why, sizeof why)) {
+            aot_free_all(buf, fsz);
+            __atomic_fetch_add(&st_aot_rejected, 1, __ATOMIC_RELAXED);
+            hao_diag_prefix(HAO_DIAG);
+            fprintf(HAO_DIAG, "AOT cache %s/%s %s\n", dirs[d].path, name, why);
+            return false;
+        }
+        bool ok = lazy ? aot_lazy_install(im, &v, buf, fsz, why, sizeof why) : aot_install(im, &v, why, sizeof why);
+        if (!(ok && lazy)) aot_free_all(buf, fsz);   /* a lazy install keeps the mapping */
         if (!ok) { aot_reject(dirs[d].path, name, why); continue; }
         if (hao_verbose)
-            fprintf(HAO_DIAG, "hao: AOT cache %s/%s loaded: %u blocks, %llu KB\n", dirs[d].path, name, nb, (unsigned long long)(cs >> 10));
+            fprintf(HAO_DIAG, "hao: AOT cache %s/%s loaded: %u blocks, %llu KB%s\n", dirs[d].path, name, nb, (unsigned long long)(cs >> 10),
+                    lazy ? ", each block copied in when it first runs" : "");
         return true;
     }
     return false;
@@ -5785,6 +5962,7 @@ static void *find_or_translate(uint64_t pc)
     hao_crit_enter();
     pthread_mutex_lock(&jit_lock);
     void *code = lookup(pc);
+    if (!code) code = aot_lazy_take(pc);
     if (!code) { code = translate(pc); fresh = code != NULL; }
     pthread_mutex_unlock(&jit_lock);
     hao_crit_leave();
@@ -5901,7 +6079,7 @@ void hao_jit_stats(void)
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
             " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu"
-            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu\n",
+            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
@@ -5909,7 +6087,8 @@ void hao_jit_stats(void)
             __atomic_load_n(&table_used, __ATOMIC_RELAXED), table ? table->mask + 1 : 0, (unsigned long long)(st_table_bytes >> 10),
             (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
             (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved,
-            (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED));
+            (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED), (unsigned long long)st_aot_lazy_blobs,
+            (unsigned long long)(st_aot_lazy_bytes >> 10));
     uint64_t counts[HG_COUNT][2];
     for (unsigned g = 0; g < HG_COUNT; g++)
         for (unsigned k = 0; k < 2; k++)
@@ -6154,6 +6333,7 @@ void hao_jit_alias(uint64_t entry, uint64_t guest)
     pthread_mutex_lock(&jit_lock);
     if (!lookup(entry)) {
         void *code = lookup(guest);
+        if (!code) code = aot_lazy_take(guest);
         if (!code) code = translate(guest);
         if (code) insert(entry, code);
     }

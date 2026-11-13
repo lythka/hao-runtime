@@ -1,5 +1,40 @@
 # Runtime issues and measured scope
 
+## AOT caches installed block by block
+
+An AOT cache was installed whole. hao read the file, copied its code into the
+code cache and entered every block in the translation table, about twice the
+file's size however little of the program ran. So under a memory limit a cache
+was skipped whenever twice its size did not fit in half of what the limit left.
+On 26B131, 11 daemons ran translated as they went, among them kernelmanagerd
+(13 MB cache, 25 MB limit) and kernelmanager_helper.
+
+Now the file is mapped read-only. Its clean pages are file-backed and do not
+count in the footprint. The blob's place in the code cache is reserved (pages
+not yet touched cost nothing), and a block is copied in and entered when the
+program first needs it: on a table miss, before the JIT would translate.
+- The blob's direct links between blocks stay valid between copied blocks.
+- A link to a block not yet copied is cut back to its exit stub, and the
+  dispatcher chains it once the target is in.
+- `hao_jit_locate` finds a copied block through the blob's own index.
+- Under a limit, a lazy install is charged its index and table entries: about
+  21 bytes a block.
+
+Measured (`tests/guest/footprint.sh`, 6000 functions never run, 15.9 MB
+cache, Rosetta on the 27.2 host): overhead over native 2.4 MB, against 18.6 MB
+installed whole. Under a 16 MB limit the cache now loads, where before it was
+skipped, and the case stays in its 3 MB budget.
+
+Limits:
+- A blob whose links are out of order, or whose first block overlaps its base
+  slot, is still installed whole, as is any blob when the file cannot be mapped
+  (it is then read). More than 4096 lazily installed blobs in one process fall
+  back the same way.
+- Each block's first entry leaves translated code once, through the
+  dispatcher, where an installed blob's blocks were found by the inline probe.
+- The mapping stays for the life of the process. A cache file must not be
+  rewritten in place; hao's own writer replaces caches by rename.
+
 ## Timing a process's start, PID 1 included
 
 Before the Data volume is mounted, a root process's log file

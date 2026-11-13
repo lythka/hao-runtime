@@ -74,7 +74,8 @@ static bool run_fn(hao_thread *t, const uint32_t *fn, int limit)
 
 /* HAO_CACHE holds a valid cache for GUEST (made by `hao --aot --cache DIR GUEST`).
  * The test loads NIMG copies of GUEST (each at its own address) and loads
- * the cache into each while NT threads translate. */
+ * the cache into each while NT threads translate: each blob's space must be
+ * its own (no overlap, nothing but its own bytes or untouched ones). */
 enum { NT = 4, NIMG = 40 };
 static int aot_nb;
 static uint32_t *aot_fns;
@@ -136,7 +137,11 @@ static int t_aot(int nb, const char *guest)
     int clobbered = 0, overlap = 0;
     for (int j = 0; j < NIMG; j++) {
         uint8_t *c = im[j]->aot;
-        if (c && memcmp(c + 16, want + 16, cs - 16)) clobbered++;
+        /* installed lazily (jit.c aot_lazy): a block's bytes are the file's once copied in, a link to a block not
+         * yet copied is cut to rel32 0, and the rest is still untouched (zero). Anything else was written there
+         * by someone else, such as a concurrent translation given space inside the blob. */
+        for (uint64_t k = 16; c && k < cs; k++)
+            if (c[k] != want[k] && c[k] != 0) { clobbered++; break; }
         for (int i = 0; c && i < j; i++)
             if (im[i]->aot && (uint8_t *)im[i]->aot < c + cs && c < (uint8_t *)im[i]->aot + cs) overlap++;
     }
