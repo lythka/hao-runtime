@@ -90,6 +90,21 @@ native ARM comparison hashes pass. The wrong-sign mutation is detected.
 `make check` passes, including `make test`,
 strict native/sanitizer oracles and 102 manifest passes (one known failure,
 three expected skips). Half FABD remains a helper.
+## Saturating integer add/sub
+
+SQADD/UQADD/SQSUB/UQSUB now use packed wrapping arithmetic, overflow masks
+and exact endpoint selection for scalar B/H/S/D and legal vector widths.
+Only active lanes contribute to sticky FPSR.QC; live NZCV and other FPSR
+bits survive. Sources are staged before an aliased destination is stored.
+All 77 static sites are covered: overall coverage is 99.854081% ->
+99.854694% across 12,561,074 instructions; generated code
+is 656,950 -> 656,956 KiB. At 1,000 iterations the directed
+workload's JIT/AOT helper calls are 704,000 -> 0.
+9,216 directed checks within 943,331 full-state cases and 1,309
+native ARM comparison hashes pass; wrong translations are detected by the
+mutation controls. `make check` passes, including `make test`, strict native
+and sanitizer oracles, and 102 manifest passes (one known failure and three
+expected skips). Reserved vector .1D forms remain on the helper.
 
 ## Categories on Swift class stubs
 
@@ -275,7 +290,7 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 3,583 untranslated sites remain implementation work,
+99.9319%. The other 3,506 untranslated sites remain implementation work,
 largest families first:
 - integer high/rounded narrowing (1,079)
 - SHA and PMULL (588)
@@ -286,7 +301,6 @@ largest families first:
 - vector ADDP (123)
 - indexed double FMUL (102)
 - double vector comparisons (86)
-- integer saturating add/sub (77)
 - scaled fixed-point conversions (77)
 - a long tail of smaller forms
 
