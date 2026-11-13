@@ -14,7 +14,7 @@
 #     OUT/root/usr/lib/hao/stub-identities       (tools/hao-trust-list --stubs: stub cdhash, Apple arm64
 #                                                 slice cdhash and path of each embedded Apple program)
 #     OUT/HaoExec.kext, OUT/stamp_identity.py   (kernel identity stamped at image build)
-#     OUT/embed/{manifest.json,stubs/}           (tools/hao-embed: every arm64-only program
+#     OUT/embed/{manifest.json,stubs/,skeletons/} (tools/hao-embed: every arm64-only program
 #                                                 under ROOT, or the paths in LIST)
 #     OUT/replace/                               (27.x only: ROOT/usr/lib/dyld with the x86_64
 #                                                 PID-1 boot-spec fix, if that dyld needs it)
@@ -172,7 +172,8 @@ EOF
 fi
 ditto "$KEXT" "$OUT/HaoExec.kext"
 cp "$H/kext/stamp_identity.py" "$H/tools/hao-install.py" "$H/tools/hao_fat.py" "$H/tools/hao_codesig.py" "$OUT/"
-EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"})
+EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"}
+       --save-skeletons "$OUT/embed/skeletons")
 LOG=$OUT/embed/embed.log
 rc=0
 case $MODE in

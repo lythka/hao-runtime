@@ -28,6 +28,12 @@ from the arm slice hao runs (arm64e first). Its manifest entry says
 "mode": "translate"; source_sha256 is the original universal file.
 Without --translate, files that already have an x86_64 slice are skipped.
 
+--save-skeletons DIR also writes each relinked stub as ld left it, with its program's carried sections
+and LC_UUID zeroed (DIR/<program sha256>.skel and .json, the sections' offsets): no bytes of the program,
+so it may be distributed. --skeletons DIR fills those from each program instead of running ld and gives
+the same stub, so a Mac without Apple's ld for the stub's deployment target can embed (hao-image-payload
+writes OUT/embed/skeletons).
+
 The stub's build directory is the directory of --stub (default build/):
 relinked stubs use its front/stub.o, libhao.dylib and libhao_identity.dylib, the deployment target
 in front/stub.o's LC_BUILD_VERSION (make MACOS_MIN=...; the program's build
@@ -743,7 +749,75 @@ def tbd_for(path, name, cur, compat):
                 f"install-name: '{q}'\ncurrent-version: {version(cur)}\ncompatibility-version: {version(compat)}\n...\n")
 
 
-def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_of=None, arm=None):
+# Skeletons: ld's output for one program with every -sectcreate section and LC_UUID zeroed, so that it
+# holds no bytes of the program (the carried sections are the program's; the rest is hao's stub.o,
+# libhao, install names and sizes). --save-skeletons writes one per relinked stub, keyed by the
+# program file's sha256; --skeletons fills them from the program instead of running ld, which gives the
+# same bytes, so a Mac without Apple's ld for the stub's deployment target can still embed.
+SKELETONS = {"save": None, "use": None}
+
+
+def skeleton_key(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def section_ranges(mo, wanted):
+    """{(segname, sectname): (fileoff, size)} of WANTED's sections in the thin Mach-O MO."""
+    out = {}
+    for cmd, off, size in load_commands(mo):
+        if cmd != 0x19:
+            continue
+        seg = mo[off + 8:off + 24].split(b"\0")[0].decode(errors="replace")
+        nsect = int.from_bytes(mo[off + 64:off + 68], "little")
+        for k in range(nsect):
+            so = off + 72 + 80 * k
+            name = mo[so:so + 16].split(b"\0")[0].decode(errors="replace")
+            if (seg, name) in wanted:
+                out[(seg, name)] = (int.from_bytes(mo[so + 48:so + 52], "little"),
+                                    int.from_bytes(mo[so + 40:so + 48], "little"))
+    return out
+
+
+def save_skeleton(linked, sections, key):
+    mo = bytearray(open(linked, "rb").read())
+    ranges = section_ranges(mo, set(sections))
+    if set(ranges) != set(sections):
+        raise RuntimeError("skeleton: sections missing from the link")
+    for (seg, name), (off, size) in ranges.items():
+        if size != len(sections[(seg, name)][0]) or off + size > len(mo):
+            raise RuntimeError(f"skeleton: section {seg},{name} is not the carried bytes")
+        mo[off:off + size] = bytes(size)
+    for cmd, off, size in load_commands(mo):
+        if cmd == 0x1B and size >= 24:
+            mo[off + 8:off + 24] = bytes(16)
+    d = SKELETONS["save"]
+    with open(os.path.join(d, key + ".skel"), "wb") as f:
+        f.write(mo)
+    with open(os.path.join(d, key + ".json"), "w") as f:
+        json.dump({"sections": sorted([seg, name, off, size] for (seg, name), (off, size) in ranges.items())},
+                  f, sort_keys=True)
+
+
+def fill_skeleton(sections, key, out):
+    d = SKELETONS["use"]
+    path = os.path.join(d, key + ".skel")
+    if not os.path.isfile(path):
+        raise RuntimeError("no skeleton " + key)
+    mo = bytearray(open(path, "rb").read())
+    meta = json.load(open(os.path.join(d, key + ".json")))["sections"]
+    if {(seg, name) for seg, name, _, _ in meta} != set(sections):
+        raise RuntimeError("skeleton " + key + ": its sections are not this program's")
+    for seg, name, off, size in meta:
+        blob = sections[(seg, name)][0]
+        if len(blob) != size or off + size > len(mo) or any(mo[off:off + size]):
+            raise RuntimeError(f"skeleton {key}: section {seg},{name} does not fit")
+        mo[off:off + size] = blob
+    with open(out, "wb") as f:
+        f.write(mo)
+    return out
+
+
+def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_of=None, arm=None, key=None):
     """hao-stub linked again with the program's carried sections (unsigned),
     from BUILD/front/stub.o at that object's own deployment target, with the
     rpaths STUB (the Makefile's hao-stub) was linked with; LINKS (native_deps)
@@ -778,9 +852,14 @@ def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_of=
     for seg, (maxprot, initprot) in sorted(prots.items()):
         args += ["-Wl,-segprot,%s,%s,%s" % (seg, letters(maxprot), letters(initprot))]
     out = os.path.join(work, "stub-relinked")
-    r = subprocess.run(args + ["-o", out], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError("relink: " + r.stderr.strip()[-300:])
+    if key is not None and SKELETONS["use"]:
+        fill_skeleton(sections, key, out)
+    else:
+        r = subprocess.run(args + ["-o", out], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError("relink: " + r.stderr.strip()[-300:])
+        if key is not None and SKELETONS["save"]:
+            save_skeleton(out, sections, key)
     if uuid_of is not None:
         set_uuid(out, stub_uuid(uuid_of, open(out, "rb").read()))
     if arm is not None:
@@ -888,7 +967,7 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None):
         own = {name for _, name, _, _ in dylib_commands(open(stub, "rb").read())} - {LIBSYSTEM}
         links, skipped, _ = native_deps(src, data, x86, own)
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test,
-                           links, data, arm)
+                           links, data, arm, skeleton_key(data))
     elif sections or host_test:
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test)
     ident, ents = identity(src)
@@ -978,8 +1057,16 @@ def main():
     ap.add_argument("--x86-cache", metavar="DIR",
                     help="directory of the dyld_shared_cache_x86_64 the stubs run with (default: with --stubs, "
                          "the one under --root; otherwise this host's)")
+    sk = ap.add_mutually_exclusive_group()
+    sk.add_argument("--save-skeletons", metavar="DIR",
+                    help="also write each relinked stub's skeleton (its program's bytes zeroed) to DIR")
+    sk.add_argument("--skeletons", metavar="DIR",
+                    help="fill the skeletons in DIR from each program instead of running ld")
     ap.add_argument("programs", nargs="*")
     a = ap.parse_args()
+    if a.save_skeletons:
+        os.makedirs(a.save_skeletons, exist_ok=True)
+    SKELETONS["save"], SKELETONS["use"] = a.save_skeletons, a.skeletons
     if not os.path.exists(a.stub):
         sys.exit(f"hao-embed: no stub at {a.stub} (run make)")
     if a.scan and not a.root:

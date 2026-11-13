@@ -89,6 +89,22 @@ if python3 -I "$here/test_ifunit_match.py" >"$d/ifmatch.log" 2>&1; then
 else bad "hao_ifunit.py match: $(tail -15 "$d/ifmatch.log")"; fi
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["inputs_sha256"] and all("stub_sha256" in e for e in m["files"])' \
     "$d/pay/embed/manifest.json" && pass "manifest records per-stub hashes and build inputs" || bad "manifest hashes"
+# --- stub skeletons: filled from the program without ld, the stub equals the linked one, and the
+# skeleton holds none of the program's carried bytes
+d=$OUT/skeleton; rm -rf "$d"; mkdir -p "$d/src/usr/bin" "$d/noclang"
+cp "$G" "$d/src/usr/bin/prog"
+printf '#!/bin/sh\necho "$0 called" >&2\nexit 99\n' > "$d/noclang/clang"; chmod +x "$d/noclang/clang"; cp "$d/noclang/clang" "$d/noclang/ld"
+"$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/a" --root "$d/src" --x86-cache "$X86" --save-skeletons "$d/skel" \
+    "$d/src/usr/bin/prog" >/dev/null 2>"$d/a.err"; ra=$?
+PATH="$d/noclang:$PATH" "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/b" --root "$d/src" --x86-cache "$X86" \
+    --skeletons "$d/skel" "$d/src/usr/bin/prog" >/dev/null 2>"$d/b.err"; rb=$?
+if [ $ra = 0 ] && [ $rb = 0 ] && ! grep -q called "$d/b.err" && diff -r "$d/a/stubs" "$d/b/stubs" >/dev/null &&
+   python3 -c 'import json,glob,sys
+for j in glob.glob(sys.argv[1] + "/*.json"):
+    b = open(j[:-5] + ".skel", "rb").read()
+    assert all(not any(b[o:o + n]) for _, _, o, n in json.load(open(j))["sections"])' "$d/skel"; then
+    pass "stub skeleton: filled without ld, the same stub as linked; carried sections zeroed"
+else bad "stub skeleton: rc $ra $rb: $(cat "$d/a.err" "$d/b.err" | tail -3)"; fi
 
 # --- a hard-linked program (27.0 usr/libexec and usr/sbin/appleh13camerad): --scan lists
 # both paths, and the installer embeds both whether the image keeps the link or not
