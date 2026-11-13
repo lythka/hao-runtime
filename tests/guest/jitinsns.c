@@ -488,6 +488,30 @@ VECF(t_uabal_2d, "uabal v2.2d,v0.2s,v1.2s")
 VECF(t_uabal2_8h, "uabal2 v2.8h,v0.16b,v1.16b")
 VECF(t_uabal2_4s, "uabal2 v2.4s,v0.8h,v1.8h")
 VECF(t_uabal2_2d, "uabal2 v2.2d,v0.4s,v1.4s")
+VECF(t_addhn_8b, "addhn v2.8b,v0.8h,v1.8h")
+VECF(t_addhn_4h, "addhn v2.4h,v0.4s,v1.4s")
+VECF(t_addhn_2s, "addhn v2.2s,v0.2d,v1.2d")
+VECF(t_addhn2_16b, "addhn2 v2.16b,v0.8h,v1.8h")
+VECF(t_addhn2_8h, "addhn2 v2.8h,v0.4s,v1.4s")
+VECF(t_addhn2_4s, "addhn2 v2.4s,v0.2d,v1.2d")
+VECF(t_raddhn_8b, "raddhn v2.8b,v0.8h,v1.8h")
+VECF(t_raddhn_4h, "raddhn v2.4h,v0.4s,v1.4s")
+VECF(t_raddhn_2s, "raddhn v2.2s,v0.2d,v1.2d")
+VECF(t_raddhn2_16b, "raddhn2 v2.16b,v0.8h,v1.8h")
+VECF(t_raddhn2_8h, "raddhn2 v2.8h,v0.4s,v1.4s")
+VECF(t_raddhn2_4s, "raddhn2 v2.4s,v0.2d,v1.2d")
+VECF(t_subhn_8b, "subhn v2.8b,v0.8h,v1.8h")
+VECF(t_subhn_4h, "subhn v2.4h,v0.4s,v1.4s")
+VECF(t_subhn_2s, "subhn v2.2s,v0.2d,v1.2d")
+VECF(t_subhn2_16b, "subhn2 v2.16b,v0.8h,v1.8h")
+VECF(t_subhn2_8h, "subhn2 v2.8h,v0.4s,v1.4s")
+VECF(t_subhn2_4s, "subhn2 v2.4s,v0.2d,v1.2d")
+VECF(t_rsubhn_8b, "rsubhn v2.8b,v0.8h,v1.8h")
+VECF(t_rsubhn_4h, "rsubhn v2.4h,v0.4s,v1.4s")
+VECF(t_rsubhn_2s, "rsubhn v2.2s,v0.2d,v1.2d")
+VECF(t_rsubhn2_16b, "rsubhn2 v2.16b,v0.8h,v1.8h")
+VECF(t_rsubhn2_8h, "rsubhn2 v2.8h,v0.4s,v1.4s")
+VECF(t_rsubhn2_4s, "rsubhn2 v2.4s,v0.2d,v1.2d")
 VECF(t_tail_fcvtn_4h, "fcvtn v2.4h,v0.4s")
 VECF(t_tail_fcvtn_2s, "fcvtn v2.2s,v0.2d")
 VECF(t_tail_fcvtn2_8h, "fcvtn2 v2.8h,v0.4s")
@@ -2129,6 +2153,30 @@ int main(void)
     RF(uabal2_8h);
     RF(uabal2_4s);
     RF(uabal2_2d);
+    RF(addhn_8b);
+    RF(addhn_4h);
+    RF(addhn_2s);
+    RF(addhn2_16b);
+    RF(addhn2_8h);
+    RF(addhn2_4s);
+    RF(raddhn_8b);
+    RF(raddhn_4h);
+    RF(raddhn_2s);
+    RF(raddhn2_16b);
+    RF(raddhn2_8h);
+    RF(raddhn2_4s);
+    RF(subhn_8b);
+    RF(subhn_4h);
+    RF(subhn_2s);
+    RF(subhn2_16b);
+    RF(subhn2_8h);
+    RF(subhn2_4s);
+    RF(rsubhn_8b);
+    RF(rsubhn_4h);
+    RF(rsubhn_2s);
+    RF(rsubhn2_16b);
+    RF(rsubhn2_8h);
+    RF(rsubhn2_4s);
     RF(cov_fmuls0);
     RF(cov_fmuls1);
     RF(cov_fmuls2);

@@ -120,6 +120,21 @@ native ARM comparison hashes pass; wrong translations are detected by the
 mutation controls. `make check` passes, including `make test`, strict native
 and sanitizer oracles, and 102 manifest passes (one known failure and three
 expected skips). Reserved 64-bit same-width forms remain on the helper.
+## High-half add/sub narrowing
+
+ADDHN/RADDHN/SUBHN/RSUBHN now add or subtract at the wide lane width,
+apply the optional rounding increment modulo that width, then select the
+high half. The 2 forms preserve the old destination low half, including
+source aliases; other forms clear the upper half. FPSR and NZCV are unchanged.
+All 645 static sites are covered: overall coverage is 99.854081% ->
+99.859216% across 12,561,074 instructions; generated code
+is 656,950 -> 656,965 KiB. At 1,000 iterations the directed
+workload's JIT/AOT helper calls are 384,000 -> 0.
+4,608 directed checks within 938,723 full-state cases and 1,289
+native ARM comparison hashes pass; wrong translations are detected by the
+mutation controls. `make check` passes, including `make test`, strict native
+and sanitizer oracles, and 102 manifest passes (one known failure and three
+expected skips). Shift-by-immediate narrowing is unchanged.
 
 ## Categories on Swift class stubs
 
@@ -305,10 +320,10 @@ until an exact implementation shows a measured Intel speed advantage. FLDCW
 skipping was checked for pending x87 exceptions only on a host that does not
 deliver them. 8,552 sites are deliberately excluded: BRK traps, and SVE/SME,
 which hao neither supports nor advertises. That caps static coverage at
-99.9319%. The other 3,276 untranslated sites remain implementation work,
+99.9319%. The other 2,631 untranslated sites remain implementation work,
 largest families first:
-- integer high/rounded narrowing (1,079)
 - SHA and PMULL (588)
+- integer shift-by-immediate rounded narrowing (434)
 - integer dot/matrix products (358, including 80 SMMLA sites)
 - integer reductions (277)
 - indexed widening multiply (240)

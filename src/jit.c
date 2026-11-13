@@ -2159,11 +2159,24 @@ static void vabsdiff(tctx *t, unsigned size, bool unsign)
     vcmpgt(t, size, 2, 3); /* absolute difference ordering */
     P(psub[size], 0, 1); P(0xEF, 0, 2); P(psub[size], 0, 2);
 }
+static void vnarrow(tctx *t, int oes);
+static void vst_narrow(tctx *t, unsigned rd, int Q);
 
 static bool t_simd_three_diff(tctx *t, uint32_t i)
 {
     unsigned Q = BIT(i, 30), U = BIT(i, 29), size = BITS(i, 23, 22), op = BITS(i, 15, 12);
     unsigned rd = BITS(i, 4, 0), rn = BITS(i, 9, 5), rm = BITS(i, 20, 16);
+    if (size < 3 && (op == 4 || op == 6)) {
+        vld(t, 0, rn); vld(t, 1, rm);
+        P(op == 4 ? padd[size + 1] : psub[size + 1], 0, 1);
+        if (U) {
+            static const uint64_t round[] = {0x0080008000800080ull, 0x0000800000008000ull, 0x80000000ull};
+            vconst(t, 1, round[size], true); P(padd[size + 1], 0, 1);
+        }
+        x_sse_shift_ri(&t->b, 0x71 + size, 2, 0, 8u << size); /* high-half add/sub */
+        vnarrow(t, 1 << size); vst_narrow(t, rd, Q);
+        return true;
+    }
     if (size == 3 || (op > 3 && op != 5 && op != 7 && op != 8 && op != 10 && op != 12)) return false;
     vld(t, 0, rn); vld(t, 1, rm);
     if (!(op == 1 || op == 3)) vwiden(t, 0, size, U, Q);
