@@ -1,5 +1,28 @@
 # Runtime issues and measured scope
 
+## Float HFAs on the arm64 stack at their natural size
+
+Once v0-v7 are taken, an HFA argument goes to the stack. AAPCS64 rounds its
+stack size up to a multiple of 8; Apple's arm64 ABI does not, and packs it at
+its natural size and alignment (clang: a `{float,float,float}` takes 12
+bytes, a `{float}` 4, and a float after them is packed in 4). `src/abi.c`
+rounded in all three places it lays out arm64 stack arguments: reading a
+guest's arguments for a native call (`arm64_get_arg`), finding the stack
+slots that hold code pointers (`arm64_code_slots`), and writing them for a
+native call into guest code. Every stack argument after such an HFA was read
+or written 4 bytes off. Double HFAs and float HFAs with an even member count
+were unaffected, since their size is already a multiple of 8.
+
+`tests/guest/stackargs.sh` now passes eight doubles, then `{float x3}`,
+`{float x3}`, `{float}`, `{float}`, a float, `{float x3}` and an int, both to
+a native Objective-C method and from native code to a guest block, under JIT
+and `--interp`. Before the change both directions differed from native arm64
+from the second HFA on.
+
+Limits: `arm64_code_slots` changed with the others but has no test of its
+own; a code pointer on the stack after such an HFA needs eight integer
+arguments before it as well.
+
 ## A fatal fault's report has a stack of its own
 
 A thread deep in nested native->guest callbacks can have little native stack
