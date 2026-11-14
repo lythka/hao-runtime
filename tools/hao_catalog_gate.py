@@ -32,14 +32,21 @@ directory; subcaches are read next to it.
      with --accept-edits RECIPE.json (a reviewed edit list: files[].edits[]
      with address, before and after), an image whose every differing byte
      lies inside one accepted edit, with the base holding its "before" bytes
-     and CACHE its "after" bytes, passes and is listed with the edits.
+     and CACHE its "after" bytes, passes and is listed with the edits;
+     when CACHE is a rebuilt family (its UUID differs from the base's),
+     images are placed and linked again, so instead of bytes an image must
+     keep its LC_UUID, __TEXT size and every export's offset from its base.
 
 Exit status: 0 all gates pass, 1 a gate fails, 2 the cache cannot be read.
 Catalog layout: LibPrespecializedData (swift/include/swift/Runtime/
-LibPrespecialized.h) versions 1.x, read through the flat
-`_swift_prespecializedPointerKeyedMetadataMap` (count, then key/metadata
-pairs) and the string-keyed map; slid pointers decoded from the cache's slide
-info (version 2, the x86_64 format; anything else is refused)."""
+LibPrespecialized.h) versions 1.x: the string-keyed map, the pointer-keyed
+hash table libswiftCore searches (+24, a dyld Swift-optimizations table whose
+keys and values are offsets from the cache base) and the flat
+`_swift_prespecializedPointerKeyedMetadataMap` list (count, then key/metadata
+pairs; names from the key symbols). A rebuilt cache may add entries to the
+table only, so both are read and every entry of either is checked. Slid
+pointers are decoded from the cache's slide info (version 2, the x86_64
+format; anything else is refused)."""
 import argparse
 import bisect
 import collections
@@ -98,9 +105,10 @@ class Images:
 class View:
     """what the gates read: 8-, 4-byte words and bytes by address, slid pointers decoded, and the images"""
 
-    def __init__(self, read, uuid, images, delta_mask, value_add):
+    def __init__(self, read, uuid, images, delta_mask, value_add, base=0):
         self.read, self.uuid, self.images = read, uuid, images
         self.mask, self.add = delta_mask, value_add
+        self.base = base                    # unslid address of the first mapping: dyld table offsets count from it
 
     def q(self, a):
         b = bytes(self.read(a, 8))
@@ -195,15 +203,45 @@ def open_cache(path):
 
     order = sorted((a, p) for p, a in c.paths)
     starts, paths = [a for a, _ in order], [p for _, p in order]
-    v = View(c.read_vm, c.uuid, LazyImages(), dm, va)
+    m0 = struct.unpack_from('<Q', c.files[0], struct.unpack_from('<I', c.files[0], 16)[0])[0]
+    v = View(c.read_vm, c.uuid, LazyImages(), dm, va, m0)
     v.path = path
     return v
 
 
 # ---------------------------------------------------------------- the catalog
 
+def pointer_table(v, t):
+    """{key tuple: metadata} of the dyld pointer hash table at T (Swift optimizations v3 format: capacity,
+    occupied, shift, mask, sentinel, rounded tab size; tab; check bytes; one u32 value offset per bucket; values
+    {u32 key array offset, u32 key count, u64 metadata offset | duplicate bit 63}); offsets from the cache base"""
+    cap, occ, _, _, sentinel, rounded = struct.unpack('<6I', bytes(v.read(t, 24)))
+    if not 0 < cap <= 1 << 22 or cap & (cap - 1) or occ > cap or rounded > 1 << 24:
+        raise Bad('pointer-keyed table at %#x: capacity %d, occupied %d' % (t, cap, occ))
+    raw = bytes(v.read(t + 1056 + rounded + cap, 4 * cap))
+    if len(raw) != 4 * cap: raise Bad('pointer-keyed table at %#x is truncated' % t)
+    starts = [o for o in struct.unpack('<%dI' % cap, raw) if o != sentinel]
+    if len(starts) != occ: raise Bad('pointer-keyed table at %#x: %d buckets used, header says %d' % (t, len(starts), occ))
+    out = {}
+    for pos in starts:
+        for _ in range(1 << 16):
+            ko, n, val = struct.unpack('<IIQ', bytes(v.read(t + pos, 16)))
+            if not 0 < n <= 64: raise Bad('pointer-keyed table at %#x: key of %d words' % (t, n))
+            out[tuple(v.base + k for k in struct.unpack('<%dQ' % n, bytes(v.read(t + ko, 8 * n))))] = \
+                v.base + (val & ~(1 << 63))
+            if not val >> 63: break
+            pos += 16
+        else:
+            raise Bad('pointer-keyed table at %#x: unterminated duplicate chain' % t)
+    return out
+
+
 def catalog_entries(v):
-    """[(name or None, metadata address)] of every prespecialized metadata in the catalog"""
+    """[(name or None, metadata address)] of every prespecialized metadata in the catalog: the string-keyed map,
+    the pointer-keyed table libswiftCore searches (LibPrespecializedData +24, minor >= 3) and the flat
+    pointer-keyed list libswiftPrespecialized exports (its keys named by symbols). v.catalog_sources counts
+    each source; an entry in either pointer-keyed form is checked."""
+    v.catalog_sources = {}
     if not v.images.has(PRESPECIALIZED): return []
     ex = v.images.exports(PRESPECIALIZED)
     data = ex.get('__swift_prespecializationsData')
@@ -219,15 +257,31 @@ def catalog_entries(v):
         for i in range(count):
             k, m = v.ptr(smap + 8 + 16 * i), v.ptr(smap + 16 + 16 * i)
             if k and m: out.append((v.cstr(k), m))
+    v.catalog_sources['string-keyed'] = len(out)
+    flat_list, named = [], {}
     flat = ex.get('__swift_prespecializedPointerKeyedMetadataMap')
-    if flat is not None:                        # {count; {key; metadata}[]}, keys named by their symbols
+    if flat is not None:                        # {count; {key; metadata}[]}, key = {count; descriptor, arguments}
         count = v.q(flat)
         if count > 1 << 24: raise Bad('pointer-keyed map of %d entries' % count)
         for i in range(count):
             k, m = v.ptr(flat + 8 + 16 * i), v.ptr(flat + 16 + 16 * i)
-            if m: out.append((names.get(k), m))
-    elif minor >= 4 and v.ptr(data + 24):
-        raise Bad('catalog %d.%d has a pointer-keyed map but no _swift_prespecializedPointerKeyedMetadataMap' % (major, minor))
+            if not m: continue
+            flat_list.append((names.get(k), m))
+            n = v.q(k) if k else 0
+            if 0 < n <= 64: named[tuple(v.ptr(k + 8 + 8 * j) for j in range(n))] = (names.get(k), m)
+    table = pointer_table(v, v.ptr(data + 24)) if minor >= 3 and v.ptr(data + 24) else None
+    if table is None:
+        out += flat_list
+        v.catalog_sources.update({'pointer-keyed table': 0, 'flat list': len(flat_list)})
+        return out
+    both = set(table) & set(named)
+    v.catalog_sources.update({'pointer-keyed table': len(table), 'flat list': len(flat_list),
+                              'table only': len(table) - len(both), 'flat only': len(flat_list) - len(both),
+                              'same key, other metadata': sum(table[k] != named[k][1] for k in both)})
+    for k, m in table.items():
+        out.append((named[k][0] if k in named and named[k][1] == m else None, m))
+    seen = set(table.values())
+    out += [(n, m) for n, m in flat_list if m not in seen]
     return out
 
 
@@ -376,13 +430,26 @@ def gate_bound_inputs(v, lock, contracts_dir, units=None, base=None, accepted=()
                 if u: by_uuid.setdefault(u.lower(), p)
         return by_uuid
 
-    reviewed, verdict = {}, {}
+    reviewed, verdict, relinked = {}, {}, set()
+    rebuilt = base is not None and base.uuid != v.uuid
 
     def same_code(path):
-        """False when BASE has this image with the same UUID but other __TEXT bytes, unless every differing
-        byte is inside an accepted edit whose before/after bytes match BASE/V there"""
+        """False when BASE has this image with the same UUID but other code. In a cache edited in place (the
+        base's cache UUID) that is any other __TEXT byte, unless every differing byte is inside an accepted edit
+        whose before/after bytes match BASE/V there. In a rebuilt family (another cache UUID) the builder places
+        and links images again, so their bytes are not comparable: the image's LC_UUID, __TEXT size and every
+        export's offset from the image base must be unchanged."""
         if base is None or not base.images.has(path): return True
         if path in verdict: return verdict[path]
+        if rebuilt:
+            lo, hi = v.images.segment(path, '__TEXT')
+            blo, bhi = base.images.segment(path, '__TEXT')
+            same = lambda im: {n: a - im.base(path) for n, a in im.exports(path).items()}
+            ok_ = v.images.uuid(path) == base.images.uuid(path) and hi - lo == bhi - blo and same(v.images) == same(base.images)
+            if ok_: relinked.add(path)
+            else: changed.add(path)
+            verdict[path] = ok_
+            return ok_
         ok_ = text_digest(v, path) == text_digest(base, path)
         if not ok_ and accepted:
             runs = text_diff(v, base, path)
@@ -442,6 +509,8 @@ def gate_bound_inputs(v, lock, contracts_dir, units=None, base=None, accepted=()
             lines.append('  FAIL unit %s: %s changed under the same UUID' % (n, found[n]))
     for p_, ids in sorted(reviewed.items()):
         lines.append('  %s: changed only by accepted edits (%s)' % (p_, ', '.join(ids)))
+    if relinked:
+        lines.append('  rebuilt family: %d images checked were placed again (same LC_UUID, __TEXT size, export offsets)' % len(relinked))
     if base is not None:
         lines.append('  images changed under the same UUID among those checked: %d%s' %
                      (len(changed), (' (' + ', '.join(sorted(changed)) + ')') if changed else ''))
@@ -465,11 +534,13 @@ def main(argv):
         entries = catalog_entries(v)
         print('cache %s: catalog %s, %d prespecialized metadata' %
               (v.uuid, 'present' if v.images.has(PRESPECIALIZED) else 'absent', len(entries)))
+        if v.catalog_sources:
+            print('  sources: ' + ', '.join('%s %d' % kv for kv in v.catalog_sources.items()))
         ok1, l1, bad1 = gate_optional(v, entries)
         l2, stat2 = gate_fast_paths(v, entries)
         if a.accept_edits and base is None: raise Bad('--accept-edits needs --base-cache')
         ok3, l3 = gate_bound_inputs(v, a.lock, a.contracts, a.units, base, load_accepted(a.accept_edits))
-    except Bad as e:
+    except (Bad, OSError) as e:
         print('hao_catalog_gate: %s' % e, file=sys.stderr)
         return 2
     print('\n'.join(l1 + l2 + l3))
@@ -477,7 +548,7 @@ def main(argv):
     print('PASS' if ok else 'FAIL')
     if a.json:
         with open(a.json, 'w') as f:
-            json.dump({'cache_uuid': v.uuid, 'entries': len(entries), 'pass': ok,
+            json.dump({'cache_uuid': v.uuid, 'entries': len(entries), 'sources': v.catalog_sources, 'pass': ok,
                        'optional': {'pass': ok1, 'other_witnesses': sorted(bad1)},
                        'fast_paths': stat2, 'bound_inputs': {'pass': ok3, 'lines': l3}}, f, indent=1)
     return 0 if ok else 1
