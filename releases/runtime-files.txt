@@ -342,6 +342,8 @@ tests/guest/async-8-main-actor.swift
 tests/guest/async-9-stack-args.swift
 tests/guest/async-lib/HaoNarrow.swift
 tests/guest/async-lib/HaoNativeAsync.swift
+tests/guest/asyncnil.sh
+tests/guest/asyncnil.swift
 tests/guest/atoken.c
 tests/guest/atoken.sh
 tests/guest/bench.c

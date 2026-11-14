@@ -1,5 +1,67 @@
 # Runtime issues and measured scope
 
+## Nils in the results of native generic functions
+
+A native generic function the guest calls through its unspecialized entry
+point builds its result in the guest's storage with the native witnesses of
+the result type, so an empty case there is in the x86_64 encoding. For a
+result `G?` whose G gets its inhabitants from a pointer word (`C?`, `(Int,
+C?)`, C a class), the Optional's nil is G's first extra inhabitant: 1 on
+arm64, 2 on x86_64. Guest code specialized for G reads the word inline,
+takes 2 for a live object and retains or releases it. Finder on 26B131
+died this way twice in an hour (`objc_retain(0x2)` from guest code at
+Finder+0x793ddc): the end of a `for try await (offset, node)` over
+`ThrowingTaskGroup<(offset: Int, node: FINode?), any Error>`, whose
+`Iterator.next()` is libswift_Concurrency's.
+
+A binding now qualifies when its demangled name is a method or getter of a
+type whose result is an Optional of one of the type's depth-0 generic
+parameters (`Swift.ThrowingTaskGroup.Iterator.next(isolation:) async
+throws(B) -> Swift.Optional<A>`; `src/swiftcc.c` `hao_swift_genres_*`).
+At the first call hao finds Self's metadata among the argument registers
+and x20 (a generic native struct or enum named like the entity's context;
+the position is the signature's, so it holds for every call), instantiates
+`G?` in that context with Self's generic arguments, and converts the value
+at the result address with the rule of a nil a witness makes
+(`witness_to_guest`: outer nils only, where guest code reads them inline).
+The result address is x8 for a synchronous call, converted when it returns,
+and x0 for an async one: its continuation (ResumeParent) is replaced for
+that invocation and restored when the native callee resumes it; the value
+is converted then, unless an error was thrown (the result is not
+initialized then).
+
+Shapes covered, measured under JIT, `--interp` and AOT:
+`ThrowingTaskGroup.next()`, `ThrowingTaskGroup.Iterator.next()` (typed
+throws), `TaskGroup.Iterator.next()`, `AsyncStream.Iterator.next()`,
+`AsyncThrowingStream.Iterator.next()`, and at `-Onone`
+`Dictionary.Values.Iterator.next()` and `Set.Iterator.next()`, each with
+`C?` or `(Int, C?)` elements, plus a child that throws and a stream that
+finishes with an error. `tests/guest/asyncnil.swift` runs them built `-O`
+and `-Onone`: on 399e78e every mode crashes at the first group's end; after
+the change all 11 lines equal native arm64 in both builds. A Finder-shaped
+loop (`(offset: Int, node: Node?)`, node used after the store) gave
+Finder's exact fault on 399e78e (`objc_retain+0x22`, x0=0x2).
+
+Limits:
+- A function whose result is not spelled `G?` of a depth-0 parameter of its
+  own type: associated types (`A.Element?`), the function's own generic
+  parameters (free functions, `withCheckedContinuation<T>`), protocol
+  extension methods, results wrapping G further (`[G]?`, `(G, Int)?`).
+- Methods that receive their type's generic arguments rather than Self's
+  metadata (a non-mutating method of a struct passed by value, such as
+  `AnyIterator.next()`): no Self metadata is found and nothing is converted.
+  AnyIterator's results come from the guest's closure, already in its
+  encoding.
+- An element whose own nil is two levels deep (`AsyncStream<C??>`, result
+  `C???`, whose nil is 2 on arm64 and 4 on x86_64) is beyond the walk's
+  bound of two consumed inhabitants and still faults.
+- Guest code that reaches these functions through a protocol witness
+  (`AsyncIteratorProtocol.next()` from generic code) handles the result with
+  the Optional witnesses (entry below), not here.
+- Native code that later reads the converted value itself, not through a
+  witness the guest calls, sees the guest's encoding, as for the entries
+  below.
+
 ## Optional witness nils returned to native code as a callback's result
 
 Guest calls of libswiftCore's Optional witnesses (`src/swiftvalue.c`
@@ -43,7 +105,8 @@ intercepted: an optimized build that inlines overlay builds
 `_OverlayModifier<P?>` itself with the arm64 nil and copies it through
 SwiftUICore's witness, which still faults the same way; and native code's
 nils read inline by specialized guest code (`-Onone` and concrete callers
-of a native generic result) are not converted either.
+of a native generic result) are not converted either, except the results
+of the entry below.
 
 ## Guest single-payload enums and guest-protocol existentials in the value walk
 

@@ -464,6 +464,16 @@ char hao_swift_async_kind_for_demangled(const char *d);
 void hao_swift_async_note_call(uint64_t ctx, char kind);     /* guest calls such a function, x22 = its context */
 uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0);   /* native resumes guest `target` */
 void hao_swiftcc_fork_child(void);
+/* Native generic results (swiftcc.c): a native method or getter whose result is
+ * G?, G a generic parameter of Self's type, gets the outer nils it makes in
+ * guest storage in the guest's encoding. bind: at binding (true: the plan
+ * gets HAO_PLAN_GENRESULT); call: at each guest call, 0 or the address to
+ * convert with *type after a synchronous call returns (an async call is
+ * converted when its callee resumes the guest); result: that conversion. */
+bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async);
+bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *param, bool *throwing);
+uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **type);
+void hao_swift_genres_result(const void *type, uint64_t result);
 /* interpose.c: a page the guest mapped or made executable itself (mmap,
  * mprotect): arm64 code generated at run time, which hao does not run */
 bool hao_guest_exec_mapped(uint64_t a);

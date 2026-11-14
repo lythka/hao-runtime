@@ -128,6 +128,38 @@ int main(int argc, char **argv)
         if (hao_swift_fixed_abi(swift[k].sym) != swift[k].yes && !mis++) snprintf(first, sizeof first, ": %s", swift[k].sym);
     printf("mangled    %s  C++ this-return and Swift fixed-ABI names from the mangling%s\n", mis ? "FAIL" : "PASS", first);
     if (mis) fail = 1;
+    /* native generic results G? (swiftcc.c): the demangler's spellings, measured on libswift_Concurrency and
+     * libswiftCore, and entities that must not qualify */
+    static const struct { const char *d, *context; int param; bool throwing; } genres[] = {
+        {"Swift.ThrowingTaskGroup.Iterator.next(isolation: isolated Swift.Optional<Swift.Actor>) async throws(B) -> Swift.Optional<A>",
+         "Swift.ThrowingTaskGroup.Iterator", 0, true},
+        {"Swift.ThrowingTaskGroup.next(isolation: isolated Swift.Optional<Swift.Actor>) async throws -> Swift.Optional<A>",
+         "Swift.ThrowingTaskGroup", 0, true},
+        {"Swift.AsyncStream.Iterator.next(isolation: isolated Swift.Optional<Swift.Actor>) async -> Swift.Optional<A>",
+         "Swift.AsyncStream.Iterator", 0, false},
+        {"Swift.Dictionary.Values.Iterator.next() -> Swift.Optional<B>", "Swift.Dictionary.Values.Iterator", 1, false},
+        {"Swift.CollectionOfOne.Iterator._elements.getter : A?", "Swift.CollectionOfOne.Iterator", 0, false},
+        {"static Swift.Foo.make() -> C?", "Swift.Foo", 2, false},
+        {"Swift.Set.Iterator.next() -> Swift.Optional<A.Element>", NULL, 0, false},       /* an associated type */
+        {"Swift.Foo.bar() -> Swift.Optional<Swift.Int>", NULL, 0, false},
+        {"Swift.Foo.bar() -> () -> Swift.Optional<A>", NULL, 0, false},                   /* a function-type result */
+        {"(extension in Swift):Swift.AsyncSequence.first() async -> Swift.Optional<A.Element>", NULL, 0, false},
+        {"closure #1 () -> Swift.Optional<A> in Swift.Foo.bar() -> ()", NULL, 0, false},
+        {"Swift.withCheckedContinuation<A>(isolation: isolated Swift.Optional<Swift.Actor>, function: Swift.String, "
+         "_: (Swift.CheckedContinuation<A, Swift.Never>) -> ()) async -> A", NULL, 0, false},
+    };
+    int gmis = 0;
+    char gfirst[200] = "";
+    for (size_t k = 0; k < sizeof genres / sizeof *genres; k++) {
+        char ctx[256];
+        int param = -1;
+        bool thr = false, ok = hao_swift_genres_demangled(genres[k].d, ctx, sizeof ctx, &param, &thr);
+        bool want = genres[k].context != NULL;
+        if (ok != want || (ok && (strcmp(ctx, genres[k].context) || param != genres[k].param || thr != genres[k].throwing)))
+            if (!gmis++) snprintf(gfirst, sizeof gfirst, ": %s", genres[k].d);
+    }
+    printf("genres     %s  native generic results G? from demangled entities%s\n", gmis ? "FAIL" : "PASS", gfirst);
+    if (gmis) fail = 1;
     char sw[512], cx[512];
     int s = hao_swift_demangle_selfcheck(sw, sizeof sw), x = hao_cxx_demangle_selfcheck(cx, sizeof cx);
     printf("demangle   %s  Swift %s%s, C++ %s%s\n", s == 0 && x == 0 ? "PASS" : "FAIL", s < 0 ? "no demangler" : s ? "differs: " : "as expected",

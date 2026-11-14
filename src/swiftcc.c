@@ -726,7 +726,12 @@ bool hao_swift_fixed_abi(const char *sym)
 static hao_gmap conts = HAO_GMAP_INIT(2, 1, 8, 24);
 static pthread_mutex_t cont_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void hao_swiftcc_fork_child(void) { cont_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+static pthread_mutex_t genres_lock = PTHREAD_MUTEX_INITIALIZER;   /* native generic results, below */
+void hao_swiftcc_fork_child(void)
+{
+    cont_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    genres_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
 
 void hao_swift_async_note_call(uint64_t ctx, char kind)
 {
@@ -759,3 +764,313 @@ uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0)
     }
     return x0;
 }
+
+/*
+ * Native generic results (hao_swift_genres_*).
+ *
+ * A native generic function the guest calls through its unspecialized entry
+ * point makes its result in the guest's storage with the native witnesses of
+ * the result type, so an outer nil there is in the x86_64 encoding. When the
+ * result is `Optional<G>`, G a generic parameter of Self's type, and G's own
+ * inhabitants come from a pointer word (`C?`, `(Int, C?)`), the Optional's nil
+ * is G's first extra inhabitant: 2 on x86_64, 1 on arm64 (the low bit is the
+ * ObjC tagged-pointer bit there). Guest code specialized for G reads it
+ * inline, takes 2 for a live object and retains it: the end of a
+ * `for try await` over ThrowingTaskGroup<(offset: Int, node: FINode?), any
+ * Error> in Finder on 26B131 faulted in objc_retain(0x2).
+ *
+ * A binding qualifies by its demangled name: a method or getter of a type
+ * ("Module.Type[.Inner].name(params) [async] [throws[(E)]] -> G?" or
+ * "Module.Type.name.getter : G?") whose result is spelled as an Optional of a
+ * depth-0 generic parameter (A..L). Self's metadata is found among the call's
+ * argument registers and x20 (Swift passes it after the formal arguments, or
+ * as self of a static method): struct or enum metadata of a generic native type
+ * whose name without generic arguments is the entity's context. Its position
+ * is fixed by the function's signature, so the first call finds it for all.
+ * The result type is G? instantiated in that context with Self's generic
+ * arguments (swift_getTypeByMangledNameInContext2), the result address is x8
+ * (synchronous) or x0 (async: the first indirect result is the first
+ * argument). The result is converted when the call returns, or, for an async
+ * function, when the native callee resumes the guest's continuation without an
+ * error: its ResumeParent is replaced for that invocation by
+ * genres_resume[_throwing], which restores it, converts, and tail-calls it.
+ */
+#include "hao/swiftvalue.h"
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+
+typedef struct genres {
+    uint64_t native;
+    char *context;          /* the entity's context, "Swift.ThrowingTaskGroup.Iterator" */
+    char result[8];         /* G? mangled: "xSg", "q_Sg", "q0_Sg", ... */
+    uint8_t is_async, throwing;
+    int8_t self_reg;        /* -2 not found yet, -1 none, 0-7 x0-x7, 20 x20 */
+    struct genres *next;
+} genres;
+typedef struct genres_type { const struct genres *fn; uint64_t self; const void *result; struct genres_type *next; } genres_type;
+static hao_gmap genres_fns = HAO_GMAP_INIT(2, 1, 4, 16);     /* native -> genres * */
+static genres_type *genres_types;                            /* (function, Self metadata) -> G? metadata, NULL: not Self */
+
+static bool genres_read(uint64_t a, void *out, size_t n)
+{
+    mach_vm_size_t got = 0;
+    return a >= 4096 && a <= UINT64_MAX - n &&
+        mach_vm_read_overwrite(mach_task_self(), a, n, (mach_vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS && got == n;
+}
+
+/* "Name(params) [async] [throws[(E)]] -> T": T, the arrow the entity's own; NULL otherwise */
+static const char *genres_function_result(const char *open, bool *throwing)
+{
+    int depth = 0;
+    const char *q = open;
+    for (; *q; q++) { if (*q == '(') depth++; else if (*q == ')' && !--depth) break; }
+    if (!*q) return NULL;
+    q++;
+    if (!strncmp(q, " async", 6)) q += 6;
+    if (!strncmp(q, " throws", 7)) {
+        *throwing = true;
+        q += 7;
+        if (*q == '(') {
+            for (depth = 0; *q; q++) { if (*q == '(') depth++; else if (*q == ')' && !--depth) break; }
+            if (!*q) return NULL;
+            q++;
+        }
+    }
+    return !strncmp(q, " -> ", 4) ? q + 4 : NULL;
+}
+
+/* "A?" or "Swift.Optional<A>", A..L: the parameter's index, else -1 */
+static int genres_param(const char *t)
+{
+    if (t[0] >= 'A' && t[0] <= 'L' && t[1] == '?' && !t[2]) return t[0] - 'A';
+    if (!strncmp(t, "Swift.Optional<", 15) && t[15] >= 'A' && t[15] <= 'L' && t[16] == '>' && !t[17]) return t[15] - 'A';
+    return -1;
+}
+
+/* Parse a demangled entity (tests/host/bridge.c checks the spellings) */
+bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *param, bool *throwing)
+{
+    *throwing = false;
+    if (!strncmp(d, "static ", 7)) d += 7;
+    if (*d == '(' || strstr(d, "(extension in ") || strstr(d, " in ")) return false;   /* extensions, local entities */
+    const char *getter = strstr(d, ".getter : ");
+    const char *open = strchr(d, '('), *end, *t;
+    if (getter && (!open || getter < open)) {
+        t = getter + 10;
+        end = getter;
+    } else {
+        if (!open || !(t = genres_function_result(open, throwing))) return false;
+        end = open;
+    }
+    const char *dot = NULL;   /* the '.' before the entity's name */
+    for (const char *p = d; p < end; p++) if (*p == '.') dot = p;
+    if (!dot || dot == d || (size_t)(dot - d) >= n) return false;
+    for (const char *p = d; p < dot; p++) if (*p == '<' || *p == ' ' || *p == '(') return false;
+    if ((*param = genres_param(t)) < 0) return false;
+    memcpy(context, d, (size_t)(dot - d));
+    context[dot - d] = 0;
+    return true;
+}
+
+static void genres_mangle(char out[8], int index)
+{
+    /* Mangling.rst: 'x' is depth 0 index 0, 'q' INDEX for index N+1 (INDEX: '_' for 0, NATURAL '_' for N+1) */
+    if (index == 0) snprintf(out, 8, "xSg");
+    else if (index == 1) snprintf(out, 8, "q_Sg");
+    else snprintf(out, 8, "q%d_Sg", index - 2);
+}
+
+bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
+{
+    if (!sym || strncmp(sym, "_$s", 3) || hao_opt.no_swift_values) return false;
+    /* the result, mangled first in the function type, is an Optional of a generic parameter */
+    if (!strstr(sym, "xSg") && !strstr(sym, "_Sg")) return false;
+    size_t len = strlen(sym);   /* a function (F), static (FZ), a getter (vg, vgZ) */
+    if (len < 6 || (strcmp(sym + len - 1, "F") && strcmp(sym + len - 2, "FZ") && strcmp(sym + len - 2, "vg") &&
+                    strcmp(sym + len - 3, "vgZ"))) return false;
+    if (hao_gmap_get1(&genres_fns, native)) return true;
+    demangle_fn dm = demangler();
+    if (!dm) return false;
+    char buf[2048], context[512];
+    size_t dl = sizeof buf;
+    if (!dm(sym + 1, len - 1, buf, &dl, 0)) return false;
+    buf[dl < sizeof buf ? dl : sizeof buf - 1] = 0;
+    int param;
+    bool throwing;
+    if (!hao_swift_genres_demangled(buf, context, sizeof context, &param, &throwing)) return false;
+    genres *g = calloc(1, sizeof *g);
+    if (!g || !(g->context = strdup(context))) { free(g); return false; }
+    g->native = native;
+    genres_mangle(g->result, param);
+    g->is_async = is_async;
+    g->throwing = throwing;
+    g->self_reg = -2;
+    bool fresh;
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    uint64_t *s = hao_gmap_claim1(&genres_fns, native, &fresh);
+    if (s && fresh) { s[1] = (uint64_t)(uintptr_t)g; hao_gmap_publish1(&genres_fns, s, native); g = NULL; }
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    if (g) { free(g->context); free(g); return s != NULL; }
+    if (hao_opt.bridge_check)
+        fprintf(HAO_DIAG, "hao: native generic result %s: %s (%s%s, Self %s)\n", sym, buf, is_async ? "async" : "sync",
+                throwing ? ", throws" : "", context);
+    return true;
+}
+
+typedef struct { const char *text; uintptr_t length; } genres_name;
+typedef genres_name __attribute__((swiftcall)) genres_name_fn(const void *, bool);
+typedef const void *__attribute__((swiftcall)) genres_resolve_fn(const char *, size_t, const void *, const void *const *);
+
+/* Is M the metadata of a generic native struct or enum named CONTEXT? */
+static bool genres_self(uint64_t m, const char *context)
+{
+    uint64_t kind, desc, vwt;
+    uint32_t flags;
+    if ((m & 7) || !genres_read(m, &kind, 8) || (kind != 0x200 && kind != 0x201) || !genres_read(m - 8, &vwt, 8) ||
+        !genres_read(vwt, &flags, 4) || !genres_read(m + 8, &desc, 8) || (desc & 3) || !genres_read(desc, &flags, 4) ||
+        ((flags & 0x1f) != 17 && (flags & 0x1f) != 18) || !(flags & 0x80) || hao_image_for_addr(desc))
+        return false;
+    static genres_name_fn *name;
+    if (!name) name = (genres_name_fn *)dlsym(RTLD_DEFAULT, "swift_getTypeName");
+    if (!name) return false;
+    genres_name t = name((const void *)(uintptr_t)m, true);
+    size_t w = 0, n = strlen(context);
+    int depth = 0;
+    for (uintptr_t i = 0; t.text && i < t.length; i++) {
+        char ch = t.text[i];
+        if (ch == '<') depth++;
+        else if (ch == '>') depth--;
+        else if (!depth) { if (w >= n || context[w] != ch) return false; w++; }
+    }
+    return t.text && !depth && w == n;
+}
+
+/* G? in Self's context, or NULL when SELF is not Self's metadata; cached per (function, value) */
+static const void *genres_result_type(const genres *g, uint64_t self)
+{
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    const void *r = NULL;
+    bool known = false;
+    unsigned n = 0;
+    for (genres_type *e = genres_types; e; e = e->next, n++)
+        if (e->fn == g && e->self == self) { r = e->result; known = true; break; }
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    if (known) return r;
+    if (genres_self(self, g->context)) {
+        static genres_resolve_fn *resolve;
+        if (!resolve) resolve = (genres_resolve_fn *)dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInContext2");
+        uint64_t desc = *(const uint64_t *)(uintptr_t)(self + 8);
+        r = resolve ? resolve(g->result, strlen(g->result), (const void *)(uintptr_t)desc, (const void *const *)(uintptr_t)(self + 16))
+                    : NULL;
+    }
+    if (n >= 4096) return r;   /* bounded: further values are checked each call */
+    genres_type *e = malloc(sizeof *e);
+    if (!e) return r;
+    e->fn = g; e->self = self; e->result = r;
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    e->next = genres_types; genres_types = e;
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    return r;
+}
+
+static void genres_convert(const void *type, uint64_t result, const char *how)
+{
+    if (hao_swift_native_result_to_guest(type, (void *)(uintptr_t)result)) {
+        if (hao_opt.bridge_check) fprintf(HAO_DIAG, "hao: native generic result nil to guest (%s) at %#llx\n", how, (unsigned long long)result);
+    }
+}
+
+/* async: invocations waiting for their native callee to resume the guest */
+typedef struct context_hdr { void *parent; void *resume; } context_hdr;
+typedef void __attribute__((swiftasynccall)) genres_resume_fn(context_hdr *__attribute__((swift_async_context)));
+typedef void __attribute__((swiftasynccall)) genres_throwing_fn(context_hdr *__attribute__((swift_async_context)),
+                                                                 void *__attribute__((swift_context)));
+typedef struct genres_wait { context_hdr *ctx; void *resume; const void *type; uint64_t result; struct genres_wait *next; } genres_wait;
+static genres_wait *genres_waiting;
+static genres_resume_fn genres_resume;
+static genres_throwing_fn genres_resume_throwing;
+
+static void *genres_take(context_hdr *ctx, bool error)
+{
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    genres_wait **at = &genres_waiting;
+    while (*at && (*at)->ctx != ctx) at = &(*at)->next;
+    genres_wait *w = *at;
+    if (w) { *at = w->next; ctx->resume = w->resume; }
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    if (!w) { fprintf(HAO_DIAG, "hao: native generic result: resume of %p has no invocation\n", (void *)ctx); abort(); }
+    void *resume = w->resume;
+    if (!error) genres_convert(w->type, w->result, "async");
+    free(w);
+    return resume;
+}
+
+static void __attribute__((swiftasynccall)) genres_resume(context_hdr *__attribute__((swift_async_context)) ctx)
+{
+    genres_resume_fn *r = (genres_resume_fn *)genres_take(ctx, false);
+    __attribute__((musttail)) return r(ctx);
+}
+
+static void __attribute__((swiftasynccall)) genres_resume_throwing(context_hdr *__attribute__((swift_async_context)) ctx,
+                                                                   void *__attribute__((swift_context)) error)
+{
+    genres_throwing_fn *r = (genres_throwing_fn *)genres_take(ctx, error != NULL);
+    __attribute__((musttail)) return r(ctx, error);
+}
+
+/* A guest call of NATIVE with the guest's registers: 0, or the result address
+ * to convert with *TYPE when the call returns (synchronous). An async call's
+ * conversion is set up here and happens at its resume. */
+uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **type)
+{
+    const uint64_t *e = hao_gmap_get1(&genres_fns, native);
+    if (!e) return 0;
+    genres *g = (genres *)(uintptr_t)e[1];
+    int reg = __atomic_load_n(&g->self_reg, __ATOMIC_ACQUIRE);
+    if (reg == -1) return 0;
+    if (reg == -2) {
+        static const int8_t regs[] = {0, 1, 2, 3, 4, 5, 6, 7, 20};
+        int found = -1;
+        for (unsigned k = 0; k < sizeof regs && found < 0; k++)
+            if (!(g->is_async && regs[k] == 0) && genres_self(c->x[regs[k]], g->context)) found = regs[k];
+        __atomic_store_n(&g->self_reg, (int8_t)found, __ATOMIC_RELEASE);
+        if (hao_opt.bridge_check)
+            fprintf(HAO_DIAG, "hao: native generic result %s: Self metadata %s%d\n", g->context, found < 0 ? "not found, x" : "x", found);
+        if (found < 0) return 0;
+        reg = found;
+    }
+    const void *t = genres_result_type(g, c->x[reg]);
+    if (!t) return 0;
+    if (!g->is_async) { *type = t; return c->x[8]; }
+    context_hdr *ctx = (context_hdr *)(uintptr_t)c->x[22];
+    if (!ctx || ((uintptr_t)ctx & 7) || !c->x[0]) return 0;
+    genres_wait *w = malloc(sizeof *w);
+    if (!w) return 0;
+    w->ctx = ctx; w->type = t; w->result = c->x[0];
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    w->resume = ctx->resume;
+    for (genres_wait **at = &genres_waiting; *at; at = &(*at)->next)
+        if ((*at)->ctx == ctx) {   /* a context reused before its resume: keep the original continuation */
+            genres_wait *old = *at;
+            *at = old->next;
+            w->resume = old->resume;
+            free(old);
+            break;
+        }
+    ctx->resume = g->throwing ? (void *)genres_resume_throwing : (void *)genres_resume;
+    w->next = genres_waiting; genres_waiting = w;
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    return 0;
+}
+
+void hao_swift_genres_result(const void *type, uint64_t result) { genres_convert(type, result, "sync"); }
