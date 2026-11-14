@@ -453,6 +453,8 @@ tests/guest/hfasret.c
 tests/guest/hfasret.sh
 tests/guest/hfasrethelper.c
 tests/guest/hfasrethelper.h
+tests/guest/hostcode.c
+tests/guest/hostcode.sh
 tests/guest/ident.m
 tests/guest/identhelper.c
 tests/guest/identity.m
