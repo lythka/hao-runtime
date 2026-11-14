@@ -88,6 +88,7 @@ tools	300	par	tests/tools/run.sh
 tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py
 translate	300	par	tests/translate/run.sh "$B" "$OUT"
 fuzz-smoke	600	par	make -s B="$B" fuzz-smoke
+guest/hostcode	300	par	tests/guest/hostcode.sh
 guest/jitinsns	300	par	tests/guest/jitinsns.sh
 guest/fpscalar	600	par	tests/guest/fpscalar.sh
 aot/fmla-mutations	600	par	tests/aot/fmla_mutations.sh

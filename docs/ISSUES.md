@@ -1,5 +1,39 @@
 # Runtime issues and measured scope
 
+## The host-code check of a first-call bind reads the image, not the kernel
+
+A native address that no import bound (a pointer from dlsym, a native
+function pointer, a block's invoke) is bound on its first call
+(`bridge.c` `bind_bare`). Before calling it hao checks that it is
+executable host memory, so data or arm64 code is never run as x86 code.
+The check asked the kernel with `mach_vm_region_recurse`, descending into
+the shared-region submap. On the laptop's Intel kernel, in a translated
+process's map, that took tens of milliseconds per call. `HAO_PERF` on the
+test laptop (ControlCenter, 26B131) put 4.1 s of a first open after a
+restart in plan lookups, against 0.1 s warm, and 9.3 s of ControlCenter's
+launch. All of that time was in `mach_vm_region_recurse` under
+`hao_bridge_plan_for_call`, about 46 ms for each of the open's 53
+first-call binds.
+
+The check now asks first which native image holds the address (`dladdr`,
+which on the development host takes under 0.04 ms). The answer is the
+initial protection of the segment of that image's load commands that
+contains it. Only an address in no native image (hao's own code areas,
+generated code, guest images) still goes to the kernel. A pointer into a
+non-executable segment is refused as before. `HAO_BRIDGE_STATS` reports
+`host-code checks=N by image, M by the kernel`.
+
+`guest/hostcode` calls `strlen`, `sqrt` and `CFAbsoluteTimeGetCurrent`
+through dlsym pointers under JIT, `--interp` and AOT. It prints what native
+arm64 prints, with all three checks answered by the image and none by the
+kernel. A call through a pointer to libc's `optarg` (`__DATA`) is still
+refused ("not executable host memory").
+
+Limits: the time saved is known only as the cost removed (the profile
+above); a before/after on the laptop is pending. Data in an
+executable segment (`__TEXT,__const`) counts as host code, as it does for
+the kernel's answer.
+
 ## Swift value checks looked their symbols up on every call
 
 The Swift value and witness code (`src/swiftvalue.c`, `src/swiftvalue/`,
