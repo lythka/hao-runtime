@@ -438,6 +438,7 @@
     {"_CEAcquireUnmanagedContext",                                      "^v^v{?=q^C^C}^v"},
     {"__MDPlistContainerCopyObject",                                    "^v^v{?=QQQ}"},
     {"_NodeCreateNewNodeQuery",                                         "^v^v^v^v^v^v{?=^v^?^?}"},
+    {"_NodeCreateSemanticNodeQuery",                                    "^v^v^v^v^v^v{?=^v^?^?}"},
     {"_SLSDisplayGetTiming",                                            "{SLSDisplayTiming=QQQQQQQQ}Qi"},
     {"_SLSSpaceGetTransform",                                           "{CGAffineTransform=dddddd}IQ^I"},
     {"_AVCFAssetGetDuration",                                           "{?=qiIq}^v"},

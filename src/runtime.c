@@ -425,10 +425,14 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
         hao_swiftmeta_resume_parent(c->x[22]);
         hao_async_contract_prepare(c,pc,p->name);
     }
+    /* a native generic result G? (swiftcc.c): async ones are converted at their resume */
+    const void *genres_type = NULL;
+    uint64_t genres_at = p && (p->flags & HAO_PLAN_GENRESULT) ? hao_swift_genres_call(c, p->native, &genres_type) : 0;
     /* async function values for a native Swift function's async parameters (swiftmeta.c) */
     if (p && (p->flags & HAO_PLAN_ASYNCARG)) hao_swiftmeta_async_args(c);
     if (kind == HAO_IF_KIND_STACKPACK) { native_call_stackpack(c, pc, p); return; }
     hao_native_call(pc, c, 16);
+    if (genres_at) hao_swift_genres_result(genres_type, genres_at);
     if (optdata && optdata[0] == 'R' && c->x[0] == 0 && c->x[1] == HAO_OPTDATA_NIL_X86) c->x[1] = HAO_OPTDATA_NIL_ARM;
     if (kind && kind != 'A') c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
 }

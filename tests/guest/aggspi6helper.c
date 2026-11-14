@@ -33,6 +33,10 @@
  *                     memcpy(.., x2, 0x450), `ldp q0, q1, [x3]`, x4..x7, [x29,#0x10] (q: two 8-byte
  *                     words), [x29,#0x20], ldrb [x29,#0x28], [x29,#0x30]; the mds caller fills the
  *                     two from -credential and -auditToken (x8 results). Result: __SIUserCtxCreate's.
+ *   NodeCreateSemanticNodeQuery  DesktopServicesPriv (Finder): x86 rdi..r8, the 24-byte record at
+ *                     0x10(%rbp); arm64e x0..x4, the record by reference in x5; both pass it on as
+ *                     NodeClientContext& (allocate_shared<TClientQuery>), whose retain/release the query
+ *                     calls. Result: the query pointer.
  * The three ess_notify_* return nothing: both slices end in the call to the template
  * `void downcallNotifyOnlyWithAttribution<...>`'s downcallInternal, whose Either<int, Unit> goes to an
  * sret buffer (rdi / x8) that is never read back; eax / w0 at the return are left over.
@@ -133,4 +137,13 @@ void *SIUserCtxCreate(void *alloc, void *a1, SICred1104 cred, audit_token_t tok,
     printf("  a4=%#llx a5=%#llx a6=%#llx a7=%#llx a8=%#llx a9=%#llx a10=%#llx flag=%d a12=%#llx\n", P(a4), P(a5),
            P(a6), P(a7), P(a8), P(a9), P(a10), flag, P(a12));
     return a4;
+}
+
+void *NodeCreateSemanticNodeQuery(void *a, void *b, void *c, void *d, void *e, NodeClientContext ctx)
+{
+    void *held = ctx.retain ? ctx.retain(ctx.info) : ctx.info;
+    printf("node-query: a=%llx b=%llx c=%llx d=%llx e=%llx info=%s retained=%s\n", P(a), P(b), P(c), P(d), P(e),
+           ctx.info == (void *)0xc0c0 ? "tag" : ctx.info ? "ptr" : "null", held == ctx.info ? "same" : "other");
+    if (ctx.release) ctx.release(held);
+    return (char *)a + 1;
 }
