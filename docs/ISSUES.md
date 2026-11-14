@@ -145,12 +145,62 @@ Limits: `arm64_code_slots` changed with the others but has no test of its
 own; a code pointer on the stack after such an HFA needs eight integer
 arguments before it as well.
 
+## Native stack per level of native->guest callbacks
+
+Each level of guest -> native -> guest recursion puts hao's frames on the
+native stack between the native caller and the guest code it called:
+`hao_callback_entry`, `hao_callback`, `hao_run`, `run_loop`, `native_step`,
+`native_call`, `hao_native_call`. Guest frames are on the guest stack, so
+the native thread's own stack pays only for those. They took about 4.2 KB a
+level, where native arm64 needs about 200 bytes for the whole level: a
+512 KB thread ran out at 125 levels. WallpaperAgent on 26B131 did so at 134
+levels of value-witness destroys calling back into guest code (the report's
+`depth=134`, SIGBUS in `___chkstk_darwin`), a chain of values released one
+inside the other: the cause the entry below left open.
+
+The big frames were state that is idle while the guest runs:
+- a 1040-byte copy of the guest CPU state in `hao_callback` and
+  `callback_swift`, restored when the guest returns. From the fifth level on
+  it is kept in a per-thread LIFO in a mapping made at first use
+  (`cpu_save_push`, 4096 slots); each segment records the count at entry
+  and resets it after every native step and on re-entry, so an exception
+  or longjmp that skips a callback's pop does not leak slots. The first four
+  levels keep the copy on the stack, so threads that never nest deeper map
+  nothing. A thread's mapping is removed with its guest stack.
+- `guest_fault`'s report, inlined into `run_loop` (1160 -> 56 bytes),
+  `callee_pop`'s diagnostics and the `HAO_VERBOSE` callback lines (632 -> 88
+  bytes in the callback), and the packed-stack-argument path of
+  `native_call` (320 bytes of arrays): now out of line.
+
+A level now takes about 1.75 KB: 293 levels fit in 512 KB under JIT,
+`--interp` and AOT. `tests/guest/deepcallback.c` recurses through qsort's
+comparator 250 levels deep on a 512 KB thread: on 399e78e JIT, `--interp`
+and AOT die with SIGBUS in `run_loop`; after the change all equal native
+arm64.
+
+`tests/guest/faultstack.sh` scans depths on a 64 KB thread until the stack
+overflows before its fault: that edge moved from 14 to 32 levels. With no
+frame left above a page, the overflow is no longer taken by a
+`___chkstk_darwin` probe but by a push in some prologue, and on the
+development host Rosetta aborts on such a fault ("unexpectedly need to
+EmulateForward") instead of delivering it; the scan accepts that as its edge.
+It also accepts a first report inside `hao_on_fault` (the signal frame fit,
+the handler's own 664-byte frame did not: the nested fault is reported), a
+window the earlier frame sizes happened to skip.
+
+Limits: still ~8x native arm64 per level, so a deeper recursion still ends
+the thread where native code would not (`hao_cb_frame`, `hao_seg` with its
+`jmp_buf`, and the native-call frames remain). A thread past 4096 nested
+levels falls back to the stack copy. WallpaperAgent's own depth is not
+known; 134 levels now fit with room to spare, deeper chains do not.
+
 ## A fatal fault's report has a stack of its own
 
 A thread deep in nested native->guest callbacks can have little native stack
 left. One case is a 512 KB dispatch worker running Swift jobs. WallpaperAgent
 used one up in three callback levels; why it took so much is still open, and
-the frames between hao's are not walkable. A fatal fault there ran hao's
+the frames between hao's are not walkable. (Later, with the report in place:
+134 levels at about 4 KB each, see the entry above.) A fatal fault there ran hao's
 report (`fault_diag`) on that same stack. The report overflowed it, and the
 process ended with SIGBUS and no report: no guest pc and no backtrace.
 

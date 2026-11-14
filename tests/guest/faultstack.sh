@@ -7,8 +7,16 @@
 # least stack), under JIT and --interp: the run must end with a signal and print a "host fault" report. A
 # run that reached the fault must report it first (rip in strlen), unless even the kernel's signal frame
 # for it did not fit: then the first report is that overflow, at _sigtramp+0 (only a handler on an
-# alternate stack could see the strlen fault; hao's is not SA_ONSTACK, signals.c). Without the change,
-# a depth where the frame fits but the report does not ends with no report at all.
+# alternate stack could see the strlen fault; hao's is not SA_ONSTACK, signals.c), or the signal frame
+# fit but hao_on_fault's own frame, which it sets up before moving to the report's stack, did not: then
+# the first report is that nested fault, in hao_on_fault. Without the change, a depth where the frame fits
+# but the report does not ends with no report at all.
+# The scan ends at the first depth whose stack overflows before the fault, with a report. On this
+# development host hao runs under Rosetta, which cannot deliver a fault on some instructions (a push in a
+# function prologue: "rosetta error: unexpectedly need to EmulateForward") and aborts instead; since hao's
+# frames per callback level shrank below a page there is no ___chkstk_darwin probe left to take the
+# overflow, so a run that did not reach the fault may end that way. It ends the scan too; an Intel Mac
+# delivers that fault as SIGBUS.
 #   OUT=dir HAO=build/hao [T=30] [MAXD=60] tests/guest/faultstack.sh     exit 1 on any failure
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -22,19 +30,22 @@ clang -arch arm64e -O1 -o "$OUT/faultstack" "$here/faultstack.c" && codesign -s 
 fail=0
 for m in jit interp; do
     case $m in jit) set -- "$HAO" ;; interp) set -- "$HAO" --interp ;; esac
-    d=0 faulted=0 tight=0 bad=0 edge=
+    d=0 faulted=0 tight=0 bad=0 edge= how="overflows and reports"
     while [ $d -le "$MAXD" ]; do
         e=$OUT/$m.$d.err
         ( timeout -s KILL "$T" "$@" "$OUT/faultstack" 64 $d >/dev/null 2>"$e"; exit $? ) 2>/dev/null
         rc=$?
         first=$(grep -m1 "host fault" "$e")
-        if [ $rc -lt 128 ] || [ -z "$first" ]; then
+        if ! grep -q "^faulting at depth" "$e" && [ -z "$first" ] &&
+           grep -q "rosetta error: unexpectedly need to EmulateForward" "$e"; then
+            edge=$d how="overflows (Rosetta aborted on it, no report)"; break   # an instruction Rosetta cannot fault (above)
+        elif [ $rc -lt 128 ] || [ -z "$first" ]; then
             echo "FAIL $m depth $d: rc $rc, no report"; bad=1
         elif grep -q "^faulting at depth" "$e"; then
             faulted=$((faulted + 1))
             case $first in
             *"[_platform_strlen+"*|*"[strlen+"*) ;;
-            *"[_sigtramp+0]"*) tight=$((tight + 1)) ;;
+            *"[_sigtramp+0]"*|*"[hao_on_fault+"*) tight=$((tight + 1)) ;;
             *) echo "FAIL $m depth $d: first report is not the fault: $first"; bad=1 ;;
             esac
         else
@@ -43,6 +54,6 @@ for m in jit interp; do
         d=$((d + 1))
     done
     if [ -z "$edge" ]; then echo "FAIL $m: no overflow by depth $MAXD (the scan never reached a full stack)"; bad=1; fi
-    if [ $bad = 0 ]; then echo "PASS $m: depths 0-$((edge - 1)) report ($faulted reached the fault, $tight of them with no room for its signal frame), depth $edge overflows and reports"; else fail=1; fi
+    if [ $bad = 0 ]; then echo "PASS $m: depths 0-$((edge - 1)) report ($faulted reached the fault, $tight of them with no room for its signal frame), depth $edge $how"; else fail=1; fi
 done
 exit $fail

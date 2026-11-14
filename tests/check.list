@@ -18,6 +18,7 @@ guest/chkstk	300	par	tests/guest/chkstk.sh
 guest/cli	300	par	tests/guest/cli.sh
 guest/crypto	300	par	tests/guest/crypto.sh
 guest/cuvalist	300	par	tests/guest/cuvalist.sh
+guest/deepcallback	120	par	tests/guest/deepcallback.sh
 guest/cxxabi	300	par	tests/guest/cxxabi.sh
 guest/datacall	300	par	tests/guest/datacall.sh
 guest/dsc	300	par	tests/guest/dsc.sh
