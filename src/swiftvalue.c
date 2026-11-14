@@ -403,7 +403,7 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
  * the guest's, since guest code made the call. Only the bounded outer-nil
  * words of collect_witness_patches change, never a live payload. A value the
  * walk cannot prove is handed over unchanged, as before. */
-#define WITNESS_MAX 48
+#define WITNESS_MAX 160
 static struct { uint64_t pc; unsigned slot; } witness_pc[WITNESS_MAX];
 static unsigned witness_count;
 uint64_t hao_swift_witness_lo = 1, hao_swift_witness_hi = 0;   /* empty until set up */
@@ -554,11 +554,61 @@ static bool witness_affected(const void *type)
     return affected;
 }
 
+/* The byte ranges in a value of TYPE (at BASE) of the fields whose struct or
+ * enum a guest image defines: their value witnesses are guest code, which
+ * reads its own encoding inside them, so a nil of an Optional there keeps
+ * the guest's bits. Through struct and tuple fields only: an Optional
+ * (or a native enum) around a guest type is read by its own native
+ * witnesses, also where its nil is a word inside the guest type's bytes
+ * (`Leaf?`, Leaf a guest struct holding a class reference). -1 when there
+ * are more than CAP or the type is deeper than 16. */
+typedef struct { uint64_t lo, hi; } byte_range;
+static int guest_ranges(const void *type, uint64_t base, byte_range *out, int n, int cap, int depth)
+{
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    if (!kind || !count || !offset || !field || depth > 16) return -1;
+    const void *const *m = type;
+    uintptr_t k = kind(type);
+    if ((k == 0x200 || k == 0x201) && hao_image_for_addr((uint64_t)(uintptr_t)m[1])) {
+        if (n >= cap) return -1;
+        out[n++] = (byte_range){base, base + vwt(type)->size};
+        return n;
+    }
+    if (k != 0x200 && k != 0x301) return n;   /* an Optional or a native enum: their witnesses are native */
+    intptr_t fields = count(type);
+    if (fields < 0 || fields > 256) return -1;
+    for (intptr_t i = 0; i < fields; ++i) {
+        field_info info = {0};
+        const void *child = field(type,i,&info);
+        if (info.free_name) info.free_name(info.name);
+        intptr_t at = offset(type,i);
+        if (!child || at < 0) return -1;
+        if ((n = guest_ranges(child,base + (uint64_t)at,out,n,cap,depth + 1)) < 0) return -1;
+    }
+    return n;
+}
+
 typedef struct { int count; empty_patch p[64]; } witness_patches;
-/* The outer nils of a value; count -1 when the walk cannot prove it. */
+/* The outer nils of a value native witnesses read; count -1 when the walk
+ * cannot prove it. A nil inside a field of a guest-defined struct or enum
+ * is left out: native witnesses hand that field to its own (guest) ones. */
 static void witness_walk(const void *type, const void *value, witness_patches *w)
 {
     w->count = value ? collect_witness_patches(type,value,w->p,64) : -1;
+    if (w->count <= 0) return;
+    byte_range guest[32];
+    int ng = guest_ranges(type,0,guest,0,32,0);
+    if (ng < 0) { w->count = -1; return; }
+    int kept = 0;
+    for (int i = 0; i < w->count; ++i) {
+        bool inside = false;
+        for (int g = 0; g < ng && !inside; ++g) inside = w->p[i].offset >= guest[g].lo && w->p[i].offset < guest[g].hi;
+        if (!inside) w->p[kept++] = w->p[i];
+    }
+    w->count = kept;
 }
 /* Rewrite the walked outer nils to the witness's own encoding. */
 static void witness_encode(void *value, const witness_patches *w)
@@ -674,6 +724,69 @@ bool hao_swift_native_result_to_guest(const void *type, void *value)
     unsigned before = t->swift_made_n;
     witness_to_guest(t,type,value);
     return t->swift_made_n != before;
+}
+
+/* The value witnesses (slots 0-5) of TYPE, a native struct or enum whose
+ * values guest code builds inline (a View it lent to a native modifier), so
+ * that its later guest calls of them (an outlined copy or destroy) convert
+ * like those of an Optional's. */
+static void witness_add_type(const void *type)
+{
+    const void *const *m = type;
+    uintptr_t kind = (uintptr_t)m[0];
+    if ((kind != 0x200 && kind != 0x201) || hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return;
+    uint64_t destroy = (uint64_t)(uintptr_t)vwt(type)->fn[1];
+    unsigned n = __atomic_load_n(&witness_count,__ATOMIC_ACQUIRE);
+    for (unsigned i = 0; i < n; ++i) if (witness_pc[i].pc == destroy && witness_pc[i].slot == 1) return;
+    hao_crit_enter();
+    pthread_mutex_lock(&witness_setup_lock);
+    n = witness_count;
+    uint64_t lo = hao_swift_witness_lo, hi = hao_swift_witness_hi;
+    for (unsigned slot = 0; slot <= 5; ++slot) {
+        uint64_t pc = (uint64_t)(uintptr_t)vwt(type)->fn[slot];
+        if (!native_function(pc)) continue;
+        bool dup = false;
+        for (unsigned j = 0; j < n; ++j) dup |= witness_pc[j].pc == pc && witness_pc[j].slot == slot;
+        if (dup || n == WITNESS_MAX) continue;
+        witness_pc[n++] = (typeof(witness_pc[0])){pc,slot};
+        if (pc < lo) lo = pc;
+        if (pc > hi) hi = pc;
+    }
+    hao_swift_witness_hi = hi;
+    __atomic_store_n(&witness_count,n,__ATOMIC_RELEASE);
+    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+    pthread_mutex_unlock(&witness_setup_lock);
+    hao_crit_leave();
+}
+
+/* VALUE of TYPE, made by guest code and lent to a native function for the
+ * call (the indirect self of a native protocol extension method; swiftcc.c,
+ * View modifiers): NULL when it needs no conversion, else a converted copy to
+ * lend instead, its outer nils in the native witnesses' encoding (the walk of
+ * a value guest code hands to a native witness), for the caller to free after
+ * the call. The guest's own value is never written. A copy is a valid borrow
+ * only for a bitwise-takable value of at most 16-byte alignment; any other is
+ * lent as the guest wrote it, as is one the walk cannot prove. */
+void *hao_swift_borrow_to_native(const void *type, const void *value)
+{
+    if (hao_opt.no_swift_values || !type || !value) return NULL;
+    hao_swift_witness_setup();
+    if (!optional_metadata || !witness_affected(type)) return NULL;
+    const witnesses *v = vwt(type);
+    if ((v->flags & 0x00100000) || (v->flags & 0xff) > 15 || !v->size) return NULL;   /* not bitwise-takable, alignment */
+    witness_add_type(type);   /* the guest's later copies and destroys of it */
+    witness_patches w;
+    witness_walk(type,value,&w);
+    unsigned changed = 0;
+    for (int i = 0; i < w.count; ++i) changed += w.p[i].bits != w.p[i].receiver_bits;
+    if (hao_opt.bridge_check)
+        fprintf(HAO_DIAG,"hao: Swift value lent to native metadata=%p patches=%d changed=%u\n",type,w.count,changed);
+    if (w.count <= 0 || !changed) return NULL;
+    void *copy = malloc((size_t)v->size);
+    if (!copy) return NULL;
+    memcpy(copy,value,(size_t)v->size);
+    witness_encode(copy,&w);
+    return copy;
 }
 
 /* Guest code that made such a nil may hand the value to native code, which
