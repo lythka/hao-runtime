@@ -40,6 +40,10 @@
  *   MRMediaRemoteRequestVideoThumbnails  MediaRemote: x86 the 2064-byte record at 0x10(%rbp), rdi/rsi/rdx, the
  *                     block in rcx; arm64e the record by reference in x0, x1..x3, the block in x4; the block is
  *                     invoked as block(thumbnails, error). Result: void.
+ *   SIPathFilterCreate  SpotlightIndex: (alloc, info, copy, release, evaluate); the filter keeps copy(info) as the
+ *                     context, release, and evaluate, which vinitContext calls as evaluate(ctx, path) with a
+ *                     zeroed 28-byte result: x86 sret in rdi (ctx rsi, path rdx), arm64e x8 (ctx x0, path x1).
+ *                     SIPathFilterTestEvaluate/Release stand in for those calls (test-only names).
  * The three ess_notify_* return nothing: both slices end in the call to the template
  * `void downcallNotifyOnlyWithAttribution<...>`'s downcallInternal, whose Either<int, Unit> goes to an
  * sret buffer (rdi / x8) that is never read back; eax / w0 at the return are left over.
@@ -47,6 +51,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include "aggspi6helper.h"
 #define P(x) ((unsigned long long)(uintptr_t)(x))
 
@@ -158,4 +163,31 @@ void MRMediaRemoteRequestVideoThumbnails(MRThumbRequest r, void *a, void *b, voi
     printf("thumbs: sum=%.1f count=%llu size=%.1fx%.1f a=%llx b=%llx c=%llx block=%s\n", sum,
            (unsigned long long)r.count, r.width, r.height, P(a), P(b), P(c), done ? "yes" : "null");
     if (done) done((void *)0x7417, r.count == 3 ? (void *)0 : (void *)0xe44);
+}
+
+#include <stdlib.h>
+typedef struct { void *ctx; void (*release)(void *); SIPathEvaluate evaluate; } TestPathFilter;
+void *SIPathFilterCreate(void *alloc, void *info, void *(*copy)(void *), void (*release)(void *), SIPathEvaluate evaluate)
+{
+    (void)alloc;
+    TestPathFilter *f = calloc(1, sizeof *f);
+    f->ctx = copy ? copy(info) : info;
+    f->release = release;
+    f->evaluate = evaluate;
+    return f;
+}
+void SIPathFilterTestEvaluate(void *filter, const char *path)
+{
+    TestPathFilter *f = filter;
+    SIPathResult r;
+    memset(&r, 0, sizeof r);
+    r = f->evaluate(f->ctx, path);
+    printf("path-filter %s: a=%llx b=%llx c=%u,%u,%u,%u,%u,%u\n", path, (unsigned long long)r.a, (unsigned long long)r.b,
+           r.c[0], r.c[1], r.c[2], r.c[3], r.c[4], r.c[5]);
+}
+void SIPathFilterTestRelease(void *filter)
+{
+    TestPathFilter *f = filter;
+    if (f->release) f->release(f->ctx);
+    free(f);
 }

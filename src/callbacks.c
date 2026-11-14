@@ -114,7 +114,8 @@ typedef struct {
     const char *name;       /* imported symbol */
     cb_arg args[2];
     bool sig;               /* also in the aggregate signature DB (by-value structs): call through abi.c */
-    const char *callback_sig; /* explicit SDK void callback contract, not the API's own signature */
+    const char *callback_sig; /* the callback argument's own signature (not the API's): a void C callback
+                               * contract, or one whose result needs marshalling (an indirect result) */
     uint8_t callback_arg;     /* arm64 integer argument slot; floating arguments have separate slots */
 } cb_api;
 
@@ -141,6 +142,10 @@ static const cb_api apis[] = {
      * Timer fireDate/interval occupy v0/v1, leaving its callback in x3. */
     {"_CFRunLoopTimerCreate", {ARG(4, L_CTX5)}, .callback_sig = "v^v^v", .callback_arg = 3},
     {"_CFRunLoopObserverCreate", {ARG(5, L_CTX5)}, .callback_sig = "v^vQ^v", .callback_arg = 4},
+    /* SpotlightIndex: SIPathFilterCreate(alloc, info, copy, release, evaluate). evaluate(ctx, path) returns a
+     * 28-byte struct {u64, u64, u16 x6} indirectly (x86_64 rdi, arm64 x8): an untyped thunk would hand the
+     * guest the result buffer as ctx (mds, 26B131: called from SISearchCtx_FSI::vinitContext). */
+    {"_SIPathFilterCreate", {}, .callback_sig = "{?=QQSSSSSS}^vr*", .callback_arg = 4},
     {"_CFMachPortCreate", {ARG(2, L_CTX5)}},
     {"_CFMachPortCreateWithPort", {ARG(3, L_CTX5)}},
     {"_CFMessagePortCreateLocal", {ARG(3, L_CTX5)}},
@@ -303,7 +308,8 @@ static void trap_cbstruct(hao_thread *t, uint64_t idx)
          * already typed entry or explicit Swift adapter. */
         uint64_t g = hao_thunk_target(a);
         if (!g && hao_is_guest_function(a)) g = a;
-        if (g) t->cpu.x[api->callback_arg] = hao_guest_entry_for_void_sig(g, api->callback_sig);
+        if (g) t->cpu.x[api->callback_arg] = api->callback_sig[0] == 'v' ? hao_guest_entry_for_void_sig(g, api->callback_sig)
+                                                                          : hao_guest_entry_for_sig(g, api->callback_sig);
     }
     for (int k = 0; k < 2 && api->args[k].lay; k++) patch_struct(t, &api->args[k]);
     t->native_calls++;

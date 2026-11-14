@@ -79,7 +79,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 
 | Entry | Expected | Time | Needs / skip reason |
 |---|---|---|---|
-| guest/aggspi6 | PASS | 3 | `node-query`: a 24-byte client context whose retain/release (guest functions) the native callee calls; `mr-thumbs`: a 2064-byte record first and a guest block the callee invokes; each crashes without its `src/aggspi_gen.inc` row |
+| guest/aggspi6 | PASS | 3 | `node-query`: a 24-byte client context whose retain/release (guest functions) the native callee calls; `mr-thumbs`: a 2064-byte record first and a guest block the callee invokes; each crashes without its `src/aggspi_gen.inc` row; `si-path-filter`: a guest callback returning a 28-byte struct indirectly, kept by a native `SIPathFilterCreate` and called later (needs its `src/callbacks.c` binding) |
 | guest/atoken | PASS | 1 | |
 | guest/bitfields | PASS | 2 | |
 | guest/blocks2 | PASS | 2 | |

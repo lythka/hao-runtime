@@ -1,5 +1,39 @@
 # Runtime issues and measured scope
 
+## A guest C callback that returns a struct indirectly: SIPathFilterCreate
+
+SpotlightIndex keeps a path filter's `evaluate(ctx, path)` callback, made
+by `SIPathFilterCreate(alloc, info, copy, release, evaluate)`. It calls the
+callback later (`SISearchCtx_FSI::vinitContext`) with a zeroed 28-byte
+result `{u64, u64, u16 x6}` that is returned indirectly: on x86_64 the
+buffer is in rdi and ctx and path move to rsi and rdx; on arm64 the buffer
+is in x8. mds passes a guest function. hao gave it an untyped thunk, so
+the guest received the result buffer as ctx. mds sent a message to it,
+whose isa is 0, got a NULL IMP and crashed at address 0 (26B131, twice
+while Finder searched).
+
+`src/callbacks.c` now binds `_SIPathFilterCreate`'s argument 4 with that
+signature (`{?=QQSSSSSS}^vr*`). A callback signature whose result is not
+void takes the general signature-thunk path (`hao_guest_entry_for_sig`),
+which moves rdi to x8 and the rest to x0 and up; void callbacks keep their
+register-exact path. The signature comes from both 26B131 slices and the
+native ObjC metadata of `-[MDPathFilter filterFullPath:]`, which mds's
+evaluator forwards to. Over all arm64-only userland programs of 26B131 it
+is the only C-ABI indirect-result callback handed to native code on the
+paths used.
+
+`guest/aggspi6` gains `si-path-filter`: a native `SIPathFilterCreate` with
+the real prototype keeps the guest's copy, release and evaluate, and a
+test-only native function calls evaluate the way vinitContext does. With
+the binding, JIT, `--interp` and AOT print what native arm64 prints,
+through a signature thunk with no NX faults. Without the binding all three
+crash in `strlen` on the shifted arguments.
+
+Limits: a guest function pointer stored into a structure that native code
+calls later with an indirect result is not covered unless its API is
+listed. Swift closures with indirect results go through the swiftcc
+bridge, not this path.
+
 ## A 2064-byte record by value: MRMediaRemoteRequestVideoThumbnails
 
 `_MRMediaRemoteRequestVideoThumbnails` (MediaRemote) takes a 2064-byte
