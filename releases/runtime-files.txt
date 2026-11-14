@@ -9,6 +9,7 @@ docs/ISSUES.md
 docs/architecture.md
 docs/async-contract.md
 docs/compatibility.md
+docs/fixes.md
 docs/images/maps-intel.png
 docs/performance.md
 docs/releases.md

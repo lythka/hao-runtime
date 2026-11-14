@@ -83,6 +83,33 @@ boundary, with runtime-sized values handled where the layout is proven.
 - Translated code is slower than native ARM code; sustained heavy workloads
   are not yet tuned.
 
+## Apps with their own entitlements (Xcode and similar)
+
+An arm64-only app that is not signed by Apple and carries entitlements does not
+start through hao's launcher: LaunchServices reports "incorrect executable
+format", and hao refuses with "claims entitlements hao cannot grant; embed it
+with tools/hao-embed". Such an app is embedded once, so that each of its
+programs starts under its own path, signing identifier and entitlements:
+
+```sh
+cp -R /Applications/Xcode.app ~/Xcode.app
+python3 tools/hao-embed --scan ~/Xcode.app > programs.txt
+python3 tools/hao-embed --in-place $(cat programs.txt)
+```
+
+- Each arm64-only program gets an x86_64 slice: hao's stub, signed ad hoc with
+  the program's own signing identifier and entitlements. The program's arm64
+  code is not changed; hao checks it against the record the stub carries.
+- Embedding relinks the stub, so it needs Apple's linker for macOS 27 (the
+  Command Line Tools or Xcode). On an Intel Mac that runs macOS 27 under hao,
+  embed the app on a Mac that has them, with the same app version, and copy
+  the embedded files over.
+- The stubs' ad hoc signatures run on Macs set up with hao's boot
+  configuration, as the macOS images hao is built into are.
+- An app update replaces the embedded programs: embed it again.
+- Laptop test 2026-11-14, image f112087 (26B131): Xcode 27.2 embedded this
+  way starts and stays up for about 3.5 minutes, until a plug-in load fails.
+
 ## Testing
 
 Every instruction and boundary change is compared with native ARM execution of
