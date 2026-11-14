@@ -1,5 +1,27 @@
 # Runtime issues and measured scope
 
+## A client context by value: NodeCreateSemanticNodeQuery
+
+`_NodeCreateSemanticNodeQuery` (DesktopServicesPriv) takes five pointers and
+then a 24-byte client context `{info, retain, release}` by value: on x86_64
+the record is on the stack at 0x10(%rbp), on arm64e a pointer to it is in
+x5. Both slices pass it on as `NodeClientContext&`, and the query calls its
+retain and release. Without a row the call took the UNKNOWN route: the
+native side read the record from stack words the guest never wrote and
+called one as `retain`. Finder on 26B131 faulted this way. `src/aggspi_gen.inc`
+gains one row of generator output (`^v^v^v^v^v^v{?=^v^?^?}`). The record is
+copied onto the native stack and its two function slots get thunks: the
+guest's retain and release arrive as thunk callbacks, with no NX faults.
+
+`guest/aggspi6` gains `node-query`: a native stand-in with the real name and
+prototype calls the guest's retain and release, with a tagged and a counted
+info and with no callbacks. With the row, JIT, `--interp` and AOT print what
+native arm64 prints. On 399e78e all three crash, calling a word of the
+guest's stack (0xdead...5b).
+
+Limits: other functions that only forward a record to their callee stay
+untyped. Equal size alone does not type a record that may carry callbacks.
+
 ## Nils in the results of native generic functions
 
 A native generic function the guest calls through its unspecialized entry
