@@ -3391,10 +3391,13 @@ static int native_bundle_expand(const char *path, const void *ra, char *out, siz
 }
 static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n);
 static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, why, n); }
-/* a guest caller's dlopen may also load an ARM-only dylib as a guest image; a native caller's keeps the bundle rule */
+/* An ARM-only dylib dyld cannot open loads as a guest image for any caller: guest code's dlopen, and native code
+ * loading the program's own frameworks and plug-ins (NSBundle/CFBundle loading a framework's MH_DYLIB, as Xcode
+ * does for its plug-ins). A native caller still gets no untyped guest function address from dlsym. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
-    return bundle_open(path, flags, guest_caller_image(ra) != NULL, why, n);
+    (void)ra;
+    return bundle_open(path, flags, true, why, n);
 }
 static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n)
 {

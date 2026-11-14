@@ -64,9 +64,9 @@ for name,cpu in [('GuestBundleFixture',0x100000c),('UniversalBundleFixture',0x10
   # kernel enforcement or an explicit loader refusal prevents execution.
   assert (result.returncode==0 and result.stdout=='refused 1\n') or (result.returncode==-9 and not result.stdout),(name,mode,result.returncode,result.stdout,result.stderr)
   print(name,'invalid signed slice',mode,'PASS')
-# A wrong-architecture dylib is deliberately outside the MH_BUNDLE fallback.
-dylib=OUT/'wrong-architecture.dylib'
+# An ARM-only dylib a native caller dlopens (NSBundle loading a framework) loads as a guest image too.
+dylib=OUT/'arm-only.dylib'
 run(['clang','-arch','arm64','-arch','arm64e','-dynamiclib','-fobjc-arc','-framework','Foundation',HERE/'plugin.m','-o',dylib]);sign(dylib)
-result=run([HAO,OUT/'guest.arm64e',dylib,'reject'],capture_output=True,text=True)
-assert result.stdout=='refused 1\n'
-print('wrong architecture dylib refused PASS')
+result=subprocess.run(list(map(str,[HAO,OUT/'guest.arm64e',dylib,'reject'])),capture_output=True,text=True,timeout=60)
+assert result.stdout=='refused 0\n',(result.returncode,result.stdout,result.stderr)
+print('ARM-only dylib from a native caller loads PASS')
