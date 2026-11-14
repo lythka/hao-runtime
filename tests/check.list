@@ -25,6 +25,7 @@ guest/dsc	300	par	tests/guest/dsc.sh
 guest/dscswift	300	par	tests/guest/dscswift.sh
 guest/dylibs	300	par	tests/guest/dylibs.sh
 guest/eh	300	par	tests/guest/eh.sh
+guest/dlrpath	300	par	tests/guest/dlrpath.sh
 guest/fenv	300	par	tests/guest/fenv.sh
 guest/fma16	300	par	tests/guest/fma16.sh
 guest/fma32	300	par	tests/guest/fma32.sh
