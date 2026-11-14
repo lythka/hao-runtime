@@ -20,6 +20,7 @@ include/hao/bridge.h
 include/hao/code.h
 include/hao/codeid.h
 include/hao/cpu.h
+include/hao/dlsym_once.h
 include/hao/gen_stamp.h
 include/hao/gmap.h
 include/hao/identity.h

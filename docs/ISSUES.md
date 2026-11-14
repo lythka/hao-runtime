@@ -1,5 +1,45 @@
 # Runtime issues and measured scope
 
+## Swift value checks looked their symbols up on every call
+
+The Swift value and witness code (`src/swiftvalue.c`, `src/swiftvalue/`,
+`swiftschema.c`, `swiftobjects.c`, `swiftresult.c`) compared metadata
+and witnesses with libswiftCore, Foundation, CoreGraphics and ObjectiveC
+symbols. It named each one with `dlsym(RTLD_DEFAULT, ...)` at the point
+of use. That lookup walks every loaded image's export trie, through
+libhao_identity's dlsym interposer. `common_byte_optional_case` alone
+made ten lookups for each value a guest witness call passes.
+
+On laptop 2 (image d588923, libhao 399e78e) these lookups were most of
+the CPU of the interactions measured:
+- ControlCenter's panel layout: at least 80 of the 127 samples under the
+  witness-patch collection were in `dlsym`'s trie search.
+- Dock's animation thread during a hover sweep: 142 of 222 samples.
+
+Each such site now resolves its symbol once, with `HAO_DLSYM("name")`
+(`include/hao/dlsym_once.h`): a static word per call site, written
+atomically. A found address is kept, since these libraries are never
+unloaded. A symbol not found is looked up again on the next call, since
+its library may load later. 134 call sites use it, among them the four
+integer types `c_integer_enum` looped over. The behaviour is otherwise unchanged:
+the same symbols, compared the same way.
+
+Measured on the development host (Rosetta), with a guest calling
+unspecialized generic code on `(any P)??` values (copy and `isSome`
+through libswiftCore's Optional witnesses), 20,000 iterations, JIT:
+10.45 s and 10.50 s before, 0.52 s after (1.28 s on a cold first run).
+That is about 520 us -> 26 us per iteration. `make check` covers
+correctness.
+
+Limits:
+- The other files' literal `dlsym(RTLD_DEFAULT, ...)` calls (bridge,
+  interpose, signals, ...) are unchanged; they are not on these paths.
+- The remaining 26 us per iteration is not attributed yet; the host's
+  sampler sees only Rosetta's frames. The reflection walk
+  (`swift_reflectionMirror_*` per field) and the crossings are the
+  candidates.
+- Not yet measured on Intel hardware: bench2 measures it before and after
+  on laptop 2.
 ## A guest C callback that returns a struct indirectly: SIPathFilterCreate
 
 SpotlightIndex keeps a path filter's `evaluate(ctx, path)` callback, made

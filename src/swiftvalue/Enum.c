@@ -8,6 +8,7 @@
 #ifdef HAO_SWIFT_VALUE_RUNTIME
 #include "hao/runtime.h"
 #include "hao/macho.h"
+#include "hao/dlsym_once.h"
 #endif
 #define SWIFT __attribute__((swiftcall))
 typedef const void *SWIFT resolve_fn(const char *, size_t, const void *, const void *const *);
@@ -36,8 +37,8 @@ enum { MAX_EMPTY = 1u << 16 };
 static int enum_cases(const void *type, unsigned field_kind, unsigned least, const void **payloads, unsigned *empty_out,
                       uint64_t *maximum)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");
-    resolve_fn *resolve = dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInContext2");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    resolve_fn *resolve = HAO_DLSYM("swift_getTypeByMangledNameInContext2");
     if (!type || !kind || !resolve || kind(type) != 0x201) return 0;
     const void *const *m = type;
     const char *desc = m[1];
@@ -86,8 +87,8 @@ static int direct_cases(const void *type, unsigned field_kind, const void **payl
 
 int enum_inline_payloads(const void *type, const void **payloads)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");
-    resolve_fn *resolve = dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInContext2");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    resolve_fn *resolve = HAO_DLSYM("swift_getTypeByMangledNameInContext2");
     if (!type || !kind || !resolve || kind(type) != 0x201) return -1;
     const void *const *m = type;
     const char *desc = m[1];
@@ -118,8 +119,8 @@ int enum_inline_payloads(const void *type, const void **payloads)
 
 int enum_payloads(const void *type, const void **payloads, uint64_t *extent)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");
-    void *runtime_tag = dlsym(RTLD_DEFAULT, "swift_getMultiPayloadEnumTagSinglePayload");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    void *runtime_tag = HAO_DLSYM("swift_getMultiPayloadEnumTagSinglePayload");
     if (!type || !kind || !runtime_tag || kind(type) != 0x201) return 0;
     const void *const *m = type;
     const char *desc = m[1];
@@ -150,7 +151,7 @@ int discover_enum_case(const void *type, const void *value, enum_case_plan *out)
     unsigned tag = ((const unsigned char *)value)[extent];
     if (tag >= (unsigned)count) {
         const char *desc = ((const void *const *)type)[1];
-        case_fn *get_case = dlsym(RTLD_DEFAULT, "swift_getEnumCaseMultiPayload");
+        case_fn *get_case = HAO_DLSYM("swift_getEnumCaseMultiPayload");
         /* Empty cases also use payload storage as a discriminator. Even with
          * one empty case, a trailing tag alone does not establish validity. */
         if (tag != (unsigned)count || u32(desc + 24) != 1 || !get_case ||

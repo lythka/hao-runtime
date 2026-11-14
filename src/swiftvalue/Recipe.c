@@ -16,6 +16,7 @@
 #include <string.h>
 #ifdef HAO_SWIFT_VALUE_RUNTIME
 #include "hao/runtime.h"
+#include "hao/dlsym_once.h"
 #endif
 
 #define SWIFT __attribute__((swiftcall))
@@ -56,16 +57,16 @@ typedef struct {
 } reflection;
 static void nominals(reflection *r)
 {
-    r->set = dlsym(RTLD_DEFAULT, "$sShMn");
-    r->dictionary = dlsym(RTLD_DEFAULT, "$sSDMn");
-    r->native_box = dlsym(RTLD_DEFAULT, "$sBoWV");
-    r->unknown_box = dlsym(RTLD_DEFAULT, "$sBOWV");
-    r->metatype_box = dlsym(RTLD_DEFAULT, "$sBomWV");
-    r->single[0] = dlsym(RTLD_DEFAULT, "$sSVMn");                       /* UnsafeRawPointer */
-    r->single[1] = dlsym(RTLD_DEFAULT, "$sSvMn");                       /* UnsafeMutableRawPointer */
-    r->single[2] = dlsym(RTLD_DEFAULT, "$ss13OpaquePointerVMn");
-    r->single[3] = dlsym(RTLD_DEFAULT, "$sSOMn");                       /* ObjectIdentifier */
-    r->single[4] = dlsym(RTLD_DEFAULT, "$s10ObjectiveC8SelectorVMn");   /* NULL until ObjectiveC is loaded */
+    r->set = HAO_DLSYM("$sShMn");
+    r->dictionary = HAO_DLSYM("$sSDMn");
+    r->native_box = HAO_DLSYM("$sBoWV");
+    r->unknown_box = HAO_DLSYM("$sBOWV");
+    r->metatype_box = HAO_DLSYM("$sBomWV");
+    r->single[0] = HAO_DLSYM("$sSVMn");                       /* UnsafeRawPointer */
+    r->single[1] = HAO_DLSYM("$sSvMn");                       /* UnsafeMutableRawPointer */
+    r->single[2] = HAO_DLSYM("$ss13OpaquePointerVMn");
+    r->single[3] = HAO_DLSYM("$sSOMn");                       /* ObjectIdentifier */
+    r->single[4] = HAO_DLSYM("$s10ObjectiveC8SelectorVMn");   /* NULL until ObjectiveC is loaded */
 }
 static int guest_laid_listed(const void *type);
 
@@ -242,11 +243,11 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
 static int discover(const void *type, empty_plan *out, int existentials)
 {
     reflection r = {
-        dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
-        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, existentials,
     };
     nominals(&r);
     if (!type || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional ||
@@ -446,11 +447,11 @@ static int xi_patterns(const xi_enum *e, uint32_t k, unsigned char *x86, unsigne
 int translated_nil_type(const void *type)
 {
     reflection r = {
-        dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
-        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, 1,
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
     };
     xi_enum e;
     if (!type || !r.kind || !r.count || !r.offset || !r.field || !r.optional || r.kind(type) != 0x202 ||
@@ -798,7 +799,7 @@ static void survey(reflection *r, const void *type, uint64_t base, unsigned dept
 #ifdef HAO_SWIFT_VALUE_RUNTIME
     typedef struct { const char *text; uintptr_t length; } type_name;
     typedef type_name SWIFT name_fn(const void *, bool);
-    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
+    name_fn *name = HAO_DLSYM("swift_getTypeName");
     type_name n = name ? name(type,true) : (type_name){"?",1};
     hao_diag_prefix(HAO_DIAG);
     fprintf(HAO_DIAG,"Swift value survey: refused at offset %llu depth %u: metadata=%p kind=%#lx size=%llu flags=%#x xi=%#x type=%.*s\n",
@@ -834,11 +835,11 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
                            int (*known_layout)(const void *), int survey_mode)
 {
     reflection r = {
-        dlsym(RTLD_DEFAULT, "swift_getMetadataKind"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset"),
-        dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata"),
-        dlsym(RTLD_DEFAULT, "$sSaMn"), dlsym(RTLD_DEFAULT, "$sSqMn"), dlsym(RTLD_DEFAULT, "$sSSN"), NULL, existentials,
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, existentials,
         known_layout, 0, survey_mode,
     };
     nominals(&r);
