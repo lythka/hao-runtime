@@ -22,13 +22,14 @@ Now:
   loaders' and the main executable's, and the set-ID restrictions). dyld
   then opens the first existing file by its absolute path, so a universal
   library still loads natively.
-- When dyld cannot open the file, a guest caller's ARM-only bundle or dylib
-  loads as a guest image, through the loader dependencies use. A native
-  caller's fallback stays limited to ARM-only bundles, as before
-  (`guest/native-bundle` checks that a native caller's ARM-only dylib is
-  still refused).
+- When dyld cannot open the file, an ARM-only bundle or dylib loads as a
+  guest image, through the loader dependencies use, for native callers too:
+  NSBundle loading a framework (an `MH_DYLIB`) is how Xcode loads its
+  plug-ins (`DVTUserInterfaceKit`: "incompatible architecture" ->
+  NSCocoaErrorDomain 3585 before). `guest/native-bundle` checks a native
+  caller's dlopen of an ARM-only dylib.
 - `dlsym` returns a guest function's address to a guest caller; native
-  callers are still refused one.
+  callers are still refused one (no untyped function ABI).
 - A runtime with an older `libhao_identity` keeps the previous behaviour.
 
 `guest/dlrpath` builds an app bundle (`Test.app/Contents/MacOS`,
