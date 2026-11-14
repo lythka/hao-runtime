@@ -10,6 +10,7 @@ docs/architecture.md
 docs/async-contract.md
 docs/compatibility.md
 docs/images/maps-intel.png
+docs/performance.md
 docs/releases.md
 docs/security-model.md
 include/hao/a64_cond.h
