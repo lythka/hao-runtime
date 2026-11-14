@@ -183,5 +183,35 @@ class CatalogGate(unittest.TestCase):
         self.assertIn('changed under the same UUID', '\n'.join(lines))
 
 
+    def accepted(self, before, after, address=0x70100):
+        r = self.dir / 'recipe.json'
+        r.write_text(json.dumps({'files': [{'file': 'main', 'edits': [
+            {'id': 'edit-1', 'address': hex(address), 'before': before.hex(), 'after': after.hex()}]}]}))
+        return g.load_accepted([str(r)])
+
+    def test_changed_code_inside_accepted_edit_passes(self):
+        v, contract = build()
+        base, _ = build(anchor=b'\x91' * 16)
+        ok, lines = g.gate_bound_inputs(v, *self.inputs(contract), base=base,
+                                        accepted=self.accepted(b'\x91' * 16, b'\x90' * 16))
+        self.assertTrue(ok, lines)
+        self.assertIn('changed only by accepted edits (edit-1)', '\n'.join(lines))
+
+    def test_change_outside_accepted_edit_fails(self):
+        v, contract = build()
+        base, _ = build(anchor=b'\x91' * 16)
+        ok, lines = g.gate_bound_inputs(v, *self.inputs(contract), base=base,   # covers 8 of the 16 changed bytes
+                                        accepted=self.accepted(b'\x91' * 8, b'\x90' * 8))
+        self.assertFalse(ok)
+        self.assertIn('changed under the same UUID', '\n'.join(lines))
+
+    def test_accepted_edit_with_other_before_bytes_fails(self):
+        v, contract = build()
+        base, _ = build(anchor=b'\x91' * 16)
+        ok, lines = g.gate_bound_inputs(v, *self.inputs(contract), base=base,
+                                        accepted=self.accepted(b'\x92' * 16, b'\x90' * 16))
+        self.assertFalse(ok)
+
+
 if __name__ == '__main__':
     unittest.main()

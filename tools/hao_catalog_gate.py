@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hao_catalog_gate.py CACHE [--base-cache BASE] [--units DIR] [--lock FILE] [--contracts DIR] [--json OUT]
+"""hao_catalog_gate.py CACHE [--base-cache BASE [--accept-edits RECIPE.json]] [--units DIR] [--lock FILE] [--contracts DIR] [--json OUT]
 
 The checks an x86_64 shared cache with prespecialized Swift metadata (a
 libswiftPrespecialized catalog) must pass before hao runs on it
@@ -28,7 +28,11 @@ directory; subcaches are read next to it.
      (tools/hao_ifunit.py match);
    - with --base-cache (the cache the inputs were made for), images whose
      LC_UUID is unchanged but whose __TEXT bytes differ are listed, and a unit
-     or contract bound to one of them fails: same UUID, different code.
+     or contract bound to one of them fails: same UUID, different code;
+     with --accept-edits RECIPE.json (a reviewed edit list: files[].edits[]
+     with address, before and after), an image whose every differing byte
+     lies inside one accepted edit, with the base holding its "before" bytes
+     and CACHE its "after" bytes, passes and is listed with the edits.
 
 Exit status: 0 all gates pass, 1 a gate fails, 2 the cache cannot be read.
 Catalog layout: LibPrespecializedData (swift/include/swift/Runtime/
@@ -305,7 +309,48 @@ def text_digest(v, path):
     return hashlib.sha256(bytes(v.read(lo, hi - lo))).hexdigest()
 
 
-def gate_bound_inputs(v, lock, contracts_dir, units=None, base=None):
+def load_accepted(paths):
+    """[(address, before bytes, after bytes, id)] from reviewed edit recipes (tools/shared-cache
+    prespecialization-overrides: files[].edits[] with address, before, after, id)"""
+    out = []
+    for path in paths or ():
+        with open(path) as f:
+            r = json.load(f)
+        for fe in r.get('files', []):
+            for e in fe.get('edits', []):
+                try:
+                    out.append((int(e['address'], 16), bytes.fromhex(e['before']), bytes.fromhex(e['after']),
+                                e.get('id', e['address'])))
+                except (KeyError, ValueError) as x:
+                    raise Bad('%s: unreadable edit %r (%s)' % (path, e, x))
+    return out
+
+
+def text_diff(v, base, path, chunk=1 << 20):
+    """[(start, end)] address runs where PATH's __TEXT differs between BASE and V"""
+    lo, hi = v.images.segment(path, '__TEXT')
+    if base.images.segment(path, '__TEXT') != (lo, hi): return [(lo, hi)]
+    runs, a = [], lo
+    while a < hi:
+        n = min(chunk, hi - a)
+        x, y = bytes(v.read(a, n)), bytes(base.read(a, n))
+        if x != y:
+            if len(x) != len(y): return runs + [(a, hi)]
+            i = 0
+            while i < n:
+                if x[i] != y[i]:
+                    j = i
+                    while j < n and x[j] != y[j]: j += 1
+                    if runs and runs[-1][1] == a + i: runs[-1] = (runs[-1][0], a + j)
+                    else: runs.append((a + i, a + j))
+                    i = j
+                else:
+                    i += 1
+        a += n
+    return runs
+
+
+def gate_bound_inputs(v, lock, contracts_dir, units=None, base=None, accepted=()):
     """(passed, report lines)"""
     ok, lines = True, ['gate 3 inputs bound to the cache (%s):' % v.uuid]
     with open(lock) as f:
@@ -331,12 +376,29 @@ def gate_bound_inputs(v, lock, contracts_dir, units=None, base=None):
                 if u: by_uuid.setdefault(u.lower(), p)
         return by_uuid
 
+    reviewed, verdict = {}, {}
+
     def same_code(path):
-        """False when BASE has this image with the same UUID but other __TEXT bytes"""
+        """False when BASE has this image with the same UUID but other __TEXT bytes, unless every differing
+        byte is inside an accepted edit whose before/after bytes match BASE/V there"""
         if base is None or not base.images.has(path): return True
-        if text_digest(v, path) == text_digest(base, path): return True
-        changed.add(path)
-        return False
+        if path in verdict: return verdict[path]
+        ok_ = text_digest(v, path) == text_digest(base, path)
+        if not ok_ and accepted:
+            runs = text_diff(v, base, path)
+            used = set()
+            ok_ = bool(runs)
+            for s_, e_ in runs:
+                hit = [ed for ed in accepted if ed[0] <= s_ and e_ <= ed[0] + len(ed[2])]
+                if not hit or bytes(v.read(hit[0][0], len(hit[0][2]))) != hit[0][2] or \
+                        bytes(base.read(hit[0][0], len(hit[0][1]))) != hit[0][1]:
+                    ok_ = False
+                    break
+                used.add(hit[0][3])
+            if ok_: reviewed[path] = sorted(used)
+        if not ok_: changed.add(path)
+        verdict[path] = ok_
+        return ok_
 
     for cpath in sorted(glob.glob(os.path.join(contracts_dir, '*.json'))):
         with open(cpath) as f:
@@ -378,6 +440,8 @@ def gate_bound_inputs(v, lock, contracts_dir, units=None, base=None):
         for n in stale_units:
             ok = False
             lines.append('  FAIL unit %s: %s changed under the same UUID' % (n, found[n]))
+    for p_, ids in sorted(reviewed.items()):
+        lines.append('  %s: changed only by accepted edits (%s)' % (p_, ', '.join(ids)))
     if base is not None:
         lines.append('  images changed under the same UUID among those checked: %d%s' %
                      (len(changed), (' (' + ', '.join(sorted(changed)) + ')') if changed else ''))
@@ -391,6 +455,8 @@ def main(argv):
     ap.add_argument('--units', help='interface unit directory (payload units-input)')
     ap.add_argument('--lock', default=os.path.join(HERE, '..', 'generated.lock'))
     ap.add_argument('--contracts', default=os.path.join(HERE, 'value-contracts'))
+    ap.add_argument('--accept-edits', action='append', metavar='RECIPE.json',
+                    help='reviewed cache edits (files[].edits[]: address, before, after); bytes changed only by these pass')
     ap.add_argument('--json', help='write the result here')
     a = ap.parse_args(argv)
     try:
@@ -401,7 +467,8 @@ def main(argv):
               (v.uuid, 'present' if v.images.has(PRESPECIALIZED) else 'absent', len(entries)))
         ok1, l1, bad1 = gate_optional(v, entries)
         l2, stat2 = gate_fast_paths(v, entries)
-        ok3, l3 = gate_bound_inputs(v, a.lock, a.contracts, a.units, base)
+        if a.accept_edits and base is None: raise Bad('--accept-edits needs --base-cache')
+        ok3, l3 = gate_bound_inputs(v, a.lock, a.contracts, a.units, base, load_accepted(a.accept_edits))
     except Bad as e:
         print('hao_catalog_gate: %s' % e, file=sys.stderr)
         return 2

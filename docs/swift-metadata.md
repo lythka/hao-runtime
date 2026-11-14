@@ -113,7 +113,7 @@ Under hao:
 
 ## Checking a cache with prespecialized metadata
 
-`make catalog-gate CACHE=DIR [BASE_CACHE=DIR] [UNITS=DIR]` (`tools/hao_catalog_gate.py`) checks the three
+`make catalog-gate CACHE=DIR [BASE_CACHE=DIR [ACCEPT_EDITS=RECIPE.json]] [UNITS=DIR]` (`tools/hao_catalog_gate.py`) checks the three
 requirements above on an x86_64 cache before hao runs on it. It reads the catalog of `libswiftPrespecialized`
 (`_swift_prespecializationsData`, versions 1.x, through its flat pointer-keyed map and its string-keyed map).
 1. **Optional witnesses (fails closed).** Each prespecialized Optional's value witnesses (slots 0-7 and 11-13)
@@ -126,12 +126,19 @@ requirements above on an x86_64 cache before hao runs on it. It reads the catalo
    Every value contract whose x86_64 image is in the cache must name its UUID and its anchors must still hash to
    the pinned values. With `UNITS`, every interface unit must match an image. With `BASE_CACHE` (the cache the
    inputs were made for), an image whose UUID is unchanged but whose `__TEXT` differs fails every unit and
-   contract bound to it.
+   contract bound to it. With `ACCEPT_EDITS`, a reviewed list of cache edits (address, bytes before and after),
+   an image changed only inside those edits passes, and the gate names the edits.
 
 On the 26B131 cache (262FA161), which already carries Apple's catalog: 2762 entries (1574 structs, 1188 classes,
 no Optionals or enums); gate 1 passes trivially; 505 structs miss the fast paths (their witnesses are in SwiftUICore,
 the concurrency library and others); gate 3 passes (9 cache tables, the Optional<Data> contract's 4 anchors,
 1896 units). `host/catalog-gate` tests each failure on a synthetic cache.
+
+With the two libswiftCore edits that keep prespecialized metadata on (the calls to
+`_dyld_shared_cache_some_image_overridden()` in its prespecialization setup replaced by a zero) and the 113
+name-to-descriptor slots that point into libraries loaded from disk nulled, on the same cache: all gates pass with
+`ACCEPT_EDITS` set to that edit list; without it, gate 3 fails libswiftCore's interface unit, as it should for
+changed code under an unchanged UUID.
 
 ## Where prespecialized metadata comes from
 
