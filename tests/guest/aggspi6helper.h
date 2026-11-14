@@ -18,3 +18,7 @@ void *CGImageCreateCopyWithParameters(void *, void *, Params48, void *, void *, 
 typedef struct { uint64_t w[138]; } SICred1104;                                     /* 0x450 B */
 void *SIUserCtxCreate(void *, void *, SICred1104, audit_token_t, void *, void *, void *, void *, void *, void *,
                       void *, bool, void *);
+/* NodeCreateSemanticNodeQuery (DesktopServicesPriv, Finder): five pointers, then a 24-byte client context
+ * {?=^v^?^?} (info, retain, release) whose callbacks the callee calls */
+typedef struct { void *info; void *(*retain)(void *); void (*release)(void *); } NodeClientContext;
+void *NodeCreateSemanticNodeQuery(void *, void *, void *, void *, void *, NodeClientContext);

@@ -8,6 +8,8 @@
  *   ess_notify_od_attribute_set           token first, eight GP after it (two on both stacks)
  *   QLPushCustomRoundedRect (QuickLookUIHelper)  CGRect: an HFA on arm64, 32 B of x86 stack
  *   CGImageCreateCopyWithParameters (sips)   48 bytes, then packed arm64 stack arguments
+ *   NodeCreateSemanticNodeQuery (Finder)  24-byte context after five pointers; the callee calls its
+ *                                         retain and release, which are guest functions
  *   CEAcquireUnmanagedContext (derq)      the REAL libCoreEntitlements function (xnu header
  *                                         EntitlementsPriv.h); the setcc gap hid it from P1's scan
  * The first seven are native stand-ins (aggspi6helper.c). Before each call the guest leaves
@@ -123,6 +125,20 @@ __attribute__((noinline)) static void ce_acquire(const char *label, int64_t vers
     printf("\n");
 }
 
+/* --- DesktopServicesPriv (Finder) --- */
+static int node_refs;
+static void *node_retain(void *info) { if (info != T(0xc0c0)) ++*(int *)info; else node_refs++; puts("guest retain"); return info; }
+static void node_release(void *info) { if (info != T(0xc0c0)) --*(int *)info; else node_refs--; puts("guest release"); }
+__attribute__((noinline)) static void node_query(int counted)
+{
+    int refs = 1;
+    NodeClientContext ctx = { counted ? (void *)&refs : T(0xc0c0), node_retain, node_release };
+    void *q = NodeCreateSemanticNodeQuery(T(0x1000), T(0x2000), T(0x3000), T(0x4000), T(0x5000), ctx);
+    printf("node-query rc=%p refs=%d node_refs=%d\n", q, refs, node_refs);
+    NodeClientContext none = { T(0xc0c0), NULL, NULL };
+    printf("node-query-nocb rc=%p\n", NodeCreateSemanticNodeQuery(T(0x1100), T(0x2100), T(0x3100), T(0x4100), T(0x5100), none));
+}
+
 /* one case per argument (the runner runs each case on its own, so a crash in one does not hide
  * the others); no argument runs every case */
 static volatile int opaque = 1;
@@ -162,10 +178,11 @@ static void run_case(const char *c)
         dirty(); ce_acquire("null-ctx", 2, 0, 32, 1);
         dirty(); ce_acquire("v0", 0, 0, 32, 0);
     } else if (!strcmp(c, "si-userctx")) { dirty(); si_userctx(0); dirty(); si_userctx(1); }
+    else if (!strcmp(c, "node-query")) { dirty(); node_query(0); dirty(); node_query(1); }
     else { printf("unknown case %s\n", c); }
 }
 static const char *const cases[] = { "si-open", "si-create", "si-cancel", "si-ops", "ess-tcc", "ess-group-add",
-                                     "ess-attr-set", "ql-rect", "img-copy", "ce", "si-userctx" };
+                                     "ess-attr-set", "ql-rect", "img-copy", "ce", "si-userctx", "node-query" };
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);

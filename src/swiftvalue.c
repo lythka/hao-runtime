@@ -659,6 +659,22 @@ static void witness_to_guest(hao_thread *t, const void *type, void *value)
     }
 }
 
+/* A value native code made in guest storage, as the result of a native generic
+ * function the guest called (swiftcc.c, native generic results): its outer
+ * nils get the guest's encoding where guest code reads them inline, the rule
+ * of a nil a witness makes. Only outer-nil words change; a live payload keeps
+ * its bits, also one guest code made (a child task's result). */
+bool hao_swift_native_result_to_guest(const void *type, void *value)
+{
+    if (hao_opt.no_swift_values || !type || !value) return false;
+    hao_swift_witness_setup();
+    hao_thread *t = hao_current();
+    if (!t || !optional_metadata || !witness_affected(type)) return false;
+    unsigned before = t->swift_made_n;
+    witness_to_guest(t,type,value);
+    return t->swift_made_n != before;
+}
+
 /* Guest code that made such a nil may hand the value to native code, which
  * reads it with its witnesses: a closure native code calls (View.overlay's
  * content: () -> V with V an Optional) builds its indirect result in place

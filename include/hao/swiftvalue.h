@@ -24,6 +24,10 @@ extern uint64_t hao_swift_witness_lo, hao_swift_witness_hi;
  * there since MARK (t->swift_made_n at the callback's entry) get the native
  * encoding back; the ring is then reset to MARK. */
 void hao_swift_witness_result(struct hao_thread *, unsigned mark, uint64_t indirect);
+/* VALUE of TYPE, which native code made in guest storage (a native generic
+ * function's result): its outer nils in the guest's encoding where guest code
+ * reads them inline. True if a word changed. */
+bool hao_swift_native_result_to_guest(const void *type, void *value);
 void hao_swift_value_fork_child(void);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif
