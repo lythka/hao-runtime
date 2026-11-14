@@ -161,7 +161,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | host/chain | PASS | 6 | |
 | host/commpage | PASS | 1 | |
 | host/contract | PASS | 1 | `contract.json` through the vendored hao-assets checker (`tools/hao-contract`, pinned in `PIN`): `generated.lock` matches every `src/*_gen.inc` byte for byte, cache tables carry `HAO_GEN_OS_BUILD` and every format is `HAO_GEN_FORMAT`; the vendored copy matches its pin. A hand-edited table fails |
-| host/catalog-gate | PASS | 9 | `tools/hao_catalog_gate.py` on a synthetic cache: a catalog Optional with libswiftCore's generic witnesses passes, one with a compiler-specialized witness fails closed; the fast-path count; generated.lock, value contracts (cache UUID, anchor bytes) and code changed under an unchanged UUID |
+| host/catalog-gate | PASS | 12 | `tools/hao_catalog_gate.py` on a synthetic cache: a catalog Optional with libswiftCore's generic witnesses passes, one with a compiler-specialized witness fails closed; the fast-path count; generated.lock, value contracts (cache UUID, anchor bytes) and code changed under an unchanged UUID, unless only by reviewed edits (`--accept-edits`) |
 | host/sigpolicy | SKIP (expected) | 1 | the profile cases need `PROFILE`; the hao cases x86_64 hardware |
 | host/near-map | PASS | 1 | |
 | host/dscselhoist | PASS | 1 | |
