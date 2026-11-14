@@ -127,7 +127,7 @@ static bool better(const hao_plan *p, const hao_plan *old)
 {
     /* or the same class, now known to be a Swift async function (note_async_entry) */
     return (old->cls == HAO_BR_UNKNOWN && p->cls != HAO_BR_UNKNOWN) ||
-           (p->cls == old->cls && (p->flags & ~old->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG)));
+           (p->cls == old->cls && (p->flags & ~old->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT)));
 }
 
 /* under bridge_lock: insert or upgrade; returns the plan now in the table. Every change ends
@@ -939,6 +939,7 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
     p->argmask = HAO_BR_SCAN_ALL;
     if (swift_async(gname)) p->flags |= HAO_PLAN_SWIFTASYNC;
     if (hao_swift_async_param(gname)) p->flags |= HAO_PLAN_ASYNCARG;
+    if (hao_swift_genres_bind(native, gname, p->flags & HAO_PLAN_SWIFTASYNC)) p->flags |= HAO_PLAN_GENRESULT;
     uint64_t gh = 0, nh = 0;
     bool thunk = r && (r->flags & HAO_IFR_THUNK) && !hao_opt.no_thunks && hao_thunks_pair(v->str + r->thunk, &gh, &nh);
     if (r && (r->flags & HAO_IFR_THUNK) && !thunk) __atomic_fetch_add(&st_thunk_missing, 1, __ATOMIC_RELAXED);
@@ -1283,7 +1284,7 @@ static const hao_plan *publish(const hao_plan *tmp, const char *name)
     const hao_plan *r;
     L();
     bool share = tmp->cls == HAO_BR_UNKNOWN && !hao_bridge_counting && !tmp->why && !tmp->redirect &&
-                 !(tmp->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_PROBE));
+                 !(tmp->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT | HAO_PLAN_PROBE));
     if (share) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare : &unknown_import);
     else {
         hao_plan *p = arena_alloc(sizeof *p);
@@ -1321,6 +1322,7 @@ static void note_async_entry(const char *gname, uint64_t afp)
     tmp.flags |= HAO_PLAN_SWIFTASYNC;
     char name[1024];
     snprintf(name, sizeof name, "%.*s", (int)(n - 2), gname);
+    if (hao_swift_genres_bind(fn, name, true)) tmp.flags |= HAO_PLAN_GENRESULT;
     publish(&tmp, old && old->name ? old->name : name);
 }
 
