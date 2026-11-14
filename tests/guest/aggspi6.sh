@@ -4,7 +4,7 @@
 # stand-ins with the 26A428 prototypes (aggspi6helper.c, a native x86_64/arm64/arm64e dylib that
 # exports the real names: SIOpenIndex, SICreateNewIndex, ess_notify_tcc_modify,
 # ess_notify_od_group_add, ess_notify_od_attribute_set, QLPushCustomRoundedRect,
-# CGImageCreateCopyWithParameters, SIUserCtxCreate, NodeCreateSemanticNodeQuery) and the real CEAcquireUnmanagedContext. It is built for arm64e
+# CGImageCreateCopyWithParameters, SIUserCtxCreate, NodeCreateSemanticNodeQuery, MRMediaRemoteRequestVideoThumbnails) and the real CEAcquireUnmanagedContext. It is built for arm64e
 # (guest) and arm64 (reference); arm64 runs natively (twice: the reference must be deterministic),
 # arm64e under hao with the JIT, with --interp and from an AOT cache, and each hao run must print
 # exactly what native prints.
@@ -28,7 +28,7 @@ for a in arm64e arm64; do
     codesign -s - -f "$OUT/aggspi6.$a" 2>/dev/null
 done
 set +e
-CASES="si-open si-create si-cancel si-ops ess-tcc ess-group-add ess-attr-set ql-rect img-copy ce si-userctx node-query"
+CASES="si-open si-create si-cancel si-ops ess-tcc ess-group-add ess-attr-set ql-rect img-copy ce si-userctx node-query mr-thumbs"
 fail=0
 # the reference, case by case, twice: it must be deterministic
 for c in $CASES; do

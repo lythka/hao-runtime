@@ -437,6 +437,7 @@
     {"_CGImageCreateCopyWithParameters",                                "^v^v^v{CGAffineTransform=dddddd}QQQQQ^vIBi"},
     {"_CEAcquireUnmanagedContext",                                      "^v^v{?=q^C^C}^v"},
     {"__MDPlistContainerCopyObject",                                    "^v^v{?=QQQ}"},
+    {"_MRMediaRemoteRequestVideoThumbnails",                            "v{?=[256d]Qff}^v^v^v@?"},
     {"_NodeCreateNewNodeQuery",                                         "^v^v^v^v^v^v{?=^v^?^?}"},
     {"_NodeCreateSemanticNodeQuery",                                    "^v^v^v^v^v^v{?=^v^?^?}"},
     {"_SLSDisplayGetTiming",                                            "{SLSDisplayTiming=QQQQQQQQ}Qi"},

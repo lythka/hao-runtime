@@ -873,7 +873,7 @@ static void code_slots(uint8_t *p, int size, uint64_t code)
     }
 }
 
-#define NSTACK 256      /* SysV stack argument slots of one signature-driven call */
+#define NSTACK 1024     /* most SysV stack argument slots of one signature-driven call (8 KB) */
 #define LDBUF 4096      /* native-layout copies of long double aggregates in one call */
 #define RETBUF 32       /* a result returned in registers: at most an HFA of four doubles */
 
@@ -918,8 +918,16 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
     uint8_t ret[RETBUF] __attribute__((aligned(16)));
     if (!in_place && !r->ld && (r->kind == 'D' ? (int)sizeof(long double) : r->size) > RETBUF) { sig_refused(enc, "result too large"); return false; }
     memset(ret, 0, sizeof ret);
-    /* x86_64 SysV layout */
-    uint64_t gpr[6] = {0}, stack[NSTACK], out[6] = {0};
+    /* x86_64 SysV layout. The stack area is sized from the signature (an upper bound of
+     * each argument's slots, alignment included), so an ordinary call's frame stays small
+     * and a large by-value record (MRMediaRemoteRequestVideoThumbnails' 2064 bytes) fits. */
+    int nstack = 0;
+    for (int k = 0; k < s->nargs; k++) {
+        const htype *a = &s->args[k];
+        nstack += a->ld ? (a->nsize + 7) / 8 + 1 : a->kind == 'D' ? 3 : a->kind == 's' ? (a->size + 7) / 8 + 1 : 1;
+    }
+    if (nstack > NSTACK) { sig_refused(enc, "too many stack arguments"); return false; }
+    uint64_t gpr[6] = {0}, stack[nstack ? nstack : 1], out[6] = {0};
     uint8_t xmm[8][16];
     memset(xmm, 0, sizeof xmm);
     int gi = 0, xi = 0, so = 0;
@@ -930,23 +938,23 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
         if (a->ld) {                                    /* X87 class: memory, 16-aligned */
             so = (so + 1) & ~1;
             int n = (a->nsize + 7) / 8;
-            if (so + n > NSTACK) goto too_many;
+            if (so + n > nstack) goto too_many;
             memcpy(&stack[so], v, (size_t)a->nsize);
             so += n;
         } else if (a->kind == 'i') {
             uint64_t x = 0; memcpy(&x, v, (size_t)a->size);
             if (a->sgn && a->size < 8) x = (uint64_t)((int64_t)(x << (64 - 8 * a->size)) >> (64 - 8 * a->size));
             if (gi < 6) gpr[gi++] = x;
-            else if (so < NSTACK) stack[so++] = x;
+            else if (so < nstack) stack[so++] = x;
             else goto too_many;
         } else if (a->kind == 'f' || a->kind == 'd') {
             if (xi < 8) memcpy(xmm[xi++], v, (size_t)a->size);
-            else if (so < NSTACK) { stack[so] = 0; memcpy(&stack[so++], v, (size_t)a->size); }
+            else if (so < nstack) { stack[so] = 0; memcpy(&stack[so++], v, (size_t)a->size); }
             else goto too_many;
         } else if (sysv_class_mem(a)) {
             if (a->kind == 'D') so = (so + 1) & ~1;
             int n = a->kind == 'D' ? 2 : (a->size + 7) / 8;
-            if (so + n > NSTACK) goto too_many;
+            if (so + n > nstack) goto too_many;
             memset(&stack[so], 0, (size_t)n * 8);
             memcpy(&stack[so], v, (size_t)(a->kind == 'D' ? 16 : a->size));
             if (a->code && v != store[k]) code_slots((uint8_t *)&stack[so], a->size, a->code);
@@ -962,7 +970,7 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
                 }
             } else {
                 int n = (a->size + 7) / 8;
-                if (so + n > NSTACK) goto too_many;
+                if (so + n > nstack) goto too_many;
                 memset(&stack[so], 0, (size_t)n * 8);
                 memcpy(&stack[so], v, (size_t)a->size);
                 so += n;
