@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <malloc/malloc.h>
+#include "hao/dlsym_once.h"
 
 #define SWIFTCC __attribute__((swiftcall))
 typedef struct { const char *name; void (*free_name)(const char *); bool strong, var; } field_info;
@@ -288,11 +289,11 @@ bool hao_swift_objects_interpose(const char *name, uint64_t *address)
         return true;
     }
     if (!native_alloc) {
-        native_alloc = dlsym(RTLD_DEFAULT, "swift_allocObject");
-        metadata_kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");
-        field_count = dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount");
-        field_type = dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata");
-        field_offset = dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset");
+        native_alloc = HAO_DLSYM("swift_allocObject");
+        metadata_kind = HAO_DLSYM("swift_getMetadataKind");
+        field_count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+        field_type = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+        field_offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
     }
     if (!native_alloc || !metadata_kind || !field_count || !field_type || !field_offset) return false;
     *address = hao_trap_address(name, trap_alloc, 0);

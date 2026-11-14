@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include "hao/dlsym_once.h"
 #define SWIFT __attribute__((swiftcall))
 #define LIMIT 256
 typedef struct { const char *text; uintptr_t length; } type_name;
@@ -39,10 +40,10 @@ static target_fn *thunk_target, *sig_target, *island_target;
 static pthread_once_t owners_once = PTHREAD_ONCE_INIT;
 static void owners_init(void)
 {
-    image_lookup = dlsym(RTLD_DEFAULT,"hao_image_for_addr");
-    thunk_target = dlsym(RTLD_DEFAULT,"hao_thunk_target");
-    sig_target = dlsym(RTLD_DEFAULT,"hao_sig_thunk_target");
-    island_target = dlsym(RTLD_DEFAULT,"hao_swiftmeta_island_target");
+    image_lookup = HAO_DLSYM("hao_image_for_addr");
+    thunk_target = HAO_DLSYM("hao_thunk_target");
+    sig_target = HAO_DLSYM("hao_sig_thunk_target");
+    island_target = HAO_DLSYM("hao_swiftmeta_island_target");
 }
 
 static bool read_at(const void *p, void *out, size_t n)
@@ -163,9 +164,9 @@ void hao_swift_schema_dump(FILE *out, const void *root, const void *enclosing,
 {
     static atomic_flag active = ATOMIC_FLAG_INIT;
     if (atomic_flag_test_and_set(&active)) { fputs("hao-schema {\"event\":\"concurrent_or_reentrant_capture_skipped\"}\n",out); return; }
-    survey s = {.out=out, .name=dlsym(RTLD_DEFAULT,"swift_getTypeName"), .kind=dlsym(RTLD_DEFAULT,"swift_getMetadataKind"),
-        .count=dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount"), .offset=dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset"),
-        .field=dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata"), .resolve=dlsym(RTLD_DEFAULT,"swift_getTypeByMangledNameInContext2")};
+    survey s = {.out=out, .name=HAO_DLSYM("swift_getTypeName"), .kind=HAO_DLSYM("swift_getMetadataKind"),
+        .count=HAO_DLSYM("swift_reflectionMirror_recursiveCount"), .offset=HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        .field=HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"), .resolve=HAO_DLSYM("swift_getTypeByMangledNameInContext2")};
     int r = add(&s,root), e = add(&s,enclosing), u = add(&s,unresolved);
     fprintf(out,"hao-schema {\"event\":\"begin\",\"version\":1,\"root\":%d,\"enclosing\":%d,\"unresolved\":%d,\"guest_lr\":%llu,\"witness\":%llu,\"witness_owner\":",
         r,e,u,(unsigned long long)guest_lr,(unsigned long long)witness);

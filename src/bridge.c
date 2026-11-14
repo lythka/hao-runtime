@@ -1674,11 +1674,60 @@ void hao_bridge_note_imp(uint64_t imp, const char *enc, uint64_t sel)
  * hao_bridge_bind, then the ObjC runtime's record of it (type_by_objc);
  * dladdr names it (a label: reports, varsniff, the libc++ string-result rule).
  * A target that is not host code fails closed (not_host_code). */
+/* Whether pc lies in an executable segment of the native image that holds it, from that image's load
+ * commands: 1 yes, 0 in a non-executable segment, -1 no image or no segment holds it (then the kernel
+ * is asked). dladdr finds the image without the kernel walk below, which on the Intel kernel costs tens
+ * of milliseconds in a translated process's large map (laptop, 26B131: ~46 ms per first-call bind,
+ * most of ControlCenter's first open after a restart). A segment's initial protection is what dyld mapped
+ * it with; hao changes no native image's protections. */
+static uint64_t st_host_by_image, st_host_by_kernel;   /* not_host_code's answers: from an image's segments / the kernel */
+static int image_exec_at(uint64_t pc)
+{
+    Dl_info di;
+    hao_crit_enter();          /* dladdr takes dyld's lock: no guest signal handler meanwhile */
+    int ok = dladdr((void *)(uintptr_t)pc, &di);
+    hao_crit_leave();
+    const struct mach_header_64 *mh = ok ? di.dli_fbase : NULL;
+    if (!mh || mh->magic != MH_MAGIC_64 || mh->sizeofcmds > (1u << 20)) return -1;
+    const uint8_t *lc = (const uint8_t *)(mh + 1), *end = lc + mh->sizeofcmds;
+    int64_t slide = 0;
+    bool have_slide = false;
+    for (uint32_t k = 0; k < mh->ncmds && lc + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *c = (const void *)lc;
+        if (c->cmdsize < sizeof *c || lc + c->cmdsize > end) return -1;
+        if (c->cmd == LC_SEGMENT_64 && c->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *sg = (const void *)c;
+            if (!have_slide && !strncmp(sg->segname, "__TEXT", 16)) {   /* the header is at __TEXT's start (in the cache too) */
+                slide = (int64_t)((uint64_t)(uintptr_t)mh - sg->vmaddr);
+                have_slide = true;
+            }
+        }
+        lc += c->cmdsize;
+    }
+    if (!have_slide) return -1;
+    lc = (const uint8_t *)(mh + 1);
+    for (uint32_t k = 0; k < mh->ncmds && lc + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *c = (const void *)lc;
+        if (c->cmd == LC_SEGMENT_64 && c->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *sg = (const void *)c;
+            uint64_t lo = sg->vmaddr + (uint64_t)slide;
+            if (pc >= lo && pc - lo < sg->vmsize) return (sg->initprot & VM_PROT_EXECUTE) ? 1 : 0;
+        }
+        lc += c->cmdsize;
+    }
+    return -1;
+}
+
 static const char *not_host_code(uint64_t pc)
 {
     /* arm64 code the guest generated (a JIT): hao translates registered images only */
     if (hao_guest_exec_mapped(pc))
         return "the target is in memory the guest mapped executable itself (arm64 code generated at run time, which hao does not run)";
+    /* a native image's segment first (no kernel call); hao's own code areas and generated code have none */
+    int ie = hao_image_for_code(pc) ? -1 : image_exec_at(pc);
+    __atomic_fetch_add(ie >= 0 ? &st_host_by_image : &st_host_by_kernel, 1, __ATOMIC_RELAXED);
+    if (ie == 1) return NULL;
+    if (ie == 0) return "the target is not executable host memory (guest code outside a loaded image, such as arm64 generated at run time, or data)";
     /* the leaf entry: the shared cache is a submap whose outer entry reads r-- */
     vm_region_submap_info_data_64_t info;
     natural_t depth = 0;
@@ -1896,6 +1945,8 @@ void hao_bridge_stats(void)
             (unsigned long long)__atomic_load_n(&hao_objcva_declined, __ATOMIC_RELAXED));
     /* arm64e cache selector strings objc_msgSend mapped to native selectors (dsc.c hao_dsc_sel_map) */
     fprintf(f, "objc cache selectors mapped=%llu; ", (unsigned long long)__atomic_load_n(&hao_dsc_sels_mapped, __ATOMIC_RELAXED));
+    fprintf(f, "host-code checks=%llu by image, %llu by the kernel; ", (unsigned long long)st_host_by_image,
+            (unsigned long long)st_host_by_kernel);
     fprintf(f, "first-call binds=%llu (named %llu, typed %llu, to an interposer %llu, skipped in signal handlers %llu); "
                "units=%d (rejected %d), thunk pairs %llu (keys not loaded %llu); table=%u/%u slots, %llu KB plans\n",
             (unsigned long long)st_bare, (unsigned long long)st_bare_named, (unsigned long long)st_bare_typed,

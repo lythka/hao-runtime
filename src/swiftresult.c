@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include "hao/dlsym_once.h"
 
 struct hao_swift_result_context {
     const hao_swift_reverse *reverse;
@@ -108,7 +109,7 @@ typedef struct { const void *metadata; uintptr_t state; } metadata_response;
 typedef metadata_response __attribute__((swiftcall)) associated_fn(uintptr_t, const void *, const void *, const void *, const void *);
 static associated_fn *associated;
 static pthread_once_t runtime_once = PTHREAD_ONCE_INIT;
-static void runtime_init(void) { associated = (associated_fn *)dlsym(RTLD_DEFAULT, "swift_getAssociatedTypeWitness"); }
+static void runtime_init(void) { associated = (associated_fn *)HAO_DLSYM("swift_getAssociatedTypeWitness"); }
 
 void hao_swift_result_prepare(const hao_swift_result_context *context, const uint64_t *args, uint64_t target, hao_swift_value_scope *scope)
 {
