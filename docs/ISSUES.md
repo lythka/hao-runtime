@@ -1,5 +1,122 @@
 # Runtime issues and measured scope
 
+## dlopen of @rpath, @loader_path and @executable_path names from guest code
+
+Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.
+dyld expands `@rpath`, `@loader_path` and `@executable_path` against the
+image that called it. That image was `libhao_identity`, so the names
+resolved in `/usr/lib/hao`. Xcode 27.2 aborts at launch on this:
+`dlopen(@rpath/Frameworks/libIDEApplicationLoader.dylib)` tried
+`/usr/lib/hao/Frameworks/...`. Two more steps were missing:
+- a guest dlopen of an ARM-only `MH_DYLIB` failed, because the guest
+  fallback after native dyld accepted only `MH_BUNDLE`;
+- `dlsym` refused any guest function's address, also to guest code, which
+  calls the function itself.
+
+Now:
+- The interposers pass their return address to the runtime
+  (`hao_identity_bundle_hooks2`). A call from the bridge's native-call
+  trampolines is a guest caller.
+- For a guest caller, such a name is expanded with the dependency
+  resolver (`for_each_candidate`: the calling image's `LC_RPATH`s, its
+  loaders' and the main executable's, and the set-ID restrictions). dyld
+  then opens the first existing file by its absolute path, so a universal
+  library still loads natively.
+- When dyld cannot open the file, a guest caller's ARM-only bundle or dylib
+  loads as a guest image, through the loader dependencies use. A native
+  caller's fallback stays limited to ARM-only bundles, as before
+  (`guest/native-bundle` checks that a native caller's ARM-only dylib is
+  still refused).
+- `dlsym` returns a guest function's address to a guest caller; native
+  callers are still refused one.
+- A runtime with an older `libhao_identity` keeps the previous behaviour.
+
+`guest/dlrpath` builds an app bundle (`Test.app/Contents/MacOS`,
+`LC_RPATH @executable_path/../Frameworks`). Its program opens an ARM-only
+library by `@rpath` and again by `@executable_path`; that library opens its
+sibling by `@loader_path`; the program also opens a universal library by
+`@rpath` and a missing name. JIT, `--interp` and AOT print what native arm64
+prints. Before the change the `@rpath` and `@loader_path` opens failed with
+dyld's `/usr/lib/hao/...` candidates.
+
+Limits: native code that dlopens an `@`-name keeps dyld's own expansion
+(against that native caller). A guest dylib loaded this way stays loaded, as
+dependencies do.
+
+## The host-code check of a first-call bind reads the image, not the kernel
+
+A native address that no import bound (a pointer from dlsym, a native
+function pointer, a block's invoke) is bound on its first call
+(`bridge.c` `bind_bare`). Before calling it hao checks that it is
+executable host memory, so data or arm64 code is never run as x86 code.
+The check asked the kernel with `mach_vm_region_recurse`, descending into
+the shared-region submap. On the laptop's Intel kernel, in a translated
+process's map, that took tens of milliseconds per call. `HAO_PERF` on the
+test laptop (ControlCenter, 26B131) put 4.1 s of a first open after a
+restart in plan lookups, against 0.1 s warm, and 9.3 s of ControlCenter's
+launch. All of that time was in `mach_vm_region_recurse` under
+`hao_bridge_plan_for_call`, about 46 ms for each of the open's 53
+first-call binds.
+
+The check now asks first which native image holds the address (`dladdr`,
+which on the development host takes under 0.04 ms). The answer is the
+initial protection of the segment of that image's load commands that
+contains it. Only an address in no native image (hao's own code areas,
+generated code, guest images) still goes to the kernel. A pointer into a
+non-executable segment is refused as before. `HAO_BRIDGE_STATS` reports
+`host-code checks=N by image, M by the kernel`.
+
+`guest/hostcode` calls `strlen`, `sqrt` and `CFAbsoluteTimeGetCurrent`
+through dlsym pointers under JIT, `--interp` and AOT. It prints what native
+arm64 prints, with all three checks answered by the image and none by the
+kernel. A call through a pointer to libc's `optarg` (`__DATA`) is still
+refused ("not executable host memory").
+
+Limits: the time saved is known only as the cost removed (the profile
+above); a before/after on the laptop is pending. Data in an
+executable segment (`__TEXT,__const`) counts as host code, as it does for
+the kernel's answer.
+
+## Swift value checks looked their symbols up on every call
+
+The Swift value and witness code (`src/swiftvalue.c`, `src/swiftvalue/`,
+`swiftschema.c`, `swiftobjects.c`, `swiftresult.c`) compared metadata
+and witnesses with libswiftCore, Foundation, CoreGraphics and ObjectiveC
+symbols. It named each one with `dlsym(RTLD_DEFAULT, ...)` at the point
+of use. That lookup walks every loaded image's export trie, through
+libhao_identity's dlsym interposer. `common_byte_optional_case` alone
+made ten lookups for each value a guest witness call passes.
+
+On laptop 2 (image d588923, libhao 399e78e) these lookups were most of
+the CPU of the interactions measured:
+- ControlCenter's panel layout: at least 80 of the 127 samples under the
+  witness-patch collection were in `dlsym`'s trie search.
+- Dock's animation thread during a hover sweep: 142 of 222 samples.
+
+Each such site now resolves its symbol once, with `HAO_DLSYM("name")`
+(`include/hao/dlsym_once.h`): a static word per call site, written
+atomically. A found address is kept, since these libraries are never
+unloaded. A symbol not found is looked up again on the next call, since
+its library may load later. 134 call sites use it, among them the four
+integer types `c_integer_enum` looped over. The behaviour is otherwise unchanged:
+the same symbols, compared the same way.
+
+Measured on the development host (Rosetta), with a guest calling
+unspecialized generic code on `(any P)??` values (copy and `isSome`
+through libswiftCore's Optional witnesses), 20,000 iterations, JIT:
+10.45 s and 10.50 s before, 0.52 s after (1.28 s on a cold first run).
+That is about 520 us -> 26 us per iteration. `make check` covers
+correctness.
+
+Limits:
+- The other files' literal `dlsym(RTLD_DEFAULT, ...)` calls (bridge,
+  interpose, signals, ...) are unchanged; they are not on these paths.
+- The remaining 26 us per iteration is not attributed yet; the host's
+  sampler sees only Rosetta's frames. The reflection walk
+  (`swift_reflectionMirror_*` per field) and the crossings are the
+  candidates.
+- Not yet measured on Intel hardware: bench2 measures it before and after
+  on laptop 2.
 ## A guest C callback that returns a struct indirectly: SIPathFilterCreate
 
 SpotlightIndex keeps a path filter's `evaluate(ctx, path)` callback, made

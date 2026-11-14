@@ -1049,7 +1049,7 @@ fail:
 #undef SERR
 }
 
-static bool arm_only_bundle_fd(int fd)
+static bool arm_only_bundle_fd(int fd, bool dylib)
 {
     struct stat st;
     uint32_t magic = 0;
@@ -1073,24 +1073,30 @@ static bool arm_only_bundle_fd(int fd)
     struct mach_header_64 mh;
     if (!hao_macho_choose_slice(fd, st.st_size, &offset, &length, &subtype, why, sizeof why) ||
         length < sizeof mh || pread(fd, &mh, sizeof mh, offset) != sizeof mh) goto out;
-    ok = mh.magic == MH_MAGIC_64 && mh.cputype == CPU_TYPE_ARM64 && mh.filetype == MH_BUNDLE;
+    ok = mh.magic == MH_MAGIC_64 && mh.cputype == CPU_TYPE_ARM64 && (mh.filetype == MH_BUNDLE || (dylib && mh.filetype == MH_DYLIB));
 out:
     return ok;
 }
-bool hao_is_arm_only_bundle(const char *path)
+bool hao_is_arm_only_loadable(const char *path, bool dylib)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
-    bool ok = arm_only_bundle_fd(fd);
+    bool ok = arm_only_bundle_fd(fd, dylib);
     close(fd);
     return ok;
 }
+bool hao_is_arm_only_bundle(const char *path) { return hao_is_arm_only_loadable(path, false); }
 
-static hao_image *load_image(const char *, int, hao_resolver, hao_mapped_fn, void *, bool, char *, size_t);
+static hao_image *load_image(const char *, int, hao_resolver, hao_mapped_fn, void *, int, char *, size_t);
 hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                               char *err, size_t errlen)
 {
-    return load_image(path, -1, resolve, mapped, ctx, true, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, 1, err, errlen);
+}
+/* the dlopen fallback for a guest caller: an ARM-only bundle or dylib */
+hao_image *hao_load_dlopen_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
+{
+    return load_image(path, -1, resolve, mapped, ctx, 2, err, errlen);
 }
 
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
@@ -1114,7 +1120,7 @@ hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_
  * on, also when the load fails); path then only names it. Otherwise path is
  * opened. */
 static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
-                             bool bundle_only, char *err, size_t errlen)
+                             int bundle_only, char *err, size_t errlen)
 {
     hao_image *img = calloc(1, sizeof *img);
     hao_slice *sl = NULL;
@@ -1131,7 +1137,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     snprintf(img->path, sizeof img->path, "%s", path);
     img->fd = fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
     if (img->fd < 0) ERR("open %s: %s", path, strerror(errno));
-    if (bundle_only && !arm_only_bundle_fd(img->fd)) ERR("%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (bundle_only && !arm_only_bundle_fd(img->fd, bundle_only == 2))
+        ERR(bundle_only == 2 ? "%s: guest dlopen fallback requires an ARM-only MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     char why[320];
     /* The slice, taken once (hao/macho.h): the one the caller checked on this descriptor and left for
      * this load (hao_slice_hand), else opened here. From here on nothing is read from the file. */
@@ -1149,7 +1156,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     const uint64_t slice = sl->size;
     const uint8_t *const cmds = sl->cmds;
 
-    if (bundle_only && sl->filetype != MH_BUNDLE) ERR("%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (bundle_only && sl->filetype != MH_BUNDLE && !(bundle_only == 2 && sl->filetype == MH_DYLIB))
+        ERR(bundle_only == 2 ? "%s: guest dlopen fallback requires an ARM-only MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     if (sl->filetype != MH_EXECUTE && sl->filetype != MH_DYLIB && sl->filetype != MH_BUNDLE &&
         !(map_only && sl->filetype == MH_DYLINKER))
         ERR("%s: filetype %u not loadable", path, sl->filetype);

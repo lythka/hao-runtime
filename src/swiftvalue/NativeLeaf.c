@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "hao/dlsym_once.h"
 typedef struct { void *fn[8]; uint64_t size,stride; uint32_t flags,extra; } witnesses;
 typedef struct cache {
     const void *type;
@@ -118,7 +119,7 @@ static bool resilient_cases(uint64_t desc,const char *module,const char *name)
 {
     uint64_t fields;
     uint32_t layout,count;
-    case_proof p = {.demangle = dlsym(RTLD_DEFAULT,"swift_demangle")};
+    case_proof p = {.demangle = HAO_DLSYM("swift_demangle")};
     if (!p.demangle || !relative(desc + 16,&fields) ||
         !read_at(fields + 8,&layout,4) || layout != (12u << 16 | 2) ||
         !read_at(fields + 12,&count,4) || !count || count > 64) return false;

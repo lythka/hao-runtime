@@ -102,7 +102,9 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/dscswift | PASS | 10 | the host's arm64e shared cache |
 | guest/dylibs | PASS | 4 | |
 | guest/eh | PASS | 19 | |
+| guest/dlrpath | PASS | 3 | dlopen of @rpath, @executable_path and @loader_path names from an app bundle: resolved from the calling guest image; an ARM-only dylib loads as a guest image, a universal one natively |
 | guest/fenv | PASS | 1 | |
+| guest/hostcode | PASS | 2 | calls through dlsym pointers: the host-code check answers from the image (0 kernel walks); a pointer to native data is still refused |
 | guest/fma32 | PASS | 2 | |
 | guest/footprint | PASS | 59 | `footprint(1)` |
 | guest/fork | PASS | 45 | |

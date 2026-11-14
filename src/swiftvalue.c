@@ -10,6 +10,7 @@
 #include "hao/opts.h"
 #include "hao/gmap.h"
 #include "hao/gen_stamp.h"
+#include "hao/dlsym_once.h"
 #define HAO_SWIFT_VALUE_RUNTIME 1
 #include "swiftvalue/Aggregate.h"
 #include "swiftvalue/Common.h"
@@ -63,7 +64,7 @@ typedef struct { const char *text; uintptr_t length; } type_name;
 static type_name name_of(const void *type)
 {
     typedef type_name SWIFT name_fn(const void *, bool);
-    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
+    name_fn *name = HAO_DLSYM("swift_getTypeName");
     type_name n = type && name ? name(type,true) : (type_name){"?",1};
     if (n.length > 4096) n.length = 4096;
     return n;
@@ -190,10 +191,10 @@ static const plan *prepare(const void *type)
     pthread_mutex_unlock(&lock); hao_crit_leave();
     builder *b = calloc(1,sizeof *b);
     if (!b) return NULL;
-    b->kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    b->count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    b->offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    b->field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    b->kind = HAO_DLSYM("swift_getMetadataKind");
+    b->count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    b->offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    b->field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     bool ok = b->kind && b->count && b->offset && b->field && graph(b,type,0) && !b->failed;
     plan *p = calloc(1,sizeof *p);
     if (!p) { free(b); return NULL; }
@@ -228,10 +229,10 @@ void hao_swift_value_begin(hao_thread *t, hao_swift_value_scope *scope, const vo
  * Do not byte-clone the enclosing non-bitwise-borrowable enum. */
 static const void *enum_storage(const void *type)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    count_fn *count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     for (unsigned depth = 0; depth < 16; ++depth) {
         if (kind(type) == 0x201) return type;
         if (kind(type) != 0x200 || count(type) != 1 || offset(type,0)) return NULL;
@@ -302,7 +303,7 @@ static bool handle(hao_thread *t, const entry *e)
         } else {
             /* Ordinary BB structs/tuples can borrow their complete storage.
              * The full active walk above supplies the live-field contract. */
-            kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+            kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
             uintptr_t k = kind(e->type);
             const witnesses *v = vwt(e->type);
             if ((k != 0x200 && k != 0x301) || (v->flags & 0x01900000))
@@ -458,7 +459,7 @@ void hao_swift_witness_setup(void)
  * witness_count includes it. */
 static void payload_witnesses_locked(void)
 {
-    const void *data = dlsym(RTLD_DEFAULT,"$s10Foundation4DataVN");
+    const void *data = HAO_DLSYM("$s10Foundation4DataVN");
     if (!data || !optional_metadata) return;   /* Foundation not loaded yet: a later image retries */
     const void *optional = optional_metadata(0,data).metadata;
     if (!optional || !translated_nil_type(optional)) { __atomic_store_n(&payload_witnesses_added,true,__ATOMIC_RELEASE); return; }
@@ -479,12 +480,12 @@ static void payload_witnesses_locked(void)
 }
 static void witness_setup_locked(void)
 {
-    optional_accessor *opt = dlsym(RTLD_DEFAULT,"$sSqMa");
-    const void *int_type = dlsym(RTLD_DEFAULT,"$sSiN");
+    optional_accessor *opt = HAO_DLSYM("$sSqMa");
+    const void *int_type = HAO_DLSYM("$sSiN");
     if (!opt || !int_type) return;   /* no Swift runtime yet: a later image retries */
     typedef SWIFT_RESPONSE SWIFT tuple2_fn(uintptr_t, const void *, const void *, const char *, const void *);
-    tuple2_fn *tuple2 = dlsym(RTLD_DEFAULT,"swift_getTupleTypeMetadata2");
-    const void *string_type = dlsym(RTLD_DEFAULT,"$sSSN");
+    tuple2_fn *tuple2 = HAO_DLSYM("swift_getTupleTypeMetadata2");
+    const void *string_type = HAO_DLSYM("$sSSN");
     if (!tuple2 || !string_type) return;
     const void *one = opt(0,int_type).metadata, *two = one ? opt(0,one).metadata : NULL;
     /* Tuple witnesses (Metadata.cpp tuple_*) are chosen by the tuple's
@@ -492,7 +493,7 @@ static void witness_setup_locked(void)
      * this path converts, a nested Optional of AnyObject (fits a buffer)
      * and of Any (does not), and from String pairs of both sizes. */
     typedef const void *SWIFT existential_fn(uintptr_t, const void *, size_t, const void *);
-    existential_fn *existential = dlsym(RTLD_DEFAULT,"swift_getExistentialTypeMetadata");
+    existential_fn *existential = HAO_DLSYM("swift_getExistentialTypeMetadata");
     const void *any_object = existential ? existential(0,NULL,0,NULL) : NULL;   /* ProtocolClassConstraint::Class */
     const void *any = existential ? existential(1,NULL,0,NULL) : NULL;          /* ::Any */
     if (!one || !two || !any_object || !any) return;
@@ -539,10 +540,10 @@ static bool witness_affected(const void *type)
     builder *b = calloc(1,sizeof *b);
     if (!b) return false;
     b->existentials = true;
-    b->kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    b->count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    b->offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    b->field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    b->kind = HAO_DLSYM("swift_getMetadataKind");
+    b->count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    b->offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    b->field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     bool affected = b->kind && b->count && b->offset && b->field && graph(b,type,0) && !b->failed;
     free(b);
     hao_crit_enter(); pthread_mutex_lock(&lock);
@@ -605,7 +606,7 @@ static bool native_frozen(const void *type)
     if (e) return e[1] == 1;
     typedef struct { const char *text; uintptr_t length; } type_name;
     typedef type_name SWIFT name_fn(const void *, bool);
-    name_fn *name = dlsym(RTLD_DEFAULT,"swift_getTypeName");
+    name_fn *name = HAO_DLSYM("swift_getTypeName");
     type_name n = name ? name(type,true) : (type_name){NULL,0};
     char nominal[512];                                 /* the qualified name without generic arguments */
     size_t w = 0;

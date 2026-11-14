@@ -14,6 +14,9 @@ static hao_bundle_open_fn guest_open;
 static hao_bundle_sym_fn guest_sym;
 static hao_bundle_close_fn guest_close;
 static hao_bundle_class_fn guest_class;
+static hao_bundle_sym2_fn guest_sym2;
+static hao_bundle_expand_fn guest_expand;
+static hao_bundle_open2_fn guest_open2;
 static atomic_bool enabled;
 static pthread_key_t error_key;
 static pthread_once_t error_once = PTHREAD_ONCE_INIT;
@@ -37,16 +40,28 @@ hao_real_dlopen_fn hao_identity_bundle_hooks(hao_bundle_open_fn o, hao_bundle_sy
     atomic_store_explicit(&enabled, true, memory_order_release);
     return dlopen; /* references inside this interposing image are the original */
 }
+hao_real_dlopen_fn hao_identity_bundle_hooks2(hao_bundle_open2_fn o, hao_bundle_sym2_fn s, hao_bundle_close_fn c,
+                                              hao_bundle_class_fn i, hao_bundle_expand_fn e)
+{
+    guest_open2 = o; guest_sym2 = s; guest_close = c; guest_class = i; guest_expand = e;
+    atomic_store_explicit(&enabled, true, memory_order_release);
+    return dlopen;
+}
 static void *bundle_dlopen(const char *path, int mode)
 {
     if (!atomic_load_explicit(&enabled, memory_order_acquire)) return dlopen(path, mode);
+    /* dyld expands @rpath, @loader_path and @executable_path against its caller, which is this image: for a
+     * guest caller the runtime expands them against the guest image that called (dyld's rules) */
+    char expanded[1024];
+    if (path && path[0] == '@' && guest_expand && guest_expand(path, __builtin_return_address(0), expanded, sizeof expanded) > 0)
+        path = expanded;
     set_error(NULL);
     void *h = dlopen(path, mode);
     if (h || !path) return h;
     const char *native = dlerror();
     char original[1024], why[1024] = "";
     snprintf(original, sizeof original, "%s", native ? native : "dlopen failed");
-    h = guest_open(path, mode, why, sizeof why);
+    h = guest_open2 ? guest_open2(path, mode, __builtin_return_address(0), why, sizeof why) : guest_open(path, mode, why, sizeof why);
     if (!h) set_error(why[0] ? why : original);
     else (void)dlerror();
     return h;
@@ -60,10 +75,11 @@ static void *bundle_dlsym(void *handle, const char *name)
     if (handle == RTLD_DEFAULT) {
         address = dlsym(handle, name);
         if (address) return address;
-        if (guest_sym(handle, name, &address) > 0) { (void)dlerror(); return address; }
+        if ((guest_sym2 ? guest_sym2(handle, name, __builtin_return_address(0), &address)
+                        : guest_sym(handle, name, &address)) > 0) { (void)dlerror(); return address; }
         return NULL; /* preserve native lookup error */
     }
-    int owned = guest_sym(handle, name, &address);
+    int owned = guest_sym2 ? guest_sym2(handle, name, __builtin_return_address(0), &address) : guest_sym(handle, name, &address);
     if (owned < 0) return dlsym(handle, name);
     set_error(owned ? NULL : "dlsym: guest bundle symbol missing or untyped function export unsupported");
     return address;

@@ -3356,9 +3356,49 @@ static struct bundle_handle *bundle_handle(void *handle)
         if (h == handle) return h;
     return NULL;
 }
-static void *native_bundle_open(const char *path, int flags, char *why, size_t n)
+/* The guest image whose code called dlopen/dlsym, when the interposer's return address `ra` is in the bridge's
+ * native-call trampolines (guest code called the function); NULL for a native caller */
+void hao_sysv_call(uint64_t fn, const uint64_t gpr[6], const uint8_t xmm[8][16], const uint64_t *stack, uint64_t nstack, uint64_t out[6]);
+static hao_image *guest_caller_image(const void *ra)
 {
-    if (!path || path[0] != '/' || !hao_is_arm_only_bundle(path)) return NULL;
+    uint64_t a = (uint64_t)(uintptr_t)ra;
+    if (a - (uint64_t)(uintptr_t)hao_native_call >= 0x400 && a - (uint64_t)(uintptr_t)hao_sysv_call >= 0x400) return NULL;
+    hao_thread *t = hao_current_peek();
+    hao_image *im = t ? hao_image_for_code(t->cpu.x[30]) : NULL;
+    return im ? im : hao_main_image;
+}
+struct first_file { char *out; size_t n; bool found; };
+static bool first_file(const char *cand, bool os, void *ctx)
+{
+    (void)os;
+    struct first_file *ff = ctx;
+    if (access(cand, F_OK) != 0) return false;
+    ff->found = (size_t)snprintf(ff->out, ff->n, "%s", cand) < ff->n;
+    return ff->found;
+}
+/* An @rpath, @loader_path or @executable_path name guest code dlopens: the first existing candidate dyld would try
+ * from the calling guest image (its LC_RPATHs, its loaders', the main executable's; set-ID rules included) */
+static int native_bundle_expand(const char *path, const void *ra, char *out, size_t n)
+{
+    hao_image *im = path && path[0] == '@' ? guest_caller_image(ra) : NULL;
+    if (!im) return 0;
+    struct first_file ff = {out, n, false};
+    const char *refused;
+    lock_loads();
+    for_each_candidate(im, path, first_file, &ff, &refused);
+    unlock_loads();
+    return ff.found;
+}
+static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n);
+static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, why, n); }
+/* a guest caller's dlopen may also load an ARM-only dylib as a guest image; a native caller's keeps the bundle rule */
+static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
+{
+    return bundle_open(path, flags, guest_caller_image(ra) != NULL, why, n);
+}
+static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n)
+{
+    if (!path || path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)) return NULL;
     const int supported = RTLD_LAZY | RTLD_NOW | RTLD_LOCAL | RTLD_GLOBAL | RTLD_NOLOAD | RTLD_NODELETE | RTLD_FIRST;
     if (flags & ~supported) { snprintf(why, n, "unsupported guest bundle dlopen flags"); return NULL; }
     char real[PATH_MAX];
@@ -3367,7 +3407,8 @@ static void *native_bundle_open(const char *path, int flags, char *why, size_t n
     hao_image *im = glib_find(real);
     if (!im && !(flags & RTLD_NOLOAD)) {
         intptr_t slot = glib_slot(real, hao_main_image);
-        im = hao_load_bundle_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
+        im = dylib ? hao_load_dlopen_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
+                   : hao_load_bundle_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
         if (!im) { free(glibs[slot].path); glibs[slot].path = NULL; glibs[slot].img = NULL; }
     }
     if (!im) {
@@ -3387,7 +3428,13 @@ static void *native_bundle_open(const char *path, int flags, char *why, size_t n
     unlock_loads();
     return h;
 }
-static int native_bundle_sym(void *handle, const char *name, void **result)
+static int bundle_sym(void *handle, const char *name, bool guest_caller, void **result);
+static int native_bundle_sym(void *handle, const char *name, void **result) { return bundle_sym(handle, name, false, result); }
+static int native_bundle_sym2(void *handle, const char *name, const void *ra, void **result)
+{
+    return bundle_sym(handle, name, guest_caller_image(ra) != NULL, result);
+}
+static int bundle_sym(void *handle, const char *name, bool guest_caller, void **result)
 {
     lock_loads();
     struct bundle_handle *h = bundle_handle(handle);
@@ -3404,9 +3451,10 @@ static int native_bundle_sym(void *handle, const char *name, void **result)
                 if (h->global) found = guest_lookup(h->image, symbol, &address, 0);
         }
     }
-    /* ObjC principal classes use registered method encodings. Untyped C
-     * function exports have no aggregate/result contract and are refused. */
-    if (found && hao_image_for_code(address)) found = false;
+    /* ObjC principal classes use registered method encodings. Untyped C function exports have no
+     * aggregate/result contract for a native caller and are refused there; guest code calls the guest
+     * function itself, so a guest caller gets its address. */
+    if (found && !guest_caller && hao_image_for_code(address)) found = false;
     *result = found ? (void *)(uintptr_t)address : NULL;
     unlock_loads();
     return found;
@@ -3429,6 +3477,11 @@ static const char *native_bundle_class(const void *cls)
 }
 void hao_native_bundles_init(void)
 {
+    hao_bundle_install2_fn install2 = (hao_bundle_install2_fn)dlsym(RTLD_DEFAULT, "hao_identity_bundle_hooks2");
+    if (install2) {
+        native_open = install2(native_bundle_open2, native_bundle_sym2, native_bundle_close, native_bundle_class, native_bundle_expand);
+        return;
+    }
     hao_bundle_install_fn install = (hao_bundle_install_fn)dlsym(RTLD_DEFAULT, "hao_identity_bundle_hooks");
     if (install) native_open = install(native_bundle_open, native_bundle_sym, native_bundle_close, native_bundle_class);
 }

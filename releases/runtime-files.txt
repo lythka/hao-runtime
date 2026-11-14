@@ -10,6 +10,7 @@ docs/architecture.md
 docs/async-contract.md
 docs/compatibility.md
 docs/images/maps-intel.png
+docs/performance.md
 docs/releases.md
 docs/security-model.md
 docs/swift-metadata.md
@@ -21,6 +22,7 @@ include/hao/bridge.h
 include/hao/code.h
 include/hao/codeid.h
 include/hao/cpu.h
+include/hao/dlsym_once.h
 include/hao/gen_stamp.h
 include/hao/gmap.h
 include/hao/identity.h
@@ -395,6 +397,9 @@ tests/guest/datacall.c
 tests/guest/datacall.sh
 tests/guest/datacall_lib.c
 tests/guest/diaglog.c
+tests/guest/dlrpath.c
+tests/guest/dlrpath.sh
+tests/guest/dlrpathlib.c
 tests/guest/dsc.sh
 tests/guest/dsc/ccan.c
 tests/guest/dsc/ccan_stub.c
@@ -453,6 +458,8 @@ tests/guest/hfasret.c
 tests/guest/hfasret.sh
 tests/guest/hfasrethelper.c
 tests/guest/hfasrethelper.h
+tests/guest/hostcode.c
+tests/guest/hostcode.sh
 tests/guest/ident.m
 tests/guest/identhelper.c
 tests/guest/identity.m

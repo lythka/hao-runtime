@@ -25,6 +25,7 @@ guest/dsc	300	par	tests/guest/dsc.sh
 guest/dscswift	300	par	tests/guest/dscswift.sh
 guest/dylibs	300	par	tests/guest/dylibs.sh
 guest/eh	300	par	tests/guest/eh.sh
+guest/dlrpath	300	par	tests/guest/dlrpath.sh
 guest/fenv	300	par	tests/guest/fenv.sh
 guest/fma16	300	par	tests/guest/fma16.sh
 guest/fma32	300	par	tests/guest/fma32.sh
@@ -88,6 +89,7 @@ tools	300	par	tests/tools/run.sh
 tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py
 translate	300	par	tests/translate/run.sh "$B" "$OUT"
 fuzz-smoke	600	par	make -s B="$B" fuzz-smoke
+guest/hostcode	300	par	tests/guest/hostcode.sh
 guest/jitinsns	300	par	tests/guest/jitinsns.sh
 guest/fpscalar	600	par	tests/guest/fpscalar.sh
 aot/fmla-mutations	600	par	tests/aot/fmla_mutations.sh
