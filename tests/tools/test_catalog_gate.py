@@ -21,7 +21,7 @@ UI_TEXT = (0x30000, 0x1000)             # another image's __TEXT (compiler-emitt
 SQMN, SQ_PATTERN, SQ_VWT = 0x10100, 0x10200, 0x40000
 POD_WV = 0x40400                        # an exported libswiftCore table ($sBi64_WV)
 DATA, FLAT = 0x50000, 0x50100
-KEYS = 0x51000
+KEYS, TABLE = 0x51000, 0x52000
 
 
 class Memory:
@@ -46,7 +46,23 @@ class Memory:
 def generic(slot): return CORE_TEXT[0] + 0x1000 + 16 * slot
 
 
-def build(optional_slot2=None, contract_cache=UUID, anchor=b'\x90' * 16):
+def pointer_table(mem, at, rows, cap=8):
+    """a dyld Swift pointer hash table at AT (offsets from cache base 0) holding ROWS [(key words, metadata)]"""
+    rounded = 4
+    mem.put(at, struct.pack('<6I', cap, len(rows), 64 - (cap.bit_length() - 1), 0, 0xffffffff, rounded))
+    mem.put(at + 24, bytes(1056 - 24 + rounded + cap))
+    values = 1056 + rounded + 5 * cap
+    keys = values + 16 * len(rows)
+    offsets = [0xffffffff] * cap
+    for i, (key, m) in enumerate(rows):
+        offsets[i] = values + 16 * i
+        mem.put(at + values + 16 * i, struct.pack('<IIQ', keys, len(key), m))
+        mem.put(at + keys, struct.pack('<%dQ' % len(key), *key))
+        keys += 8 * len(key)
+    mem.put(at + 1056 + rounded + cap, struct.pack('<%dI' % cap, *offsets))
+
+
+def build(optional_slot2=None, contract_cache=UUID, anchor=b'\x90' * 16, table_only=False, flat_only=False):
     mem = Memory()
     # Optional's descriptor: generic enum; +32 relative pointer to its pattern; pattern +12 to its value witnesses.
     mem.u32(SQMN, 0x800f2)
@@ -83,14 +99,21 @@ def build(optional_slot2=None, contract_cache=UUID, anchor=b'\x90' * 16):
     mem.u32(DATA, 1)
     mem.u32(DATA + 4, 5)
     mem.q(DATA + 8, 0)
-    mem.q(DATA + 24, FLAT)
-    mem.q(FLAT, len(entries))
+    # (libswiftCore searches the +24 table; the flat list names the keys). table_only: entry 2 (String?) is missing
+    # from the flat list, as in a rebuilt cache that adds table rows only; flat_only: missing from the table.
+    mem.q(DATA + 24, TABLE)
+    flat = [e for i, e in enumerate(entries) if not (table_only and i == 1)]
+    mem.q(FLAT, len(flat))
     exports_pre = {'__swift_prespecializationsData': DATA, '__swift_prespecializedPointerKeyedMetadataMap': FLAT}
-    for i, (name, m) in enumerate(entries):
+    words = lambda i: (0x80000 + 0x10 * i, 0x81000)
+    for i, (name, m) in enumerate(flat):
         key = KEYS + 32 * i
         exports_pre['__metadataMapKey_' + name] = key
+        mem.q(key, 2)
+        for j, w in enumerate(words(entries.index((name, m)))): mem.q(key + 8 + 8 * j, w)
         mem.q(FLAT + 8 + 16 * i, key)
         mem.q(FLAT + 16 + 16 * i, m)
+    pointer_table(mem, TABLE, [(words(i), m) for i, (_, m) in enumerate(entries) if not (flat_only and i == 1)])
     # a value contract's anchor in the Foundation image
     foundation = 0x70000
     mem.put(foundation, bytes(0x1000))
@@ -128,6 +151,28 @@ class CatalogGate(unittest.TestCase):
         v, _ = build()
         names = [n for n, _ in g.catalog_entries(v)]
         self.assertEqual(names, ['$sSiSg', '$sSSSg', '$s4Test3PODVySiG', '$s4Test4ViewVySiG', '$s4Test5ModelCySiG'])
+
+    def test_catalog_sources(self):
+        v, _ = build()
+        g.catalog_entries(v)
+        self.assertEqual(v.catalog_sources, {'string-keyed': 0, 'pointer-keyed table': 5, 'flat list': 5,
+                                             'table only': 0, 'flat only': 0, 'same key, other metadata': 0})
+
+    def test_table_only_entry_is_checked(self):
+        v, _ = build(optional_slot2=UI_TEXT[0] + 0x80, table_only=True)
+        entries = g.catalog_entries(v)
+        self.assertEqual(v.catalog_sources['table only'], 1)
+        self.assertIn((None, 0x60110), entries)
+        ok, _, bad = g.gate_optional(v, entries)
+        self.assertFalse(ok)
+        self.assertEqual(list(bad), ['0x60110'])
+
+    def test_flat_only_entry_is_checked(self):
+        v, _ = build(optional_slot2=UI_TEXT[0] + 0x80, flat_only=True)
+        entries = g.catalog_entries(v)
+        self.assertEqual(v.catalog_sources['flat only'], 1)
+        ok, _, bad = g.gate_optional(v, entries)
+        self.assertEqual(list(bad), ['$sSSSg'])
 
     def test_generic_optional_witnesses_pass(self):
         v, _ = build()
@@ -182,6 +227,36 @@ class CatalogGate(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn('changed under the same UUID', '\n'.join(lines))
 
+
+    def rebuilt_base(self, move=0x100000, export_shift=0):
+        """the base cache as the family looked before a rebuild: another cache UUID, other code bytes, Foundation
+        at another address with its export EXPORT_SHIFT bytes away from where the rebuilt one has it"""
+        base, _ = build(anchor=b'\x91' * 16)
+        base.uuid = '2' * 32
+        f = '/System/Library/Frameworks/Foundation.framework/Foundation'
+        a, ex, segs = base.images.entries[f]
+        base.images.entries[f] = (a + move, {'_NSFoo': a + move + 0x100 + export_shift},
+                                  [(n, sa + move, ss) for n, sa, ss in segs])
+        return base
+
+    def rebuilt(self):
+        v, contract = build()
+        f = '/System/Library/Frameworks/Foundation.framework/Foundation'
+        a, _, segs = v.images.entries[f]
+        v.images.entries[f] = (a, {'_NSFoo': a + 0x100}, segs)
+        return v, contract
+
+    def test_rebuilt_family_relinked_image_passes(self):
+        v, contract = self.rebuilt()
+        ok, lines = g.gate_bound_inputs(v, *self.inputs(contract), base=self.rebuilt_base())
+        self.assertTrue(ok, lines)
+        self.assertIn('rebuilt family: 1 images checked were placed again', '\n'.join(lines))
+
+    def test_rebuilt_family_moved_export_fails(self):
+        v, contract = self.rebuilt()
+        ok, lines = g.gate_bound_inputs(v, *self.inputs(contract), base=self.rebuilt_base(export_shift=0x10))
+        self.assertFalse(ok)
+        self.assertIn('changed under the same UUID', '\n'.join(lines))
 
     def accepted(self, before, after, address=0x70100):
         r = self.dir / 'recipe.json'
