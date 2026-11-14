@@ -28,6 +28,10 @@ void hao_swift_witness_result(struct hao_thread *, unsigned mark, uint64_t indir
  * function's result): its outer nils in the guest's encoding where guest code
  * reads them inline. True if a word changed. */
 bool hao_swift_native_result_to_guest(const void *type, void *value);
+/* VALUE of TYPE, which guest code made and lends to a native function for one
+ * call: NULL to lend it as it is, else a copy with its nils in the native
+ * encoding to lend instead (free it after the call). */
+void *hao_swift_borrow_to_native(const void *type, const void *value);
 void hao_swift_value_fork_child(void);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif

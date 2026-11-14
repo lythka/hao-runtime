@@ -481,6 +481,13 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async);
 bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *param, bool *throwing);
 uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **type);
 void hao_swift_genres_result(const void *type, uint64_t result);
+/* Native View modifiers (swiftcc.c): a native protocol extension method of
+ * SwiftUI.View lends self (x20) to native witnesses with Self's nils in the
+ * native encoding. bind: at binding (true: the plan gets HAO_PLAN_VIEWSELF);
+ * call: at each guest call, NULL or a converted copy of self to pass in x20
+ * for the call (then freed). */
+bool hao_swift_viewself_bind(uint64_t native, const char *sym);
+void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
 /* interpose.c: a page the guest mapped or made executable itself (mmap,
  * mprotect): arm64 code generated at run time, which hao does not run */
 bool hao_guest_exec_mapped(uint64_t a);

@@ -118,6 +118,7 @@ enum {
                                        * name): async function records in x0-x7 get hao's copy (swiftmeta.c) */
 #define HAO_PLAN_PROVEN 0x10          /* unit type justified by the bounded code prover */
 #define HAO_PLAN_GENRESULT 0x40       /* a native generic result G? (swiftcc.c hao_swift_genres_bind) */
+#define HAO_PLAN_VIEWSELF 0x80        /* a native SwiftUI.View modifier: self lent converted (swiftcc.c hao_swift_viewself_bind) */
 #define HAO_PLAN_PROBE  0x20          /* an untyped bare address: later calls may still find its ObjC type
                                        * (a receiver or block the first call did not carry) */
 /* resmask (for W6: native function pointers and blocks the guest receives) */

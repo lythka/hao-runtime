@@ -1074,3 +1074,127 @@ uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **t
 }
 
 void hao_swift_genres_result(const void *type, uint64_t result) { genres_convert(type, result, "sync"); }
+
+/*
+ * Native View modifiers (hao_swift_viewself_*).
+ *
+ * A native protocol extension method of SwiftUI.View ("(extension in M):
+ * SwiftUI.View.sheet(isPresented:onDismiss:content:)", and every other
+ * modifier) takes self indirectly in x20, and Self's metadata and its
+ * Self: View witness table among the generic arguments after the formal
+ * ones. It copies self with Self's native value witnesses. Guest code
+ * specialized for Self wrote self inline, so a nil whose inhabitants come
+ * from a pointer word is in arm64's encoding: the outer nil of `AnyView??`
+ * (an `if` around an `AnyView?` in a ViewBuilder) is inhabitant 1, the
+ * value 1, where x86_64's witnesses expect 2 (the low bit is the ObjC
+ * tagged-pointer bit there). The copy takes 1 for a live AnyView and
+ * swift_retain faults at 0x8 (the Bluetooth Settings pane on 26B131:
+ * sheet(isPresented:) on an HStack<TupleView<(AnyView??, Spacer)>>).
+ *
+ * A binding qualifies by its mangled prefix and demangled name. Self is
+ * found at the first call: the argument word (x0-x7, then the first eight
+ * stack words) holding struct, enum or Optional metadata of a native type,
+ * followed by a witness table whose conformance descriptor is SwiftUI.View's
+ * conformance of that type. The positions are the signature's, so they hold
+ * for every call. self is then lent as a converted copy
+ * (swiftvalue.c hao_swift_borrow_to_native): the guest's value is not written.
+ */
+typedef struct viewself { int8_t self_at, wt_at; } viewself;   /* argument word index; -2 not found yet, -1 none */
+static hao_gmap viewself_fns = HAO_GMAP_INIT(2, 1, 4, 16);     /* native -> viewself * */
+static uint64_t view_protocol;                                 /* SwiftUI.View's protocol descriptor */
+
+bool hao_swift_viewself_bind(uint64_t native, const char *sym)
+{
+    if (!sym || strncmp(sym, "_$s7SwiftUI4ViewP", 17) || hao_opt.no_swift_values) return false;
+    if (hao_gmap_get1(&viewself_fns, native)) return true;
+    demangle_fn dm = demangler();
+    if (!dm) return false;
+    char buf[2048];
+    size_t len = strlen(sym), dl = sizeof buf;
+    if (!dm(sym + 1, len - 1, buf, &dl, 0)) return false;
+    buf[dl < sizeof buf ? dl : sizeof buf - 1] = 0;
+    const char *close = strncmp(buf, "(extension in ", 14) ? NULL : strchr(buf, ')');
+    if (!close || strncmp(close, "):SwiftUI.View.", 15)) return false;   /* an instance member: self is a value */
+    if (!view_protocol) {
+        uint64_t p = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT, "$s7SwiftUI4ViewMp");
+        if (!p) return false;
+        __atomic_store_n(&view_protocol, p, __ATOMIC_RELEASE);
+    }
+    viewself *v = malloc(sizeof *v);
+    if (!v) return false;
+    v->self_at = v->wt_at = -2;
+    bool fresh;
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    uint64_t *s = hao_gmap_claim1(&viewself_fns, native, &fresh);
+    if (s && fresh) { s[1] = (uint64_t)(uintptr_t)v; hao_gmap_publish1(&viewself_fns, s, native); v = NULL; }
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    free(v);
+    if (hao_opt.bridge_check) fprintf(HAO_DIAG, "hao: native View modifier %s: %s\n", sym, buf);
+    return s != NULL;
+}
+
+/* M: metadata of a native struct, enum or Optional; *desc its nominal type descriptor */
+static bool viewself_meta(uint64_t m, uint64_t *desc)
+{
+    uint64_t kind;
+    if (!m || (m & 7) || !genres_read(m, &kind, 8) || (kind != 0x200 && kind != 0x201 && kind != 0x202)) return false;
+    return genres_read(m + 8, desc, 8) && *desc && !(*desc & 3) && !hao_image_for_addr(*desc);
+}
+
+/* WT: a witness table of the conformance to SwiftUI.View of the type DESC describes */
+static bool viewself_conforms(uint64_t wt, uint64_t desc)
+{
+    uint64_t cd, proto, tref;
+    int32_t f[4];
+    if (!wt || (wt & 7) || !genres_read(wt, &cd, 8) || !cd || (cd & 3) || !genres_read(cd, f, sizeof f)) return false;
+    proto = cd + (uint64_t)(int64_t)(f[0] & ~1);                 /* RelativeContextPointer: bit 0 indirect */
+    if ((f[0] & 1) && !genres_read(proto, &proto, 8)) return false;
+    if (proto != __atomic_load_n(&view_protocol, __ATOMIC_ACQUIRE)) return false;
+    tref = cd + 4 + (uint64_t)(int64_t)f[1];
+    switch (((uint32_t)f[3] >> 3) & 7) {                         /* TypeReferenceKind */
+    case 0: break;                                               /* DirectTypeDescriptor */
+    case 1: if (!genres_read(tref, &tref, 8)) return false; break;   /* IndirectTypeDescriptor */
+    default: return false;
+    }
+    return tref == desc;
+}
+
+static uint64_t viewself_word(const hao_cpu *c, int k)
+{
+    uint64_t w = 0;
+    if (k < 8) return c->x[k];
+    return genres_read(c->x[31] + 8 * (uint64_t)(k - 8), &w, 8) ? w : 0;
+}
+
+/* A guest call of NATIVE with the guest's registers: NULL, or a converted copy
+ * of self to pass in x20 instead (free it after the call) */
+void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native)
+{
+    const uint64_t *e = hao_gmap_get1(&viewself_fns, native);
+    if (!e || !c->x[20] || (c->x[20] & 7)) return NULL;
+    viewself *v = (viewself *)(uintptr_t)e[1];
+    int at = __atomic_load_n(&v->self_at, __ATOMIC_ACQUIRE);
+    if (at == -1) return NULL;
+    uint64_t m = 0, desc;
+    if (at == -2) {
+        int found = -1, wt = -1;
+        for (int i = 0; i < 16 && found < 0; i++) {
+            m = viewself_word(c, i);
+            if (!viewself_meta(m, &desc)) continue;
+            for (int j = i + 1; j < 16 && found < 0; j++)
+                if (viewself_conforms(viewself_word(c, j), desc)) { found = i; wt = j; }
+        }
+        v->wt_at = (int8_t)wt;
+        __atomic_store_n(&v->self_at, (int8_t)found, __ATOMIC_RELEASE);
+        if (hao_opt.bridge_check)
+            fprintf(HAO_DIAG, "hao: native View modifier %#llx: Self metadata %s%d, Self: View at %d\n",
+                    (unsigned long long)native, found < 0 ? "not found " : "word ", found, wt);
+        if (found < 0) return NULL;
+        at = found;
+    }
+    m = viewself_word(c, at);
+    if (!viewself_meta(m, &desc)) return NULL;
+    return hao_swift_borrow_to_native((const void *)(uintptr_t)m, (const void *)(uintptr_t)c->x[20]);
+}

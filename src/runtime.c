@@ -431,7 +431,12 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
     /* async function values for a native Swift function's async parameters (swiftmeta.c) */
     if (p && (p->flags & HAO_PLAN_ASYNCARG)) hao_swiftmeta_async_args(c);
     if (kind == HAO_IF_KIND_STACKPACK) { native_call_stackpack(c, pc, p); return; }
+    /* a native View modifier borrows self (x20): a copy with native nils (swiftcc.c) */
+    void *lent = p && (p->flags & HAO_PLAN_VIEWSELF) ? hao_swift_viewself_call(c, p->native) : NULL;
+    uint64_t self = c->x[20];
+    if (lent) c->x[20] = (uint64_t)(uintptr_t)lent;
     hao_native_call(pc, c, 16);
+    if (lent) { c->x[20] = self; free(lent); }
     if (genres_at) hao_swift_genres_result(genres_type, genres_at);
     if (optdata && optdata[0] == 'R' && c->x[0] == 0 && c->x[1] == HAO_OPTDATA_NIL_X86) c->x[1] = HAO_OPTDATA_NIL_ARM;
     if (kind && kind != 'A') c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
