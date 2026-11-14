@@ -704,6 +704,7 @@ tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
 tests/tools/test_codesig.py
+tests/tools/test_catalog_gate.py
 tests/tools/test_contract.py
 tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
@@ -720,6 +721,7 @@ tools/hao-image-payload
 tools/hao-install.py
 tools/hao-trust-list
 tools/hao.entitlements
+tools/hao_catalog_gate.py
 tools/hao_codesig.py
 tools/hao_fat.py
 tools/hao_ifunit.py
