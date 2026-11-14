@@ -67,6 +67,9 @@ Native code calling back into the guest (blocks, function pointers,
 Objective-C methods, Swift witnesses and async continuations) enters through
 generated thunks, or by faulting on the non-executable guest page; both paths
 convert the arguments the same way.
+How Swift metadata, witness tables and conformances work across this
+boundary, and what a metadata request costs, is in
+[Swift metadata](swift-metadata.md).
 
 The command-line launcher and embedded stubs share `libhao`. Packaging tools
 validate Mach-O identity, interface units and code signatures; they do not
