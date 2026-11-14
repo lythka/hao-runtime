@@ -45,6 +45,7 @@ guest/nojit	300	par	tests/guest/nojit.sh
 guest/objcimp	300	par	tests/guest/objcimp.sh
 guest/objcva	300	par	tests/guest/objcva.sh
 guest/optwitness	300	par	tests/guest/optwitness.sh
+guest/overlaynil	300	par	tests/guest/overlaynil.sh
 guest/oslog	600	par	tests/guest/oslog.sh
 guest/signals	600	par	tests/guest/signals.sh
 guest/sret-forward	300	par	tests/guest/sret-forward.sh

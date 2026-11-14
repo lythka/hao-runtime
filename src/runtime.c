@@ -935,12 +935,14 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
         hao_swift_result_prepare(context, arguments, f->target, &values);
     }
     uint64_t indirect = c->x[8];
+    unsigned made = t->swift_made_n;
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
     c->native_pop = 0;
     t->callbacks++;
     hao_run(t, &saved);
     hao_swift_objects_result(t, f->target, indirect);
+    hao_swift_witness_result(t, made, indirect);
     hao_swift_value_end(t, &values);
     for (unsigned k = s->nargs; k < s->nargs + s->nrets; k++) {
         const hao_swift_move *m = &s->moves[k];
@@ -1013,9 +1015,11 @@ uint64_t hao_callback(hao_cb_frame *f)
     c->pc = f->target;
     c->native_pop = 0;       /* per activation; nested callbacks restore it */
     unsigned objc_enum_result = hao_objc_enum_args(c, f->target, true);
+    unsigned made = t->swift_made_n;
     hao_run(t, &saved);
     hao_objc_enum_result(c, objc_enum_result);
     hao_swift_objects_result(t, f->target, data ? r : 0);
+    hao_swift_witness_result(t, made, data ? r : 0);
     for (int k = 0; k < 4; k++) { f->gpr[k] = c->x[k]; memcpy(f->xmm[k], &c->v[k], 16); }
     f->swift[0] = c->x[21];
     const char *why;
