@@ -20,8 +20,8 @@ dyld.
 Guest handles support data and class lookup, `RTLD_FIRST`, and local and
 global data visibility. Native symbol definitions keep precedence. Untyped C
 function exports are refused: a `dlsym` name alone does not describe an
-aggregate or callback ABI. Wrong-architecture dylibs are not covered by this
-fallback. Guest images stay resident after close, because registered classes
+aggregate or callback ABI. An ARM-only dylib (a framework's executable) falls
+back the same way. Guest images stay resident after close, because registered classes
 and escaping callbacks can still reference them.
 
 The test compares native ARM execution with JIT, interpreter and verified AOT
