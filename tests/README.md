@@ -79,7 +79,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 
 | Entry | Expected | Time | Needs / skip reason |
 |---|---|---|---|
-| guest/aggspi6 | PASS | 3 | |
+| guest/aggspi6 | PASS | 3 | `node-query`: a 24-byte client context whose retain/release (guest functions) the native callee calls; crashes without its `src/aggspi_gen.inc` row |
 | guest/atoken | PASS | 1 | |
 | guest/bitfields | PASS | 2 | |
 | guest/blocks2 | PASS | 2 | |
