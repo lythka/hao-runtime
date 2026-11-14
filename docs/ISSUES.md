@@ -1,5 +1,48 @@
 # Runtime issues and measured scope
 
+## dlopen of @rpath, @loader_path and @executable_path names from guest code
+
+Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.
+dyld expands `@rpath`, `@loader_path` and `@executable_path` against the
+image that called it. That image was `libhao_identity`, so the names
+resolved in `/usr/lib/hao`. Xcode 27.2 aborts at launch on this:
+`dlopen(@rpath/Frameworks/libIDEApplicationLoader.dylib)` tried
+`/usr/lib/hao/Frameworks/...`. Two more steps were missing:
+- a guest dlopen of an ARM-only `MH_DYLIB` failed, because the guest
+  fallback after native dyld accepted only `MH_BUNDLE`;
+- `dlsym` refused any guest function's address, also to guest code, which
+  calls the function itself.
+
+Now:
+- The interposers pass their return address to the runtime
+  (`hao_identity_bundle_hooks2`). A call from the bridge's native-call
+  trampolines is a guest caller.
+- For a guest caller, such a name is expanded with the dependency
+  resolver (`for_each_candidate`: the calling image's `LC_RPATH`s, its
+  loaders' and the main executable's, and the set-ID restrictions). dyld
+  then opens the first existing file by its absolute path, so a universal
+  library still loads natively.
+- When dyld cannot open the file, a guest caller's ARM-only bundle or dylib
+  loads as a guest image, through the loader dependencies use. A native
+  caller's fallback stays limited to ARM-only bundles, as before
+  (`guest/native-bundle` checks that a native caller's ARM-only dylib is
+  still refused).
+- `dlsym` returns a guest function's address to a guest caller; native
+  callers are still refused one.
+- A runtime with an older `libhao_identity` keeps the previous behaviour.
+
+`guest/dlrpath` builds an app bundle (`Test.app/Contents/MacOS`,
+`LC_RPATH @executable_path/../Frameworks`). Its program opens an ARM-only
+library by `@rpath` and again by `@executable_path`; that library opens its
+sibling by `@loader_path`; the program also opens a universal library by
+`@rpath` and a missing name. JIT, `--interp` and AOT print what native arm64
+prints. Before the change the `@rpath` and `@loader_path` opens failed with
+dyld's `/usr/lib/hao/...` candidates.
+
+Limits: native code that dlopens an `@`-name keeps dyld's own expansion
+(against that native caller). A guest dylib loaded this way stays loaded, as
+dependencies do.
+
 ## The host-code check of a first-call bind reads the image, not the kernel
 
 A native address that no import bound (a pointer from dlsym, a native

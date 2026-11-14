@@ -216,6 +216,8 @@ hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, 
 /* Native bundle fallback: recheck ARM-only MH_BUNDLE on the descriptor used
  * for signature validation and mapping, not only the preflight pathname. */
 bool hao_is_arm_only_bundle(const char *path);
+bool hao_is_arm_only_loadable(const char *path, bool dylib);   /* an ARM-only MH_BUNDLE, or with dylib also an MH_DYLIB */
+hao_image *hao_load_dlopen_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen);
 hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                               char *err, size_t errlen);
 /* The generation of the native-target caches (runtime.c run_loop): what a guest branch to a

@@ -396,6 +396,9 @@ tests/guest/datacall.c
 tests/guest/datacall.sh
 tests/guest/datacall_lib.c
 tests/guest/diaglog.c
+tests/guest/dlrpath.c
+tests/guest/dlrpath.sh
+tests/guest/dlrpathlib.c
 tests/guest/dsc.sh
 tests/guest/dsc/ccan.c
 tests/guest/dsc/ccan_stub.c
