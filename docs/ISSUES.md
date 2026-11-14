@@ -262,6 +262,52 @@ Limits:
   witness the guest calls, sees the guest's encoding, as for the entries
   below.
 
+## Guest-made views lent to native View modifiers
+
+A native protocol extension method of SwiftUI.View (`sheet`, `padding`,
+every modifier) takes self indirectly in x20 and copies it with Self's
+native value witnesses. Guest code specialized for Self built that value
+inline, so a nil whose inhabitants come from a pointer word is in arm64's
+encoding: `HStack { if show { acc }; Spacer() }` with `acc: AnyView?` holds
+`AnyView??`, whose outer nil is 1 on arm64 and 2 on x86_64. The Bluetooth
+Settings pane on 26B131 called `sheet(isPresented:onDismiss:content:)` on
+such an HStack; the copy took 1 for a live AnyView and `swift_retain`
+faulted at 0x8. Behind it, the guest's own destroy of the temporary went
+through the view type's native destroy witness and `swift_release(0x1)`
+faulted.
+
+Such a binding is recognized by its mangled prefix (`$s7SwiftUI4ViewP`) and
+demangled name (`(extension in M):SwiftUI.View.`; `src/swiftcc.c`
+`hao_swift_viewself_*`). At its first call hao finds Self's metadata among
+x0-x7 and the first eight stack words: struct, enum or Optional metadata
+of a native type, followed by a witness table whose conformance descriptor
+is SwiftUI.View's for that type (the positions are the signature's, so they
+hold for every call). self is then lent as a copy whose nils native
+witnesses read are in the native encoding (`hao_swift_borrow_to_native`,
+the walk of a value handed to a native witness); the guest's value is not
+written. Self's native value witnesses (slots 0-5) join the guest-witness
+interception, so the guest's later copies and destroys of it convert like
+an Optional's. A nil inside a field of a guest-defined struct or enum
+(reached through struct and tuple fields) keeps the guest's bits in every
+walk of a value handed to native witnesses: that field's witnesses are
+guest code. An Optional around a guest type is read by its own native
+witnesses and is converted as before (`tests/guest/overlaynil`'s `Leaf?`).
+
+`tests/guest/viewselfnil.swift`: views with `AnyView??` built inline and
+passed to `sheet`, nested in a VStack conditional, and a guest View struct
+holding the field. On f30d604 JIT, `--interp` and AOT crash in
+`swift_retain`; after the change all lines equal native arm64.
+
+Limits:
+- Guest-made values passed to other native generic functions (not View
+  protocol extension methods) are not converted.
+- Guest calls of libswiftCore's exported layout-string witnesses
+  (`swift_cvw_initWithCopy`, `swift_cvw_destroy`, ...) are not intercepted.
+- An Optional around a guest struct whose own fields hold such a nil, when
+  present, has those fields converted although guest witnesses read them.
+- The copy needs a bitwise-takable Self of at most 16-byte alignment;
+  others are lent as the guest wrote them.
+
 ## Optional witness nils returned to native code as a callback's result
 
 Guest calls of libswiftCore's Optional witnesses (`src/swiftvalue.c`
