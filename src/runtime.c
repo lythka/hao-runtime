@@ -77,6 +77,31 @@ static size_t thread_state_size(void) { size_t page = (size_t)getpagesize(); ret
 
 static void thread_key_dtor(void *v) { pthread_setspecific(thread_key, v); }
 
+/* Saved guest states of nested native-to-guest calls (hao_thread.cpu_saves).
+ * Each level of guest -> native -> guest recursion (a chain of objects whose
+ * deinits release the next, a native sort whose comparator sorts) costs
+ * native stack for hao's frames; the 1 KB copy of the guest state was the
+ * largest part, so a 512 KB dispatch worker ran out at ~125 levels where
+ * native arm64 needs ~200 bytes a level. The first CPU_SAVES_ON_STACK
+ * levels keep the copy on the stack (most threads never nest deeper, so
+ * they never map anything); deeper ones take a slot here. A mapping, not
+ * malloc: callbacks also run in signal handlers. */
+#define CPU_SAVES 4096
+#define CPU_SAVES_ON_STACK 4
+static hao_cpu *cpu_save_push(hao_thread *t, unsigned *mark)
+{
+    unsigned n = t->cpu_saves_n;
+    if (t->depth < CPU_SAVES_ON_STACK || n >= CPU_SAVES) return NULL;
+    if (!t->cpu_saves) {
+        void *m = mmap(NULL, CPU_SAVES * sizeof(hao_cpu), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED) return NULL;
+        t->cpu_saves = m;
+    }
+    *mark = n;
+    t->cpu_saves_n = n + 1;
+    return &t->cpu_saves[n];
+}
+
 static pthread_introspection_hook_t prev_hook;
 
 static void thread_hook(unsigned int ev, pthread_t th, void *addr, size_t size)
@@ -88,6 +113,7 @@ static void thread_hook(unsigned int ev, pthread_t th, void *addr, size_t size)
     pthread_setspecific(thread_key, NULL);
     __atomic_fetch_sub(&hao_threads_live, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&hao_threads_freed, 1, __ATOMIC_RELAXED);
+    if (t->cpu_saves) munmap(t->cpu_saves, CPU_SAVES * sizeof(hao_cpu));
     /* Safe with guest frames still on this stack (pthread_exit from guest
      * code): Darwin's pthread_exit never returns into them. The mapping
      * holds t itself, so nothing reads t after this. */
@@ -323,7 +349,7 @@ static void run_trap(hao_thread *t, uint64_t pc)
 
 /* -------------------------------------------------------- dispatch */
 
-static void guest_fault(hao_thread *t, int st)
+__attribute__((noinline, cold)) static void guest_fault(hao_thread *t, int st)
 {
     hao_cpu *c = &t->cpu;
     const char *what = st == HAO_EXIT_UNDEF ? "unimplemented/undefined instruction" :
@@ -348,6 +374,30 @@ bool hao_no_guest_code;
 
 /* Guest -> native call of `pc` with the guest's registers and stack, as its
  * plan says (hao/bridge.h; NULL: UNKNOWN). */
+/* noinline: its 320 bytes of arrays would otherwise be in every native call's frame, also across the
+ * native callee's callbacks into guest code */
+__attribute__((noinline)) static void native_call_stackpack(hao_cpu *c, uint64_t pc, const hao_plan *p)
+{
+    /* Swift packed stack arguments (interface-unit record kind K): Apple arm64 put the arguments
+     * past x7 at their natural size, SysV wants one 8-byte slot each. hao_native_call copies
+     * guest stack words to slots 2 onward, so build those words below the guest's frame (the
+     * arguments zero-extended, the rest 0) and let it copy them from there. Native code
+     * calling back into guest code runs below them (hao_callback's red-zone margin); the
+     * guest sp is restored after the call. */
+    uint8_t off[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
+    int n = hao_ifunit_stackpack(p->enc, off, w);
+    uint64_t sp = c->x[31], words[HAO_IF_MAX_PACK] = {0};
+    for (int i = 0; i < n; i++) {
+        const uint8_t *a = (const uint8_t *)(uintptr_t)(sp + off[i]);
+        words[i] = w[i] == 1 ? *a : w[i] == 2 ? *(const uint16_t *)a : w[i] == 4 ? *(const uint32_t *)a : *(const uint64_t *)a;
+    }
+    uint64_t nsp = (sp - 256 - sizeof words) & ~15ull;
+    memcpy((void *)(uintptr_t)nsp, words, sizeof words);
+    c->x[31] = nsp;
+    hao_native_call(pc, c, (uint64_t)n);
+    c->x[31] = sp;
+}
+
 static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
 {
     char kind = p ? p->kind : 0;
@@ -377,27 +427,7 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
     }
     /* async function values for a native Swift function's async parameters (swiftmeta.c) */
     if (p && (p->flags & HAO_PLAN_ASYNCARG)) hao_swiftmeta_async_args(c);
-    if (kind == HAO_IF_KIND_STACKPACK) {
-        /* Swift packed stack arguments (interface-unit record kind K): Apple arm64 put the arguments
-         * past x7 at their natural size, SysV wants one 8-byte slot each. hao_native_call copies
-         * guest stack words to slots 2 onward, so build those words below the guest's frame (the
-         * arguments zero-extended, the rest 0) and let it copy them from there. Native code
-         * calling back into guest code runs below them (hao_callback's red-zone margin); the
-         * guest sp is restored after the call. */
-        uint8_t off[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
-        int n = hao_ifunit_stackpack(p->enc, off, w);
-        uint64_t sp = c->x[31], words[HAO_IF_MAX_PACK] = {0};
-        for (int i = 0; i < n; i++) {
-            const uint8_t *a = (const uint8_t *)(uintptr_t)(sp + off[i]);
-            words[i] = w[i] == 1 ? *a : w[i] == 2 ? *(const uint16_t *)a : w[i] == 4 ? *(const uint32_t *)a : *(const uint64_t *)a;
-        }
-        uint64_t nsp = (sp - 256 - sizeof words) & ~15ull;
-        memcpy((void *)(uintptr_t)nsp, words, sizeof words);
-        c->x[31] = nsp;
-        hao_native_call(pc, c, (uint64_t)n);
-        c->x[31] = sp;
-        return;
-    }
+    if (kind == HAO_IF_KIND_STACKPACK) { native_call_stackpack(c, pc, p); return; }
     hao_native_call(pc, c, 16);
     if (optdata && optdata[0] == 'R' && c->x[0] == 0 && c->x[1] == HAO_OPTDATA_NIL_X86) c->x[1] = HAO_OPTDATA_NIL_ARM;
     if (kind && kind != 'A') c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
@@ -614,6 +644,7 @@ static void run_loop(void *arg)
         chain_from = 0;
         if (native) {
             if (hao_eh_guard(native_step, seg, HAO_GUARD_NATIVE)) hao_eh_landed(t);
+            t->cpu_saves_n = seg->cpu_saves_at_entry;   /* also when an exception skipped a callback's pop */
             if (t->eh_resume) hao_eh_resume_native(t);
             if (t->seg != seg) {
                 /* a native longjmp skipped inner segments: their saved state is gone */
@@ -663,12 +694,14 @@ void hao_run(hao_thread *t, const hao_cpu *outer)
     seg.fault_at_entry = t->in_fault_handler;
     seg.nest_at_entry = t->sig_nest;
     seg.swift_values_at_entry = t->swift_values;
+    seg.cpu_saves_at_entry = t->cpu_saves_n;
     t->seg = &seg;
     /* Re-entry point for a guest longjmp from an inner segment
      * (hao_longjmp_segment) and for a guest signal handler that moved pc
      * while this segment ran guest code (signals.c); cpu.pc is set. */
     if (_setjmp(seg.jb)) {
         t->swift_values = seg.swift_values_at_entry;
+        t->cpu_saves_n = seg.cpu_saves_at_entry;   /* saves of the skipped native-to-guest calls */
         /* frames above this hao_run are gone, among them an interrupted cache store at this depth or deeper */
         hao_ncache_abandon(t, seg.depth);
     }
@@ -852,7 +885,8 @@ static void pop_disagrees(const hao_cb_frame *f, int64_t sig, const char *swhy, 
     if (n > 0) hao_diag_write(b, (size_t)n < sizeof b ? (size_t)n : sizeof b - 1);
 }
 
-static uint64_t callee_pop(const hao_cb_frame *f, const hao_cpu *outer, int64_t measured, const char **why)
+/* noinline: its diagnostics' buffer would otherwise sit in callback_plain's frame for the whole guest call */
+__attribute__((noinline)) static uint64_t callee_pop(const hao_cb_frame *f, const hao_cpu *outer, int64_t measured, const char **why)
 {
     const char *m = hao_opt.swift_pop;
     int mode = !strcmp(m, "signature") ? 1 : !strcmp(m, "frame") ? 2 : 0;   /* 0: both */
@@ -911,12 +945,21 @@ static void *swift_native_location(hao_cb_frame *f, const hao_swift_move *m)
     return (uint8_t *)f->stack_args + m->native;
 }
 
-static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const hao_swift_result_context *context)
+__attribute__((noinline)) static void swift_result_prepare_args(hao_cpu *c, const hao_swift_reverse *s,
+    const hao_swift_result_context *context, uint64_t target, hao_swift_value_scope *values)
 {
-    hao_thread *t = hao_current();
-    hao_cpu saved = t->cpu, *c = &t->cpu;
+    uint64_t arguments[128] = {0};
+    for (unsigned k = 0; k < s->nargs; k++)
+        if (s->moves[k].size <= 8) memcpy(arguments + k, swift_arm_location(c, &s->moves[k]), s->moves[k].size);
+    hao_swift_result_prepare(context, arguments, target, values);
+}
+
+static void callback_swift_run(hao_cb_frame *f, const hao_swift_reverse *s, const hao_swift_result_context *context,
+                               hao_thread *t, hao_cpu *saved)
+{
+    hao_cpu *c = &t->cpu;
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
-    c->x[31] = (saved.x[31] - 256 - s->stack_bytes) & ~15ull;
+    c->x[31] = (saved->x[31] - 256 - s->stack_bytes) & ~15ull;
     memset((void *)(uintptr_t)c->x[31], 0, s->stack_bytes);
     /* Clear high bits of narrow register values; only declared bytes are read
      * from the native frame. No speculative stack window or C sret placement. */
@@ -928,19 +971,14 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
         memcpy(swift_arm_location(c, m), swift_native_location(f, m), m->size);
     }
     hao_swift_value_scope values = {0};
-    if (context) {
-        uint64_t arguments[128] = {0};
-        for (unsigned k = 0; k < s->nargs; k++)
-            if (s->moves[k].size <= 8) memcpy(arguments + k, swift_arm_location(c, &s->moves[k]), s->moves[k].size);
-        hao_swift_result_prepare(context, arguments, f->target, &values);
-    }
+    if (context) swift_result_prepare_args(c, s, context, f->target, &values);
     uint64_t indirect = c->x[8];
     unsigned made = t->swift_made_n;
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
     c->native_pop = 0;
     t->callbacks++;
-    hao_run(t, &saved);
+    hao_run(t, saved);
     hao_swift_objects_result(t, f->target, indirect);
     hao_swift_witness_result(t, made, indirect);
     hao_swift_value_end(t, &values);
@@ -948,8 +986,29 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
         const hao_swift_move *m = &s->moves[k];
         memcpy(swift_native_location(f, m), swift_arm_location(c, m), m->size);
     }
-    t->cpu = saved;
+    t->cpu = *saved;
 }
+
+__attribute__((noinline)) static void callback_swift_local(hao_cb_frame *f, const hao_swift_reverse *s,
+    const hao_swift_result_context *context, hao_thread *t)
+{
+    hao_cpu saved = t->cpu;
+    callback_swift_run(f, s, context, t, &saved);
+}
+
+static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const hao_swift_result_context *context)
+{
+    hao_thread *t = hao_current();
+    unsigned mark;
+    hao_cpu *saved = cpu_save_push(t, &mark);
+    if (!saved) { callback_swift_local(f, s, context, t); return; }
+    *saved = t->cpu;
+    callback_swift_run(f, s, context, t, saved);
+    t->cpu_saves_n = mark;
+}
+
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved);
+static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t);
 
 uint64_t hao_callback(hao_cb_frame *f)
 {
@@ -974,17 +1033,40 @@ uint64_t hao_callback(hao_cb_frame *f)
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
     if (sig) { hao_callback_with_sig(f, sig); return 0; }
     hao_thread *t = hao_current();
-    hao_cpu saved = t->cpu;
+    unsigned mark;
+    hao_cpu *saved = cpu_save_push(t, &mark);
+    if (!saved) return callback_plain_local(f, t);
+    *saved = t->cpu;
+    uint64_t pop = callback_plain(f, t, saved);
+    t->cpu_saves_n = mark;
+    return pop;
+}
+
+/* HAO_VERBOSE > 1 lines, out of line so that their locals are not on the native stack across the guest call */
+__attribute__((noinline, cold)) static void callback_trace_entry(const hao_cb_frame *f, const hao_thread *t)
+{
+    Dl_info di;
+    const char *sn = dladdr((void *)(uintptr_t)f->ret, &di) && di.dli_sname ? di.dli_sname : "?";
+    fprintf(stderr, "hao: callback into guest %#llx from %s+%#llx (ret %#llx rsp %#llx rbp %#llx, thread %p)\n", (unsigned long long)f->target, sn,
+            (unsigned long long)(f->ret - (uint64_t)(uintptr_t)di.dli_saddr), (unsigned long long)f->ret,
+            (unsigned long long)(uintptr_t)f->stack_args - 8, (unsigned long long)f->rbp, (const void *)t);
+}
+__attribute__((noinline, cold)) static void callback_trace_pop(const hao_cb_frame *f, uint64_t pop, const char *why, int64_t native_pop)
+{
+    Dl_info di;
+    const char *sn = dladdr((void *)(uintptr_t)f->ret, &di) && di.dli_sname ? di.dli_sname : "?";
+    fprintf(stderr, "hao: callback %#llx returns to %s+%#llx popping %llu (%s; native tail call popped %lld)\n",
+            (unsigned long long)f->target, sn, (unsigned long long)(f->ret - (uint64_t)(uintptr_t)di.dli_saddr), (unsigned long long)pop, why,
+            (long long)native_pop);
+}
+
+/* A native-to-guest call without a signature (NX fault, plain thunk). */
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
+{
     hao_cpu *c = &t->cpu;
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
     t->callbacks++;
-    if (hao_verbose > 1) {
-        Dl_info di;
-        const char *sn = dladdr((void *)(uintptr_t)f->ret, &di) && di.dli_sname ? di.dli_sname : "?";
-        fprintf(stderr, "hao: callback into guest %#llx from %s+%#llx (ret %#llx rsp %#llx rbp %#llx, thread %p)\n", (unsigned long long)f->target, sn,
-                (unsigned long long)(f->ret - (uint64_t)(uintptr_t)di.dli_saddr), (unsigned long long)f->ret,
-                (unsigned long long)(uintptr_t)f->stack_args - 8, (unsigned long long)f->rbp, (void *)t);
-    }
+    if (hao_verbose > 1) callback_trace_entry(f, t);
     for (int k = 0; k < 6; k++) c->x[k] = f->gpr[k];
     /* SysV stack args 0,1 -> x6,x7; the rest are copied to the guest stack */
     c->x[6] = f->stack_args[0];
@@ -997,7 +1079,7 @@ uint64_t hao_callback(hao_cb_frame *f)
     /* Guest stack: the SysV stack arguments from slot 2 at sp, above them a
      * scratch area for an indirect result x8 must not point at (below). */
     enum { SCRATCH = 1024 };
-    uint64_t top = (saved.x[31] - 256) & ~15ull;
+    uint64_t top = (saved->x[31] - 256) & ~15ull;
     uint64_t sp = (top - SCRATCH - CB_STACK_AREA) & ~15ull;
     memcpy((void *)(uintptr_t)sp, &f->stack_args[2], 8 * CB_STACK_COPY);
     /* x8 is the indirect-result register: native swiftcc passes it in rax.
@@ -1016,23 +1098,23 @@ uint64_t hao_callback(hao_cb_frame *f)
     c->native_pop = 0;       /* per activation; nested callbacks restore it */
     unsigned objc_enum_result = hao_objc_enum_args(c, f->target, true);
     unsigned made = t->swift_made_n;
-    hao_run(t, &saved);
+    hao_run(t, saved);
     hao_objc_enum_result(c, objc_enum_result);
     hao_swift_objects_result(t, f->target, data ? r : 0);
     hao_swift_witness_result(t, made, data ? r : 0);
     for (int k = 0; k < 4; k++) { f->gpr[k] = c->x[k]; memcpy(f->xmm[k], &c->v[k], 16); }
     f->swift[0] = c->x[21];
     const char *why;
-    uint64_t pop = callee_pop(f, &saved, (int64_t)c->native_pop, &why);
-    if (pop && hao_verbose > 1) {
-        Dl_info di;
-        const char *sn = dladdr((void *)(uintptr_t)f->ret, &di) && di.dli_sname ? di.dli_sname : "?";
-        fprintf(stderr, "hao: callback %#llx returns to %s+%#llx popping %llu (%s; native tail call popped %lld)\n",
-                (unsigned long long)f->target, sn, (unsigned long long)(f->ret - (uint64_t)(uintptr_t)di.dli_saddr), (unsigned long long)pop, why,
-                (long long)c->native_pop);
-    }
-    t->cpu = saved;
+    uint64_t pop = callee_pop(f, saved, (int64_t)c->native_pop, &why);
+    if (pop && hao_verbose > 1) callback_trace_pop(f, pop, why, c->native_pop);
+    t->cpu = *saved;
     return pop;
+}
+
+__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t)
+{
+    hao_cpu saved = t->cpu;
+    return callback_plain(f, t, &saved);
 }
 
 /* ---------------------------------------------------- fault handler */

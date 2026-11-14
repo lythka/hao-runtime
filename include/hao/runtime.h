@@ -32,6 +32,7 @@ typedef struct hao_seg {
     int fault_at_entry;        /* t->in_fault_handler when the segment was entered */
     int nest_at_entry;         /* t->sig_nest when the segment was entered */
     struct hao_swift_value_scope *swift_values_at_entry;
+    unsigned cpu_saves_at_entry;   /* t->cpu_saves_n while this segment runs guest code */
     jmp_buf jb;                /* re-entry point: a guest longjmp from an inner segment
                                 * (hao_longjmp_segment), a signal handler that moved pc (signals.c) */
     /* run_loop -> native_step, for the native call about to run (runtime.c, native-target cache):
@@ -73,6 +74,12 @@ typedef struct hao_thread {
      * native encoding back (hao_swift_witness_result). */
     struct { uint64_t value, at, native, arm; } swift_made[16];
     unsigned swift_made_n;
+    /* The guest state a native-to-guest call saves and restores (1 KB),
+     * from the fifth nesting level on kept here instead of on the native
+     * stack: a LIFO in a mapping made at first use (runtime.c
+     * cpu_save_push), reset by each segment to its entry count. */
+    hao_cpu *cpu_saves;
+    unsigned cpu_saves_n;
     hao_seg *seg;              /* innermost running segment */
     void *eh_landed;           /* exception that stopped at this segment's native-call guard */
     void *eh_resume;           /* exception to resume natively after the current native step */

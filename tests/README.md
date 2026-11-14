@@ -95,6 +95,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/cli | PASS | 3 | two cases need `HAO_FS` (expected SKIP without it); `sandbox-exec` |
 | guest/crypto | PASS | 1 | |
 | guest/cuvalist | PASS | 2 | private CoreUtils on the host (`VSNPrintF`, `NSErrorV`, ...) |
+| guest/deepcallback | PASS | 1 | guest -> native -> guest recursion (qsort's comparator sorting again) 250 levels deep on a 512 KB thread: hao's native frames per level must fit where native arm64's do |
 | guest/cxxabi | PASS | 10 | |
 | guest/datacall | PASS | 1 | |
 | guest/dsc | PASS | 3 | the host's arm64e shared cache |
