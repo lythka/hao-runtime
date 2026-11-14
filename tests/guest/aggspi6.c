@@ -12,6 +12,8 @@
  *                                         retain and release, which are guest functions
  *   MRMediaRemoteRequestVideoThumbnails   a 2064-byte record first, then a guest completion block the callee
  *                                         invokes
+ *   SIPathFilterCreate (mds)              a guest evaluate callback that returns a 28-byte struct indirectly,
+ *                                         called later by native code
  *   CEAcquireUnmanagedContext (derq)      the REAL libCoreEntitlements function (xnu header
  *                                         EntitlementsPriv.h); the setcc gap hid it from P1's scan
  * The first seven are native stand-ins (aggspi6helper.c). Before each call the guest leaves
@@ -158,6 +160,24 @@ __attribute__((noinline)) static void mr_thumbs(int k)
     printf("thumbs k=%d calls=%d\n", k, calls);
 }
 
+/* --- SpotlightIndex path filter (mds) --- */
+static int filter_copies, filter_releases;
+static void *filter_copy(void *info) { filter_copies++; return info; }
+static void filter_release(void *ctx) { (void)ctx; filter_releases++; }
+static SIPathResult filter_evaluate(void *ctx, const char *path)
+{
+    SIPathResult r = { (uint64_t)strlen(path), (uint64_t)(uintptr_t)ctx, { 1, 2, 3, 4, 5, (uint16_t)path[0] } };
+    return r;
+}
+__attribute__((noinline)) static void si_path_filter(void)
+{
+    void *f = SIPathFilterCreate(NULL, T(0xf17e), filter_copy, filter_release, filter_evaluate);
+    SIPathFilterTestEvaluate(f, "/Users/Shared/Documents");
+    SIPathFilterTestEvaluate(f, "/Applications");
+    SIPathFilterTestRelease(f);
+    printf("path-filter copies=%d releases=%d\n", filter_copies, filter_releases);
+}
+
 /* one case per argument (the runner runs each case on its own, so a crash in one does not hide
  * the others); no argument runs every case */
 static volatile int opaque = 1;
@@ -197,12 +217,13 @@ static void run_case(const char *c)
         dirty(); ce_acquire("null-ctx", 2, 0, 32, 1);
         dirty(); ce_acquire("v0", 0, 0, 32, 0);
     } else if (!strcmp(c, "si-userctx")) { dirty(); si_userctx(0); dirty(); si_userctx(1); }
+    else if (!strcmp(c, "si-path-filter")) { dirty(); si_path_filter(); }
     else if (!strcmp(c, "mr-thumbs")) { dirty(); mr_thumbs(0); dirty(); mr_thumbs(opaque); }
     else if (!strcmp(c, "node-query")) { dirty(); node_query(0); dirty(); node_query(1); }
     else { printf("unknown case %s\n", c); }
 }
 static const char *const cases[] = { "si-open", "si-create", "si-cancel", "si-ops", "ess-tcc", "ess-group-add",
-                                     "ess-attr-set", "ql-rect", "img-copy", "ce", "si-userctx", "node-query", "mr-thumbs" };
+                                     "ess-attr-set", "ql-rect", "img-copy", "ce", "si-userctx", "node-query", "mr-thumbs", "si-path-filter" };
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);

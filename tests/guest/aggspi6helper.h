@@ -26,3 +26,10 @@ void *NodeCreateSemanticNodeQuery(void *, void *, void *, void *, void *, NodeCl
  * block the callee invokes as block(thumbnails, error) */
 typedef struct { double times[256]; uint64_t count; float width, height; } MRThumbRequest;   /* {?=[256d]Qff} */
 void MRMediaRemoteRequestVideoThumbnails(MRThumbRequest, void *, void *, void *, void (^)(void *, void *));
+/* SIPathFilterCreate (SpotlightIndex, mds): its evaluate callback returns a 28-byte struct indirectly (x86_64 rdi,
+ * arm64 x8). SIPathFilterTestEvaluate is the test's stand-in for SISearchCtx_FSI::vinitContext's call. */
+typedef struct { uint64_t a, b; uint16_t c[6]; } SIPathResult;      /* {?=QQSSSSSS}: 28 bytes, size 32 */
+typedef SIPathResult (*SIPathEvaluate)(void *ctx, const char *path);
+void *SIPathFilterCreate(void *alloc, void *info, void *(*copy)(void *), void (*release)(void *), SIPathEvaluate evaluate);
+void SIPathFilterTestEvaluate(void *filter, const char *path);
+void SIPathFilterTestRelease(void *filter);
