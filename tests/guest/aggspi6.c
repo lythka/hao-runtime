@@ -10,6 +10,8 @@
  *   CGImageCreateCopyWithParameters (sips)   48 bytes, then packed arm64 stack arguments
  *   NodeCreateSemanticNodeQuery (Finder)  24-byte context after five pointers; the callee calls its
  *                                         retain and release, which are guest functions
+ *   MRMediaRemoteRequestVideoThumbnails   a 2064-byte record first, then a guest completion block the callee
+ *                                         invokes
  *   CEAcquireUnmanagedContext (derq)      the REAL libCoreEntitlements function (xnu header
  *                                         EntitlementsPriv.h); the setcc gap hid it from P1's scan
  * The first seven are native stand-ins (aggspi6helper.c). Before each call the guest leaves
@@ -139,6 +141,23 @@ __attribute__((noinline)) static void node_query(int counted)
     printf("node-query-nocb rc=%p\n", NodeCreateSemanticNodeQuery(T(0x1100), T(0x2100), T(0x3100), T(0x4100), T(0x5100), none));
 }
 
+/* --- MediaRemote (NowPlayingTouchUI) --- */
+__attribute__((noinline)) static void mr_thumbs(int k)
+{
+    static MRThumbRequest r;
+    for (int i = 0; i < 256; i++) r.times[i] = i * 0.5 + k;
+    r.count = 3 + (uint64_t)k;
+    r.width = 160.0f;
+    r.height = 90.0f + (float)k;
+    __block int calls = 0;
+    MRMediaRemoteRequestVideoThumbnails(r, T(0x31), T(0x32), T(0x33), ^(void *thumbs, void *error) {
+        calls++;
+        printf("guest block: thumbs=%llx error=%llx k=%d\n", (unsigned long long)(uintptr_t)thumbs,
+               (unsigned long long)(uintptr_t)error, k);
+    });
+    printf("thumbs k=%d calls=%d\n", k, calls);
+}
+
 /* one case per argument (the runner runs each case on its own, so a crash in one does not hide
  * the others); no argument runs every case */
 static volatile int opaque = 1;
@@ -178,11 +197,12 @@ static void run_case(const char *c)
         dirty(); ce_acquire("null-ctx", 2, 0, 32, 1);
         dirty(); ce_acquire("v0", 0, 0, 32, 0);
     } else if (!strcmp(c, "si-userctx")) { dirty(); si_userctx(0); dirty(); si_userctx(1); }
+    else if (!strcmp(c, "mr-thumbs")) { dirty(); mr_thumbs(0); dirty(); mr_thumbs(opaque); }
     else if (!strcmp(c, "node-query")) { dirty(); node_query(0); dirty(); node_query(1); }
     else { printf("unknown case %s\n", c); }
 }
 static const char *const cases[] = { "si-open", "si-create", "si-cancel", "si-ops", "ess-tcc", "ess-group-add",
-                                     "ess-attr-set", "ql-rect", "img-copy", "ce", "si-userctx", "node-query" };
+                                     "ess-attr-set", "ql-rect", "img-copy", "ce", "si-userctx", "node-query", "mr-thumbs" };
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);

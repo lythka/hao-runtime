@@ -37,6 +37,9 @@
  *                     0x10(%rbp); arm64e x0..x4, the record by reference in x5; both pass it on as
  *                     NodeClientContext& (allocate_shared<TClientQuery>), whose retain/release the query
  *                     calls. Result: the query pointer.
+ *   MRMediaRemoteRequestVideoThumbnails  MediaRemote: x86 the 2064-byte record at 0x10(%rbp), rdi/rsi/rdx, the
+ *                     block in rcx; arm64e the record by reference in x0, x1..x3, the block in x4; the block is
+ *                     invoked as block(thumbnails, error). Result: void.
  * The three ess_notify_* return nothing: both slices end in the call to the template
  * `void downcallNotifyOnlyWithAttribution<...>`'s downcallInternal, whose Either<int, Unit> goes to an
  * sret buffer (rdi / x8) that is never read back; eax / w0 at the return are left over.
@@ -146,4 +149,13 @@ void *NodeCreateSemanticNodeQuery(void *a, void *b, void *c, void *d, void *e, N
            ctx.info == (void *)0xc0c0 ? "tag" : ctx.info ? "ptr" : "null", held == ctx.info ? "same" : "other");
     if (ctx.release) ctx.release(held);
     return (char *)a + 1;
+}
+
+void MRMediaRemoteRequestVideoThumbnails(MRThumbRequest r, void *a, void *b, void *c, void (^done)(void *, void *))
+{
+    double sum = 0;
+    for (int i = 0; i < 256; i++) sum += r.times[i];
+    printf("thumbs: sum=%.1f count=%llu size=%.1fx%.1f a=%llx b=%llx c=%llx block=%s\n", sum,
+           (unsigned long long)r.count, r.width, r.height, P(a), P(b), P(c), done ? "yes" : "null");
+    if (done) done((void *)0x7417, r.count == 3 ? (void *)0 : (void *)0xe44);
 }

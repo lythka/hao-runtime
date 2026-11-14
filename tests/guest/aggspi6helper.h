@@ -22,3 +22,7 @@ void *SIUserCtxCreate(void *, void *, SICred1104, audit_token_t, void *, void *,
  * {?=^v^?^?} (info, retain, release) whose callbacks the callee calls */
 typedef struct { void *info; void *(*retain)(void *); void (*release)(void *); } NodeClientContext;
 void *NodeCreateSemanticNodeQuery(void *, void *, void *, void *, void *, NodeClientContext);
+/* MRMediaRemoteRequestVideoThumbnails (MediaRemote): a 2064-byte record first, three pointers, then a completion
+ * block the callee invokes as block(thumbnails, error) */
+typedef struct { double times[256]; uint64_t count; float width, height; } MRThumbRequest;   /* {?=[256d]Qff} */
+void MRMediaRemoteRequestVideoThumbnails(MRThumbRequest, void *, void *, void *, void (^)(void *, void *));

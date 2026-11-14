@@ -1,5 +1,31 @@
 # Runtime issues and measured scope
 
+## A 2064-byte record by value: MRMediaRemoteRequestVideoThumbnails
+
+`_MRMediaRemoteRequestVideoThumbnails` (MediaRemote) takes a 2064-byte
+record `{double[256]; uint64_t; float; float}` first, three pointers and a
+completion block, which it invokes as `block(thumbnails, error)`. On x86_64
+the record is on the stack at 0x10(%rbp); on arm64e a pointer to it is in
+x0. `src/aggspi_gen.inc` gains its row (`v{?=[256d]Qff}^v^v^v@?`), the first
+with a block argument.
+
+The row alone was not enough: the signature marshaller kept a fixed
+256-slot (2 KB) area for SysV stack arguments and refused the call ("too
+many stack arguments"; the record needs 258 slots), so the UNKNOWN route
+still passed x0 as a scalar. The area is now sized from the signature, an
+upper bound of each argument's slots with alignment, up to 1024 slots
+(8 KB). An ordinary call's frame is smaller than before.
+
+`guest/aggspi6` gains `mr-thumbs`: a native stand-in with the real name
+and prototype checks the record and calls the guest's block. With the
+row and the change, JIT, `--interp` and AOT print what native arm64
+prints, and the block arrives through its thunk with no NX faults. On
+9568ead all three crash.
+
+Limits: a signature needing more than 1024 stack slots is still refused.
+NowPlayingTouchUI, the only guest importer in 26B131, is a Touch Bar UI;
+this call is not exercised on the MacBookPro9,2.
+
 ## A client context by value: NodeCreateSemanticNodeQuery
 
 `_NodeCreateSemanticNodeQuery` (DesktopServicesPriv) takes five pointers and
