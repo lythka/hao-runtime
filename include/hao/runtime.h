@@ -67,6 +67,12 @@ typedef struct hao_thread {
     unsigned swift_results_resolving;
     bool async_contract_resolving;
     struct hao_swift_value_scope *swift_values;
+    /* Nils a guest call of an Optional witness made and hao wrote in the
+     * guest's encoding (swiftvalue.c witness_to_guest), a ring: a callback
+     * returning such a value to native code as its indirect result gets the
+     * native encoding back (hao_swift_witness_result). */
+    struct { uint64_t value, at, native, arm; } swift_made[16];
+    unsigned swift_made_n;
     hao_seg *seg;              /* innermost running segment */
     void *eh_landed;           /* exception that stopped at this segment's native-call guard */
     void *eh_resume;           /* exception to resume natively after the current native step */

@@ -1,5 +1,50 @@
 # Runtime issues and measured scope
 
+## Optional witness nils returned to native code as a callback's result
+
+Guest calls of libswiftCore's Optional witnesses (`src/swiftvalue.c`
+`hao_swift_witness_native`) leave the nils they make or copy in the guest's
+encoding: a store or inject of an empty case gets the arm64 extra
+inhabitant (`witness_to_guest`), and a copied or taken value gets back the
+source's bits (`witness_restore_produced`), so that guest code reading the
+value inline sees its own encoding. A value made that way can leave the
+guest as the indirect result of a callback. ControlCenter on 26B131
+(`CompactModuleSliderView.body`, hovering the Sound module) passes
+`View.overlay(alignment:content:)` a closure `{ if hovered { placeholder } }`
+whose result is `V?` with V itself an Optional over frozen SwiftUI structs
+(their inhabitants come from an inner guest Optional's pointer). Its
+unspecialized generic code builds the result in place through the
+Optional's witnesses: the nil of a pointer word as arm64's inhabitant 1,
+where x86_64's witnesses expect 2 (the low bit is the ObjC tagged-pointer
+bit there). overlay's copy of the result then took the 1 for a live
+payload and `swift_retain` faulted at 0x8 inside SwiftUICore's value
+witnesses, with no value-walk refusal logged.
+
+Each word hao sets to the guest's bits is noted with its value's address in
+a per-thread ring (`hao_thread.swift_made`). When a callback's guest code
+returns to native code (`hao_callback`, `callback_swift`), every word noted
+during that activation in a value at the callback's indirect-result address
+that still holds the bits hao wrote gets back the bits the native witness
+produced (`hao_swift_witness_result`); the ring is then reset to the
+activation's entry.
+
+`tests/guest/overlaynil.swift` calls overlay from unspecialized generic code
+with `P` and `P?` placeholders (P a SwiftUI struct whose nil is an inner
+guest Optional's inhabitant), hovered or not, present or nil: on 1de47eb
+JIT, `--interp` and AOT crash in `swift_retain`; after the change all lines
+equal native arm64.
+
+Limits: only nils hao itself wrote through a witness call, in a value whose
+storage is the indirect result, are restored. A value the guest builds
+elsewhere and copies into the result with its own code, or one returned in
+registers, is not tracked. Guest code that calls a native type's own value
+witnesses (not libswiftCore's Optional, tuple and array ones) is not
+intercepted: an optimized build that inlines overlay builds
+`_OverlayModifier<P?>` itself with the arm64 nil and copies it through
+SwiftUICore's witness, which still faults the same way; and native code's
+nils read inline by specialized guest code (`-Onone` and concrete callers
+of a native generic result) are not converted either.
+
 ## Guest single-payload enums and guest-protocol existentials in the value walk
 
 After 9dce413 ControlCenter still refused two kinds of value at every

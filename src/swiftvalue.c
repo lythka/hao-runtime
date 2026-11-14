@@ -564,10 +564,25 @@ static void witness_encode(void *value, const witness_patches *w)
 {
     for (int i = 0; i < w->count; ++i) memcpy((char *)value + w->p[i].offset,&w->p[i].receiver_bits,8);
 }
-/* Put back the bits the walk found (a source's encoding on its copy). */
-static void witness_restore(void *value, const witness_patches *w)
+/* A word of VALUE at AT that a witness wrote as NATIVE and hao set to the
+ * guest's ARM bits (hao_swift_witness_result). */
+static void guest_bits_note(hao_thread *t, const void *value, const void *at, uint64_t native, uint64_t arm)
 {
-    for (int i = 0; i < w->count; ++i) memcpy((char *)value + w->p[i].offset,&w->p[i].bits,8);
+    unsigned k = t->swift_made_n++ % (sizeof t->swift_made / sizeof *t->swift_made);
+    t->swift_made[k].value = (uint64_t)(uintptr_t)value;
+    t->swift_made[k].at = (uint64_t)(uintptr_t)at;
+    t->swift_made[k].native = native;
+    t->swift_made[k].arm = arm;
+}
+/* A produced value (destination of a copy or take, a projected payload):
+ * the source's guest bits again, noted where they differ from the witness's. */
+static void witness_restore_produced(hao_thread *t, void *value, const witness_patches *w)
+{
+    for (int i = 0; i < w->count; ++i) {
+        char *at = (char *)value + w->p[i].offset;
+        if (w->p[i].bits != w->p[i].receiver_bits) guest_bits_note(t,value,at,w->p[i].receiver_bits,w->p[i].bits);
+        memcpy(at,&w->p[i].bits,8);
+    }
 }
 /* A struct whose layout guest code was compiled against: one a guest image
  * defines (its nominal descriptor lies in one). A native module's struct may
@@ -633,11 +648,45 @@ int native_frozen_type(const void *type) { return native_frozen(type); }
  * the native encoding stays: its readers are native witnesses, also those
  * reached from native code that holds an enclosing guest struct, which no
  * conversion sees. */
-static void witness_to_guest(const void *type, void *value)
+static void witness_to_guest(hao_thread *t, const void *type, void *value)
 {
     witness_patches w;
     w.count = value ? collect_inline_patches(type,value,w.p,64,guest_layout) : -1;
-    for (int i = 0; i < w.count; ++i) { memcpy((char *)value + w.p[i].offset,&w.p[i].arm_bits,8); }
+    for (int i = 0; i < w.count; ++i) {
+        char *at = (char *)value + w.p[i].offset;
+        if (w.p[i].arm_bits != w.p[i].bits) guest_bits_note(t,value,at,w.p[i].bits,w.p[i].arm_bits);
+        memcpy(at,&w.p[i].arm_bits,8);
+    }
+}
+
+/* Guest code that made such a nil may hand the value to native code, which
+ * reads it with its witnesses: a closure native code calls (View.overlay's
+ * content: () -> V with V an Optional) builds its indirect result in place
+ * with the Optional's storeEnumTagSinglePayload. The callback's return is
+ * the boundary: each nil made in a value at that address in this activation,
+ * still holding the guest bits hao wrote, gets back the bits the native
+ * witness wrote. A value made elsewhere and copied there by guest code is
+ * not tracked (a copy is the guest's own memcpy, not a witness call). */
+void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
+{
+    const unsigned ring = sizeof t->swift_made / sizeof *t->swift_made;
+    unsigned n = t->swift_made_n;
+    if (indirect && n != mark) {
+        unsigned from = n - mark > ring ? n - ring : mark;
+        unsigned restored = 0;
+        for (unsigned i = from; i != n; ++i) {
+            unsigned k = i % ring;
+            if (t->swift_made[k].value != indirect) continue;
+            uint64_t bits;
+            memcpy(&bits,(const void *)(uintptr_t)t->swift_made[k].at,8);
+            if (bits != t->swift_made[k].arm) continue;
+            memcpy((void *)(uintptr_t)t->swift_made[k].at,&t->swift_made[k].native,8);
+            restored++;
+        }
+        if (restored && hao_opt.bridge_check)
+            fprintf(HAO_DIAG,"hao: Swift Optional witness nils returned to native: %u at %#llx\n",restored,(unsigned long long)indirect);
+    }
+    t->swift_made_n = mark;
 }
 
 /* Each element's outer nils in the witness's encoding, in place; their
@@ -766,19 +815,19 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
         switch (slot) {
         case 0: case 2: case 3: case 4: case 5:
             result = (uint64_t)(uintptr_t)((ptr3_fn *)f)(dest,scratch ? scratch : src,type);
-            witness_restore(dest,&in);                         /* the source's encoding */
+            witness_restore_produced(t,dest,&in);              /* the source's encoding */
             break;
         case 1: ((void2_fn *)f)(dest,type); break;
         case 6: result = ((single_get_fn *)f)(scratch ? scratch : dest,(unsigned)c->x[1],type); break;
         case 7:   /* case 0 is the payload: no nil is made, its encoding stays */
             ((single_store_fn *)f)(dest,(unsigned)c->x[1],(unsigned)c->x[2],type);
-            if ((unsigned)c->x[1]) witness_to_guest(walked,dest);
+            if ((unsigned)c->x[1]) witness_to_guest(t,walked,dest);
             break;
         case 11: result = ((tag_fn *)f)(scratch ? scratch : dest,type); break;
-        case 12: ((void2_fn *)f)(dest,type); witness_restore(dest,&in); break;
+        case 12: ((void2_fn *)f)(dest,type); witness_restore_produced(t,dest,&in); break;
         case 13:
             ((inject_fn *)f)(dest,(unsigned)c->x[1],type);
-            if ((unsigned)c->x[1]) witness_to_guest(type,dest);
+            if ((unsigned)c->x[1]) witness_to_guest(t,type,dest);
             break;
         default: return false;
         }

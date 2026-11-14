@@ -123,6 +123,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/objcimp | PASS | 4 | |
 | guest/objcva | PASS | 3 | |
 | guest/optwitness | PASS | 1 | guest calls of native Optional, tuple and array witnesses on nested Optionals, also beside guest multi-payload enums (tag byte with several empty cases, spare-bit tags decoded from the image's layout record, Optionals over 17-byte spare-bit enums whose nil is one of the enum's inhabitants, and single-payload enums whose empty cases are their payload's inhabitants), and `Data??` whose nils are translated between the architectures' spare-bit encodings; see below |
+| guest/overlaynil | PASS | 1 | a guest closure native SwiftUI calls (`View.overlay`'s content) returns an Optional whose nil hao's Optional witness calls left in the guest's encoding; the callback's return gives it the native encoding back (ControlCenter's Sound module) |
 | guest/oslog | PASS | 79 | `log show`; was a failure that depended on the checkout's path, see below. Under heavy parallel load one `oslogswift` mode can miss its records; it passes alone |
 | guest/signals | PASS | 36 | |
 | guest/sret-forward | PASS | 3 | |

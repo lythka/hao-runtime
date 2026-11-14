@@ -525,6 +525,8 @@ tests/guest/openfds.c
 tests/guest/optsnap.c
 tests/guest/optwitness.sh
 tests/guest/optwitness.swift
+tests/guest/overlaynil.sh
+tests/guest/overlaynil.swift
 tests/guest/oslog.c
 tests/guest/oslog.sh
 tests/guest/osloghelper.c
