@@ -10,6 +10,7 @@
 #include <string.h>
 #ifdef HAO_SWIFT_VALUE_RUNTIME
 #include "hao/macho.h"
+#include "hao/dlsym_once.h"
 bool hao_probe_read8(uint64_t a, uint64_t *out);   /* hao/runtime.h */
 #endif
 #define SWIFT __attribute__((swiftcall))
@@ -39,12 +40,12 @@ static bool scalar_shape(const void *m, unsigned depth)
     if (v->extra || (v->flags & 0x01910000) ||
         (v->size != 4 && v->size != 8) || v->stride != v->size ||
         (v->flags & 255) != v->size - 1) return false;
-    if (m == dlsym(RTLD_DEFAULT,"$sSiN") || m == dlsym(RTLD_DEFAULT,"$sSfN") ||
-        m == dlsym(RTLD_DEFAULT,"$sSdN")) return true;
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    count_fn *count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    if (m == HAO_DLSYM("$sSiN") || m == HAO_DLSYM("$sSfN") ||
+        m == HAO_DLSYM("$sSdN")) return true;
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     if (!kind || !count || !offset || !field || kind(m) != 0x200 || count(m) != 1 || offset(m,0)) return false;
     field_info info = {0};
     const void *child = field(m,0,&info);
@@ -58,7 +59,7 @@ static bool scalar_shape(const void *m, unsigned depth)
 static bool reference_shape(const void *m, unsigned depth)
 {
     if (depth > 8) return false;
-    kind_fn *kind = dlsym(RTLD_DEFAULT, "swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     const witnesses *v = vwt(m);
     if (v->size != 8 || v->stride != 8 || v->extra != 0x7fffffff ||
         (v->flags & 255) != 7 || (v->flags & 0x01900000)) return false;
@@ -69,9 +70,9 @@ static bool reference_shape(const void *m, unsigned depth)
         return (u64((const char *)m + 32) & 3) && (u32((const char *)m + 40) & 2);
     }
     if (k != 0x200) return false;
-    count_fn *count = dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = dlsym(RTLD_DEFAULT, "swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     if (!count || !offset || !field || count(m) != 1 || offset(m,0) != 0) return false;
     field_info info = {0};
     const void *child = field(m,0,&info);
@@ -89,11 +90,11 @@ static bool reference_shape(const void *m, unsigned depth)
  * The witness checks XI bits without dereferencing/retaining the object. */
 int common_objc_reference_type(const void *m)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     if (!m || !kind || kind(m) != 0x305) return 0;
     const witnesses *v = vwt(m);
     if (!((const void *const *)m)[1] ||
-        v != dlsym(RTLD_DEFAULT,"$sBOWV") || v->size != 8 || v->stride != 8 ||
+        v != HAO_DLSYM("$sBOWV") || v->size != 8 || v->stride != 8 ||
         v->flags != 0x10007 || v->extra != 0x7fffffff || !v->fn[6]) return false;
     return 1;
 }
@@ -107,10 +108,10 @@ int common_objc_reference_type(const void *m)
  * class: the same value rule applies. */
 static int anyobject_type(const void *m)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     if (!m || !kind || kind(m) != 0x303 || u32((const char *)m + 8) || u32((const char *)m + 12)) return 0;
     const witnesses *v = vwt(m);
-    return v == dlsym(RTLD_DEFAULT,"$sBOWV") && v->size == 8 && v->stride == 8 &&
+    return v == HAO_DLSYM("$sBOWV") && v->size == 8 && v->stride == 8 &&
            v->flags == 0x10007 && v->extra == 0x7fffffff && v->fn[6];
 }
 
@@ -127,7 +128,7 @@ static int unknown_object_value(const void *m, const void *value)
  * in common_leaf_value), else 0. */
 static unsigned payload_free_enum_cases(const void *m)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     if (!m || !kind || kind(m) != 0x201) return 0;
     const char *desc = ((const void *const *)m)[1];
     if (!desc || (u32(desc) & 31) != 18 || (u32(desc + 20) & 0xffffff)) return 0;
@@ -158,7 +159,7 @@ int common_objc_reference_value(const void *m, const void *value)
  * independent contracts. */
 static bool one_witness_class_existential(const void *m)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     if (!m || !kind || kind(m) != 0x303) return false;
     const witnesses *v = vwt(m);
     if (v->size != 16 || v->stride != 16 || v->flags != 0x10007 ||
@@ -177,10 +178,10 @@ static bool one_witness_class_existential(const void *m)
  * storage, so its nonzero object word is a strong reference. */
 static const void *existential_wrapper(const void *m)
 {
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    count_fn *count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     if (!m || !kind || !count || !offset || !field || kind(m) != 0x200 || count(m) != 1 || offset(m,0) != 0) return NULL;
     field_info info = {0};
     const void *child = field(m,0,&info);
@@ -275,7 +276,7 @@ static const void *field_type(const char *record, const char *desc)
         if (c >= 1 && c <= 0x17) n += 4;
         else if (c >= 0x18 && c <= 0x1f) n += sizeof(void *);
     }
-    resolve_fn *resolve = dlsym(RTLD_DEFAULT,"swift_getTypeByMangledNameInContext2");
+    resolve_fn *resolve = HAO_DLSYM("swift_getTypeByMangledNameInContext2");
     return n < 4096 && resolve ? resolve(name,n,desc,NULL) : NULL;
 }
 
@@ -477,13 +478,13 @@ static bool selected_byte_xi(byte_xi_reflection *r, const void *type,
 int common_byte_optional_case(const void *type, const void *value)
 {
     byte_xi_reflection r = {
-        dlsym(RTLD_DEFAULT,"swift_getMetadataKind"),
-        dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount"),
-        dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset"),
-        dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata"),
-        dlsym(RTLD_DEFAULT,"$sSaMn"), dlsym(RTLD_DEFAULT,"$sSqMn"),
-        dlsym(RTLD_DEFAULT,"$sSiN"), dlsym(RTLD_DEFAULT,"$sSdN"),
-        dlsym(RTLD_DEFAULT,"$sSfN"), dlsym(RTLD_DEFAULT,"$ss6UInt32VN"),
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"),
+        HAO_DLSYM("$sSiN"), HAO_DLSYM("$sSdN"),
+        HAO_DLSYM("$sSfN"), HAO_DLSYM("$ss6UInt32VN"),
     };
     byte_xi_plan plan;
     if (!type || !value || !(r.kind && r.count && r.offset && r.field && r.array && r.optional &&
@@ -502,10 +503,10 @@ static bool string_reference_enum(const void *m, const void *value, const char *
     const char *fields = relative(desc + 16);
     if (!fields || u32(fields + 8) != (12u << 16 | 3) || u32(fields + 12) != 2 ||
         !no_payload_spare_bits(desc,relative(fields),17,24,254)) return false;
-    const void *string = dlsym(RTLD_DEFAULT,"$sSSN");
+    const void *string = HAO_DLSYM("$sSSN");
     if (!string || vwt(string)->size != 16 || vwt(string)->stride != 16 || (vwt(string)->flags & 255) != 7) return false;
     const void *a = field_type(fields + 16, desc), *b = field_type(fields + 28, desc);
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     bool layout = (a == string && b && kind(b) == 0 && reference_shape(b,0)) ||
                   (b == string && a && kind(a) == 0 && reference_shape(a,0));
     return layout && ((const unsigned char *)value)[16] < 2;
@@ -516,9 +517,9 @@ static bool compact_strong_enum(const void *m, const void *value, const char *de
     const witnesses *v = vwt(m);
     void *const *slots = (void *const *)v;
     if (u32(desc + 20) != 2 || u32(desc + 24) != 4 || v->size != 8 || v->stride != 8 ||
-        (v->flags & 255) != 7 || slots[1] != dlsym(RTLD_DEFAULT,"swift_cvw_destroy") ||
-        slots[2] != dlsym(RTLD_DEFAULT,"swift_cvw_initWithCopy") ||
-        slots[11] != dlsym(RTLD_DEFAULT,"swift_cvw_enumFn_getEnumTag")) return false;
+        (v->flags & 255) != 7 || slots[1] != HAO_DLSYM("swift_cvw_destroy") ||
+        slots[2] != HAO_DLSYM("swift_cvw_initWithCopy") ||
+        slots[11] != HAO_DLSYM("swift_cvw_enumFn_getEnumTag")) return false;
     const char *p = ((const char *const *)m)[-2];
     if (!p || u64(p + 16) != (UINT64_C(0x14) << 56) || u64(p + 32) != 2 ||
         u64(p + 40) != 32 || u64(p + 48) != 8 || u64(p + 56) != 0 || u64(p + 64) != 16 ||
@@ -547,9 +548,9 @@ static bool c_integer_enum(const void *type)
     const char *module = relative(parent + 8);
     if (!module || strcmp(module,"__C")) return false;
     const witnesses *v = vwt(type);
-    const char *symbols[] = {"$ss4Int8VN","$ss5Int16VN","$ss5Int32VN","$sSiN"};
+    const void *integers[] = {HAO_DLSYM("$ss4Int8VN"),HAO_DLSYM("$ss5Int16VN"),HAO_DLSYM("$ss5Int32VN"),HAO_DLSYM("$sSiN")};
     for (unsigned i = 0; i < 4; ++i) {
-        const void *integer = dlsym(RTLD_DEFAULT,symbols[i]);
+        const void *integer = integers[i];
         if (integer && v == vwt(integer) && v->size == (1u << i) &&
             v->stride == v->size && v->flags == v->size - 1 && !v->extra) return true;
     }
@@ -565,18 +566,18 @@ static bool scalar_record(const void *type, const unsigned char *value, unsigned
     if (!type || depth > 8) return false;
     const witnesses *v = vwt(type);
     if (!v->size || v->size > 64 || v->extra || (v->flags & 0x01910000)) return false;
-    const void *integer = dlsym(RTLD_DEFAULT,"$sSiN");
-    const void *real = dlsym(RTLD_DEFAULT,"$sSdN");
-    const void *floating = dlsym(RTLD_DEFAULT,"$sSfN");
+    const void *integer = HAO_DLSYM("$sSiN");
+    const void *real = HAO_DLSYM("$sSdN");
+    const void *floating = HAO_DLSYM("$sSfN");
     unsigned bytes = type == floating ? 4 : type == integer || type == real ? 8 : 0;
-    const void *cgfloat = dlsym(RTLD_DEFAULT,"$s12CoreGraphics7CGFloatVN");
+    const void *cgfloat = HAO_DLSYM("$s12CoreGraphics7CGFloatVN");
     if (cgfloat && type == cgfloat && real && v == vwt(real)) bytes = 8;
     if (bytes) return v->size == bytes && v->stride == bytes && (v->flags & 255) == bytes - 1;
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     if (!kind) return false;
     const void *const *m = type;
     uintptr_t k = kind(type);
-    if (k == 0x202 && m[1] == dlsym(RTLD_DEFAULT,"$sSqMn")) {
+    if (k == 0x202 && m[1] == HAO_DLSYM("$sSqMn")) {
         const witnesses *p = vwt(m[2]);
         if (!scalar_record(m[2],NULL,depth + 1) || v->size != p->size + 1 ||
             (v->flags & 255) != (p->flags & 255) ||
@@ -586,9 +587,9 @@ static bool scalar_record(const void *type, const unsigned char *value, unsigned
         return tag == 1 || (tag == 0 && scalar_record(m[2],value,depth + 1));
     }
     if (k != 0x301) return false;
-    count_fn *count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     if (!count || !offset || !field || count(type) != 1 || offset(type,0)) return false;
     field_info info = {0};
     const void *child = field(type,0,&info);
@@ -630,12 +631,12 @@ static bool string_payload(const void *m, const unsigned char *value, unsigned d
     const witnesses *v = vwt(m);
     if (!v->size || v->size > 1024 || v->stride != v->size ||
         (v->flags & 255) != 7 || (v->flags & 0x01900000) || v->extra != 0x7fffffff) return false;
-    if (m == dlsym(RTLD_DEFAULT,"$sSSN"))
+    if (m == HAO_DLSYM("$sSSN"))
         return v->size == 16 && (!value || u64(value + 8) > 2);
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
-    count_fn *count = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = dlsym(RTLD_DEFAULT,"swift_reflectionMirror_recursiveChildMetadata");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     if (!kind || !count || !offset || !field || kind(m) != 0x301) return false;
     intptr_t n = count(m);
     if (n < 1 || n > 64) return false;
@@ -679,14 +680,14 @@ int common_leaf_value(const void *type, const void *value)
     return 0;
 #endif
     if (!type || !value) return 0;
-    kind_fn *kind = dlsym(RTLD_DEFAULT,"swift_getMetadataKind");
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     if (!kind) return 0;
     uintptr_t k = kind(type);
     const witnesses *v = vwt(type);
     if (v->flags & 0x01900000) return 0;
     const void *const *m = type;
     if (k == 0x201 && c_integer_enum(type)) return 1;
-    if (k == 0x202 && m[1] == dlsym(RTLD_DEFAULT,"$sSqMn")) {
+    if (k == 0x202 && m[1] == HAO_DLSYM("$sSqMn")) {
         const witnesses *payload = vwt(m[2]);
         if (v->size == 16 && v->stride == 16 && (v->flags & ~0x2000000u) == 0x210007 &&
             v->extra == 0x7ffffffe && class_existential_value(m[2],value)) return 1;
