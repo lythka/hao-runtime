@@ -1,0 +1,106 @@
+{
+  "abi": "swiftcc void (i64, i64, ptr swiftself)",
+  "argument_roles": [
+    [
+      0,
+      1
+    ]
+  ],
+  "install_name": "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+  "layouts": {
+    "arm64": {
+      "bytes": 16,
+      "nil": [
+        0,
+        17293822569102704640
+      ],
+      "threshold": 17293822569102704640
+    },
+    "arm64e": {
+      "bytes": 16,
+      "nil": [
+        0,
+        17293822569102704640
+      ],
+      "threshold": 17293822569102704640
+    },
+    "x86_64": {
+      "bytes": 16,
+      "nil": [
+        0,
+        18374686479671623680
+      ],
+      "threshold": 18374686479671623680
+    }
+  },
+  "recipe": "optional-data-direct-setter-nil-v1",
+  "release": "26B131",
+  "schema": 1,
+  "scope": "nil arguments only; live words and self unchanged",
+  "symbol": "_$s10Foundation10URLRequestV8httpBodyAA4DataVSgvs",
+  "targets": {
+    "arm64e": {
+      "address": 6467920236,
+      "anchors": [
+        {
+          "address": 6467920236,
+          "role": "setter-and-body-closure",
+          "sha256": "e689a78c400fe0bac61d3ca1bcaec07dad07ac5b4ebcae967990c257dbacded0",
+          "size": 192
+        },
+        {
+          "address": 6467931140,
+          "role": "cow-mutation-helper",
+          "sha256": "fb714b08174a3cf591e06209b575732e6c7d64e231259de7d47eda3e2ba51afb",
+          "size": 276
+        },
+        {
+          "address": 6460668672,
+          "role": "optional-data-release",
+          "sha256": "2eb8beb1ba7434e924cb1ec4452cefd9fb7a2f34e651d8cba815b70fcc0244e7",
+          "size": 20
+        },
+        {
+          "address": 6467919860,
+          "role": "getter-nil-constructor",
+          "sha256": "ec5daa96e988700864997821e3995b8f5ef2d2aec14f587ad244b4a54b75b3b3",
+          "size": 128
+        }
+      ],
+      "cache_uuid": "c208f2eb29b03d9eba5645fd90e37b16",
+      "image_uuid": "3f6d1ace77563b52a2978e7ada36194f"
+    },
+    "x86_64": {
+      "address": 140703205469104,
+      "anchors": [
+        {
+          "address": 140703205469104,
+          "role": "setter-and-body-closure",
+          "sha256": "00508696d47fff872372ba9fbd787a258d3cd74065b914686626dd3eaedbc931",
+          "size": 122
+        },
+        {
+          "address": 140703205480496,
+          "role": "cow-mutation-helper",
+          "sha256": "658e5ac2e2ffe1e7461f7bd8ca4fcf107a825a023303f95daea3006bc672c463",
+          "size": 284
+        },
+        {
+          "address": 140703197770608,
+          "role": "optional-data-release",
+          "sha256": "09bcb308f956f2a67126741b439a126b22008b0c3a5c81d5bd229e2ed69a8b39",
+          "size": 26
+        },
+        {
+          "address": 140703205468720,
+          "role": "getter-nil-constructor",
+          "sha256": "45900d8ad0833b584b3239a1ff3c01c6b670ad6d14e35548d6d8c0d0e726ba2b",
+          "size": 140
+        }
+      ],
+      "cache_uuid": "b3c88154f62f378883f5a49ffb1c2828",
+      "image_uuid": "5119c02feccd3c209858a2d9e725c718"
+    }
+  },
+  "version": "0.1.0-26B131.1"
+}
