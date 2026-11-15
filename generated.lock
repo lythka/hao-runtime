@@ -8,7 +8,11 @@
       "input_kind": "cache",
       "export_id": "b0294686ba8a9747",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/archdiff_gen.inc",
@@ -17,7 +21,11 @@
       "input_kind": "cache",
       "export_id": "5118fb6f01e62639",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/cxxstr_gen.inc",
@@ -26,7 +34,11 @@
       "input_kind": "cache",
       "export_id": "d3adf3b5840b2baa",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/fmtattr_gen.inc",
@@ -44,7 +56,11 @@
       "input_kind": "cache",
       "export_id": "ed4470bfc28e726e",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/frozenstruct_gen.inc",
@@ -53,7 +69,11 @@
       "input_kind": "cache",
       "export_id": "af6a3ca9237187a7",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/gss_gen.inc",
@@ -79,7 +99,11 @@
       "input_kind": "cache",
       "export_id": "28639a9242360ecc",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/narrowret_gen.inc",
@@ -97,7 +121,11 @@
       "input_kind": "cache",
       "export_id": "c748b3a88eca6b12",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/sigdb_gen.inc",
@@ -133,7 +161,11 @@
       "input_kind": "cache",
       "export_id": "bf5c2b5986176647",
       "os_build": "26B131",
-      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
     },
     {
       "path": "src/vlist_gen.inc",
@@ -142,7 +174,38 @@
       "input_kind": "cache",
       "export_id": "b603ef2fd1e4c382",
       "os_build": "26B131",
+      "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620",
+      "checked_cache_uuids": [
+        "7C4BC5CBBA52307A9BDCEF4364623EA1",
+        "B3C88154F62F378883F5A49FFB1C2828"
+      ]
+    },
+    {
+      "path": "tools/value-contracts/optional-data-26B131.json",
+      "sha256": "358e31b3e0cf98b797dcd0058f6c4a15701f07b0f8072097572d542689b58350",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "358e31b3e0cf98b7",
+      "os_build": "26B131",
       "cache_uuid": "262FA161F25B34F2B18BC7ED4369D620"
+    },
+    {
+      "path": "tools/value-contracts/optional-data-26B131-7c4bc5cb.json",
+      "sha256": "a73d6bc86bed13bbc2060c704692c175bf3dc5e26653f968f25cbd33b3584de4",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "a73d6bc86bed13bb",
+      "os_build": "26B131",
+      "cache_uuid": "7C4BC5CBBA52307A9BDCEF4364623EA1"
+    },
+    {
+      "path": "tools/value-contracts/optional-data-26B131-b3c88154.json",
+      "sha256": "f543ae8af4c2783c96cc9a8a9d9e90582467c91d1c9031aee830fa6f1f94ee6f",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "f543ae8af4c2783c",
+      "os_build": "26B131",
+      "cache_uuid": "B3C88154F62F378883F5A49FFB1C2828"
     }
   ]
 }
