@@ -111,6 +111,41 @@ Under hao:
     without changing its UUID is a different input. Generated tables and contracts record the UUID of the shared
     cache they were generated for (`generated.lock`), and they have to be regenerated for a changed cache.
 
+## Checking a cache with prespecialized metadata
+
+`make catalog-gate CACHE=DIR [BASE_CACHE=DIR [ACCEPT_EDITS=RECIPE.json]] [UNITS=DIR]` (`tools/hao_catalog_gate.py`) checks the three
+requirements above on an x86_64 cache before hao runs on it. It reads the catalog of `libswiftPrespecialized`
+(`_swift_prespecializationsData`, versions 1.x): its string-keyed map, the pointer-keyed hash table libswiftCore
+searches (+24, in dyld's Swift table format, offsets from the cache base) and the flat pointer-keyed list whose key
+symbols give the names. A rebuilt cache may add entries to the table only, so every entry of either is checked.
+1. **Optional witnesses (fails closed).** Each prespecialized Optional's value witnesses (slots 0-7 and 11-13)
+   must be the generic ones in the instantiation pattern of `$sSqMn` in the same cache, which every run-time
+   Optional shares. Any other witness is listed with the image that holds it.
+2. **Fast paths (a count).** Value types whose witness table is not one of libswiftCore's exported tables and
+   whose witnesses are not all in libswiftCore's `__TEXT` cannot match the pointer checks; they take the general
+   path.
+3. **Bound inputs (fails closed).** Every cache-derived table in `generated.lock` must name the cache's UUID.
+   Every value contract whose x86_64 image is in the cache must name its UUID and its anchors must still hash to
+   the pinned values. With `UNITS`, every interface unit must match an image. With `BASE_CACHE` (the cache the
+   inputs were made for), an image whose UUID is unchanged but whose `__TEXT` differs fails every unit and
+   contract bound to it. With `ACCEPT_EDITS`, a reviewed list of cache edits (address, bytes before and after),
+   an image changed only inside those edits passes, and the gate names the edits. When `CACHE` is a rebuilt
+   family (its cache UUID differs from `BASE_CACHE`'s), the builder places and links every image again, so bytes
+   are not compared: an image must keep its LC_UUID, its `__TEXT` size and every export's offset from its base.
+   The cache-derived tables and value contracts still name the old cache and fail until they are regenerated
+   and re-proved for the new one.
+
+On the 26B131 cache (262FA161), which already carries Apple's catalog: 2762 entries (1574 structs, 1188 classes,
+no Optionals or enums); gate 1 passes trivially; 505 structs miss the fast paths (their witnesses are in SwiftUICore,
+the concurrency library and others); gate 3 passes (9 cache tables, the Optional<Data> contract's 4 anchors,
+1896 units). `host/catalog-gate` tests each failure on a synthetic cache.
+
+With the two libswiftCore edits that keep prespecialized metadata on (the calls to
+`_dyld_shared_cache_some_image_overridden()` in its prespecialization setup replaced by a zero) and the 113
+name-to-descriptor slots that point into libraries loaded from disk nulled, on the same cache: all gates pass with
+`ACCEPT_EDITS` set to that edit list; without it, gate 3 fails libswiftCore's interface unit, as it should for
+changed code under an unchanged UUID.
+
 ## Where prespecialized metadata comes from
 
 Prespecialized metadata is part of the x86_64 shared cache the image installs. hao-runtime neither builds nor

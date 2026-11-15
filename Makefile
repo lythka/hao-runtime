@@ -55,7 +55,7 @@ FRONT_LD := -Wl,-rpath,@executable_path -Wl,-rpath,$(HAO_LIBDIR)
 # linked into every embedded program by tools/hao-embed.
 FRONT_CFLAGS := $(ARCH) -O2 $(WARN)
 
-.PHONY: all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke
+.PHONY: all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke catalog-gate
 all: $(B)/libhaocore.a $(B)/libhao.dylib $(B)/hao $(B)/hao-stub $(B)/front/stub.o $(B)/libhao_codeid.a
 
 $(MIN_STAMP):
@@ -264,6 +264,12 @@ unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/te
 AOT_OUT ?= $(B)/aot-test
 aot: all
 	OUT=$(abspath $(AOT_OUT)) HAO=$(abspath $(B))/hao B=$(abspath $(B)) tests/aot/run.sh
+
+# The checks an x86_64 shared cache with prespecialized Swift metadata must pass before hao runs on it
+# (docs/swift-metadata.md): make catalog-gate CACHE=DIR [BASE_CACHE=DIR [ACCEPT_EDITS=RECIPE.json]] [UNITS=DIR]
+catalog-gate:
+	@test -n "$(CACHE)" || { echo 'catalog-gate: CACHE=dyld directory or dyld_shared_cache_x86_64 needed' >&2; exit 2; }
+	python3.14 -I -B tools/hao_catalog_gate.py "$(CACHE)" $(if $(BASE_CACHE),--base-cache "$(BASE_CACHE)") $(if $(UNITS),--units "$(UNITS)") $(if $(ACCEPT_EDITS),--accept-edits "$(ACCEPT_EDITS)")
 
 async-contract-test: all
 	python3.14 tests/host/async_package.py --build $(B)
