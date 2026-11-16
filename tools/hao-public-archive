@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""hao-public-archive DST: from DST/payload (tools/hao-image-payload) and this checkout's build/ and tools/, write
+DST/GENERATE.md and DST/hao-runtime-VERSION-public.tar.gz: the payload without what tools/hao_release.py delivery_for
+marks generate-locally, the stub generator's inputs, the generators, GENERATE.md and SHA256SUMS, as a deterministic
+tar.gz (sorted, mtime 0, root:wheel, gzip mtime 0). Prints the file count, size and sha256."""
+import gzip, hashlib, io, json, os, struct, sys, tarfile
+
+TOOLS = ('hao-embed', 'dyld-ignition-fix.py', 'hao-trust-list', 'hao_fat.py', 'hao_codesig.py', 'hao_macho.py',
+         'stub_identity_gate.py', 'hao_ifunit.py', 'hao.entitlements', 'hao-public-archive', 'hao-runtime-from-source')
+BUILT = ('hao-stub', 'front/stub.o', 'libhao.dylib', 'libhao_identity.dylib')
+
+GENERATE = """# hao runtime {version}: what is published and what you make yourself
+
+hao-runtime commit `{commit}` (clean tree), macOS {os_version} ({os_build}),
+x86_64 shared cache `{cache}`, libhao LC_UUID `{uuid}`.
+
+## In this archive (hao's own bytes)
+
+- `payload/`: the hao payload without its Apple-derived parts. It holds the runtime (`root/usr/libexec/hao`,
+  `root/usr/lib/hao/libhao.dylib`, `libhao_identity.dylib`), HaoExec.kext (not yet stamped for a kernel),
+  the install helpers (`hao-install.py`, `hao_fat.py`, `hao_codesig.py`, `stamp_identity.py`), {units} interface
+  units and their thunk libraries (`root/usr/lib/hao/if/`), the async provider, the stub skeletons
+  (`embed/skeletons/`: each stub as linked, with its program's bytes zeroed), and hash lists and records
+  (`trusted-cdhashes`, `stub-identities`, `embed/manifest.json`, `build.json`, `aot.json`, `aot-list.txt`, logs).
+  `payload-manifest.json` is the original payload's manifest: it also lists, by sha256, the files you
+  generate below.
+- `build/`: the inputs the stub generator checks (`hao-stub`, `front/stub.o`, `libhao.dylib`,
+  `libhao_identity.dylib`, the same bytes as in `payload/`).
+- `tools/`: the generators.
+- `SHA256SUMS`: every file above.
+
+## Made on your Mac from Apple's files (never published)
+
+Inputs: the {os_build} System root, mounted read-only at `ROOT`, and its x86_64 dyld shared cache directory
+`X86` (from the IPSW's Rosetta cryptex). Python 3.12 or later and `codesign`; no compiler or linker.
+Every output must have the sha256 the manifests record.
+
+1. Embedded stubs ({embedded} programs; `payload/embed/stubs/`), filled from the skeletons:
+
+       python3 tools/hao-embed --stub build/hao-stub --stubs payload/embed --root ROOT --x86-cache X86 \\
+         --skeletons payload/embed/skeletons \\
+         $(python3 -c 'import json,sys; [print(sys.argv[1] + "/" + f["path"]) for f in json.load(open("payload/embed/manifest.json"))["files"]]' ROOT)
+
+   Each `stubs/*.stub` must match `stub_sha256` in `payload/embed/manifest.json`.
+{dyld}
+3. `stub-identities` and `trusted-cdhashes` are hashes, not Apple bytes, so they ship. To check them:
+
+       python3 tools/hao-trust-list ROOT | cmp - payload/root/usr/lib/hao/trusted-cdhashes
+       python3 tools/hao-trust-list --stubs payload/embed payload/root/usr/lib/hao/trusted-cdhashes ROOT \\
+         | cmp - payload/root/usr/lib/hao/stub-identities
+
+4. AOT caches (optional; without them hao translates on first run). `hao` needs macOS 27, so this runs on
+   the installed system after its first boot, not on the Mac that builds the image:
+
+       sudo /usr/libexec/hao --aot PROGRAM...     # writes /private/var/db/hao, read by every process
+
+   `aot-list.txt` lists the programs the original payload translated.
+
+## Building this archive from source
+
+With Xcode 27.2 and Python 3.14, from a clone of hao-runtime at the commit above:
+
+    tools/hao-runtime-from-source ROOT X86 THIS-ARCHIVE.tar.gz OUT
+
+It builds hao, makes the payload with the interface units, async provider and AOT list taken from this archive, and
+writes `OUT/{name}`, which should have this archive's sha256. Another Xcode builds working but different bytes.
+"""
+
+DYLD = """
+2. The dyld fix (`payload/replace/dyld`, sha256 `{sha}`):
+
+       python3 tools/dyld-ignition-fix.py ROOT/usr/lib/dyld payload/replace/dyld
+"""
+
+
+def sha(p):
+    return hashlib.sha256(open(p, 'rb').read()).hexdigest()
+
+
+def lc_uuid(p):
+    b = open(p, 'rb').read()
+    magic, _, _, _, ncmds, _, _ = struct.unpack_from('<7I', b, 0)
+    if magic != 0xfeedfacf:
+        sys.exit('hao-public-archive: %s is not a thin x86_64 Mach-O' % p)
+    i = 32
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from('<II', b, i)
+        if cmd == 0x1b:
+            u = b[i + 8:i + 24].hex().upper()
+            return '-'.join((u[:8], u[8:12], u[12:16], u[16:20], u[20:]))
+        i += size
+    sys.exit('hao-public-archive: %s has no LC_UUID' % p)
+
+
+def local_only(rel):
+    return rel.startswith(('root/usr/lib/hao/aot/', 'embed/stubs/')) or (rel.startswith('replace/') and rel != 'replace/manifest.json')
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    dst = os.path.abspath(sys.argv[1])
+    top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pay = os.path.join(dst, 'payload')
+    man = json.load(open(os.path.join(pay, 'payload-manifest.json')))
+    build = json.load(open(os.path.join(pay, 'build.json')))
+    if not man['clean']:
+        sys.exit('hao-public-archive: the payload was built from a dirty tree')
+    files = {}
+    for d, _, names in os.walk(pay):
+        for n in names:
+            rel = os.path.relpath(os.path.join(d, n), pay)
+            if not local_only(rel):
+                files['payload/' + rel] = os.path.join(d, n)
+    for rel in BUILT:
+        files['build/' + rel] = os.path.join(top, 'build', rel)
+    for rel in TOOLS:
+        files['tools/' + rel] = os.path.join(top, 'tools', rel)
+    for lib in ('libhao.dylib', 'libhao_identity.dylib'):
+        if sha(files['build/' + lib]) != sha(files['payload/root/usr/lib/hao/' + lib]):
+            sys.exit('hao-public-archive: build/%s is not the payload\'s' % lib)
+    emb = json.load(open(os.path.join(pay, 'embed/manifest.json')))
+    if sha(files['build/hao-stub']) != emb['stub_sha256'] or sha(files['build/front/stub.o']) != emb['inputs_sha256']['front/stub.o']:
+        sys.exit('hao-public-archive: build/ stub inputs are not the payload\'s')
+    name = 'hao-runtime-%s-public' % man['version']
+    rep = os.path.join(pay, 'replace/manifest.json')
+    dyld = [e for e in json.load(open(rep))['files'] if e['path'] == 'usr/lib/dyld'] if os.path.exists(rep) else []
+    gen = GENERATE.format(version=man['version'], commit=man['commit'], os_version=man['os_version'], os_build=man['os_build'],
+                          cache=man['cache_uuid'], uuid=lc_uuid(files['build/libhao.dylib']),
+                          units=(build.get('interface_units') or {}).get('units', 0), embedded=build['embedded'],
+                          dyld=DYLD.format(sha=dyld[0]['result_sha256']) if dyld else '\n2. No dyld fix for this release.\n',
+                          name=name + '.tar.gz')
+    gpath = os.path.join(dst, 'GENERATE.md')
+    open(gpath, 'w').write(gen)
+    files['GENERATE.md'] = gpath
+    sums = ''.join('%s  %s\n' % (sha(files[k]), k) for k in sorted(files))
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT) as t:
+        def add(n, data, mode):
+            ti = tarfile.TarInfo(name + '/' + n)
+            ti.size, ti.mtime, ti.mode, ti.uid, ti.gid, ti.uname, ti.gname = len(data), 0, mode, 0, 0, 'root', 'wheel'
+            t.addfile(ti, io.BytesIO(data))
+        for k in sorted(files):
+            p = files[k]
+            add(k, open(p, 'rb').read(), 0o755 if os.stat(p).st_mode & 0o111 else 0o644)
+        add('SHA256SUMS', sums.encode(), 0o644)
+    out = os.path.join(dst, name + '.tar.gz')
+    with open(out, 'wb') as f:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=f, mtime=0, compresslevel=9) as g:
+            g.write(buf.getvalue())
+    print(len(files) + 1, 'files;', os.path.getsize(out), 'bytes;', sha(out), out)
+
+
+main()
