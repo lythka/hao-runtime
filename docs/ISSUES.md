@@ -1,5 +1,48 @@
 # Runtime issues and measured scope
 
+## Native blocks that share one invoke function
+
+A guest call of a native block's invoke is typed on its first call by
+that block's ObjC signature (`bridge.c` `type_by_objc`, or
+`hao_note_native_block` when the block reached guest code as a `@?`
+value), and the plan was kept for the invoke's address. One invoke can
+serve blocks of different types: every block made by
+`__NSMakeSpecialForwardingCaptureBlock`, NSXPC's reply blocks among them,
+has CoreFoundation's `__forwarding_prep_b___` as invoke, which reads its
+arguments as the calling block's own signature says. Once one reply
+typed it with a signature the register bridge cannot place (a struct of
+doubles), later replies of other types were placed by that signature:
+arguments arrived as zeros or as whatever lay above the call's stack
+area. gamed's exported object crashed in NSXPC's reply decoding
+(`objc_opt_isKindOfClass` or `objc_lookUpImpOrForward` under
+`_replacedWithDistantObject`, with a stack address or a libhao address
+as the argument).
+
+Now every call through a block-typed plan reads the signature address of
+the block in x0 (four guarded word reads, no Mach call). When it is the
+plan's own string, in the shared cache, the plan is used. Otherwise the
+block's signature is read and compared: another type is placed by that
+signature for this call only, and the first such call in a process is
+logged (`typed per call`). `HAO_BRIDGE_STATS` counts these calls. A
+signature noted from a block is now copied, as one found at a first call
+was: a heap block's signature is freed with it.
+
+`guest/xpcreply` has a guest exported object call reply blocks of five
+types over an anonymous listener in the same process, twice: a CGSize
+with a string first, then two strings, a double and a long between
+strings, seven strings and nine strings (NSXPC answers the two-string
+reply with a block of its own, not a forwarding block). JIT, `--interp`
+and AOT print what native arm64 prints. Before the change the mixed reply
+lost its last two arguments and the seven-string reply crashed as gamed
+did.
+
+Limits: a block-typed invoke whose blocks keep their signature outside
+the shared cache (a native library not in it) reads the whole signature
+through Mach on every call. On the development host a native
+`dispatch_block_create` block called 200000 times took about 45 ns more
+per call (about 240 ns before). Which reply type gamed's first one was is
+not known; the crash reports match this failure, not a traced value.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.

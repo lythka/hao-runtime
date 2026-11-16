@@ -1499,7 +1499,15 @@ void hao_bridge_note(uint64_t native, char kind, const char *enc, int src)
     const hao_plan *old = hao_bridge_lookup(native);
     if (old && old->cls != HAO_BR_UNKNOWN) return;      /* known (same function, same type) */
     hao_plan tmp = {.native = native, .argmask = HAO_BR_SCAN_ALL, .cls = HAO_BR_TYPED, .src = (uint8_t)src, .kind = kind,
-                    .enc = enc, .calls = old ? old->calls : 0, .flags = old ? (old->flags & HAO_PLAN_DLADDR) : 0};
+                    .calls = old ? old->calls : 0, .flags = old ? (old->flags & HAO_PLAN_DLADDR) : 0};
+    if (src == HAO_BRS_BLOCKSIG && enc && hao_native_static_addr((uint64_t)(uintptr_t)enc)) tmp.bsig = (uint64_t)(uintptr_t)enc;
+    if (enc) {   /* a heap block's signature is freed with the block: the plan keeps a copy */
+        if (strlen(enc) > 4096) return;
+        L();
+        tmp.enc = arena_str(enc);
+        U();
+        if (!tmp.enc) return;
+    }
     publish(&tmp, old ? old->name : NULL);
 }
 
@@ -1569,6 +1577,8 @@ char hao_bridge_kind_for_enc(const char *enc)
 /* ObjC-typed first-call plans: methods and blocks typed, calls through a method plan with another
  * selector (rechecked), and those whose method had another encoding or none */
 static uint64_t st_objc_imp, st_objc_block, st_objc_recheck, st_objc_other, st_objc_unseen;
+/* calls through a block-typed invoke plan whose block in x0 has another signature (typed per call) */
+static uint64_t st_block_other;
 
 /* The ObjC runtime's record of what guest code calls at native pc, from the
  * call's own registers: a native block in x0 whose invoke is pc (a block is
@@ -1610,6 +1620,7 @@ static bool type_by_objc(const hao_cpu *c, uint64_t pc, hao_plan *p)
     p->kind = kind;
     p->enc = copy;
     p->sel = sel;
+    p->bsig = src == HAO_BRS_BLOCKSIG && hao_native_static_addr((uint64_t)(uintptr_t)enc) ? (uint64_t)(uintptr_t)enc : 0;
     p->flags &= ~HAO_PLAN_PROBE;
     p->why = NULL;
     __atomic_fetch_add(src == HAO_BRS_OBJCIMP ? &st_objc_imp : &st_objc_block, 1, __ATOMIC_RELAXED);
@@ -1656,6 +1667,31 @@ const hao_plan *hao_bridge_objc_recheck(const struct hao_cpu *c, const hao_plan 
     }
     tmp->kind = kind;
     tmp->enc = enc;   /* the runtime's string: alive while its class is, for this one call */
+    return tmp;
+}
+
+/* One invoke function can serve blocks of different types: CoreFoundation's
+ * __forwarding_prep_b___ is the invoke of every block made by
+ * __NSMakeSpecialForwardingCaptureBlock (NSXPC reply blocks, among others),
+ * and it reads its arguments as the calling block's own signature says. A
+ * plan typed by one block's signature is therefore rechecked against the
+ * block in x0 at every call: another signature types this call. */
+const hao_plan *hao_bridge_block_recheck(hao_thread *t, const hao_plan *p, hao_plan *tmp)
+{
+    const hao_cpu *c = &t->cpu;
+    uint64_t sp = hao_native_block_sigptr(t, c->x[0], p->native);
+    if (!sp || sp == p->bsig) return p;   /* no block with a signature in x0, or the typing block's own string */
+    const char *enc = hao_native_block_sig(c->x[0], p->native);
+    if (!enc) return p;
+    char kind = hao_bridge_kind_for_enc(enc);
+    if (kind == p->kind && (kind != 'A' || same_types(enc, p->enc))) return p;
+    if (!__atomic_fetch_add(&st_block_other, 1, __ATOMIC_RELAXED) || hao_opt.bridge_check) {
+        HAO_LOG(0, "bridge: native block invoke %#llx typed %s, called by a block with %s: typed per call\n",
+                (unsigned long long)p->native, p->enc ? p->enc : "(register-exact)", enc);
+    }
+    *tmp = *p;
+    tmp->kind = kind;
+    tmp->enc = kind == 'A' ? enc : NULL;   /* the block's string: alive while the block is, for this one call */
     return tmp;
 }
 
@@ -1967,11 +2003,11 @@ void hao_bridge_stats(void)
             (unsigned long long)st_bare_redirected, (unsigned long long)st_bare_skipped, units_loaded, units_rejected,
             (unsigned long long)st_thunk_halves, (unsigned long long)st_thunk_missing, t ? t->used : 0, t ? t->mask + 1 : 0,
             (unsigned long long)(arena_bytes >> 10));
-    if (st_objc_imp || st_objc_block || st_objc_recheck)
+    if (st_objc_imp || st_objc_block || st_objc_recheck || st_block_other)
         fprintf(f, "hao: bridge: objc-typed first calls: methods=%llu blocks=%llu; other-selector calls rechecked=%llu "
-                   "(another type %llu, no method %llu)\n",
+                   "(another type %llu, no method %llu); block invokes called with another signature %llu\n",
                 (unsigned long long)st_objc_imp, (unsigned long long)st_objc_block, (unsigned long long)st_objc_recheck,
-                (unsigned long long)st_objc_other, (unsigned long long)st_objc_unseen);
+                (unsigned long long)st_objc_other, (unsigned long long)st_objc_unseen, (unsigned long long)st_block_other);
     if (st_conflicts) fprintf(f, "hao: bridge: %llu unit records disagree with the compiled-in tables (HAO_BRIDGE_CHECK=1 names them)\n",
                               (unsigned long long)st_conflicts);
     if (st_alias_typed || st_alias_refused || st_trap_alias)
