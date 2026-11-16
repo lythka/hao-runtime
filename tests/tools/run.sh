@@ -7,6 +7,7 @@
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
 # tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
 # tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
+# tools/hao-runtime-on-mac (the archive's on-Mac files),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
@@ -105,6 +106,37 @@ for j in glob.glob(sys.argv[1] + "/*.json"):
     assert all(not any(b[o:o + n]) for _, _, o, n in json.load(open(j))["sections"])' "$d/skel"; then
     pass "stub skeleton: filled without ld, the same stub as linked; carried sections zeroed"
 else bad "stub skeleton: rc $ra $rb: $(cat "$d/a.err" "$d/b.err" | tail -3)"; fi
+
+# --- tools/hao-runtime-on-mac: from an archive's layout (build/, tools/, payload/ with skeletons and manifests) and
+# ROOT, the stubs and the dyld fix come out with the manifest's hashes; a missing AOT cache is allowed, a wrong
+# hash is not. ROOT's dyld is this host's (the generator needs a 27.x dyld).
+d=$OUT/onmac; rm -rf "$d"; mkdir -p "$d/src/sbin" "$d/src/usr/libexec" "$d/src/usr/lib" "$d/arch/build" "$d/arch/tools" "$d/arch/payload/embed"
+cp "$G" "$d/src/sbin/launchd"; cp "$G" "$d/src/usr/libexec/xpcproxy"; cp /usr/lib/dyld "$d/src/usr/lib/dyld"
+"$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/orig" --root "$d/src" --x86-cache "$X86" \
+    --save-skeletons "$d/arch/payload/embed/skeletons" --require sbin/launchd --require usr/libexec/xpcproxy \
+    "$d/src/sbin/launchd" "$d/src/usr/libexec/xpcproxy" >/dev/null 2>"$d/orig.err"
+python3 -I "$repo/tools/dyld-ignition-fix.py" "$d/src/usr/lib/dyld" "$d/dyld.want" >/dev/null 2>&1
+mkdir -p "$d/arch/build/front"; for f in hao-stub front/stub.o libhao.dylib libhao_identity.dylib; do cp "$B/$f" "$d/arch/build/$f"; done
+cp "$d/orig/manifest.json" "$d/arch/payload/embed/"
+for t in hao-embed dyld-ignition-fix.py hao-runtime-on-mac hao_fat.py hao_codesig.py hao_macho.py stub_identity_gate.py hao.entitlements; do
+    cp "$repo/tools/$t" "$d/arch/tools/"
+done
+python3 -I - "$d" <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+h = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
+files = {'embed/stubs/' + n: h(os.path.join(d, 'orig/stubs', n)) for n in os.listdir(os.path.join(d, 'orig/stubs'))}
+files['replace/dyld'] = h(os.path.join(d, 'dyld.want'))
+files['root/usr/lib/hao/aot/00000000000000000000000000000000.aot'] = '0' * 64
+json.dump({'files': files}, open(os.path.join(d, 'arch/payload/payload-manifest.json'), 'w'))
+PY
+python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" >"$d/run.log" 2>&1; r1=$?
+python3 -I -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["files"]["replace/dyld"]="1"*64; json.dump(m,open(p,"w"))' \
+    "$d/arch/payload/payload-manifest.json"
+python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" "$d/arch" >"$d/bad.log" 2>&1; r2=$?
+if [ $r1 = 0 ] && grep -q '3 files match payload-manifest.json, 0 differ' "$d/run.log" && [ $r2 = 1 ] && grep -q 'replace/dyld: sha256 differs' "$d/bad.log"; then
+    pass "hao-runtime-on-mac: stubs and dyld fix from the archive layout match the manifest; a wrong hash fails"
+else bad "hao-runtime-on-mac: rc $r1 $r2: $(tail -3 "$d/run.log" "$d/bad.log")"; fi
 
 # --- a hard-linked program (27.0 usr/libexec and usr/sbin/appleh13camerad): --scan lists
 # both paths, and the installer embeds both whether the image keeps the link or not
