@@ -29,7 +29,7 @@
 static void usage(void)
 {
     fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n"
-                    "       hao --aot [--check] [--cache DIR] [--] [FILE...]\n"
+                    "       hao --aot [--check] [--cache DIR] [--] [FILE...] | hao --aot --auto\n"
                     "(internal: use `hao run` / `hao aot`)\n");
     exit(64);
 }
@@ -343,6 +343,47 @@ static int aot_default(const char *cache, bool check)
     return failed ? 1 : 0;
 }
 
+/* hao --aot --auto (the hao.aot LaunchDaemon, root): once a user is logged in, the default set, then a marker
+ * naming this libhao's generation, so it runs again only after libhao changes (an update). Under HAO_AOT_LIST_DIR
+ * (tests) the marker is kept there, any user may run it, and it does not wait. */
+static int aot_auto(void)
+{
+    hao_opts_init(NULL);
+    bool test = hao_opt.aot_list_dir[0] != 0;
+    if (!test && geteuid() != 0) { fprintf(stderr, "hao-aot: --auto runs as root\n"); return 1; }
+    uint8_t g[16];
+    if (!hao_aot_generation(g)) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return 1; }
+    char want[64], have[64] = "", marker[1100], tmp[1200];
+    int l = snprintf(want, sizeof want, "libhao ");
+    for (int k = 0; k < 16; k++) l += snprintf(want + l, sizeof want - (size_t)l, "%02x", g[k]);
+    snprintf(marker, sizeof marker, "%s/auto-aot.done", test ? hao_opt.aot_list_dir : HAO_AOT_SYS_DIR);
+    int fd = open(marker, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd >= 0) {
+        ssize_t n = read(fd, have, sizeof have - 1);
+        close(fd);
+        have[n > 0 ? n : 0] = 0;
+        char *nl = strchr(have, '\n');
+        if (nl) *nl = 0;
+        if (!strcmp(have, want)) { fprintf(stderr, "hao-aot: --auto: done already for %s\n", want); return 0; }
+    }
+    if (!test) {
+        struct stat st;
+        while (stat("/dev/console", &st) != 0 || st.st_uid < 501) sleep(30);
+        sleep(120);   /* the first login's own start-up first */
+    }
+    fprintf(stderr, "hao-aot: --auto: start for %s\n", want);
+    int rc = aot_default(NULL, false);
+    snprintf(tmp, sizeof tmp, "%s.tmp", marker);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) { fprintf(stderr, "hao-aot: --auto: %s: %s\n", tmp, strerror(errno)); return 1; }
+    char line[96];
+    int m = snprintf(line, sizeof line, "%s\n", want);
+    bool ok = write(fd, line, (size_t)m) == m;
+    if (close(fd) != 0 || !ok || rename(tmp, marker) != 0) { fprintf(stderr, "hao-aot: --auto: cannot write %s\n", marker); unlink(tmp); return 1; }
+    fprintf(stderr, "hao-aot: --auto: done for %s%s\n", want, rc ? " (some programs failed; see above)" : "");
+    return rc;
+}
+
 static int aot_main(int argc, char **argv)
 {
     /* hao --aot [--cache DIR] [--] BINARY...: generate AOT caches (no execution).
@@ -352,6 +393,7 @@ static int aot_main(int argc, char **argv)
     int bad = 0, k = 2;
     const char *cache = NULL;
     bool check = false;
+    if (argc == 3 && !strcmp(argv[k], "--auto")) return aot_auto();
     if (k < argc && !strcmp(argv[k], "--check")) { check = true; k++; }
     char abs[PATH_MAX];
     if (k < argc && !strcmp(argv[k], "--cache")) {

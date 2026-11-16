@@ -31,8 +31,14 @@ same libhao) is skipped, so a rerun writes only missing and stale caches;
 each program prints an `[N/M]` line. `hao --aot --check [FILE...]` writes
 nothing and reports each cache valid, missing or stale (exit 1 if any is
 not valid; for one FILE, 3 missing and 4 stale). Test: `guest/aotdefault`.
-Limits: the time on the target Mac has not been measured; a stale cache is
-replaced, not removed, so a program that left the list keeps its old file.
+The payload's LaunchDaemon `hao.aot` (/System/Library/LaunchDaemons) runs
+`hao --aot --auto` at each start-up: background priority and low-priority
+I/O; after a user has logged in (and 2 minutes more) it runs the default
+set, then writes /private/var/db/hao/auto-aot.done naming this libhao's
+generation. With that marker present it exits at once, so it runs again only
+after an update brings another libhao. Limits: the time on the target Mac
+has not been measured; a stale cache is replaced, not removed, so a program
+that left the list keeps its old file; no notification when it finishes.
 
 ## libswiftos `_swift_os_log` and `_swift_os_signpost_with_format` from guest code
 

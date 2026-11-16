@@ -2,7 +2,8 @@
 # hao --aot with no FILE: the default set from the image's lists (aot-list, else stub-identities' fourth field),
 # here from HAO_AOT_LIST_DIR (a TEST_SWITCHES build). A path with spaces and a universal file with an x86_64 slice
 # are cached, a listed missing file is counted, not failed; a list others can write is not used. A second run skips
-# the valid caches; --check reports valid, missing and stale and changes nothing.
+# the valid caches; --check reports valid, missing and stale and changes nothing. --auto (the LaunchDaemon) runs
+# once per libhao: a marker names its generation.
 #   OUT=dir HAO=/abs/build-ts/hao [T=120] tests/guest/aotdefault.sh
 set -u
 OUT=${OUT:-$(mktemp -d -t hao-aotdefault)}
@@ -47,6 +48,16 @@ printf '%s\n' "$W/two" > "$W/lists/aot-list"; chmod 644 "$W/lists/aot-list"
 HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/b.log" 2>&1; rc=$?
 [ $rc = 0 ] && [ "$(ls "$W/c2" | grep -c '\.aot$')" = 1 ] && grep -q 'aot-list names' "$OUT/b.log" \
     && echo "PASS aot-list is read first" || bad "aot-list rc $rc: $(tail -2 "$OUT/b.log")"
+mkdir -p "$W/c3"; chmod 755 "$W/c3"
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c3 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u1.log" 2>&1; r1=$?
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c3 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u2.log" 2>&1; r2=$?
+printf 'libhao 00000000000000000000000000000000\n' > "$W/lists/auto-aot.done"
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c3 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u3.log" 2>&1; r3=$?
+if [ $r1 = 0 ] && [ $r2 = 0 ] && [ $r3 = 0 ] && [ "$(ls "$W/c3" | grep -c '\.aot$')" = 1 ] && grep -q 'done for libhao' "$OUT/u1.log" \
+    && grep -q 'done already' "$OUT/u2.log" && grep -q '0 programs cached, 1 already valid' "$OUT/u3.log" \
+    && grep -q "^libhao [0-9a-f]\{32\}\$" "$W/lists/auto-aot.done" && ! grep -q '^libhao 0\{32\}' "$W/lists/auto-aot.done"; then
+    echo "PASS --auto: caches, then a marker; a second run does nothing; another libhao's marker runs it again (valid caches skipped)"
+else bad "--auto rc $r1 $r2 $r3: $(tail -1 "$OUT/u1.log" "$OUT/u2.log" "$OUT/u3.log")"; fi
 chmod 666 "$W/lists/aot-list" "$W/lists/stub-identities"
 HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/c.log" 2>&1; rc=$?
 [ $rc = 1 ] && grep -q 'neither' "$OUT/c.log" && echo "PASS lists others can write are not used (rc 1)" || bad "writable lists rc $rc: $(tail -2 "$OUT/c.log")"

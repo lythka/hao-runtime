@@ -4703,6 +4703,13 @@ static const uint8_t *aot_gen(void)
     return gen_ok ? gen_uuid : NULL;
 }
 
+bool hao_aot_generation(uint8_t out[16])
+{
+    const uint8_t *g = aot_gen();
+    if (g) memcpy(out, g, 16);
+    return g != NULL;
+}
+
 /* The effective user's home from the user database (never $HOME), looked
  * up only for ordinary users and only again when the euid changes. */
 static pthread_mutex_t pw_lock = PTHREAD_MUTEX_INITIALIZER;
