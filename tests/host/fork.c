@@ -14,7 +14,16 @@
  * Prints one summary line; exit 0 only if every child exited 0.
  *
  * hao_fork_init is looked up at run time, so the same source runs against a
- * libhao without it (the line then says "absent") to show the failure. */
+ * libhao without it (the line then says "absent") to show the failure.
+ *
+ * Under Rosetta the parent's jit workers translate without running: Rosetta
+ * write-protects a page of x86 code once it has run code from it and lifts
+ * that on the next write, but a write to such a page on another thread while
+ * the process forks kills the process (SIGBUS, KERN_PROTECTION_FAILURE; the
+ * same in tests/host/mapjit_fork.c, which has no hao linked). Code that has
+ * not run is not protected. Forks still cut off translations under jit_lock,
+ * and each child still runs one new translation. JIT_RUN=1 runs the parent's
+ * translations under Rosetta as well. */
 #include "hao/runtime.h"
 #include "hao/bridge.h"
 #include <dlfcn.h>
@@ -24,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -38,6 +48,7 @@ static uint32_t next_sig;
 static volatile int stop;
 static volatile int *stage;             /* MAP_SHARED: how far the child got */
 static int sig_slow;
+static int jit_run = 1;                 /* parent jit workers run what they translate */
 
 static void run_one(uint32_t i)
 {
@@ -53,7 +64,11 @@ static void *w_jit(void *a)
     while (!stop) {
         uint32_t i = __atomic_fetch_add(&next_pc, 1, __ATOMIC_RELAXED);
         if (i >= 900000) { usleep(1000); continue; }   /* leave pcs for the children */
-        run_one(i);
+        if (jit_run) run_one(i);
+        else {
+            hao_jit_translate((uint64_t)(uintptr_t)&code[i % NPC]);
+            usleep(20);   /* about the rate of run_one: still translating at the last fork */
+        }
     }
     return NULL;
 }
@@ -117,6 +132,10 @@ int main(int argc, char **argv)
     int forks = argc > 1 ? atoi(argv[1]) : 300;
     const char *mode = argc > 2 ? argv[2] : "all";
     if (getenv("SIG_SLOW")) sig_slow = atoi(getenv("SIG_SLOW"));
+    int translated = 0;
+    size_t tn = sizeof translated;
+    if (sysctlbyname("sysctl.proc_translated", &translated, &tn, NULL, 0) != 0) translated = 0;
+    jit_run = translated != 1 || (getenv("JIT_RUN") && atoi(getenv("JIT_RUN")));
     hao_jit_init();
     hao_bridge_init();
     void (*fork_init)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "hao_fork_init");
@@ -156,7 +175,10 @@ int main(int argc, char **argv)
     }
     stop = 1;
     for (int k = 0; k < n; k++) pthread_join(th[k], NULL);
-    printf("mode=%s forks=%d ok=%d hung=%d bad=%d (hung in: thunk_for=%d entry_for_sig=%d translate=%d sig_check=%d bridge=%d)\n",
-           mode, forks, ok, hung, bad, hung_at[1], hung_at[2], hung_at[3], hung_at[4], hung_at[5]);
+    uint32_t blocks = __atomic_load_n(&next_pc, __ATOMIC_RELAXED);
+    printf("mode=%s forks=%d ok=%d hung=%d bad=%d (hung in: thunk_for=%d entry_for_sig=%d translate=%d sig_check=%d bridge=%d) "
+           "parent jit: %s, %u blocks\n",
+           mode, forks, ok, hung, bad, hung_at[1], hung_at[2], hung_at[3], hung_at[4], hung_at[5],
+           jit_run ? "run" : "translated, not run", blocks < 900000 ? blocks : 900000);
     return hung || bad ? 1 : 0;
 }
