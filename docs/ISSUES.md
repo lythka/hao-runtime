@@ -1,5 +1,43 @@
 # Runtime issues and measured scope
 
+## Guest calls of a frozen native struct's own value witnesses
+
+An optimized guest build that inlines `View.overlay(alignment:content:)`
+into a specialized `body` builds `_OverlayModifier<P?>` itself, with P a
+SwiftUI struct whose nil is an inner guest Optional's extra inhabitant: the
+nil is written inline in the arm64 encoding (1 at offset 16, where x86_64's
+witnesses expect 2). Guest code then copies and destroys the value through
+an outlined copy that calls SwiftUICore's own value witnesses for the frozen
+struct, which hao did not intercept: only libswiftCore's Optional, tuple and
+array witnesses and those of views lent to native modifiers were known by
+address. The native copy took the 1 for a live payload and `swift_retain`
+faulted at 0x8.
+
+Now the first guest call of a native function without an exported name
+(`src/bridge.c` bare bind) is checked by `hao_swift_witness_probe`
+(`src/swiftvalue.c`): when its metadata argument (x1 for destroy, x2 for the
+copies, assigns and takes) is a struct's metadata whose value witness table
+holds that very function in that slot, the struct is native and its module
+freezes it (`frozenstruct_gen.inc`), its slots 0-5 join the witnesses whose
+guest calls convert (`hao_swift_witness_native`): the value goes to the
+witness with its outer nils in the native encoding, and a value it produces
+gets back the source's bits. Reads of the candidate metadata use the guarded
+probe. A resilient native struct is left alone: guest code cannot build it
+inline, so its nils are its witnesses' own.
+
+`tests/guest/overlaynil.swift` adds four `inlined` lines (a generic `Tile`
+View whose specialized body inlines overlay, hovered or not, inner value
+present or not): JIT, `--interp` and AOT crashed in `swift_retain` at 0x8 on
+0e75f64; with the change all 16 lines equal native arm64.
+
+Limits:
+- Only frozen native structs; a frozen native enum's witnesses, and
+  witnesses with an exported name (libswiftCore's layout-string
+  `swift_cvw_*`), are not probed.
+- A guest-made value passed by value to another native generic function
+  (`AnyView(body)` with the inlined body above) is still not converted; it
+  faults the same way inside that function's copy.
+
 ## Swift.Float16 through native metadata
 
 x86_64 macOS libswiftCore declares `Swift.Float16` as a stub: its metadata
@@ -384,7 +422,8 @@ registers, is not tracked. Guest code that calls a native type's own value
 witnesses (not libswiftCore's Optional, tuple and array ones) is not
 intercepted: an optimized build that inlines overlay builds
 `_OverlayModifier<P?>` itself with the arm64 nil and copies it through
-SwiftUICore's witness, which still faults the same way; and native code's
+SwiftUICore's witness, which still faults the same way (now converted:
+"Guest calls of a frozen native struct's own value witnesses"); and native code's
 nils read inline by specialized guest code (`-Onone` and concrete callers
 of a native generic result) are not converted either, except the results
 of the entry below.
