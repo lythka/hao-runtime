@@ -429,6 +429,7 @@ void hao_abort_entry(int sig, siginfo_t *info, void *uctx);
 
 /* jit.c */
 int hao_jit_run_block(hao_thread *t);   /* returns exit reason */
+void *hao_jit_translate(uint64_t pc);   /* host tests: translate, do not run; NULL: interpreted */
 /* The guest instruction a host pc inside translated code belongs to:
  * false if host_pc is not in a translated block. *flags_in_host: the guest
  * NZCV lives in host RFLAGS there, not in cpu.flags. */

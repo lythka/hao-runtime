@@ -5977,6 +5977,14 @@ static void *find_or_translate(uint64_t pc)
     return code;
 }
 
+/* Translate the block at pc without running it (host tests): its code, or
+ * NULL when it would be interpreted. */
+void *hao_jit_translate(uint64_t pc)
+{
+    if (!hao_jit_init() || __atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) return NULL;
+    return find_or_translate(pc);
+}
+
 /* Give a hao_cpu what translated code reaches through it: the entry
  * points, the FCMP table and a jump cache (HAO_JIT_JC_SLOTS slots and as
  * many two-word miss records, zero when new: every slot then starts at

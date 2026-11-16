@@ -1,5 +1,43 @@
 # Runtime issues and measured scope
 
+## Rosetta, MAP_JIT and fork
+
+On the development host, `test_fork` (`make test` and `guest/fork`) died
+with SIGBUS (KERN_PROTECTION_FAILURE) in JIT emission: 13 of 200 runs, six
+at a time. Each of the 12 crash reports shows the same state. A worker is
+writing a block into the code cache (`emit_block`). The address lies in an
+`r-x/rwx` map entry over the part of the cache that has run. The main
+thread is inside `fork`. Rosetta's exception handler ended the process.
+
+The protection is Rosetta's. Once x86 code on a MAP_JIT page has run, the
+page reads back `r-x` (`mach_vm_region`). After the next write, which raises
+no signal, it reads `rwx` again: Rosetta catches writes to code it has
+translated. When the write comes on another thread while the process forks,
+it is not resolved. The process ends, and a SIGBUS handler does not run.
+`tests/host/mapjit_fork.c` has no hao linked and does the same: 28 of 200
+runs fail with writers that run their code, 0 of 200 with writers that do
+not (`noexec`; interleaved, eight at a time). An Intel Mac has no such
+protection: MAP_JIT memory stays `rwx`, and the kernel resolves fork's
+copy-on-write faults itself. hao's fork handling (no prepare handler; the
+child re-initialises the locks) is not involved, and the runtime does not
+change.
+
+Under Rosetta, the parent's JIT workers in `test_fork` now translate without
+running (`hao_jit_translate`, for host tests). Code that has not run is not
+protected. The workers are throttled so that they still translate at the
+last fork (about 110,000 blocks a run, against about 50,000 when they run
+their code). Each child still translates and runs a block. With a child
+handler that leaves `jit_lock` alone, 6 of 300 children hang in translation
+(10 of 300 when the parent runs its code), so the test still catches an
+inherited JIT lock. After the change 500 of 500 runs pass, six at a time
+(load average 20 to 90), with no crash report. `JIT_RUN=1` makes the parent
+run its code under Rosetta again.
+
+Remaining: under Rosetta, a hao process can still die this way if it forks
+while another thread writes the code cache. `guest/fork` does this (four
+guest threads translate while the main thread forks); it has not failed in
+the gate. No Intel run confirms the Intel side yet.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.
@@ -2905,9 +2943,8 @@ reproduces the same SIGBUS/KERN_PROTECTION_FAILURE in 8 of 200 Rosetta runs
 platform failure independently of the runtime's bridge and translation tables.
 The original full host stress workload passes 200/200 runs at 300 forks each;
 the deterministic label-table control and mutation provide the stronger
-regression check for that separate race. Intel behavior and a workaround for
-the Rosetta MAP_JIT/fork failure are not established. The gate continues to
-report a JIT stress crash as a failure. Full validation passes unit tests,
+regression check for that separate race. The Rosetta MAP_JIT/fork failure is
+traced in "Rosetta, MAP_JIT and fork" above. Full validation passes unit tests,
 the native and sanitizer oracles, and all 92 applicable guest/host checks;
 one unrelated expected failure and three expected platform skips remain.
 

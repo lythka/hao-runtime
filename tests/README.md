@@ -281,12 +281,13 @@ bridge now defers guest signals around the complete `pthread_once` call.
 [Measured scope and remaining limitations](../docs/ISSUES.md) record the
 bounded before/after counts and native ARM comparison.
 
-Flaky: `guest/fork`'s host stress (`test_fork`, mode `all`) ended with
-SIGSEGV in one gate run; 8 runs of the script right after and 8 on an
-a00a428 build passed. The host has `test_fork` crash reports from 5 and 8
-November as well. Those stacks are in JIT emission or bridge binding,
-without the recursive enum initialization above; no shared cause has been
-established (see [remaining issues](../docs/ISSUES.md)).
+Fixed: `test_fork` (`forktest`, and `guest/fork`'s host stress) could die
+with SIGBUS in JIT emission on the Rosetta host, more often under load. The
+cause is Rosetta's, not hao's: a write to a page of x86 code Rosetta has run,
+on one thread while another forks, kills the process. Under Rosetta the
+parent's JIT workers now translate without running; `JIT_RUN=1` restores
+the old behaviour. The earlier SIGSEGVs in bridge binding were the label
+initialization race (see [remaining issues](../docs/ISSUES.md)).
 
 Host load: `make oracle`'s `atomic16` race cases once failed their control
 ("two 8-byte halves (must tear)") with 0 torn loads of 300000 at a load
@@ -545,17 +546,20 @@ The dependent-operation loops remain available through `fpscalar -b`.
 `host/labels-race` pauses an unlocked re-export reader after it captures the
 name-table pointer, then runs a second binder. The control must finish; a
 private library with the old initialization guard must crash. `N=200` runs
-200 fresh processes per variant. This startup race does not require fork;
-the separate Rosetta MAP_JIT/fork protection failure remains a gate failure.
+200 fresh processes per variant. This startup race does not require fork.
 
 `tests/host/mapjit_fork.c` is a standalone platform diagnostic with no hao
 linked. Build with `clang -arch x86_64 -O2 -pthread`, ad-hoc sign using
 `tools/hao.entitlements`, and run under `timeout -s KILL 30`. Repeat with
 `-arch arm64` for a native control. Each process performs 300 forks while
-other parent threads emit and execute code. The Rosetta parent can fault on
-a formerly writable MAP_JIT page; this diagnostic remains separate from the
-passing-control/mutation bridge regression and is not an expected-failure
-entry in the gate.
+other parent threads emit and execute code. Rosetta makes a MAP_JIT page
+`r-x` once it has run x86 code from it and makes it writable again on the
+next write; during a fork that write instead ends the process (SIGBUS,
+terminated by Rosetta's exception handler, so a SIGBUS handler does not
+run). The rate depends on host load: 0 of 200 serial runs, 76 of 200 with
+12 at a time. `mapjit_fork noexec` writes without running: 0 of 200, against
+28 of 200 without it (interleaved, eight at a time). It is not a gate entry;
+`test_fork` avoids it as described above.
 
 `oracle` and `oracle-asan` include `reserved`: 30,016 selector combinations
 in nine SIMD groups, compared with native ARM for acceptance, values and flags.
