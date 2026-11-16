@@ -52,9 +52,9 @@ Every output must have the sha256 the manifests record.
 4. AOT caches (optional; without them hao translates on first run). `hao` needs macOS 27, so this runs on
    the installed system after its first boot, not on the Mac that builds the image:
 
-       sudo /usr/libexec/hao --aot PROGRAM...     # writes /private/var/db/hao, read by every process
+       sudo /usr/libexec/hao --aot     # writes /private/var/db/hao, read by every process
 
-   `aot-list.txt` lists the programs the original payload translated.
+   With no PROGRAM it caches every program in /usr/lib/hao/aot-list (`aot-list.txt` here).
 
 ## Building this archive from source
 
