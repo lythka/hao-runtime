@@ -37,6 +37,7 @@ include/hao/swiftschema.h
 include/hao/swiftvalue.h
 include/hao/vafmt.h
 include/hao/x86.h
+include/hao/x86args.h
 kext/HaoExec/HaoExec.c
 kext/HaoExec/Info.plist
 kext/build.sh
@@ -244,6 +245,7 @@ src/variants_gen.inc
 src/varsniff.c
 src/vlist_gen.inc
 src/x86_emit.c
+src/x86args.c
 tests/README.md
 tests/a64/test_imm_cond.c
 tests/abi/test_layout.m
@@ -425,6 +427,8 @@ tests/guest/dylibs/liblz.c
 tests/guest/dylibs/libre.c
 tests/guest/dylibs/libup.c
 tests/guest/dylibs/main.c
+tests/guest/dynfunc.sh
+tests/guest/dynfunc.swift
 tests/guest/eh.mm
 tests/guest/eh.sh
 tests/guest/ehhelper.cpp
@@ -432,8 +436,13 @@ tests/guest/ehhelper.h
 tests/guest/features.c
 tests/guest/fenv.c
 tests/guest/fenv.sh
+tests/guest/fetchgiveup.c
+tests/guest/fetchgiveup.sh
 tests/guest/fma32.c
 tests/guest/fma32.sh
+tests/guest/fmtpos.m
+tests/guest/fmtpos.sh
+tests/guest/fmtposhelper.m
 tests/guest/fnhelper.h
 tests/guest/fnhelper.mm
 tests/guest/fnslots.mm
@@ -443,6 +452,8 @@ tests/guest/footprint_front.c
 tests/guest/fork.c
 tests/guest/fork.sh
 tests/guest/fork_dyld.c
+tests/guest/forkabort.c
+tests/guest/forkabort.sh
 tests/guest/forkgen.h
 tests/guest/fpscalar.c
 tests/guest/fpscalar.sh
@@ -542,6 +553,10 @@ tests/guest/overlaynil.sh
 tests/guest/overlaynil.swift
 tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
+tests/guest/layoutxi.sh
+tests/guest/layoutxi.swift
+tests/guest/xpcrect.m
+tests/guest/xpcrect.sh
 tests/guest/oslog.c
 tests/guest/oslog.sh
 tests/guest/osloghelper.c
@@ -561,6 +576,9 @@ tests/guest/run-async.sh
 tests/guest/sighelper.c
 tests/guest/signals.c
 tests/guest/signals.sh
+tests/guest/sitepack.sh
+tests/guest/sitepack.swift
+tests/guest/sitepackhelper.swift
 tests/guest/sorts.c
 tests/guest/spawn0.c
 tests/guest/sret-forward.c
@@ -576,6 +594,9 @@ tests/guest/stackguard_lib.c
 tests/guest/stackhelper.h
 tests/guest/stackhelper.m
 tests/guest/stackpack.swift
+tests/guest/stackpackfp.sh
+tests/guest/stackpackfp.swift
+tests/guest/stackpackfp_lib.swift
 tests/guest/stackpackhelper.swift
 tests/guest/stacks.c
 tests/guest/stubself.c
@@ -613,6 +634,9 @@ tests/guest/swiftmeta.sh
 tests/guest/swiftmeta.swift
 tests/guest/swiftpop.sh
 tests/guest/swiftpop.swift
+tests/guest/swifttextalign.sh
+tests/guest/swifttextalign.swift
+tests/guest/swifttextalign_lib.swift
 tests/guest/swiftthunks.sh
 tests/guest/swiftthunks.swift
 tests/guest/swiftvw.swift
@@ -672,6 +696,7 @@ tests/host/swiftvalue.sh
 tests/host/swiftvalue.swift
 tests/host/test_x86_emit.c
 tests/host/traps.c
+tests/host/x86args.c
 tests/loader/test_ifunit.c
 tests/loader/test_images.c
 tests/loader/test_macho.c
@@ -794,3 +819,7 @@ tests/guest/logclient.c
 tests/guest/logclient.sh
 tests/guest/faultstack.c
 tests/guest/faultstack.sh
+src/ids.c
+src/ioreg.c
+tests/guest/ioreg.c
+tests/host/ioreg.c

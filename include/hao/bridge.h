@@ -99,8 +99,9 @@ enum {
     HAO_BRS_VARSNIFF,      /* varsniff.c bound an untabled variadic to a trap */
     HAO_BRS_THISRET,       /* a C++ constructor or non-deleting destructor, from its mangled name (kind 'P') */
     HAO_BRS_THUNK,         /* the native half of a generated thunk pair (src/thunks.c) */
-    HAO_BRS_SWIFTABI,      /* a Swift type metadata accessor or value witness, by its mangled name (swiftcc.c
-                            * hao_swift_fixed_abi): EXACT, no argument is guest code */
+    HAO_BRS_SWIFTABI,      /* a Swift type metadata accessor or value witness, by its mangled name, or a dynamic
+                            * replacement lookup (swiftcc.c hao_swift_fixed_abi): EXACT, no argument is guest
+                            * code to be called */
     HAO_BRS_OBJCIMP,       /* a native ObjC method's IMP called bare: its method's encoding, found from the
                             * call's receiver and selector (objc.c hao_objc_imp_types) */
     HAO_BRS_CXXSTR,        /* cxxstr_gen.inc: std::string parameters converted (kind 'Z') */
@@ -143,8 +144,12 @@ typedef struct hao_plan {
                                        * 'K' (Swift packed stack arguments: enc is the layout,
                                        * hao_ifunit_stackpack),
                                        * 'Z' (std::string parameters converted, roles in enc: src/cxxstr.c),
-                                       * 'D' (Foundation.Data? nils converted, roles in enc: hao_optdata_enc_ok), 0 */
+                                       * 'D' (Foundation.Data? nils converted, roles in enc: hao_optdata_enc_ok),
+                                       * 'k' (UNKNOWN synchronous Swift function: packed stack arguments from the
+                                       * call site, HAO_KIND_SITEPACK), 0 */
     uint8_t reported;                 /* HAO_BRIDGE_CHECK printed its first-call line */
+    uint16_t swift_enum;              /* NSTextAlignment registers converted (hao_swift_textalign): bits 0-7
+                                       * arguments x0-x7, HAO_SWIFT_ENUM_RESULT the result */
     uint8_t probes;                   /* HAO_PLAN_PROBE: calls that looked for an ObjC type */
     uint64_t sel;                     /* HAO_BRS_OBJCIMP: the selector the method was found by */
 } hao_plan;
@@ -292,6 +297,8 @@ void hao_swift_objects_interpose_names(hao_name_fn cb, void *ctx);
 void hao_valist_builder_interpose_names(hao_name_fn cb, void *ctx);
 void hao_gss_interpose_names(hao_name_fn cb, void *ctx);
 void hao_libm_interpose_names(hao_name_fn cb, void *ctx);
+bool hao_ioreg_interpose(const char *name, uint64_t *addr);
+void hao_ioreg_interpose_names(hao_name_fn cb, void *ctx);
 void hao_swiftmeta_interpose_names(hao_name_fn cb, void *ctx);
 void hao_objc_interpose_names(hao_name_fn cb, void *ctx);
 void hao_regvar_interpose_names(hao_name_fn cb, void *ctx);
@@ -444,6 +451,9 @@ int hao_ifunit_check(const void *buf, uint64_t size, const uint8_t *uuid, hao_if
  * take slots 0 and 1), the arm64 byte offset and width of the argument each carries. Returns the
  * number of slots (offsets and widths filled in), or -1 for an invalid layout. */
 #define HAO_IF_KIND_STACKPACK 'K'
+/* Plan kind (never a unit record's): an UNKNOWN synchronous native Swift function, whose packed stack
+ * arguments, if any, come from the guest call site (swiftcc.c hao_swift_sitepack). */
+#define HAO_KIND_SITEPACK 'k'
 #define HAO_IF_MAX_PACK 32
 int hao_ifunit_stackpack(const char *enc, uint8_t off[HAO_IF_MAX_PACK], uint8_t width[HAO_IF_MAX_PACK]);
 /* The record for a symbol name in a validated unit, or NULL. */

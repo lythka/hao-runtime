@@ -707,6 +707,15 @@ bool hao_sig_msgsend(const char *enc, unsigned *codeslots, bool *fnret)
     return !s || s->simple;
 }
 
+/* Whether x86_64 returns enc's result through a hidden pointer in rdi (the _stret message ABI), as
+ * hao_call_native_sig places it. */
+static int sysv_class_mem(const htype *t);
+bool hao_sig_native_memret(const char *enc)
+{
+    hsig *s = hao_sig(enc);
+    return s && s->ret.kind == 's' && (s->ret.ld ? !s->ret.nst0 : sysv_class_mem(&s->ret));
+}
+
 /* ------------------------------------------------- arm64 argument layout */
 
 typedef struct { int ngrn, nsrn; uint64_t nsaa; } aapcs_state;

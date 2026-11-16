@@ -14,6 +14,7 @@ guest/cfnull	300	par	tests/guest/cfnull.sh
 guest/diagtime	120	par	tests/guest/diagtime.sh
 guest/logclient	120	par	tests/guest/logclient.sh
 guest/faultstack	300	par	tests/guest/faultstack.sh
+guest/fetchgiveup	120	par	tests/guest/fetchgiveup.sh
 guest/chkstk	300	par	tests/guest/chkstk.sh
 guest/cli	300	par	tests/guest/cli.sh
 guest/crypto	300	par	tests/guest/crypto.sh
@@ -29,8 +30,10 @@ guest/dlrpath	300	par	tests/guest/dlrpath.sh
 guest/fenv	300	par	tests/guest/fenv.sh
 guest/fma16	300	par	tests/guest/fma16.sh
 guest/fma32	300	par	tests/guest/fma32.sh
+guest/fmtpos	300	par	tests/guest/fmtpos.sh
 guest/footprint	600	par	tests/guest/footprint.sh
 guest/fork	600	par	tests/guest/fork.sh
+guest/forkabort	120	par	tests/guest/forkabort.sh
 guest/fullcache	300	par	tests/guest/fullcache.sh
 guest/gss	300	par	tests/guest/gss.sh
 guest/heapprobe	300	par	tests/guest/heapprobe.sh
@@ -49,7 +52,11 @@ guest/objcva	300	par	tests/guest/objcva.sh
 guest/optwitness	300	par	tests/guest/optwitness.sh
 guest/overlaynil	300	par	tests/guest/overlaynil.sh
 guest/viewselfnil	300	par	tests/guest/viewselfnil.sh
+guest/layoutxi	300	par	tests/guest/layoutxi.sh
+guest/sitepack	300	par	tests/guest/sitepack.sh
+guest/xpcrect	300	par	tests/guest/xpcrect.sh
 guest/asyncnil	400	par	tests/guest/asyncnil.sh
+guest/dynfunc	300	par	tests/guest/dynfunc.sh
 guest/oslog	600	par	tests/guest/oslog.sh
 guest/signals	600	par	tests/guest/signals.sh
 guest/sret-forward	300	par	tests/guest/sret-forward.sh
@@ -59,6 +66,8 @@ guest/swift-object-callbacks	300	par	tests/guest/swift-object-callbacks.sh
 guest/svarchdiff	300	par	tests/guest/svarchdiff.sh
 guest/mkgeometry	300	par	tests/guest/mkgeometry.sh
 guest/optdata	300	par	tests/guest/optdata.sh
+guest/stackpackfp	300	par	tests/guest/stackpackfp.sh
+guest/swifttextalign	300	par	tests/guest/swifttextalign.sh
 guest/svconformance	300	par	tests/guest/svconformance.sh
 guest/swiftlate	300	par	tests/guest/swiftlate.sh
 guest/swiftls	300	par	tests/guest/swiftls.sh

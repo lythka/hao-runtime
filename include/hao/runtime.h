@@ -58,6 +58,7 @@ typedef struct hao_eh_rec {
 
 #define HAO_JIT_JC_SLOTS 2048   /* a power of two */
 #define HAO_NCACHE_SLOTS 256    /* a power of two */
+#define HAO_STEP_RING 16        /* a power of two */
 typedef struct hao_thread {
     hao_cpu cpu;               /* must be first (16-byte aligned) */
     uint8_t *stack;
@@ -116,6 +117,10 @@ typedef struct hao_thread {
      * completed stores, so a probe a handler's store interrupted sees the change */
     int ncache_owner;
     uint32_t ncache_wseq;
+    /* runtime.c native_step: the last HAO_STEP_RING native calls and traps of this thread (target, lr,
+     * x0), a ring the abort report prints (how guest code reached the failing call) */
+    struct { uint64_t pc, lr, x0; } step_ring[HAO_STEP_RING];
+    uint32_t step_n;
 } hao_thread;
 
 /* Frames at segment depth `depth` and deeper were abandoned (a nonlocal jump or an exception): a cache
@@ -488,6 +493,12 @@ void hao_swift_genres_result(const void *type, uint64_t result);
  * for the call (then freed). */
 bool hao_swift_viewself_bind(uint64_t native, const char *sym);
 void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
+/* Packed stack arguments of a native Swift function without a layout record
+ * (swiftcc.c; plan kind HAO_KIND_SITEPACK): the layout the guest call site
+ * returning to c->x[30] stored for its call of native, as hao_ifunit_stackpack
+ * gives one (at most HAO_IF_MAX_PACK entries), or 0 when the word copy is
+ * right or unproven. */
+int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width);
 /* interpose.c: a page the guest mapped or made executable itself (mmap,
  * mprotect): arm64 code generated at run time, which hao does not run */
 bool hao_guest_exec_mapped(uint64_t a);
@@ -531,9 +542,17 @@ void hao_async_contract_prepare(hao_cpu *, uint64_t target, const char *symbol);
 void hao_async_contract_fork_child(void);
 void hao_swiftmeta_async_args(hao_cpu *c);   /* async function records in x0-x7 for a native Swift function (HAO_PLAN_ASYNCARG) */
 bool hao_swift_async_param(const char *sym);   /* a Swift function with a parameter of async function type (swiftcc.c) */
-/* "_$s...": a type metadata accessor or a value witness, whose signature the metadata ABI fixes (swiftcc.c) */
+/* "_$s...": a type metadata accessor or a value witness, whose signature the metadata ABI fixes, or a `dynamic`
+ * function prologue's runtime call (swiftcc.c) */
 bool hao_swift_fixed_abi(const char *sym);
 bool hao_swift_async_param_demangled(const char *d);
+/* NSTextAlignment (arm64 Center 1 Right 2, x86_64 the reverse) in a native Swift function's signature:
+ * bits 0-7 argument registers x0-x7, HAO_SWIFT_ENUM_RESULT the result (swiftcc.c) */
+#define HAO_SWIFT_ENUM_RESULT 0x100
+#define HAO_SWIFT_ENUM_PENDING 0x8000   /* decided again at the first call (an Objective-C class not yet registered) */
+uint16_t hao_swift_textalign(const char *sym, bool final);
+uint16_t hao_swift_textalign_demangled(const char *d, bool final);
+uint64_t hao_swift_textalign_value(uint64_t v);   /* the other architecture's value (an involution) */
 void hao_swiftmeta_fork_child(void);   /* an AsyncContext handed to native code: thunk its ResumeParent */
 /* callbacks.c */
 bool hao_callbacks_interpose(const char *name, uint64_t *addr);
@@ -552,6 +571,7 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc);
  * (hao_sig_simple); *codeslots: the arm64 argument slots holding code ('^?' function pointers, '@?'
  * blocks, such fields of by-value aggregates; hao/bridge.h argmask bits), *fnret: a '^?' result */
 bool hao_sig_msgsend(const char *enc, unsigned *codeslots, bool *fnret);
+bool hao_sig_native_memret(const char *enc);
 uint64_t hao_guest_entry_for_sig(uint64_t guest, const char *enc);
 /* Explicit API callback contract: only supported unambiguous simple void
  * signatures receive a typed entry; everything else keeps a plain thunk. */

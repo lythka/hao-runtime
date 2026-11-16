@@ -81,8 +81,10 @@ static void print_stats(void)
  */
 static int g_argc; static char **g_argv, **g_envp; static const char *g_apple[2];
 static struct { uint64_t mh, argc, argv, envp, progname; } g_progvars;
+extern bool hao_ids_prepare(hao_image *img);
 void hao_guest_image_init(hao_image *img)
 {
+    bool prepared = hao_ids_prepare(img);
     hao_tlv_setup(img);
     /* Swift records first: ObjC registration runs the metadata
      * initializers of Swift classes laid out at run time (objc.c), which
@@ -99,7 +101,7 @@ void hao_guest_image_init(hao_image *img)
     const char *base = strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path;
     if (hao_opt.diag_time) { snprintf(what, sizeof what, "registered %s", base); hao_phase(what); }
     if (hao_use_jit) {
-        hao_aot_load(img);
+        if (!prepared) hao_aot_load(img);
         if (hao_opt.diag_time) { snprintf(what, sizeof what, "aot %s", base); hao_phase(what); }
     }
     hao_thread *t = hao_current();

@@ -1,40 +1,4 @@
-/*
- * Variadic native functions that no interposer table names.
- *
- * Apple arm64 passes every variadic argument in an 8-byte stack slot; SysV
- * x86_64 passes them like fixed arguments (remaining GPRs, then XMMs, then
- * the stack). The tables in interpose.c cover the public variadics, but the
- * 27.0 arm64-only programs import over a hundred more, mostly private
- * logging and formatting SPI (DBLoggingLogWithFormat, LogPrintF,
- * CPMF_GetLocStrFmt, syslog$DARWIN_EXTSN, ...). Bound directly, the native
- * callee reads its variadic arguments from whatever the guest left in
- * x2..x7 and crashes on the first %@.
- *
- * A SysV variadic function compiled by clang starts with the va_start
- * register save: it stores the GPRs after its fixed ones into the register
- * save area (r9 last, at area+40), then `testb %al,%al; je` over movaps of
- * the XMMs after its fixed floating-point ones. Decoding that prologue gives
- * the number of fixed GPR and FP arguments, so an import whose native
- * definition has it is bound to trap_varsniff instead: the fixed arguments
- * go in registers and the guest's stack slots are passed as SysV variadic
- * arguments. The slots are typed from the format string when the last fixed
- * argument is one in a guest image (a C string or a constant CFString):
- * %f/%e/%g go to XMMs, everything else to GPRs; a format with %Lf is
- * handed over as a copy whose L conversions take a double (vafmt.c). Without a format every slot is an integer, which is exact for the
- * pointer and integer lists those functions take.
- *
- * %a is not one type across the formatters these functions use: printf reads a
- * double, CoreUtils' PrintF (LogPrintF, SNPrintF, ...) a pointer to a hardware or
- * network address (%.6a: six bytes; %##a: a sockaddr). A function without an SDK
- * format attribute takes its formatter family from fmtfamily_gen.inc (derived from
- * which formatter its arguments reach): CoreUtils' %a/%A take a pointer, printf's and
- * CFString's a double. A function the table does not list is assumed to be printf. No
- * slot is typed by its value: a pointer and a double of the same bits cannot be told
- * apart.
- *
- * The decoder accepts only the instructions such prologues contain and gives
- * up on anything else, so an unrecognised function stays bound as before.
- */
+
 #include "hao/runtime.h"
 #include "hao/gen_stamp.h"
 #include "hao/gmap.h"
@@ -79,14 +43,40 @@ static int modrm_len(const uint8_t *p, int rex, int *base, int32_t *disp)
     return n;
 }
 
-/* The va_start prologue of a SysV variadic function: fixed GPR and FP argument counts. six: also accept
- * the XMM save with no GPR saved, which a function with six or more fixed integer arguments has, as
- * *ngp = 6 ("six or more": the caller needs another source for the count, objc.c the encoding). */
+#define VA_ST 24
+typedef struct { int8_t base; uint8_t kind; int32_t disp; int64_t v; } va_store;
+
+static bool va_counts(const va_store *vs, int n, int first, int *ngp, int *nfp)
+{
+    for (int o = 0; o < n; o++) {
+        if (vs[o].kind != 'o') continue;
+        int64_t gp = -1, fp = -1;
+        for (int k = 0; k < n; k++) {
+            if (vs[k].base != vs[o].base || vs[k].kind == 'o') continue;
+            if (vs[k].kind == 8 && vs[k].disp == vs[o].disp - 8) gp = (uint32_t)vs[k].v, fp = (uint32_t)((uint64_t)vs[k].v >> 32);
+            if (vs[k].kind == 4 && vs[k].disp == vs[o].disp - 8) gp = vs[k].v;
+            if (vs[k].kind == 4 && vs[k].disp == vs[o].disp - 4) fp = vs[k].v;
+        }
+        if (gp < 8 || gp > 48 || (gp & 7) || fp != 48 + 16 * first) continue;
+        int64_t k = (vs[o].v - 16) / 8;
+        if (gp < 48 && k) continue;
+        *ngp = (int)(gp / 8 + k);
+        *nfp = first;
+        return true;
+    }
+    return false;
+}
+
 static bool prologue(const uint8_t *p, int *ngp, int *nfp, bool six)
 {
     struct { int reg, base; int32_t disp; } st[24];
-    int nst = 0, i = 0;
-    for (int insn = 0; insn < 48 && i < 200; insn++) {
+    int nst = 0, i = 0, nvs = 0, afirst = -1;
+    va_store vs[VA_ST];
+    int32_t lea[16];
+    int64_t imm[16];
+    bool after = false;
+    for (int r = 0; r < 16; r++) lea[r] = -1, imm[r] = -1;
+    for (int insn = 0; insn < 64 && i < 236; insn++) {
         int rex = 0;
         if ((p[i] & 0xf0) == 0x40) rex = p[i++];
         uint8_t op = p[i++];
@@ -101,20 +91,40 @@ static bool prologue(const uint8_t *p, int *ngp, int *nfp, bool six)
             bool mem = (p[i] >> 6) != 3;
             i += modrm_len(p + i, rex, &base, &disp);
             if (op == 0x89 && (rex & 8) && mem && nst < 24) st[nst].reg = reg, st[nst].base = base, st[nst++].disp = disp;
+            if (op == 0x89 && (rex & 8) && mem && base >= 0 && nvs < VA_ST) {
+                if (lea[reg] >= 0) vs[nvs++] = (va_store){(int8_t)base, 'o', disp, lea[reg]};
+                else if (imm[reg] >= 0) vs[nvs++] = (va_store){(int8_t)base, 8, disp, imm[reg]};
+            }
+            if (op == 0x8d && (rex & 8) && mem && base == 5  && disp >= 16 && !(disp & 7)) lea[reg] = disp, imm[reg] = -1;
+            else if (op != 0x89 && op != 0x85 && op != 0x39 && op != 0x3b) lea[reg] = -1, imm[reg] = -1;
             continue;
         }
         if (op == 0x81 || op == 0x83 || op == 0xc7) {
+            bool mem = (p[i] >> 6) != 3;
             i += modrm_len(p + i, rex, &base, &disp);
+            if (op == 0xc7 && mem && !(rex & 8) && base >= 0 && nvs < VA_ST) {
+                uint32_t v;
+                memcpy(&v, p + i, 4);
+                vs[nvs++] = (va_store){(int8_t)base, 4, disp, v};
+            }
             i += op == 0x83 ? 1 : 4;
             continue;
         }
-        if (op >= 0xb8 && op <= 0xbf) { i += (rex & 8) ? 8 : 4; continue; }
+        if (op >= 0xb8 && op <= 0xbf) {
+            int reg = (op & 7) | (rex & 1) << 3;
+            uint64_t v = 0;
+            memcpy(&v, p + i, (rex & 8) ? 8 : 4);
+            imm[reg] = (rex & 8) && v < (1ull << 62) ? (int64_t)v : -1;
+            lea[reg] = -1;
+            i += (rex & 8) ? 8 : 4;
+            continue;
+        }
         if (op == 0x0f && (p[i] == 0x1f || p[i] == 0x28 || p[i] == 0x29 || p[i] == 0x10 || p[i] == 0x11)) {
             i++;
             i += modrm_len(p + i, rex, &base, &disp);
             continue;
         }
-        if (op == 0x84 && p[i] == 0xc0 && !rex) {                        /* testb %al, %al */
+        if (op == 0x84 && p[i] == 0xc0 && !rex && !after) {             /* testb %al, %al */
             i++;
             if (p[i] == 0x74) i += 2;
             else if (p[i] == 0x0f && p[i + 1] == 0x84) i += 6;
@@ -134,10 +144,9 @@ static bool prologue(const uint8_t *p, int *ngp, int *nfp, bool six)
             int k9 = -1;
             for (int k = 0; k < nst; k++) if (st[k].reg == 9 && st[k].base >= 0) k9 = k;
             if (k9 < 0) {
-                if (!six) return false;
-                *ngp = 6;
-                *nfp = first;
-                return true;
+                after = true;
+                afirst = first;
+                continue;
             }
             int32_t area = st[k9].disp - 40;
             int g = 6;
@@ -153,7 +162,13 @@ static bool prologue(const uint8_t *p, int *ngp, int *nfp, bool six)
             *nfp = first;
             return true;
         }
-        return false;                         /* call, jump, ret, pop, anything else */
+        break;                                /* call, jump, ret, pop, anything else */
+    }
+    if (after && va_counts(vs, nvs, afirst, ngp, nfp)) return true;
+    if (after && six) {
+        *ngp = 6;
+        *nfp = afirst;
+        return true;
     }
     return false;
 }
@@ -283,6 +298,24 @@ bool hao_varsniff_call(hao_thread *t, uint64_t fn, int ngp, int nfp, char narrow
         typed = true;
     } else if (fmt >= 0 && fmt < gi) {
         if (fkind != 'w') nt = guest_format_types(c->x[fmt], ty, VS_SLOTS, &kind, assumed);
+
+        if (nt < 0 && assumed) {
+            int alt = -1;
+            for (int k = 0; k < gi && alt != -2; k++) {
+                char tk[VS_SLOTS], kk = 0;
+                if (k == fmt || guest_format_types(c->x[k], tk, VS_SLOTS, &kk, true) <= 0) continue;
+                if (kk == 'p') {
+                    const unsigned char *u = (const unsigned char *)(uintptr_t)c->x[k];
+                    while (*u >= 0x20 || *u == '\t' || *u == '\n') u++;
+                    if (*u) continue;
+                }
+                alt = alt < 0 ? k : -2;
+            }
+            if (alt >= 0) {
+                fmt = alt;
+                nt = guest_format_types(c->x[fmt], ty, VS_SLOTS, &kind, assumed);
+            }
+        }
         /* %L: Apple arm64 long double is double. The callee gets a copy of the format whose floating
          * conversions take a double (made once per format and kept: the callee may keep the pointer), which
          * is what the arm64 format means, %La included; the slot then goes in an XMM register. */
@@ -449,6 +482,7 @@ bool hao_varsniff_bind(const char *name, uint64_t native, uint64_t *addr)
     if (hao_sigdb_enc(name) || hao_stackargs_enc(name)) return false;   /* aggregates: the signature path */
     int ngp, nfp;
     if (!hao_varsniff_native(native, &ngp, &nfp)) return false;
+    if (ngp > 8) return false;
     pthread_mutex_lock(&vs_lock);
     bool fresh;
     uint64_t *s = hao_gmap_claim1(&vs, native, &fresh);

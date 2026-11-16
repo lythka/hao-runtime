@@ -40,8 +40,12 @@
  * caller's frame geometry gives no exact value.
  */
 #include "hao/runtime.h"
+#include "hao/bridge.h"
 #include "hao/gmap.h"
+#include "hao/x86args.h"
 #include <dlfcn.h>
+#include <objc/runtime.h>
+#include <mach-o/loader.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -699,9 +703,18 @@ static void demangle_selfcheck_verbose(demangle_fn fn)
  * hao_native_call carries both exactly, and none of their arguments is guest
  * code (integers, metadata, witness tables, addresses of values). The
  * historical witnesses (allocateBuffer, storeExtraInhabitant, ...) are no
- * longer in the table and are not matched. */
+ * longer in the table and are not matched.
+ * Also the two runtime functions of a `dynamic` (dynamically replaceable)
+ * function's prologue (stdlib/public/runtime/Exclusivity.cpp, IRGen
+ * createReplaceableProlog): swift_getFunctionReplacement(char **link, char
+ * *current) and swift_getOrigOfReplaceable(char **orig), C calling
+ * convention, pointers in and out. `current` is the calling function's own
+ * address, which the runtime only compares with *link: a native entry point
+ * in its place makes the replacement look installed, and the function then
+ * tail-calls *link, itself, forever. */
 bool hao_swift_fixed_abi(const char *sym)
 {
+    if (sym && (!strcmp(sym, "_swift_getFunctionReplacement") || !strcmp(sym, "_swift_getOrigOfReplaceable"))) return true;
     /* value-witness-kind (ValueWitness.def): initializeBufferWithCopyOfBuffer, destroy, initializeWithCopy,
      * assignWithCopy, initializeWithTake, assignWithTake, getEnumTagSinglePayload, storeEnumTagSinglePayload,
      * getEnumTag, destructiveProjectEnumData, destructiveInjectEnumTag */
@@ -721,16 +734,157 @@ bool hao_swift_fixed_abi(const char *sym)
     return dm(sym + 1, n - 1, buf, &len, 0) != NULL;
 }
 
+/* NSTextAlignment in native Swift signatures. NSText.h gives Center and
+ * Right the values 1 and 2 where TARGET_ABI_USES_IOS_VALUES (arm64), 2 and 1
+ * on x86_64; objc.c converts the SDK's Objective-C methods typed with it, and
+ * this does the same for Swift functions whose demangled name types a
+ * parameter or the result `__C.NSTextAlignment` (an Int: one GP register):
+ *  - "X.name.setter : __C.NSTextAlignment": the new value is x0 (self, if
+ *    any, is x20 or follows the formal arguments);
+ *  - "X.name.getter : __C.NSTextAlignment" or a synchronous function whose
+ *    result is exactly `__C.NSTextAlignment`: the result is x0;
+ *  - a parameter typed `__C.NSTextAlignment`, when every parameter before it
+ *    has a type whose GP register count is known (Swift.String and String?
+ *    two, the integer types and Bool one, Objective-C classes and their
+ *    Optionals one, Double, Float and CGFloat none) and it lands in x0-x7.
+ *    Any other type before it ends the scan: later parameters are left alone.
+ * Bits 0-7 of the result name argument registers x0-x7, HAO_SWIFT_ENUM_RESULT
+ * the result. A class name not yet registered at bind time (the guest's
+ * imports bind while their native libraries load) gives
+ * HAO_SWIFT_ENUM_PENDING: the first call decides again with final set, when
+ * an unknown name is no class. A Swift async function, an Optional NSTextAlignment and a
+ * mangling the demangler does not spell this way are not converted. */
+static int textalign_gp(const char *t, size_t n, bool final)
+{
+    static const struct { const char *t; int gp; } known[] = {
+        {"Swift.String", 2}, {"Swift.String?", 2}, {"Swift.Int", 1}, {"Swift.UInt", 1}, {"Swift.Bool", 1},
+        {"Swift.Int8", 1}, {"Swift.UInt8", 1}, {"Swift.Int16", 1}, {"Swift.UInt16", 1}, {"Swift.Int32", 1},
+        {"Swift.UInt32", 1}, {"Swift.Int64", 1}, {"Swift.UInt64", 1}, {"Swift.AnyObject", 1}, {"Swift.AnyObject?", 1},
+        {"Swift.Double", 0}, {"Swift.Float", 0}, {"CoreGraphics.CGFloat", 0}, {"__C.NSTextAlignment", 1},
+    };
+    for (unsigned k = 0; k < sizeof known / sizeof *known; k++)
+        if (strlen(known[k].t) == n && !memcmp(known[k].t, t, n)) return known[k].gp;
+    /* the runtime's demangler spells an Optional "Swift.Optional<T>": a String's two words, a
+     * class reference's one (its nil is the null pointer) */
+    static const char opt[] = "Swift.Optional<";
+    if (n > sizeof opt && !memcmp(t, opt, sizeof opt - 1) && t[n - 1] == '>') {
+        const char *in = t + sizeof opt - 1;
+        size_t m = n - (sizeof opt - 1) - 1;
+        if ((m == 12 && !memcmp(in, "Swift.String", 12)) || (m == 15 && !memcmp(in, "Swift.AnyObject", 15)))
+            return m == 12 ? 2 : 1;
+        if (m > 4 && !memcmp(in, "__C.", 4) && in[m - 1] != '?' && !(m == 19 && !memcmp(in, "__C.NSTextAlignment", 19)))
+            return textalign_gp(in, m, final);   /* a class (an enum's Optional has a tag word too) */
+        return -1;
+    }
+    /* an imported Objective-C class (or its Optional): one pointer */
+    if (n > 4 && !memcmp(t, "__C.", 4)) {
+        char cls[128];
+        size_t m = n - 4 - (t[n - 1] == '?');
+        if (m == 0 || m >= sizeof cls) return -1;
+        memcpy(cls, t + 4, m);
+        cls[m] = 0;
+        for (size_t i = 0; i < m; i++)
+            if (!((cls[i] >= 'A' && cls[i] <= 'Z') || (cls[i] >= 'a' && cls[i] <= 'z') || (cls[i] >= '0' && cls[i] <= '9') || cls[i] == '_'))
+                return -1;
+        /* before the class is registered (its library still loading) the answer waits for the first call */
+        return objc_getClass(cls) ? 1 : final ? -1 : -2;
+    }
+    return -1;
+}
+
+uint16_t hao_swift_textalign_demangled(const char *d, bool final)
+{
+    static const char T[] = "__C.NSTextAlignment";
+    size_t tl = sizeof T - 1, dl = strlen(d);
+    if (!strstr(d, T)) return 0;
+    if (dl > tl + 10 && !strncmp(d + dl - tl - 10, ".setter : ", 10) && !strcmp(d + dl - tl, T)) return 1;
+    if (dl > tl + 10 && !strncmp(d + dl - tl - 10, ".getter : ", 10) && !strcmp(d + dl - tl, T)) return HAO_SWIFT_ENUM_RESULT;
+    if (strstr(d, " : ") && !strstr(d, " -> ")) return 0;   /* another accessor */
+    /* the entity's parameter list: the first '(' that is not "(extension in M):" */
+    const char *p = d;
+    if (!strncmp(p, "static ", 7)) p += 7;
+    if (!strncmp(p, "(extension in ", 14)) {
+        p = strstr(p, "):");
+        if (!p) return 0;
+        p += 2;
+    }
+    p = strchr(p, '(');
+    if (!p) return 0;
+    uint16_t bits = 0;
+    int gp = 0, depth = 0;
+    bool scanning = true;
+    const char *start = p + 1, *q = p + 1, *unresolved = NULL;
+    for (; *q; q++) {
+        char ch = *q;
+        if (ch == '(' || ch == '<' || ch == '[') depth++;
+        else if ((ch == ')' || (ch == '>' && q[-1] != '-') || ch == ']') && depth) depth--;   /* not an arrow's '>' */
+        else if (!depth && (ch == ',' || ch == ')')) {
+            if (scanning && q > start) {
+                /* "label: Type" or "Type" */
+                const char *t = start, *e = q;
+                int dd = 0;
+                for (const char *s = start; s + 1 < q; s++) {
+                    if (*s == '(' || *s == '<' || *s == '[') dd++;
+                    else if (*s == ')' || (*s == '>' && s[-1] != '-') || *s == ']') dd--;
+                    else if (!dd && s[0] == ':' && s[1] == ' ') { t = s + 2; break; }
+                }
+                int g = textalign_gp(t, (size_t)(e - t), final);
+                if (g == -2) unresolved = q;
+                if (g < 0) scanning = false;
+                else {
+                    if ((size_t)(e - t) == tl && !memcmp(t, T, tl) && gp < 8) bits |= (uint16_t)(1u << gp);
+                    gp += g;
+                }
+            }
+            if (ch == ')') break;
+            start = q + 2;   /* past ", " */
+        }
+    }
+    if (*q != ')') return 0;
+    /* a parameter after an unresolved class name may be one: decided at the first call */
+    if (unresolved && memmem(unresolved, (size_t)(q - unresolved), T, tl)) bits |= HAO_SWIFT_ENUM_PENDING;
+    /* the result: " -> __C.NSTextAlignment" right after the list and its effects, not async */
+    const char *r = q + 1;
+    if (!strncmp(r, " throws", 7)) {
+        r += 7;
+        if (*r == '(') { r = strchr(r, ')'); if (!r) return bits; r++; }
+    }
+    if (!strcmp(r, " -> __C.NSTextAlignment")) bits |= HAO_SWIFT_ENUM_RESULT;
+    if (!strncmp(q + 1, " async", 6)) return 0;
+    return bits;
+}
+
+uint16_t hao_swift_textalign(const char *sym, bool final)
+{
+    /* the words of "NSTextAlignment" appear in the mangling at least once (a word substitution
+     * refers back to an earlier literal word) */
+    if (!sym || strncmp(sym, "_$s", 3) || !strcasestr(sym, "alignment")) return 0;
+    demangle_fn dm = demangler();
+    if (!dm) return 0;
+    char buf[4096];
+    size_t len = sizeof buf;
+    if (!dm(sym + 1, strlen(sym + 1), buf, &len, 0)) return 0;
+    buf[len < sizeof buf ? len : sizeof buf - 1] = 0;
+    return hao_swift_textalign_demangled(buf, final);
+}
+
+uint64_t hao_swift_textalign_value(uint64_t v)
+{
+    return v == 1 || v == 2 ? 3 - v : v;
+}
+
 /* guest continuations that receive a narrow result: address -> kind. Lock-free
  * reads; writers hold cont_lock (hao/gmap.h). */
 static hao_gmap conts = HAO_GMAP_INIT(2, 1, 8, 24);
 static pthread_mutex_t cont_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static pthread_mutex_t genres_lock = PTHREAD_MUTEX_INITIALIZER;   /* native generic results, below */
+static pthread_mutex_t sitepack_lock = PTHREAD_MUTEX_INITIALIZER; /* packed stack arguments from call sites, below */
 void hao_swiftcc_fork_child(void)
 {
     cont_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     genres_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    sitepack_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 }
 
 void hao_swift_async_note_call(uint64_t ctx, char kind)
@@ -1197,4 +1351,364 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native)
     m = viewself_word(c, at);
     if (!viewself_meta(m, &desc)) return NULL;
     return hao_swift_borrow_to_native((const void *)(uintptr_t)m, (const void *)(uintptr_t)c->x[20]);
+}
+
+/* ------------------------------------------- packed stack arguments, from the call site
+ *
+ * Apple arm64 passes the arguments past x7 at their natural size and alignment
+ * (two Bools take [sp] and [sp+1]); x86_64 SysV gives each its own 8-byte
+ * slot. hao_native_call copies the guest's stack words to SysV slots 2
+ * onward, which is right only while every stack argument starts at a multiple
+ * of 8. An interface-unit record of kind K gives a native Swift function's
+ * layout; a function without one (no unit, or one the generator left UNKNOWN)
+ * got the word copy, so its later stack arguments came from the wrong words:
+ * findmylocateagent on 26B131 calls FindMyLocate's Friend.init with two Bools
+ * at [sp] and [sp+1] and the addresses of an indirect Handle? and
+ * LocationSharingState? at [sp+8] and [sp+16]; x86_64 took the state's
+ * address for the owner Handle's and copied 176 bytes of guest stack as a
+ * Handle, which the friend list's copy then retained.
+ *
+ * The guest's call site holds the layout. LLVM lowers a call's outgoing
+ * arguments as stores to [sp, #off] inside the call sequence, after every
+ * argument value is computed and after the sequence's own `sub sp`, so they
+ * lie between the call and the nearest earlier branch, call, function start
+ * or write of sp, each with its argument's width. A store is not always one
+ * argument: LLVM merges adjacent constant arguments into one wider store (two
+ * constant Bools become `strh` of 0x101), and adjacent values loaded from
+ * adjacent memory the same way; such a layout has one argument too few and
+ * shifts every later one. So the layout is checked against the native callee
+ * (hao/x86args.h): its frame-pointer reads say how many SysV stack slots it
+ * takes, K + 2 (slots 0 and 1 carry x6 and x7). A layout is taken only when
+ * the K lowest stores prove one: general-register stores at naturally aligned
+ * offsets with widths 1, 2, 4 or 8, none overlapping, contiguous from 0 up to
+ * alignment padding, at least one at an offset that is not 8 times its
+ * position (otherwise the word copy is already right), the callee reading
+ * every one of the K slots and none narrower than the store. Stores above
+ * the K arguments are the caller's locals (a `str q0` spill, the frame
+ * record) and are not looked at. Fewer than K stores (a merged store, or an
+ * argument stored outside the window), a SIMD/FP store among them (FP stack
+ * arguments are placed differently), a store through a register offset or a
+ * hole leaves the word copy. When the callee's code does not show its slots
+ * (no frame-pointer prologue, an instruction the decoder does not know, its
+ * image's function starts missing), every store must be an argument and every
+ * store wider than a byte must hold an address computed in the window (sp-
+ * or x29-relative, ADR/ADRP), which no merge of narrower arguments is.
+ *
+ * The stores describe the native function only when the instruction before
+ * lr called it: a BL to a stub whose slot holds the native address, or a
+ * BLR/BLRAA whose register still holds it at the call (a guest function that
+ * tail-calls the native one reaches it with its caller's lr, whose stores are
+ * the guest function's arguments). The answer is kept per (call site, native
+ * function), in one word: nearly every call site has none, and a daemon's
+ * memory limit counts the table; the layouts are few and kept apart. An
+ * indirect call's register is checked on every call. */
+#define SITEPACK_WINDOW 64
+#define SITEPACK_DIRECT 0xff
+#define SITEPACK_LAYOUTS 256
+static hao_gmap sitepacks = HAO_GMAP_INIT(3, 2, 6, 20);   /* (lr, native) -> n | register << 8 | (layout + 1) << 16 */
+static uint8_t sitepack_layouts[SITEPACK_LAYOUTS][2 * HAO_IF_MAX_PACK];   /* (offset, width) pairs; under sitepack_lock */
+static unsigned sitepack_nlayouts;
+static inline uint64_t untag(uint64_t a) { return a & 0x00007fffffffffffull; }
+
+/* The address a stub at T branches to: ADRP, ADD, LDR (64-bit, unsigned offset) of x16/x17, then BR or
+ * BRAA/BRAB; 0 for anything else. */
+static uint64_t stub_target(uint64_t t)
+{
+    hao_image *im = hao_image_for_code(t);
+    uint64_t r[32] = {0};
+    uint32_t known = 0;
+    for (int k = 0; im && k < 6; k++) {
+        uint64_t a = t + 4 * (uint64_t)k;
+        if (hao_image_for_code(a) != im) return 0;
+        uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, a);
+        unsigned rd = i & 31, rn = (i >> 5) & 31;
+        if ((i & 0x9F000000) == 0x90000000) {                     /* ADRP */
+            uint64_t imm = ((uint64_t)((i >> 29) & 3) | (uint64_t)((i >> 5) & 0x7ffff) << 2) << 12;
+            r[rd] = (a & ~0xfffull) + (uint64_t)sx(imm, 33);
+            known |= bit(rd);
+        } else if ((i & 0xFF800000) == 0x91000000 && rd != 31 && rn != 31 && (known & bit(rn))) {   /* ADD Xd, Xn, #imm */
+            r[rd] = r[rn] + ((uint64_t)((i >> 10) & 0xfff) << (((i >> 22) & 1) ? 12 : 0));
+            known |= bit(rd);
+        } else if ((i & 0xFFC00000) == 0xF9400000 && rn != 31 && (known & bit(rn))) {   /* LDR Xt, [Xn, #imm] */
+            if (!genres_read(r[rn] + (((i >> 10) & 0xfff) << 3), &r[rd], 8)) return 0;
+            known |= bit(rd);
+        } else if ((i & 0xFFFFFC1F) == 0xD61F0000 || (i & 0xFEFFF800) == 0xD61F0800)   /* BR, BRAA/BRAB(Z) */
+            return (known & bit(rn)) ? untag(r[rn]) : 0;
+        else return 0;
+    }
+    return 0;
+}
+
+/* How the instruction at CALL reaches NATIVE: SITEPACK_DIRECT (a BL to a stub that branches to it), the
+ * register of an indirect call (checked per call), or -1 (not a call of it). */
+static int sitepack_call(uint64_t call, uint64_t native)
+{
+    hao_image *im = hao_image_for_code(call);
+    if (!im) return -1;
+    uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, call);
+    if ((i & 0xFC000000) == 0x94000000)                           /* BL */
+        return stub_target(call + (uint64_t)(sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
+    if ((i & 0xFFFFFC1F) == 0xD63F0000 || (i & 0xFEFFF800) == 0xD63F0800)   /* BLR, BLRAA/BLRAB(Z) */
+        return (int)((i >> 5) & 31);
+    return -1;
+}
+
+/* ---- the native callee's stack-argument slots, kept per function */
+#define SITEPACK_SKIPS 32
+#define SITEPACK_CODE_MAX (256u << 10)
+/* native -> 1 | shown << 1 | nslots << 8, then the slots' widths (HAO_X86_MAX_SLOTS bytes) */
+static hao_gmap callee_slots = HAO_GMAP_INIT(2 + (HAO_X86_MAX_SLOTS + 7) / 8, 1, 4, 14);
+
+/* The length of the x86_64 function at FN, up to the next entry of its image's LC_FUNCTION_STARTS
+ * (FN must be one) inside its executable __TEXT, and its LC_DATA_IN_CODE ranges as offsets from FN;
+ * 0 when they are not known. */
+static size_t native_code(uint64_t fn, uint32_t skip[2 * SITEPACK_SKIPS], int *nskip)
+{
+    Dl_info d;
+    *nskip = 0;
+    if (!fn || !dladdr((const void *)(uintptr_t)fn, &d) || !d.dli_fbase) return 0;
+    const struct mach_header_64 *mh = d.dli_fbase;
+    if (mh->magic != MH_MAGIC_64 || mh->cputype != CPU_TYPE_X86_64) return 0;
+    const uint8_t *lc = (const uint8_t *)(mh + 1);
+    const struct segment_command_64 *text = NULL, *le = NULL;
+    const struct linkedit_data_command *fs = NULL, *dic = NULL;
+    for (uint32_t k = 0; k < mh->ncmds; k++, lc += ((const struct load_command *)lc)->cmdsize) {
+        const struct load_command *l = (const void *)lc;
+        if (l->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sg = (const void *)lc;
+            if (!strncmp(sg->segname, "__TEXT", 16)) text = sg;
+            else if (!strncmp(sg->segname, "__LINKEDIT", 16)) le = sg;
+        } else if (l->cmd == LC_FUNCTION_STARTS) fs = (const void *)lc;
+        else if (l->cmd == LC_DATA_IN_CODE) dic = (const void *)lc;
+    }
+    if (!text || !le || !fs || !(text->initprot & VM_PROT_EXECUTE)) return 0;
+    uint64_t lo = (uint64_t)(uintptr_t)mh, hi = lo + text->vmsize;
+    if (fn < lo || fn >= hi) return 0;
+    /* linkedit data by file offset, in the shared cache as in a file */
+    const uint8_t *base = (const uint8_t *)mh + (le->vmaddr - text->vmaddr) - le->fileoff;
+    const uint8_t *p = base + fs->dataoff, *e = p + fs->datasize;
+    uint64_t a = lo, end = 0;
+    bool found = false;
+    while (p < e && !end) {
+        uint64_t v = 0;
+        unsigned sh = 0;
+        uint8_t b;
+        do {
+            if (p >= e || sh > 56) return 0;
+            b = *p++;
+            v |= (uint64_t)(b & 0x7f) << sh;
+            sh += 7;
+        } while (b & 0x80);
+        if (!v) break;
+        a += v;
+        if (a == fn) found = true;
+        else if (a > fn) end = a;
+    }
+    if (!found || !end || end > hi || end - fn > SITEPACK_CODE_MAX) return 0;
+    if (dic) {
+        const struct data_in_code_entry *x = (const void *)(base + dic->dataoff);
+        for (uint32_t k = 0; k < dic->datasize / sizeof *x; k++) {
+            uint64_t at = lo + x[k].offset;
+            if (at + x[k].length <= fn || at >= end) continue;
+            if (*nskip == SITEPACK_SKIPS) return 0;
+            skip[2 * *nskip] = (uint32_t)(at > fn ? at - fn : 0);
+            skip[2 * *nskip + 1] = (uint32_t)(at + x[k].length - fn);
+            ++*nskip;
+        }
+    }
+    return (size_t)(end - fn);
+}
+
+/* The stack-argument slots of the native function NATIVE (following up to three trampolines): false
+ * when its code does not show them (hao_x86_stackargs). */
+static bool callee_stackuse(uint64_t native, hao_x86_stackuse *u)
+{
+    uint64_t fn = untag(native);
+    const uint64_t *e = hao_gmap_get1(&callee_slots, fn);
+    memset(u, 0, sizeof *u);
+    if (e) {
+        u->nslots = (int)(e[1] >> 8);
+        memcpy(u->width, &e[2], sizeof u->width);
+        return (e[1] >> 1) & 1;
+    }
+    bool shown = false;
+    for (int hop = 0, t = 0; hop < 4 && !t; hop++) {
+        uint32_t skip[2 * SITEPACK_SKIPS];
+        int nskip;
+        size_t len = native_code(fn, skip, &nskip);
+        if (!len || !hao_x86_stackargs((const uint8_t *)(uintptr_t)fn, len, skip, nskip, u)) break;
+        if (u->jump) fn = u->jump;
+        else shown = t = 1;
+    }
+    if (!shown) memset(u, 0, sizeof *u);
+    bool fresh;
+    uint64_t key = untag(native);
+    hao_crit_enter();
+    pthread_mutex_lock(&sitepack_lock);
+    uint64_t *s = hao_gmap_claim(&callee_slots, &key, &fresh);
+    if (s && fresh) {
+        s[1] = 1 | (uint64_t)shown << 1 | (uint64_t)u->nslots << 8;
+        memcpy(&s[2], u->width, sizeof u->width);
+        hao_gmap_publish(&callee_slots, s, &key);
+    }
+    pthread_mutex_unlock(&sitepack_lock);
+    hao_crit_leave();
+    return shown;
+}
+
+/* Whether the register a store at window position K (the instruction at call - 4K) writes holds an
+ * address computed inside the window: ADR/ADRP, or a 64-bit ADD/SUB immediate of sp, x29 or an
+ * ADR/ADRP result. No merge of narrower arguments is such a value. */
+static bool sitepack_address(const uint32_t *win, int nwin, int k, unsigned r)
+{
+    for (int depth = 0; depth < 2; depth++) {
+        if (r == 31) return false;                                     /* wzr/xzr: a constant */
+        int d = k + 1;
+        for (; d <= nwin; d++) {
+            ins o;
+            decode(win[d], 0, &o);
+            if (o.wr & bit(r)) break;
+        }
+        if (d > nwin) return false;                                    /* set before the window */
+        uint32_t i = win[d];
+        if ((i & 0x1F000000) == 0x10000000) return true;               /* ADR, ADRP */
+        if ((i & 0xBF800000) != 0x91000000) return false;              /* not ADD/SUB Xd, Xn, #imm */
+        unsigned rn = (i >> 5) & 31;
+        if (rn == 31 || rn == 29) return true;
+        if (depth) return false;
+        /* ADD Xd, Xn, #imm of an ADRP result */
+        for (d++; d <= nwin; d++) {
+            ins o;
+            decode(win[d], 0, &o);
+            if (o.wr & bit(rn)) return (win[d] & 0x9F000000) == 0x90000000;
+        }
+        return false;
+    }
+    return false;
+}
+
+/* The layout the stores of the call sequence ending at CALL give its stack arguments, as described
+ * above, or 0 (word copy); *why says why a packed-looking site was refused. */
+static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_PACK], uint8_t width[HAO_IF_MAX_PACK],
+                         const char **why)
+{
+    *why = NULL;
+    hao_image *im = hao_image_for_code(call);
+    if (!im) return 0;
+    ins o;
+    struct { int16_t off; uint8_t w, fp, src, k; } st[2 * SITEPACK_WINDOW];
+    uint32_t win[SITEPACK_WINDOW + 1];
+    int ns = 0, nwin = 0;
+    for (int k = 1; k <= SITEPACK_WINDOW; k++) {
+        uint64_t a = call - 4 * (uint64_t)k;
+        if (hao_image_for_code(a) != im) break;
+        uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, a);
+        decode(i, a, &o);
+        if (o.flow != F_NEXT || o.dst == 31 || o.wb_reg == 31) break;   /* control flow, or sp written */
+        win[nwin = k] = i;
+        if (o.mem && !o.load && o.base == 31) {
+            bool pair = (i & 0x38000000) == 0x28000000, fp = (i >> 26) & 1;
+            int w = pair ? o.bytes / 2 : o.bytes;
+            for (int p = 0; p <= (int)pair; p++) {
+                int64_t at = o.imm + p * w;
+                if (at < 0 || at >= 8 * HAO_IF_MAX_PACK) continue;     /* below sp, or no argument we place */
+                bool seen = false;
+                for (int j = 0; j < ns && !seen; j++) {
+                    if (st[j].off == at && st[j].w == w) seen = true;  /* the later store is the argument */
+                    else if (at < st[j].off + st[j].w && st[j].off < at + w) return 0;   /* overlapping */
+                }
+                if (!seen) {
+                    st[ns].off = (int16_t)at, st[ns].w = (uint8_t)w, st[ns].fp = fp, st[ns].k = (uint8_t)k;
+                    st[ns].src = (uint8_t)(p ? (i >> 10) & 31 : i & 31);
+                    ns++;
+                }
+            }
+        } else if ((i & 0x3B200C00) == 0x38200800 && ((i >> 5) & 31) == 31 && !((i >> 22) & 1))
+            return 0;                                                  /* a store to [sp, register] */
+        if (hao_is_guest_function(a)) break;
+    }
+    for (int x = 1; x < ns; x++)                                       /* by offset */
+        for (int y = x; y > 0 && st[y - 1].off > st[y].off; y--) { __typeof__(st[0]) t = st[y]; st[y] = st[y - 1]; st[y - 1] = t; }
+    /* every general-register store at a multiple of 8: no layout of them is packed */
+    bool odd = false;
+    for (int j = 0; j < ns; j++) odd |= !st[j].fp && (st[j].off & 7);
+    if (!odd) return 0;
+    hao_x86_stackuse u;
+    bool shown = callee_stackuse(native, &u);
+    int n = ns;
+    if (shown) {
+        n = u.nslots - 2;
+        if (n <= 0) { *why = "the callee reads no stack argument past x7"; return 0; }
+        if (n > ns) { *why = "fewer stores than the callee's stack arguments (a merged store?)"; return 0; }
+    }
+    if (n > HAO_IF_MAX_PACK) { *why = "too many stack arguments"; return 0; }
+    bool packed = false;
+    unsigned end = 0;
+    for (int j = 0; j < n; j++) {
+        unsigned at = (unsigned)st[j].off, w = st[j].w;
+        if (st[j].fp) { *why = "an FP/SIMD store among the arguments"; return 0; }
+        if ((w != 1 && w != 2 && w != 4 && w != 8) || at % w) { *why = "a store not naturally aligned"; return 0; }
+        if (at != ((end + w - 1) & ~(w - 1))) { *why = "a hole among the stores"; return 0; }
+        if (shown) {
+            uint8_t r = u.width[j + 2];
+            if (!r) { *why = "the callee does not read an argument's slot"; return 0; }
+            if (r != HAO_X86_WIDTH_UNKNOWN && r < w) { *why = "the callee reads a slot narrower than its store"; return 0; }
+        } else if (w > 1 && !sitepack_address(win, nwin, st[j].k, st[j].src)) {
+            *why = "callee not readable, and a store wider than a byte may be merged arguments";
+            return 0;
+        }
+        off[j] = (uint8_t)at;
+        width[j] = (uint8_t)w;
+        packed |= at != 8u * (unsigned)j;
+        end = at + w;
+    }
+    return packed ? n : 0;
+}
+
+int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width)
+{
+    uint64_t lr = c->x[30], key[2] = {lr, native};
+    if (!lr || (lr & 3) || !native) return 0;
+    const uint64_t *e = hao_gmap_get(&sitepacks, key);
+    int n, reg;
+    uint8_t o[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
+    const char *why = NULL;
+    if (e) {
+        uint64_t v = e[2];
+        unsigned li = (unsigned)(v >> 16);
+        n = (int)(v & 0xff);
+        reg = (int)((v >> 8) & 0xff);
+        if (n && li) for (int j = 0; j < n; j++) { o[j] = sitepack_layouts[li - 1][2 * j]; w[j] = sitepack_layouts[li - 1][2 * j + 1]; }
+        else if (n) n = sitepack_scan(lr - 4, native, o, w, &why);   /* the layout table was full: read the site again */
+    } else {
+        reg = sitepack_call(lr - 4, native);
+        n = reg < 0 ? 0 : sitepack_scan(lr - 4, native, o, w, &why);
+        if (reg < 0) reg = SITEPACK_DIRECT;
+        bool fresh;
+        hao_crit_enter();
+        pthread_mutex_lock(&sitepack_lock);
+        uint64_t *s = hao_gmap_claim(&sitepacks, key, &fresh);
+        if (s && fresh) {
+            unsigned li = 0;
+            if (n && sitepack_nlayouts < SITEPACK_LAYOUTS) {
+                li = ++sitepack_nlayouts;
+                for (int j = 0; j < n; j++) { sitepack_layouts[li - 1][2 * j] = o[j]; sitepack_layouts[li - 1][2 * j + 1] = w[j]; }
+            }
+            s[2] = (uint64_t)n | (uint64_t)reg << 8 | (uint64_t)li << 16;
+            hao_gmap_publish(&sitepacks, s, key);
+        }
+        pthread_mutex_unlock(&sitepack_lock);
+        hao_crit_leave();
+        if (n && hao_opt.bridge_check) {
+            char t[8 * HAO_IF_MAX_PACK];
+            size_t l = 0;
+            for (int j = 0; j < n && l + 9 < sizeof t; j++) l += (size_t)snprintf(t + l, sizeof t - l, "%s%u.%u", j ? "," : "", o[j], w[j]);
+            fprintf(HAO_DIAG, "hao: packed stack arguments from the call site at %#llx: %s\n", (unsigned long long)(lr - 4), t);
+        } else if (why && hao_opt.bridge_check)
+            fprintf(HAO_DIAG, "hao: packed stack arguments at %#llx refused (%s): word copy\n", (unsigned long long)(lr - 4), why);
+    }
+    if (n <= 0 || (reg != SITEPACK_DIRECT && untag(c->x[reg]) != untag(native))) return 0;
+    memcpy(off, o, (size_t)n);
+    memcpy(width, w, (size_t)n);
+    return n;
 }

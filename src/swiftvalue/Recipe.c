@@ -459,6 +459,88 @@ int translated_nil_type(const void *type)
     return translated_xi_enum(&r, ((const void *const *)type)[2], &e);
 }
 
+/* The extra-inhabitant count TYPE has in arm64 code compiled against it:
+ * the count a native frozen type's layout gives on arm64 (its fields'
+ * maximum, as Metadata.cpp performBasicLayout takes it), where it holds a
+ * native spare-bit enum whose row gives arm64's count (Data: 12 against
+ * x86_64's 252); the live count for everything else (a resilient native
+ * type, whose count guest code reads from its metadata at run time; a guest
+ * type, whose table guest code or this rule made). Through tuples and
+ * Optionals (payload count - 1). *MOVED is set where a row changed a
+ * count; a type without one keeps its live count, so a field reflection
+ * does not list (a Builtin's in Bool) never changes it. 0 if not known. */
+static int arm_xi(reflection *r, const void *type, unsigned depth, uint32_t *out, int *moved)
+{
+    const witnesses *v = vwt(type);
+    const void *const *m = type;
+    uintptr_t kind = r->kind(type);
+    *out = v->extra;
+    *moved = 0;
+    if (depth > 16) return 0;
+    if (kind == 0x202 && m[1] == r->optional) {
+        uint32_t p;
+        if (!arm_xi(r, m[2], depth + 1, &p, moved)) return 0;
+        if (!*moved) { *out = v->extra; return 1; }
+        if (!p) return 0;                       /* a tag byte on arm64, inhabitants on x86_64: another size */
+        *out = p - 1;
+        return 1;
+    }
+    bool native = (kind == 0x200 || kind == 0x201) && m[1] && !hao_image_for_addr((uint64_t)(uintptr_t)m[1]);
+    if (kind == 0x201 && native && depth) {         /* inside a frozen struct: its layout is compiled in */
+        mpenum_row row;
+        if (mpenum_type(type, &row) && row.xi == v->extra && !(row.flags & MPENUM_XI) &&
+            !row.x86_extra_bits && !row.arm_extra_bits && row.arm_xi != v->extra) {
+            *out = row.arm_xi;
+            *moved = 1;
+        }
+        return 1;
+    }
+    if (kind == 0x301 || (kind == 0x200 && native && native_frozen_type(type) && type != r->string &&
+                          m[1] != r->array)) {
+        intptr_t count = r->count(type);
+        if (count < 0 || count > 64) return 0;
+        uint32_t best = 0;
+        int any = 0;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type, i, &info);
+            if (info.free_name) info.free_name(info.name);
+            uint32_t c;
+            int mv;
+            if (!child || !arm_xi(r, child, depth + 1, &c, &mv)) return 0;
+            any |= mv;
+            if (c > best) best = c;
+        }
+        if (any) { *out = best; *moved = best != v->extra; }
+        return 1;
+    }
+    return 1;
+}
+
+int arm_struct_xi(const void *const *fields, const uint8_t *tags, size_t n, uint32_t *out)
+{
+    reflection r = {
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 0,
+    };
+    if (!r.kind || !r.count || !r.field || !r.optional || n > 4096) return 0;
+    uint32_t best = 0;
+    int any = 0;
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t c;
+        int mv;
+        if (tags[i] || !fields[i] || !arm_xi(&r, fields[i], 0, &c, &mv)) return 0;
+        any |= mv;
+        if (c > best) best = c;
+    }
+    if (!any) return 0;
+    *out = best;
+    return 1;
+}
+
 /* A type declared differently on arm64 (Tables.h archdiff_type,
  * src/archdiff_gen.inc) whose bytes guest code lays out: one its module
  * froze (frozenstruct_gen.inc), whose layout is compiled into guest code.

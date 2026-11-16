@@ -174,6 +174,10 @@ static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
 /* Shared by every UNKNOWN entry point while nothing counts per symbol. */
 static const hao_plan unknown_import = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL};
 static const hao_plan unknown_bare = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .flags = HAO_PLAN_DLADDR};
+/* the same for a synchronous Swift function (packed stack arguments from the call site) */
+static const hao_plan unknown_import_sitepack = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .kind = HAO_KIND_SITEPACK};
+static const hao_plan unknown_bare_sitepack = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .flags = HAO_PLAN_DLADDR,
+                                               .kind = HAO_KIND_SITEPACK};
 
 /* bind counts: edges (one per resolved import) by class and source */
 static uint64_t st_bind_cls[HAO_BR_NCLASS], st_bind_src[HAO_BRS_N], st_bare, st_bare_named, st_bare_typed, st_bare_skipped;
@@ -942,6 +946,7 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
     if (hao_swift_async_param(gname)) p->flags |= HAO_PLAN_ASYNCARG;
     if (hao_swift_genres_bind(native, gname, p->flags & HAO_PLAN_SWIFTASYNC)) p->flags |= HAO_PLAN_GENRESULT;
     if (hao_swift_viewself_bind(native, gname)) p->flags |= HAO_PLAN_VIEWSELF;
+    if (!(p->flags & HAO_PLAN_SWIFTASYNC)) p->swift_enum = hao_swift_textalign(gname, false);
     uint64_t gh = 0, nh = 0;
     bool thunk = r && (r->flags & HAO_IFR_THUNK) && !hao_opt.no_thunks && hao_thunks_pair(v->str + r->thunk, &gh, &nh);
     if (r && (r->flags & HAO_IFR_THUNK) && !thunk) __atomic_fetch_add(&st_thunk_missing, 1, __ATOMIC_RELAXED);
@@ -999,6 +1004,11 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
         p->cls = HAO_BR_UNKNOWN;
         if (r && r->why) p->why = v->str + r->why;
     }
+    /* a synchronous Swift function the unit and tables leave untyped: Apple arm64 may have packed its
+     * stack arguments, which the guest call site shows (swiftcc.c hao_swift_sitepack). An async one's
+     * swifttailcc callee pops its own area (no repack, as for kind K). */
+    if (p->cls == HAO_BR_UNKNOWN && !p->kind && !(p->flags & HAO_PLAN_SWIFTASYNC) && gname && !strncmp(gname, "_$s", 3))
+        p->kind = HAO_KIND_SITEPACK;
 }
 
 /* The compiled-in sources by guest import name (interpose.c tables, then a
@@ -1285,15 +1295,17 @@ static const hao_plan *publish(const hao_plan *tmp, const char *name)
 {
     const hao_plan *r;
     L();
-    bool share = tmp->cls == HAO_BR_UNKNOWN && !hao_bridge_counting && !tmp->why && !tmp->redirect &&
+    bool share = tmp->cls == HAO_BR_UNKNOWN && (!tmp->kind || tmp->kind == HAO_KIND_SITEPACK) && !hao_bridge_counting &&
+                 !tmp->why && !tmp->redirect && !tmp->swift_enum &&
                  !(tmp->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT | HAO_PLAN_VIEWSELF | HAO_PLAN_PROBE));
-    if (share) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare : &unknown_import);
+    if (share && tmp->kind) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare_sitepack : &unknown_import_sitepack);
+    else if (share) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare : &unknown_import);
     else {
         hao_plan *p = arena_alloc(sizeof *p);
         if (!p) { U(); return NULL; }
         *p = *tmp;
         /* names: for reports and diagnostics only */
-        if (hao_bridge_counting || p->cls == HAO_BR_REFUSED) p->name = arena_str(name);
+        if (hao_bridge_counting || p->cls == HAO_BR_REFUSED || (p->swift_enum & HAO_SWIFT_ENUM_PENDING)) p->name = arena_str(name);
         r = tab_put(tmp->native, p);
     }
     U();
