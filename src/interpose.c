@@ -96,6 +96,13 @@ static const vlist_map vlists[] = {
     /* libsystem_trace SPI: void os_log_with_args(os_log_t, os_log_type_t, const char *fmt, va_list,
      * void *ret_addr) */
     {"_os_log_with_args", 3},
+    /* libswiftos SPI, what the os overlay's os_log() and os_signpost() call (arguments read from the
+     * arm64e code; tests/guest/oslog.sh checks the x86_64 side):
+     * void _swift_os_log(dso, ra, os_log_t, os_log_type_t, const char *fmt, va_list);
+     * void _swift_os_signpost_with_format(dso, ra, os_log_t, os_signpost_type_t, const char *name,
+     * os_signpost_id_t, const char *fmt, va_list). Guest code calls them with an arm64 va_list from its
+     * own va_start or an inlined withVaList (src/valist_builder.c). */
+    {"__swift_os_log", 5}, {"__swift_os_signpost_with_format", 7},
     /* libsystem_platform private SPI (launchd's early console log) */
     {"__simple_vsnprintf", 3}, {"__simple_vsprintf", 2}, {"__simple_vdprintf", 2}, {"__simple_vesprintf", 3},
     /* CoreUtils (private, so not in vlist_gen.inc, which comes from SDK declarations): every export whose
@@ -132,22 +139,36 @@ static const hao_fmtattr *entry_fmt(const hao_fmtattr **cache, const char *name,
     return a;
 }
 
+void hao_sysv_call(uint64_t fn, const uint64_t gpr[6], const uint8_t xmm[8][16], const uint64_t *stack, uint64_t nstack,
+                   uint64_t out[6]);
+
 /* fn(prefix zeros..., fixed..., va_list, [registers after the fixed ones when `tail`]);
- * argument `fi` (if >= 0) replaced by `fv` */
+ * argument `fi` (if >= 0) replaced by `fv`. Arguments past the sixth (x6, x7: a va_list at index 6 or 7)
+ * go in SysV stack slots, where an x86_64 caller puts them. */
 static void call_with_va(hao_thread *t, void *fn, int nfixed, int nprefix, uint64_t va_source, bool tail, int fi, uint64_t fv)
 {
     hao_cpu *c = &t->cpu;
-    if (nfixed + nprefix > 5) {   /* the tables guarantee this; the native call takes 6 registers */
+    int nargs = nfixed + nprefix + 1;
+    if (nargs > 8) {   /* the tables guarantee this: the fixed arguments come from x0-x7 */
         HAO_LOG(0, "va_list bridge with %d fixed arguments is not supported\n", nfixed + nprefix);
         abort();
     }
     x86_va_list va;
     make_va(va, va_source);
-    uint64_t a[6] = {0};
+    uint64_t a[8] = {0};
     for (int k = 0; k < nfixed; k++) a[k + nprefix] = k == fi ? fv : c->x[k];
     a[nfixed + nprefix] = (uint64_t)(uintptr_t)va;
-    if (tail) for (int k = nfixed + 1; k < 6; k++) a[k] = c->x[k];
-    c->x[0] = ((fn6)fn)(a[0], a[1], a[2], a[3], a[4], a[5]);
+    if (nargs <= 6) {
+        if (tail) for (int k = nfixed + 1; k < 6; k++) a[k] = c->x[k];
+        c->x[0] = ((fn6)fn)(a[0], a[1], a[2], a[3], a[4], a[5]);
+        return;
+    }
+    if (tail) for (; nargs < 8; nargs++) a[nargs] = c->x[nargs];
+    uint64_t out[6] = {0};
+    uint8_t xmm[8][16];
+    memset(xmm, 0, sizeof xmm);
+    hao_sysv_call((uint64_t)(uintptr_t)fn, a, (const uint8_t (*)[16])xmm, a + 6, (uint64_t)(nargs - 6), out);
+    c->x[0] = out[0];
 }
 
 static void trap_vararg(hao_thread *t, uint64_t idx)
@@ -216,8 +237,6 @@ static const gvar_map gvars[] = {
 #define GVAR_SLOTS 16
 #define GVAR_FMT_SLOTS 64
 static char gvar_narrow[sizeof gvars / sizeof *gvars];
-void hao_sysv_call(uint64_t fn, const uint64_t gpr[6], const uint8_t xmm[8][16], const uint64_t *stack, uint64_t nstack,
-                   uint64_t out[6]);
 
 /* A gvar whose SDK declaration has a format attribute: the format's conversions type the guest's
  * slots, so floating arguments reach the XMM registers SysV va_arg reads them from (W7). */

@@ -1,6 +1,8 @@
 // Swift's logging routes from guest code (tests/guest/oslog.sh, src/oslog.c): Logger (the compiler's
 // buffer, _os_log_impl with the module's #dsohandle), os_log() and os_signpost() (libswiftos, native code
-// that sends a pack naming the guest's dso: os_log_pack_send, _os_signpost_emit_with_name_impl).
+// that sends a pack naming the guest's dso: os_log_pack_send, _os_signpost_emit_with_name_impl), and
+// libswiftos's _swift_os_log and _swift_os_signpost_with_format called with a va_list from an inlined
+// withVaList (oslogswiftspi.h), as code inlining the overlay's os_log() and os_signpost() does.
 import Foundation
 import os
 
@@ -20,4 +22,29 @@ os_log("os_log error %{public}s", log: log, type: .error, "err")
 let spid = OSSignpostID(log: log)
 os_signpost(.begin, log: log, name: "SwiftInterval", signpostID: spid, "begin %d", value)
 os_signpost(.end, log: log, name: "SwiftInterval", signpostID: spid)
+let spiLog: StaticString = "spi log %d %{public}@ %f %lld"
+let spiName: StaticString = "SpiInterval"
+let spiBegin: StaticString = "spi begin %{public}@ %d %f"
+spiLog.withUTF8Buffer { f in
+    f.withMemoryRebound(to: CChar.self) { f in
+        withVaList([value, "spi" as NSString, 1.25, Int64(-9_876_543_210)]) { va in
+            _swift_os_log(#dsohandle, nil, log, .default, f.baseAddress!, va)
+        }
+    }
+}
+spiName.withUTF8Buffer { n in
+    n.withMemoryRebound(to: CChar.self) { n in
+        spiBegin.withUTF8Buffer { f in
+            f.withMemoryRebound(to: CChar.self) { f in
+                withVaList(["s" as NSString, value, 0.75]) { va in
+                    _swift_os_signpost_with_format(#dsohandle, nil, log, .begin, n.baseAddress!, spid.rawValue,
+                                                   f.baseAddress!, va)
+                }
+            }
+        }
+        withVaList([]) { va in
+            _swift_os_signpost_with_format(#dsohandle, nil, log, .end, n.baseAddress!, spid.rawValue, nil, va)
+        }
+    }
+}
 logger.log("\(tag, privacy: .public) swift end")

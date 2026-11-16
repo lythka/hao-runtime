@@ -5,9 +5,11 @@
 #   oslog       tests/guest/oslog.c + osloghelper.c (a guest dylib: no x86_64 slice): every log type,
 #               public/private/sensitive/plain strings, numbers, objects, precision, value annotations,
 #               mask.hash, %m, OS_LOG_DEFAULT, a second subsystem, signposts, _os_log_internal,
-#               _os_log_send_and_compose_impl
+#               _os_log_send_and_compose_impl, libswiftos's _swift_os_log and _swift_os_signpost_with_format
+#               from a C variadic (a va_start va_list; the signpost's format and va_list in x6/x7)
 #   oslogswift  tests/guest/oslogswift.swift: Logger with privacy, os_log() and os_signpost() (libswiftos
-#               sends a pack naming the guest's dso)
+#               sends a pack naming the guest's dso), and the two libswiftos entries called with a va_list
+#               from an inlined withVaList
 #
 # Each program is embedded (tools/hao-embed --host-test) and run as `arch -arm64` (native) and
 # `arch -x86_64` under JIT, --interp (HAO_FLAGS=i) and AOT (HAO_CACHE). Its records are read back with
@@ -37,9 +39,9 @@ fails=0
 clang -arch arm64 -arch arm64e -O1 -dynamiclib -install_name "$OUT/libosloghelper.dylib" \
     -o libosloghelper.dylib "$here/osloghelper.c" && codesign -s - -f libosloghelper.dylib 2>/dev/null || exit 2
 clang -arch arm64 -arch arm64e -O1 -Wno-format -Wno-deprecated-declarations -framework CoreFoundation \
-    -o plain/oslog "$here/oslog.c" libosloghelper.dylib && codesign -s - -f plain/oslog 2>/dev/null || exit 2
+    -L"$(xcrun --show-sdk-path)/usr/lib/swift" -lswiftos -o plain/oslog "$here/oslog.c" libosloghelper.dylib && codesign -s - -f plain/oslog 2>/dev/null || exit 2
 for a in arm64 arm64e; do
-    xcrun swiftc -target $a-apple-macos27.0 -O -o "oslogswift.$a" "$here/oslogswift.swift" 2>swift.log || { cat swift.log; exit 2; }
+    xcrun swiftc -target $a-apple-macos27.0 -O -import-objc-header "$here/oslogswiftspi.h" -o "oslogswift.$a" "$here/oslogswift.swift" 2>swift.log || { cat swift.log; exit 2; }
 done
 lipo -create -output plain/oslogswift oslogswift.arm64 oslogswift.arm64e && codesign -s - -f plain/oslogswift 2>/dev/null || exit 2
 # a build directory whose front end lacks hao_oslog_format (tools/hao-embed relinks from its front/stub.o)

@@ -561,6 +561,7 @@ tests/guest/oslog.c
 tests/guest/oslog.sh
 tests/guest/osloghelper.c
 tests/guest/oslogswift.swift
+tests/guest/oslogswiftspi.h
 tests/guest/p25src.c
 tests/guest/p25srccxx.cpp
 tests/guest/regvar.c

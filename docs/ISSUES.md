@@ -1,5 +1,37 @@
 # Runtime issues and measured scope
 
+## libswiftos `_swift_os_log` and `_swift_os_signpost_with_format` from guest code
+
+The os overlay's `os_log()` and `os_signpost()` with `CVarArg` arguments end
+in two libswiftos functions that take a `va_list`:
+`_swift_os_log(dso, ra, log, type, format, va_list)` and
+`_swift_os_signpost_with_format(dso, ra, log, type, name, id, format,
+va_list)`. Guest code that calls them itself (a C variadic wrapper that
+forwards its `va_start` list, or Swift that inlines `withVaList`) bound them
+directly: the native function got the guest's arm64 `va_list`, a pointer to
+8-byte slots, as an x86_64 `va_list` and faulted in libswiftos
+`_os_log_encode` reading its fields. Dock does this from its display
+reconfiguration callback, so every display change ended it with SIGSEGV.
+Neither name is in an SDK header, so neither is in `src/vlist_gen.inc`.
+
+Both are now hand rows of the `va_list` table (index 5 and 7, read from the
+arm64e code; the tests below check the x86_64 side). `call_with_va` passes arguments past the sixth in
+SysV stack slots, so a `va_list` may now be the seventh or eighth argument
+(x6, x7).
+
+`guest/oslog` calls both from a C variadic (`oslog`, with the signpost's
+format and `va_list` in x6/x7) and from Swift `withVaList` (`oslogswift`),
+with integer, 64-bit, double and object arguments and a null signpost format.
+Before the change both programs ended with SIGSEGV at the instruction of
+Dock's reports under JIT and `--interp`; after it, their `log show` records
+equal native arm64's under JIT, `--interp`, AOT and the old-stub mode.
+
+Limits: `%s` with a C string is not a valid libswiftos argument (native arm64
+faults in the same encoder); the tests do not use it. As for every row of
+the table, a list from Swift's `getVaList` (already an x86_64 `va_list`,
+`src/valist_builder.c`) is not converted correctly. Not yet measured in Dock
+itself.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.
@@ -2612,7 +2644,7 @@ Remaining limitations:
   encoding in `src/objc.c`). A private function of those kinds needs a hand
   row.
 - A function with a floating-point argument before its `va_list`, or with more
-  than five integer arguments before it, cannot go through `call_with_va`. No
+  than seven integer arguments before it, cannot go through `call_with_va`. No
   CoreUtils row has either.
 
 ## Guest calls of native Optional, tuple and array witnesses
