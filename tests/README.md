@@ -98,6 +98,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/cuvalist | PASS | 2 | private CoreUtils on the host (`VSNPrintF`, `NSErrorV`, ...) |
 | guest/deepcallback | PASS | 1 | guest -> native -> guest recursion (qsort's comparator sorting again) 250 levels deep on a 512 KB thread: hao's native frames per level must fit where native arm64's do |
 | guest/cxxabi | PASS | 10 | |
+| guest/cxxbool | PASS | 3 | C++ functions with ObjC BOOL parameters in a native library: the guest imports `..b..` (bool on arm64), the x86_64 slice exports `..a..` (signed char) |
 | guest/datacall | PASS | 1 | |
 | guest/dsc | PASS | 3 | the host's arm64e shared cache |
 | guest/dscswift | PASS | 10 | the host's arm64e shared cache |

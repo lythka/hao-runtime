@@ -315,6 +315,14 @@ int hao_tables_plan(const char *name, char *kind, const char **enc);
  * ABI that Apple arm64 follows; clang's AppleARM64CXXABI HasThisReturn),
  * x86_64 returns void. */
 bool hao_cxx_this_return(const char *name);
+/* ObjC BOOL is bool on arm64 and signed char on x86_64 (objc.h
+ * OBJC_BOOL_IS_BOOL), so a C++ function with BOOL in its signature has two
+ * mangled names: b in the arm64 slice, a in the x86_64 one. The offsets in
+ * name ("__Z...", a function's encoding) of the builtin type b: their count,
+ * or -1 for data, special and local names, what the walk does not read and
+ * more than HAO_CXX_BOOL_MAX. */
+#define HAO_CXX_BOOL_MAX 6
+int hao_cxx_bool_types(const char *name, size_t off[HAO_CXX_BOOL_MAX]);
 /* blocks.c: the argument scan. hao_thunk_native_args_mask scans the slots
  * mask names (HAO_BR_SCAN_ALL: hao_thunk_native_args); hao_args_code_slots
  * reports, changing nothing, which slots the full scan would act on. */

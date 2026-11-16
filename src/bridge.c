@@ -1043,7 +1043,15 @@ typedef struct {
     size_t len;
 } cx_comp;
 
-static const char *cx_type(const char *p, int d);
+/* Where the walk read the builtin type bool (b): HAO_CXX_BOOL_MAX at most,
+ * then over. NULL: not recorded. */
+typedef struct {
+    const char *at[HAO_CXX_BOOL_MAX];
+    int n;
+    bool over;
+} cx_rec;
+
+static const char *cx_type(const char *p, int d, cx_rec *r);
 
 static bool cx_digit(char c) { return c >= '0' && c <= '9'; }
 
@@ -1067,14 +1075,14 @@ static const char *cx_seq(const char *p)
     return *p == '_' ? p + 1 : NULL;
 }
 
-static const char *cx_template_args(const char *p, int d);
+static const char *cx_template_args(const char *p, int d, cx_rec *r);
 
 /* L <type> <value> E; L _Z <encoding> E is not read */
-static const char *cx_expr_primary(const char *p, int d)
+static const char *cx_expr_primary(const char *p, int d, cx_rec *r)
 {
     p++;
     if (*p == '_' || *p == 'Z') return NULL;
-    if (!(p = cx_type(p, d))) return NULL;
+    if (!(p = cx_type(p, d, r))) return NULL;
     while (*p && *p != 'E') {
         if (!cx_digit(*p) && !(*p >= 'a' && *p <= 'f') && *p != 'n' && *p != 'p' && *p != '.') return NULL;
         p++;
@@ -1082,35 +1090,35 @@ static const char *cx_expr_primary(const char *p, int d)
     return *p == 'E' ? p + 1 : NULL;
 }
 
-static const char *cx_template_arg(const char *p, int d)
+static const char *cx_template_arg(const char *p, int d, cx_rec *r)
 {
-    if (p[0] == 'T' && p[1] == 'y') return cx_template_arg(p + 2, d);   /* a type parameter's declaration */
+    if (p[0] == 'T' && p[1] == 'y') return cx_template_arg(p + 2, d, r);   /* a type parameter's declaration */
     if (p[0] == 'T' && p[1] == 'n') {                                   /* a non-type parameter's: its type */
-        if (!(p = cx_type(p + 2, d))) return NULL;
-        return cx_template_arg(p, d);
+        if (!(p = cx_type(p + 2, d, r))) return NULL;
+        return cx_template_arg(p, d, r);
     }
     switch (*p) {
-    case 'L': return cx_expr_primary(p, d);
+    case 'L': return cx_expr_primary(p, d, r);
     case 'J':
         for (p++; *p != 'E';)
-            if (!*p || !(p = cx_template_arg(p, d))) return NULL;
+            if (!*p || !(p = cx_template_arg(p, d, r))) return NULL;
         return p + 1;
     case 'X': return NULL;       /* an expression */
-    default: return cx_type(p, d);
+    default: return cx_type(p, d, r);
     }
 }
 
 /* I <template-arg>+ E */
-static const char *cx_template_args(const char *p, int d)
+static const char *cx_template_args(const char *p, int d, cx_rec *r)
 {
     if (++d > 64) return NULL;
     for (p++; *p != 'E';)
-        if (!*p || !(p = cx_template_arg(p, d))) return NULL;
+        if (!*p || !(p = cx_template_arg(p, d, r))) return NULL;
     return p + 1;
 }
 
 /* <unqualified-name> [<abi-tags>] */
-static const char *cx_unqualified(const char *p, int d, cx_comp *out)
+static const char *cx_unqualified(const char *p, int d, cx_rec *r, cx_comp *out)
 {
     cx_comp c = {.kind = 't'};
     if (p[0] == 'L' && cx_digit(p[1])) p++;                 /* internal linkage */
@@ -1119,7 +1127,7 @@ static const char *cx_unqualified(const char *p, int d, cx_comp *out)
         p = cx_source_name(p, &c.id, &c.len);
     } else if (p[0] == 'C' && p[1] == 'I' && (p[2] == '1' || p[2] == '2')) {   /* inheriting constructor: CI1 <base> */
         c.kind = 'c', c.code = p[2];
-        p = cx_type(p + 3, d);
+        p = cx_type(p + 3, d, r);
     } else if (p[0] == 'C' && p[1] >= '1' && p[1] <= '5') {
         c.kind = 'c', c.code = p[1];
         p += 2;
@@ -1134,13 +1142,13 @@ static const char *cx_unqualified(const char *p, int d, cx_comp *out)
         for (p += 2; cx_digit(*p); p++) {}
         p = *p == '_' ? p + 1 : NULL;
     } else if (p[0] == 'U' && p[1] == 'l') {               /* lambda: Ul <parameter types> E [<number>] _ */
-        for (p += 2; p && *p != 'E';) p = *p ? cx_type(p, d) : NULL;
+        for (p += 2; p && *p != 'E';) p = *p ? cx_type(p, d, r) : NULL;
         if (!p) return NULL;
         for (p++; cx_digit(*p); p++) {}
         p = *p == '_' ? p + 1 : NULL;
     } else if (p[0] >= 'a' && p[0] <= 'z' && p[1]) {        /* an operator */
         c.kind = 'o', c.id = p, c.len = 2;
-        if (p[0] == 'c' && p[1] == 'v') p = cx_type(p + 2, d);
+        if (p[0] == 'c' && p[1] == 'v') p = cx_type(p + 2, d, r);
         else if (p[0] == 'l' && p[1] == 'i') p = cx_source_name(p + 2, NULL, NULL);
         else if (p[0] == 'v' && cx_digit(p[1])) p = cx_source_name(p + 2, NULL, NULL);
         else if ((p[1] >= 'a' && p[1] <= 'z') || (p[1] >= 'A' && p[1] <= 'Z')) p += 2;
@@ -1154,7 +1162,7 @@ static const char *cx_unqualified(const char *p, int d, cx_comp *out)
 
 /* N [<CV-qualifiers>] [<ref-qualifier>] <prefix> <unqualified-name> E, at 'N'. last[0] and last[1]: the
  * last two components (kind 0: none); *cv_const: the K qualifier (a const member function). */
-static const char *cx_nested(const char *p, int d, cx_comp last[2], bool *cv_const)
+static const char *cx_nested(const char *p, int d, cx_rec *r, cx_comp last[2], bool *cv_const)
 {
     cx_comp prev = {0}, cur = {0};
     bool k = false;
@@ -1165,7 +1173,7 @@ static const char *cx_nested(const char *p, int d, cx_comp last[2], bool *cv_con
         cx_comp c = {.kind = 's'};
         if (!*p) return NULL;
         if (*p == 'I') {                                   /* the template arguments of the component before */
-            if (!cur.kind || !(p = cx_template_args(p, d))) return NULL;
+            if (!cur.kind || !(p = cx_template_args(p, d, r))) return NULL;
             continue;
         }
         if (*p == 'M') { p++; continue; }                  /* a data-member prefix */
@@ -1181,7 +1189,7 @@ static const char *cx_nested(const char *p, int d, cx_comp last[2], bool *cv_con
         else if (p[0] == 'D' && (p[1] == 't' || p[1] == 'T'))
             return NULL;                                   /* decltype */
         else
-            p = cx_unqualified(p, d, &c);
+            p = cx_unqualified(p, d, r, &c);
         if (!p) return NULL;
         prev = cur;
         cur = c;
@@ -1192,45 +1200,51 @@ static const char *cx_nested(const char *p, int d, cx_comp last[2], bool *cv_con
     return p + 1;
 }
 
-static const char *cx_type(const char *p, int d)
+static const char *cx_type(const char *p, int d, cx_rec *r)
 {
     if (++d > 64 || !*p) return NULL;
     char c = *p;
-    if (strchr("vwbcahstijlmxynofdegz", c)) return p + 1;
+    if (strchr("vwbcahstijlmxynofdegz", c)) {
+        if (c == 'b' && r) {
+            if (r->n < HAO_CXX_BOOL_MAX) r->at[r->n++] = p;
+            else r->over = true;
+        }
+        return p + 1;
+    }
     switch (c) {
     case 'r': case 'V': case 'K': case 'P': case 'R': case 'O': case 'C': case 'G':
-        return cx_type(p + 1, d);
+        return cx_type(p + 1, d, r);
     case 'U':                                              /* vendor qualifier U <source-name> [<template-args>] <type> */
         if (!(p = cx_source_name(p + 1, NULL, NULL))) return NULL;
-        if (*p == 'I' && !(p = cx_template_args(p, d))) return NULL;
-        return cx_type(p, d);
+        if (*p == 'I' && !(p = cx_template_args(p, d, r))) return NULL;
+        return cx_type(p, d, r);
     case 'u':                                              /* vendor type */
         if (!(p = cx_source_name(p + 1, NULL, NULL))) return NULL;
-        return *p == 'I' ? cx_template_args(p, d) : p;
+        return *p == 'I' ? cx_template_args(p, d, r) : p;
     case 'F':                                              /* F [Y] <types> [<ref-qualifier>] E */
         if (*++p == 'Y') p++;
         while (*p != 'E') {
             if ((*p == 'R' || *p == 'O') && p[1] == 'E') { p++; break; }
-            if (!*p || !(p = cx_type(p, d))) return NULL;
+            if (!*p || !(p = cx_type(p, d, r))) return NULL;
         }
         return p + 1;
     case 'A':                                              /* A [<number>] _ <type> */
         for (p++; cx_digit(*p); p++) {}
-        return *p == '_' ? cx_type(p + 1, d) : NULL;
+        return *p == '_' ? cx_type(p + 1, d, r) : NULL;
     case 'M':                                              /* M <class type> <member type> */
-        if (!(p = cx_type(p + 1, d))) return NULL;
-        return cx_type(p, d);
+        if (!(p = cx_type(p + 1, d, r))) return NULL;
+        return cx_type(p, d, r);
     case 'T':
-        if (p[1] == 's' || p[1] == 'u' || p[1] == 'e') return cx_type(p + 2, d);   /* elaborated: struct, union, enum */
+        if (p[1] == 's' || p[1] == 'u' || p[1] == 'e') return cx_type(p + 2, d, r);   /* elaborated: struct, union, enum */
         if (!(p = cx_seq(p + 1))) return NULL;            /* a template parameter */
-        return *p == 'I' ? cx_template_args(p, d) : p;
+        return *p == 'I' ? cx_template_args(p, d, r) : p;
     case 'S':
-        if (p[1] == 't') p = cx_unqualified(p + 2, d, NULL);
+        if (p[1] == 't') p = cx_unqualified(p + 2, d, r, NULL);
         else if (p[1] && strchr("absiod", p[1])) p += 2;
         else p = cx_seq(p + 1);
-        return p && *p == 'I' ? cx_template_args(p, d) : p;
+        return p && *p == 'I' ? cx_template_args(p, d, r) : p;
     case 'N':
-        return cx_nested(p, d, NULL, NULL);
+        return cx_nested(p, d, r, NULL, NULL);
     case 'D':
         switch (p[1]) {
         case 'd': case 'e': case 'f': case 'h': case 'i': case 's': case 'u': case 'a': case 'c': case 'n':
@@ -1242,24 +1256,24 @@ static const char *cx_type(const char *p, int d)
             for (p += 2; cx_digit(*p); p++) {}
             return *p == '_' ? p + 1 : NULL;
         case 'p':                                          /* pack expansion */
-            return cx_type(p + 2, d);
+            return cx_type(p + 2, d, r);
         case 'v':                                          /* vector: Dv <number> _ <type> */
             if (!cx_digit(p[2])) return NULL;
             for (p += 2; cx_digit(*p); p++) {}
-            return *p == '_' ? cx_type(p + 1, d) : NULL;
+            return *p == '_' ? cx_type(p + 1, d, r) : NULL;
         case 'x': case 'o':                                /* transaction_safe / noexcept function type */
-            return cx_type(p + 2, d);
+            return cx_type(p + 2, d, r);
         case 'w':                                          /* dynamic exception specification */
             for (p += 2; *p != 'E';)
-                if (!*p || !(p = cx_type(p, d))) return NULL;
-            return cx_type(p + 1, d);
+                if (!*p || !(p = cx_type(p, d, r))) return NULL;
+            return cx_type(p + 1, d, r);
         default:
             return NULL;
         }
     default:
         if (cx_digit(c) || (c == 'L' && cx_digit(p[1]))) {   /* a class or enum: <unqualified-name> [<template-args>] */
-            if (!(p = cx_unqualified(p, d, NULL))) return NULL;
-            return *p == 'I' ? cx_template_args(p, d) : p;
+            if (!(p = cx_unqualified(p, d, r, NULL))) return NULL;
+            return *p == 'I' ? cx_template_args(p, d, r) : p;
         }
         return NULL;
     }
@@ -1280,10 +1294,31 @@ bool hao_cxx_this_return(const char *name)
 {
     if (strncmp(name, "__ZN", 4)) return false;
     cx_comp last[2];
-    const char *params = cx_nested(name + 3, 0, last, NULL);
+    const char *params = cx_nested(name + 3, 0, NULL, last, NULL);
     if (!params) return false;
     if (last[1].kind == 'd') return (last[1].code == '1' || last[1].code == '2') && !strcmp(params, "v");
     return last[1].kind == 'c' && (last[1].code == '1' || last[1].code == '2');
+}
+
+/* _Z <name> <bare-function-type> (5.1.2); a template function's first type is its result's. */
+int hao_cxx_bool_types(const char *name, size_t off[HAO_CXX_BOOL_MAX])
+{
+    if (strncmp(name, "__Z", 3)) return -1;
+    cx_rec r = {0};
+    const char *p = name + 3;
+    if (*p == 'N')
+        p = cx_nested(p, 0, &r, NULL, NULL);
+    else {
+        if (p[0] == 'S' && p[1] == 't') p += 2;                                         /* ::std */
+        if (!cx_digit(*p) && !(*p == 'L' && cx_digit(p[1])) && !(*p >= 'a' && *p <= 'z')) return -1;   /* T, G, Z, S */
+        p = cx_unqualified(p, 0, &r, NULL);
+        if (p && *p == 'I') p = cx_template_args(p, 0, &r);
+    }
+    if (!p || !*p) return -1;   /* no parameter types: data */
+    while (p && *p) p = cx_type(p, 0, &r);
+    if (!p || r.over) return -1;
+    for (int k = 0; k < r.n; k++) off[k] = (size_t)(r.at[k] - name);
+    return r.n;
 }
 
 static bool cx_is(const cx_comp *c, const char *id)
@@ -1549,7 +1584,7 @@ static const char *libcxx_string_result(const char *name, const char *lib)
                                             "do_positive_sign", "do_negative_sign", "do_transform"};
     cx_comp last[2];
     bool is_const = false;
-    const char *params = cx_nested(name + 3, 0, last, &is_const);   /* N K <class> <function> E <params> */
+    const char *params = cx_nested(name + 3, 0, NULL, last, &is_const);   /* N K <class> <function> E <params> */
     if (!params) return NULL;
     if (cx_is(&last[1], "message"))
         return is_const && !strcmp(params, "i") ? "error_category::message returns std::string by value" : NULL;
