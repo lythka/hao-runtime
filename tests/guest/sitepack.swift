@@ -31,10 +31,46 @@ import SitePackHelper
     return s + " v=\(v * v)"
 }
 
+// a guest Codable value around the native ones: nested keyed and unkeyed containers, an enum with
+// payloads, optionals; the native JSONEncoder calls its guest encode(to:) and the native Context's
+enum Shape: Codable { case note(String), sticker(Int, Offer?), group([Shape]) }
+struct Board: Codable {
+    var title: String
+    var contexts: [Context]
+    var byName: [String: Context?]
+    var shapes: [Shape]
+    var pinned: Context?
+}
+
+@inline(never) func context(_ n: Int) -> Context {
+    _ = dirty()
+    return Context(status: n % 2 == 0 ? .active : .trial, product: n % 3 == 0 ? nil : "com.example.plan\(n)",
+                   renews: n % 2 == 0 ? nil : flag(n), purchaser: flag(n + 1), age: 0, currentAge: 0, trialAge: 0,
+                   trialMonth: 0, trialYear: 0, startMonth: 0, startYear: 0, offer: n == 0 ? nil : .promotional)
+}
+
+@inline(never) func encode() {
+    for n in 0..<3 {
+        let c = context(n)
+        print("context \(n): offer=\(c.offer.map { $0.rawValue } ?? "nil") years=\(c.trialYear),\(c.startMonth),\(c.startYear)")
+        let b = Board(title: "board \(n)", contexts: [c, context(n + 1)], byName: ["a": c, "none": nil],
+                      shapes: [.note("hello"), .sticker(n, c.offer), .group([.note("in"), .sticker(-1, nil)])],
+                      pinned: n == 1 ? nil : c)
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys]
+        do {
+            let d = try e.encode(b)
+            print("board \(n): \(String(decoding: d, as: UTF8.self))")
+            let back = try JSONDecoder().decode(Board.self, from: d)
+            print("decoded \(n): \(back.contexts.map { $0.offer?.rawValue ?? "nil" }) \(back.pinned?.status.rawValue ?? "nil")")
+        } catch { print("board \(n): \(error)") }
+    }
+}
+
 @main struct Main {
     static func main() {
         switch CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "" {
-        case "list": print("friend pair0 pair16 quad spill")
+        case "list": print("friend pair0 pair16 quad spill encode")
         case "friend": friends()
         case "pair0":
             for n in 0..<2 {
@@ -56,7 +92,8 @@ import SitePackHelper
                 _ = dirty()
                 print("spill: \(spill(SIMD4<Float>(Float(n), 2, 3, 4), n == 0 ? nil : Tag("tag-\(n)"), flag(n), flag(n + 1)))")
             }
-        default: print("usage: sitepack list|friend|pair0|pair16|quad|spill")
+        case "encode": encode()
+        default: print("usage: sitepack list|friend|pair0|pair16|quad|spill|encode")
         }
     }
 

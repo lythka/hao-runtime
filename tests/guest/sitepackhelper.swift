@@ -89,3 +89,34 @@ public func tagged(_ x0: Int, _ x1: Int, _ x2: Int, _ x3: Int, _ x4: Int, _ x5: 
                    _ a: Bool, _ b: Bool, _ o: Tag?) -> String {
     "x=\(x0),\(x1),\(x2),\(x3),\(x4),\(x5),\(x6),\(x7) a=\(a) b=\(b) o=\(o?.name ?? "nil")"
 }
+
+// A Codable struct whose initializer takes four Int32 and the address of an indirect Offer? past x7:
+// [sp] [sp+4] [sp+8] [sp+12] the Int32, [sp+16] the Offer? (AppSubscriptions
+// UserSubscriptionContextData.init's shape; the x86_64 callee reads 4 bytes of slots 2-5). A call
+// site with constant zero Int32 stores them with one `stp xzr, xzr`, often the one that also
+// allocates the outgoing area (`[sp, #-32]!`); the native JSON encoding reads the Offer? back.
+public enum Status: String, Codable { case none, active, expired, trial }
+public enum Offer: String, Codable { case unknown, winback, promotional, code, introductory }
+
+public struct Context: Codable {
+    public var status: Status
+    public var product: String?
+    public var renews: Bool?
+    public var purchaser: Bool
+    public var age: Int32, currentAge: Int32, trialAge: Int32
+    public var trialMonth: Int32, trialYear: Int32, startMonth: Int32, startYear: Int32
+    public var offer: Offer?
+    public var offerID: String?
+    public var grouped: Bool
+
+    // x0 status*, x1 x2 product, w3 renews, w4 purchaser, w5-w7 the ages, then the stack as above
+    @inline(never)
+    public init(status: Status, product: String?, renews: Bool?, purchaser: Bool, age: Int32, currentAge: Int32,
+                trialAge: Int32, trialMonth: Int32, trialYear: Int32, startMonth: Int32, startYear: Int32,
+                offer: Offer?) {
+        self.status = status; self.product = product; self.renews = renews; self.purchaser = purchaser
+        self.age = age; self.currentAge = currentAge; self.trialAge = trialAge
+        self.trialMonth = trialMonth; self.trialYear = trialYear; self.startMonth = startMonth; self.startYear = startYear
+        self.offer = offer; self.offerID = nil; self.grouped = false
+    }
+}
