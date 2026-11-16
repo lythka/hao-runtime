@@ -179,7 +179,7 @@ static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "H
  * a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
-                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", NULL};
+                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {

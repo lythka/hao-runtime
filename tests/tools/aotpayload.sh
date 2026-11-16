@@ -224,8 +224,9 @@ env HAO_NO_CHAIN=1 HAO_JIT_HELPERS_ONLY=1 HAO_CACHE=/nonexistent "$repo/tools/ha
 got=$(cd "$P2/root/usr/lib/hao/aot" 2>/dev/null && ls | sort | tr '\n' ' ')
 want2=$(printf '%s.aot\n' "$U2" "$U3" | sort | tr '\n' ' ')
 if [ $rc = 0 ] && [ "$got" = "$want2" ] && cmp -s "$P2/root/usr/lib/hao/aot/$U3.aot" "$A/$U3.aot" && cmp -s "$P2/root/usr/lib/hao/aot/$U2.aot" "$A/$U2.aot" \
-    && python3 -c 'import json,sys; b=json.load(open(sys.argv[1]))["aot"]; assert (b["source"], b["programs"], b["caches"]) == ("list", 2, 2), b' "$P2/build.json"; then
-    pass "E --no-embed --aot-list: the 2 listed programs (3 lines, 1 repeat), byte for byte A's caches with HAO_NO_CHAIN/HAO_JIT_HELPERS_ONLY/HAO_CACHE in the builder's environment"
+    && python3 -c 'import json,sys; b=json.load(open(sys.argv[1]))["aot"]; assert (b["source"], b["programs"], b["caches"]) == ("list", 2, 2), b' "$P2/build.json" \
+    && [ "$(cat "$P2/root/usr/lib/hao/aot-list")" = "$(printf '/usr/bin/prog\n/usr/libexec/xpcproxy')" ]; then
+    pass "E --no-embed --aot-list: the 2 listed programs (3 lines, 1 repeat) in root/usr/lib/hao/aot-list, byte for byte A's caches with HAO_NO_CHAIN/HAO_JIT_HELPERS_ONLY/HAO_CACHE in the builder's environment"
 else bad "E --aot-list rc $rc [$got]: $(tail -3 "$OUT/e.log")"; fi
 "$repo/tools/hao-image-payload" --no-embed --aot "$OUT/pay3" "$R" >"$OUT/e3.log" 2>&1; rc=$?
 [ $rc = 2 ] && grep -q "use --aot-list" "$OUT/e3.log" && [ ! -e "$OUT/pay3" ] && pass "E --no-embed --aot: usage error (rc 2)" || bad "E --no-embed --aot rc $rc: $(tail -2 "$OUT/e3.log")"

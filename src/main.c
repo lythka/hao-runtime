@@ -29,12 +29,14 @@
 static void usage(void)
 {
     fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n"
-                    "       hao --aot [--cache DIR] [--] FILE...\n");
+                    "       hao --aot [--cache DIR] [--] [FILE...]\n");
     exit(64);
 }
 
 #include <signal.h>
 #include <dlfcn.h>
+#include <spawn.h>
+#include <sys/wait.h>
 static void watchdog(int sig)
 {
     (void)sig;
@@ -228,6 +230,93 @@ static void dyld_abs_path(const char *path, char *out, size_t n)
     snprintf(out, n, "%s/%s", cwd, path);
 }
 
+/* The default set of `hao --aot` with no FILE: the image's list of programs
+ * (/usr/lib/hao/aot-list, absolute paths, one per line), else the paths of
+ * its embedded programs (the fourth field of /usr/lib/hao/stub-identities).
+ * Either file must be root's and writable by no one else. */
+static FILE *aot_open_list(const char *path, uid_t owner)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != owner || (st.st_mode & 022)) {
+        fprintf(stderr, "hao-aot: %s is not a file of uid %u writable only by it: not used\n", path, (unsigned)owner);
+        close(fd);
+        return NULL;
+    }
+    FILE *f = fdopen(fd, "r");
+    if (!f) close(fd);
+    return f;
+}
+
+static int aot_default(const char *cache)
+{
+    hao_opts_init(NULL);
+    const char *dir = hao_opt.aot_list_dir[0] ? hao_opt.aot_list_dir : "/usr/lib/hao";
+    uid_t owner = hao_opt.aot_list_dir[0] ? geteuid() : 0;
+    char lpath[1100], spath[1100];
+    snprintf(lpath, sizeof lpath, "%s/aot-list", dir);
+    snprintf(spath, sizeof spath, "%s/stub-identities", dir);
+    bool stubs = false;
+    FILE *f = aot_open_list(lpath, owner);
+    if (!f && (f = aot_open_list(spath, owner))) stubs = true;
+    if (!f) { fprintf(stderr, "hao-aot: no FILE given and neither %s nor %s is usable\n", lpath, spath); return 1; }
+    char self[1100];
+    if (self_path(self, sizeof self) != 0) { fprintf(stderr, "hao-aot: cannot find this program's path\n"); fclose(f); return 1; }
+    int jobs = 1;
+    size_t jl = sizeof jobs;
+    if (sysctlbyname("hw.activecpu", &jobs, &jl, NULL, 0) != 0 || jobs < 1) jobs = 1;
+    if (jobs > 4) jobs = 4;
+    fprintf(stderr, "hao-aot: no FILE given: the programs %s names, %d at a time\n", stubs ? spath : lpath, jobs);
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t len;
+    int running = 0, ok = 0, failed = 0, missing = 0;
+    for (;;) {
+        len = getline(&line, &cap, f);
+        if (len > 0) {
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = 0;
+            char *p = line;
+            if (!p[0] || p[0] == '#') continue;
+            if (stubs) {
+                for (int k = 0; k < 3; k++) {
+                    while (*p && *p != ' ') p++;
+                    while (*p == ' ') p++;
+                }
+                if (!*p) continue;
+            }
+            char path[PATH_MAX];
+            if (snprintf(path, sizeof path, "%s%s", p[0] == '/' ? "" : "/", p) >= (int)sizeof path) { missing++; continue; }
+            struct stat st;
+            if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) { missing++; continue; }
+            char *av[7];
+            int n = 0;
+            av[n++] = self;
+            av[n++] = "--aot";
+            if (cache) { av[n++] = "--cache"; av[n++] = (char *)cache; }
+            av[n++] = "--";
+            av[n++] = path;
+            av[n] = NULL;
+            pid_t pid;
+            if (posix_spawn(&pid, self, NULL, NULL, av, *_NSGetEnviron()) != 0) { failed++; continue; }
+            running++;
+        }
+        while (running > 0 && (running >= jobs || len < 0)) {
+            int status;
+            pid_t w = wait(&status);
+            if (w < 0) { if (errno == EINTR) continue; running = 0; break; }
+            running--;
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) ok++;
+            else failed++;
+        }
+        if (len < 0) break;
+    }
+    free(line);
+    fclose(f);
+    fprintf(stderr, "hao-aot: %d programs cached, %d failed, %d listed but not present\n", ok, failed, missing);
+    return failed ? 1 : 0;
+}
+
 static int aot_main(int argc, char **argv)
 {
     /* hao --aot [--cache DIR] [--] BINARY...: generate AOT caches (no execution).
@@ -251,7 +340,7 @@ static int aot_main(int argc, char **argv)
         k += 2;
     }
     if (k < argc && !strcmp(argv[k], "--")) k++;
-    if (k >= argc) usage();
+    if (k >= argc) return aot_default(cache);
     hao_opts_init(NULL);
     hao_verbose = 1;
     for (; k < argc; k++)
@@ -275,7 +364,7 @@ static int aot_main(int argc, char **argv)
 int hao_cli_main(int argc, char **argv, char **envp)
 {
     hao_phase_mark();
-    if (argc >= 3 && !strcmp(argv[1], "--aot")) return aot_main(argc, argv);
+    if (argc >= 2 && !strcmp(argv[1], "--aot")) return aot_main(argc, argv);
     /* HAO_EXEC is stage 1's hand-off to stage 2, which stage 1 runs with
      * argv[0] = the program: it is the absolute path stage 1 made of that
      * argv[0]. Any other HAO_EXEC was not set by stage 1 for this exec:

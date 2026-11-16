@@ -128,6 +128,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     if ((v = env_get(o, envp, "HAO_WATCHDOG", tier))) o->watchdog = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_JIT_CACHE_MB", tier)) && atoi(v) > 0) o->jit_cache_mb = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_AOT_LIMIT_KB", tier)) && atoi(v) > 0) o->aot_limit_kb = (unsigned)atoi(v);
+    if ((v = env_get(o, envp, "HAO_AOT_LIST_DIR", tier))) snprintf(o->aot_list_dir, sizeof o->aot_list_dir, "%s", v);
     for (size_t k = 0; k < NKNOBS; k++) {
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)

@@ -1,5 +1,18 @@
 # Runtime issues and measured scope
 
+## `hao --aot` with no FILE
+
+The install instructions say to run `sudo /usr/libexec/hao --aot` once
+after the first start-up, but `hao --aot` needed FILE arguments and printed
+its usage. With no FILE it now caches the image's default set: each path of
+`/usr/lib/hao/aot-list` (the programs the payload was built to cache), or,
+on an image without that list, each program of `/usr/lib/hao/stub-identities`.
+It runs `hao --aot FILE` for each, up to four at a time. As root the caches
+go to `/private/var/db/hao`. A listed file that is not present is counted and
+skipped. Test: `guest/aotdefault`. Limits: a run caches every program again,
+including ones that already have a valid cache; the time on the target Mac
+has not been measured.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.

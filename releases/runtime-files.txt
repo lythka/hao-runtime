@@ -400,6 +400,7 @@ tests/guest/datacall.c
 tests/guest/datacall.sh
 tests/guest/datacall_lib.c
 tests/guest/diaglog.c
+tests/guest/aotdefault.sh
 tests/guest/dlrpath.c
 tests/guest/dlrpath.sh
 tests/guest/dlrpathlib.c
