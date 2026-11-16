@@ -787,6 +787,42 @@ static void witness_add_type(const void *type)
     hao_crit_leave();
 }
 
+/* A native function guest code calls for the first time (bridge.c, a bare
+ * address with no exported name): one of the value witnesses (slots 0-5) of
+ * a native struct whose module freezes it, called through that struct's
+ * metadata, if its metadata argument (x1 for destroy, x2 for the others)
+ * is a struct's metadata whose table holds this very function in that slot.
+ * Guest code compiled against a frozen struct builds its values inline
+ * (an optimized build inlining View.overlay makes `_OverlayModifier<P?>`
+ * itself), its nils in the arm64 encoding, and calls the struct's own
+ * witnesses through an outlined copy or destroy: those witnesses are added
+ * to the ones whose calls convert (hao_swift_witness_native), so this call
+ * and later ones, with any metadata whose table holds them, get the value's
+ * outer nils in the native encoding. A resilient struct's values are made
+ * only by its witnesses, in their own encoding, and are left alone. */
+void hao_swift_witness_probe(hao_thread *t, uint64_t pc)
+{
+    if (hao_opt.no_swift_values || !t || !hao_probe_safe(t) || !native_function(pc)) return;
+    hao_cpu *c = &t->cpu;
+    for (unsigned reg = 1; reg <= 2; ++reg) {
+        uint64_t m = c->x[reg], w[3], fn[6];
+        if (m < 0x1000 || (m & 7) || !hao_probe_addr_ok(m - 8)) continue;
+        if (!hao_probe_read_words(t,m - 8,w,3) || w[1] != 0x200 || !w[0] || !w[2]) continue;   /* {vwt, kind, descriptor} */
+        if ((w[0] & 7) || !hao_probe_addr_ok(w[0]) || !hao_probe_read_words(t,w[0],fn,6)) continue;
+        bool slot = false;
+        for (unsigned s = 0; s <= 5 && !slot; ++s) slot = fn[s] == pc && (s == 1) == (reg == 1);
+        if (!slot || hao_image_for_addr(w[2])) continue;   /* not this witness, or the guest's own struct */
+        const void *type = (const void *)(uintptr_t)m;
+        if (!native_frozen(type)) return;
+        hao_swift_witness_setup();
+        witness_add_type(type);
+        if (hao_opt.bridge_check)
+            fprintf(HAO_DIAG,"hao: Swift value witness of a frozen native struct called by guest code: %#llx metadata=%p\n",
+                    (unsigned long long)pc,type);
+        return;
+    }
+}
+
 /* VALUE of TYPE, made by guest code and lent to a native function for the
  * call (the indirect self of a native protocol extension method; swiftcc.c,
  * View modifiers): NULL when it needs no conversion, else a converted copy to
