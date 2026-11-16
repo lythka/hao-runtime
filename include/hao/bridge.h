@@ -152,6 +152,8 @@ typedef struct hao_plan {
                                        * arguments x0-x7, HAO_SWIFT_ENUM_RESULT the result */
     uint8_t probes;                   /* HAO_PLAN_PROBE: calls that looked for an ObjC type */
     uint64_t sel;                     /* HAO_BRS_OBJCIMP: the selector the method was found by */
+    uint64_t bsig;                    /* HAO_BRS_BLOCKSIG: the typing block's signature string when it lies in
+                                       * the shared cache (never freed), else 0 (hao_bridge_block_recheck) */
 } hao_plan;
 
 /* The plan table: open addressing keyed by native address, grown by
@@ -237,6 +239,14 @@ uint64_t hao_objc_variadic_imp_trap(uint64_t imp, bool decode);
  * typed by: the plan to use for this call (p, or tmp filled for it). */
 struct hao_cpu;
 const hao_plan *hao_bridge_objc_recheck(const struct hao_cpu *c, const hao_plan *p, hao_plan *tmp);
+/* A call through a plan typed by a native block's signature (HAO_BRS_BLOCKSIG): the plan to use
+ * for the block in x0 (p, or tmp filled from that block's own signature). */
+struct hao_thread;
+const hao_plan *hao_bridge_block_recheck(struct hao_thread *t, const hao_plan *p, hao_plan *tmp);
+/* blocks.c: the signature address of the native block at a whose invoke is inv, read as the argument
+ * scan reads (0: no such block, or no signature); whether a lies in the shared cache (never freed) */
+uint64_t hao_native_block_sigptr(const struct hao_thread *t, uint64_t a, uint64_t inv);
+bool hao_native_static_addr(uint64_t a);
 /* The plan for a guest -> native call of pc: the table, else (outside
  * signal handlers) a first-call bind by dladdr. NULL: UNKNOWN, unnamed. */
 const hao_plan *hao_bridge_plan_for_call(struct hao_thread *t, uint64_t pc);

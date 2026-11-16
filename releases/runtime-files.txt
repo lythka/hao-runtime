@@ -558,6 +558,8 @@ tests/guest/layoutxi.sh
 tests/guest/layoutxi.swift
 tests/guest/xpcrect.m
 tests/guest/xpcrect.sh
+tests/guest/xpcreply.m
+tests/guest/xpcreply.sh
 tests/guest/oslog.c
 tests/guest/oslog.sh
 tests/guest/osloghelper.c

@@ -572,8 +572,9 @@ static void native_step(void *arg)
         p = hao_bridge_plan_for_call(t, pc);
         if (seg->nc_key && hao_bridge_plan_settled(p)) ncache_put(t, seg->nc_gen, seg->nc_key, pc, seg->nc_x1, p);
     }
-    hao_plan objc_call;   /* a method IMP called with another selector than its plan's: this call's type */
+    hao_plan objc_call;   /* a method IMP called with another selector, a block invoke by another block: this call's type */
     if (p && p->src == HAO_BRS_OBJCIMP && c->x[1] != p->sel) p = hao_bridge_objc_recheck(c, p, &objc_call);
+    else if (p && p->src == HAO_BRS_BLOCKSIG) p = hao_bridge_block_recheck(t, p, &objc_call);   /* a shared invoke */
     if (p && p->redirect) { run_trap(t, p->redirect); return; }   /* an interposed function by its bare address */
     if (p && p->cls == HAO_BR_REFUSED) hao_bridge_refused(t, p);
     if (__builtin_expect(hao_bridge_counting, 0)) {
