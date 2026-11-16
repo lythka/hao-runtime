@@ -270,6 +270,47 @@ while another thread writes the code cache. `guest/fork` does this (four
 guest threads translate while the main thread forks); it has not failed in
 the gate. No Intel run confirms the Intel side yet.
 
+## C++ imports with BOOL parameters from native libraries
+
+ObjC `BOOL` is `bool` on arm64 and `signed char` on x86_64 (objc.h
+`OBJC_BOOL_IS_BOOL`). A C++ function with `BOOL` in its signature therefore
+has two mangled names: `b` in the arm64 slice, `a` in the x86_64 one. A guest
+import of such a function from a native library did not resolve. Books'
+reader framework logged `unresolved import
+__Z53TSTCellSetRichTextPayloadClearingIDConvertToPlaintextP7TSTCellP18TSTRichTextPayloadbb`
+on every launch: the x86_64 TSReading exports it as `...aa`, and a call
+would have reached the unresolved-import trap. In TSReading alone, 45 arm64e
+C++ exports are missing from the x86_64 slice under the same name, all for
+this reason (measured on the 27.2 arm64e and x86_64 caches).
+
+When the import's own name is not found natively, hao now reads the
+function's encoding (the Itanium mangling walk in `src/bridge.c`,
+`hao_cxx_bool_types`) and finds where the builtin type `b` occurs:
+parameters, pointees, template arguments, function types, and a template
+function's result. Not every `b` is a `BOOL`, so each choice of them spelled
+`a` is looked up. Exactly one native function must answer. Two different
+functions (another overload) leave the import unresolved, as before.
+The binding uses the native name for interface-unit lookups. All 45 TSReading
+names resolve this way, each to one function. `-vv` prints each rewrite.
+
+`tests/guest/cxxbool.sh` builds a universal ObjC++ helper whose x86_64 slice
+exports the `a` spellings: two `BOOL`s, a C++ `bool` next to a `BOOL`,
+`BOOL *`, a static member, two template instantiations and a plain C++
+`bool` function. JIT, `--interp` and AOT print what native arm64 prints.
+Before the change, all three modes aborted on the unresolved imports.
+`bridgetest` checks the positions the walk reports.
+
+Limits:
+- At most six `b`s per name (`HAO_CXX_BOOL_MAX`); a longer name is not
+  rewritten.
+- A name the walk does not read (local names, expressions in template
+  arguments, vendor suffixes) is not rewritten.
+- Data symbols carry no parameter types and are unaffected.
+- Imports only: a guest's `dlsym` of the arm64 name on a native library
+  handle is not rewritten.
+- A `BOOL` value crosses as it is: arm64 passes `bool` as 0 or 1 extended to
+  32 bits, which is the same `signed char` value on x86_64.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.

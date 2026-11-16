@@ -129,6 +129,36 @@ int main(int argc, char **argv)
         if (hao_swift_fixed_abi(swift[k].sym) != swift[k].yes && !mis++) snprintf(first, sizeof first, ": %s", swift[k].sym);
     printf("mangled    %s  C++ this-return and Swift fixed-ABI names from the mangling%s\n", mis ? "FAIL" : "PASS", first);
     if (mis) fail = 1;
+    /* the builtin bool types of a C++ function's encoding (BOOL on arm64, signed char on x86_64):
+     * the name with each of them as a, or NULL for -1 */
+    static const struct { const char *sym, *all; } bools[] = {
+        {"__Z53TSTCellSetRichTextPayloadClearingIDConvertToPlaintextP7TSTCellP18TSTRichTextPayloadbb",
+         "__Z53TSTCellSetRichTextPayloadClearingIDConvertToPlaintextP7TSTCellP18TSTRichTextPayloadaa"},
+        {"__Z3bobb", "__Z3boba"},                                               /* b in the identifier */
+        {"__Z8cb_storePbb", "__Z8cb_storePaa"},
+        {"__ZN4cbns5Table4pickEiib", "__ZN4cbns5Table4pickEiia"},
+        {"__ZN4cbns6chooseIiEET_S1_S1_b", "__ZN4cbns6chooseIiEET_S1_S1_a"},   /* template function: result type first */
+        {"__ZNSt3__16vectorIbNS_9allocatorIbEEE9push_backERKb", "__ZNSt3__16vectorIaNS_9allocatorIaEEE9push_backERKa"},
+        {"__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEEb", "__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEEa"},
+        {"__Z1fPFbbE", "__Z1fPFaaE"},
+        {"__Z1fiv", "__Z1fiv"},                                                 /* none */
+        {"__Z1fbbbbbbb", NULL},                                                 /* more than HAO_CXX_BOOL_MAX */
+        {"__ZN3hao1S3setEb.cold.1", NULL}, {"__ZTVN3hao1SE", NULL}, {"__ZN3hao1xE", NULL}, {"__ZZ3foovE1b", NULL},
+        {"_bool_fn", NULL},
+    };
+    int bmis = 0;
+    char bfirst[200] = "";
+    for (size_t k = 0; k < sizeof bools / sizeof *bools; k++) {
+        size_t off[HAO_CXX_BOOL_MAX];
+        int n = hao_cxx_bool_types(bools[k].sym, off);
+        char all[200];
+        snprintf(all, sizeof all, "%s", bools[k].sym);
+        for (int i = 0; i < n; i++) all[off[i]] = all[off[i]] == 'b' ? 'a' : '?';
+        if ((n < 0) != !bools[k].all || (n >= 0 && strcmp(all, bools[k].all)))
+            if (!bmis++) snprintf(bfirst, sizeof bfirst, ": %s (%d)", bools[k].sym, n);
+    }
+    printf("cxxbool    %s  bool types in C++ function names (BOOL's other spelling on x86_64)%s\n", bmis ? "FAIL" : "PASS", bfirst);
+    if (bmis) fail = 1;
     /* native generic results G? (swiftcc.c): the demangler's spellings, measured on libswift_Concurrency and
      * libswiftCore, and entities that must not qualify */
     static const struct { const char *d, *context; int param; bool throwing; } genres[] = {

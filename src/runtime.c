@@ -3277,6 +3277,39 @@ static bool defined_in(void *p, const char *lib)
     return dladdr(p, &di) && di.dli_fname && !strcmp(di.dli_fname, lib);
 }
 
+/* A C++ import with BOOL in its signature (bridge.h hao_cxx_bool_types):
+ * the x86_64 library has it with signed char (a) where the arm64 name has
+ * bool (b). Not every b is a BOOL, so each choice of them is tried; one
+ * native function must answer (two are refused: a different overload).
+ * *alt: the native name (malloc'd). */
+static void *native_bool_spelling(void *h, const char *name, bool flat, char **alt)
+{
+    size_t off[HAO_CXX_BOOL_MAX];
+    int n = hao_cxx_bool_types(name, off);
+    if (n <= 0) return NULL;
+    char *cand = strdup(name);
+    void *found = NULL;
+    unsigned hit = 0;
+    bool two = false;
+    if (!cand) return NULL;
+    for (unsigned m = (1u << n) - 1; m; m--) {
+        for (int k = 0; k < n; k++) cand[off[k]] = m >> k & 1 ? 'a' : 'b';
+        void *q = native_dlsym(h, cand + 1, flat);
+        if (!q || q == found) continue;
+        if (found) two = true;
+        else found = q, hit = m;
+    }
+    if (found && !two) {
+        for (int k = 0; k < n; k++) cand[off[k]] = hit >> k & 1 ? 'a' : 'b';
+        if (hao_verbose > 1) fprintf(stderr, "hao: %s -> %s (BOOL is signed char on x86_64)\n", name, cand);
+        *alt = cand;
+        return found;
+    }
+    if (two && hao_verbose) fprintf(stderr, "hao: %s: more than one native function with signed char for bool\n", name);
+    free(cand);
+    return NULL;
+}
+
 /* A symbol in a native library (h may be RTLD_DEFAULT); flat: also search
  * every native library. */
 static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
@@ -3294,7 +3327,9 @@ static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
             fprintf(stderr, "hao: %s -> %s%s\n", name, p ? v->native : name, p ? "" : " (variant not in this library)");
     }
     const char *nname = p ? v->native : name;
+    char *alt = NULL;
     if (!p) p = native_dlsym(h, sym, flat);
+    if (!p && (p = native_bool_spelling(h, name, flat, &alt))) nname = alt;
     if (!p) return false;
     /* a function an interposer answers under another of its names (a renamed
      * re-export, an alias at the same address): its trap, as for that name */
@@ -3303,13 +3338,14 @@ static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
         if (hao_verbose > 1) fprintf(stderr, "hao: %s -> trap %#llx (another name of its function)\n", name, (unsigned long long)trap);
         hao_bridge_bind_trap(name, HAO_BRS_TRAP);
         *addr = trap;
-        return true;
+    } else if (hao_varsniff_bind(name, (uint64_t)(uintptr_t)p, addr))   /* a variadic native function no interposer table handles (varsniff.c) */
+        hao_bridge_bind_trap(name, HAO_BRS_VARSNIFF);
+    else {
+        /* its plan: interface unit, compiled-in tables, Swift async narrow result */
+        hao_bridge_bind(name, nname, (uint64_t)(uintptr_t)p);
+        *addr = (uint64_t)(uintptr_t)p;
     }
-    /* a variadic native function no interposer table handles (varsniff.c) */
-    if (hao_varsniff_bind(name, (uint64_t)(uintptr_t)p, addr)) { hao_bridge_bind_trap(name, HAO_BRS_VARSNIFF); return true; }
-    /* its plan: interface unit, compiled-in tables, Swift async narrow result */
-    hao_bridge_bind(name, nname, (uint64_t)(uintptr_t)p);
-    *addr = (uint64_t)(uintptr_t)p;
+    free(alt);
     return true;
 }
 
