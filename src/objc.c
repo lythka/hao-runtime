@@ -1371,10 +1371,15 @@ static void msgsend_fnret(hao_cpu *c)
  * code invokes later (-invoke, NSTimer, -performSelectorOnMainThread:...): a guest function stored
  * for an argument the invocation's signature types '^?' is stored as its native entry point, from a
  * copy in *buf, as objc_msgSend passes one (trap_msgsend). */
-static SEL sel_setarg, sel_methsig, sel_argtype, sel_nargs;
+static SEL sel_setarg, sel_methsig, sel_argtype, sel_nargs, sel_fts, sel_msfs, sel_rettype;
+static IMP imp_root_fts;
 static Class cls_invocation;
 static void msgsend_init(void)   /* before the first guest objc_msgSend: its import's binding */
 {
+    sel_fts = sel_registerName("forwardingTargetForSelector:");
+    imp_root_fts = class_getMethodImplementation(objc_getClass("NSObject"), sel_fts);
+    sel_msfs = sel_registerName("methodSignatureForSelector:");
+    sel_rettype = sel_registerName("methodReturnType");
     sel_methsig = sel_registerName("methodSignature");
     sel_argtype = sel_registerName("getArgumentTypeAtIndex:");
     sel_nargs = sel_registerName("numberOfArguments");
@@ -1403,6 +1408,46 @@ static void msgsend_invocation_arg(hao_thread *t, Class cls, id inv, uint64_t *b
     c->x[2] = (uint64_t)(uintptr_t)buf;
 }
 
+/*
+ * A message no method of the receiver's class implements goes to _objc_msgForward, whose ABI is the
+ * forwarded method's. Native forwarding first asks -forwardingTargetForSelector: and sends the
+ * message on to the object it names, unchanged; else it reads the x86 frame by the receiver's
+ * -methodSignatureForSelector: (an NSXPC remote object proxy's comes from its interface's protocol)
+ * into the invocation for -forwardInvocation:. hao takes the same steps before the call, so the
+ * arguments are placed by the forwarded method's type: a struct of floats travels in s0-s3 on arm64
+ * and two to an xmm register on x86_64, a CGRect in d0-d3 and on the x86 stack.
+ */
+/* the object -forwardingTargetForSelector: names (NSObject's names none) */
+static id forwarding_target(id recv, SEL sel)
+{
+    Class k = object_getClass(recv);
+    if (!sel_fts || !class_respondsToSelector(k, sel_fts) || class_getMethodImplementation(k, sel_fts) == imp_root_fts)
+        return nil;
+    id to = ((id (*)(id, SEL, SEL))objc_msgSend)(recv, sel_fts, sel);
+    return to == recv ? nil : to;
+}
+/* -methodSignatureForSelector:'s signature as an encoding in buf; NULL when the receiver gives none */
+static const char *forwarded_types(id recv, SEL sel, char *buf, size_t size)
+{
+    if (!sel_msfs || !class_respondsToSelector(object_getClass(recv), sel_msfs)) return NULL;
+    id sig = ((id (*)(id, SEL, SEL))objc_msgSend)(recv, sel_msfs, sel);
+    if (!sig) return NULL;
+    const char *rt = ((const char *(*)(id, SEL))objc_msgSend)(sig, sel_rettype);
+    unsigned long n = ((unsigned long (*)(id, SEL))objc_msgSend)(sig, sel_nargs);
+    if (!rt || n < 2) return NULL;
+    size_t len = strlen(rt);
+    if (len >= size) return NULL;
+    memcpy(buf, rt, len + 1);
+    for (unsigned long i = 0; i < n; i++) {
+        const char *ty = ((const char *(*)(id, SEL, unsigned long))objc_msgSend)(sig, sel_argtype, i);
+        size_t l = ty ? strlen(ty) : 0;
+        if (!l || len + l >= size) return NULL;
+        memcpy(buf + len, ty, l + 1);
+        len += l;
+    }
+    return buf;
+}
+
 static void trap_msgsend(hao_thread *t, uint64_t kind)
 {
     hao_cpu *c = &t->cpu;
@@ -1429,6 +1474,15 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
     c->x[0] = (uint64_t)(uintptr_t)recv;
     uint64_t g = hao_guest_of_entry((uint64_t)(uintptr_t)imp);
     if (g) { c->pc = g; return; }               /* guest method: stay in translated code */
+    bool forwarded = imp == _objc_msgForward && !class_getInstanceMethod(cls, sel);
+    if (forwarded) {
+        id to = forwarding_target(recv, sel);
+        if (to) {                               /* the message, as sent to that object */
+            c->x[0] = (uint64_t)(uintptr_t)to;
+            trap_msgsend(t, 0);
+            return;
+        }
+    }
     hao_thunk_native_blocks(t);                 /* guest blocks passed as arguments */
     /* argument conversions by class and selector, once for every native path below (a variadic
      * one too: -[NSUnarchiver decodeValuesOfObjCTypes:]) */
@@ -1436,6 +1490,10 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
     if (msgsend_variadic(c, recv, cls, sel, imp)) { hao_objc_enum_result(c, enum_result); return; }
     Method m = class_getInstanceMethod(cls, sel);
     const char *enc = m ? method_getTypeEncoding(m) : NULL;
+    char fwdbuf[512];
+    if (forwarded) enc = forwarded_types(recv, sel, fwdbuf, sizeof fwdbuf);
+    if (imp == _objc_msgForward && enc && hao_sig_native_memret(enc))
+        imp = (IMP)_objc_msgForward_stret;   /* objc_msgSend_stret's forwarding: the result's pointer in rdi */
     /* guest functions in the slots the encoding types as code ('^?': -[NSArray
      * sortedArrayUsingFunction:context:]'s comparator) get native entry points; untyped slots keep
      * their values (hao_thunk_native_blocks) */

@@ -118,6 +118,7 @@ int main(int argc, char **argv)
     static const struct { const char *sym; bool yes; } swift[] = {
         {"_$s3hao1SVMa", true}, {"_$s3hao1SVwxx", true}, {"_$s3hao1SVwcp", true},
         {"_$s3hao5readySbyYaF", false}, {"_$s3hao1SV1aSivg", false},
+        {"_swift_getFunctionReplacement", true}, {"_swift_getOrigOfReplaceable", true}, {"_swift_retain", false},
     };
     dlopen("/usr/lib/swift/libswiftCore.dylib", RTLD_LAZY);   /* swiftcc.c finds the demangler once it is loaded */
     int mis = 0;

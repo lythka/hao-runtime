@@ -1,5 +1,6 @@
 #pragma once
 #include "Prefix.h"
+#include <stddef.h>
 #include <stdint.h>
 #include "Common.h"
 typedef struct { uint64_t size, offset; uint32_t consumed; } empty_plan;
@@ -8,6 +9,11 @@ int discover_empty_plan(const void *type, empty_plan *out);
  * spare-bit enum that differs between arm64 and x86_64 (translated by the
  * walk from the mpenum table's masks). */
 int translated_nil_type(const void *type);
+/* The extra-inhabitant count arm64 gives a struct whose N fields
+ * swift_cvw_initStructMetadataWithLayoutString lays out (FIELDS metadata,
+ * TAGS all 0): the fields' maximum, each field's count as arm64 code
+ * compiled against it has it. 0 if any field's is not known. */
+int arm_struct_xi(const void *const *fields, const uint8_t *tags, size_t n, uint32_t *out);
 /* Destination is uninitialized, exclusive storage. Returns
  * zero without writing if type/value is outside the proven empty case. */
 int initialize_empty(void *destination, const void *source, const void *type,

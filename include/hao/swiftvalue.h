@@ -32,6 +32,11 @@ bool hao_swift_native_result_to_guest(const void *type, void *value);
  * call: NULL to lend it as it is, else a copy with its nils in the native
  * encoding to lend instead (free it after the call). */
 void *hao_swift_borrow_to_native(const void *type, const void *value);
+/* After a guest call of swift_cvw_initStructMetadataWithLayoutString laid
+ * out the guest struct METADATA from its N FIELDS (TAGS): its extra
+ * inhabitant count set to arm64's, which the guest's compiled witnesses
+ * for it select a field by. */
+void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const *fields, const uint8_t *tags);
 void hao_swift_value_fork_child(void);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif

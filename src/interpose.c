@@ -966,6 +966,7 @@ static const struct {
     {hao_valist_builder_interpose, hao_valist_builder_interpose_names},
     {hao_gss_interpose, hao_gss_interpose_names},
     {hao_libm_interpose, hao_libm_interpose_names},
+    {hao_ioreg_interpose, hao_ioreg_interpose_names},
     {hao_swiftmeta_interpose, hao_swiftmeta_interpose_names},
     {objc_lookup, hao_objc_interpose_names},
     {hao_regvar_interpose, hao_regvar_interpose_names},

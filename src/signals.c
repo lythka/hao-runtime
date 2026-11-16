@@ -728,12 +728,17 @@ void hao_signal_redeliver(hao_thread *t, uint32_t pending)
  * call, so rip follows a syscall instruction. (A fault at an instruction
  * that follows one is taken for a send: give-up raises it again, which ends
  * the same way, and hao_signal_forward defers it once only.) A send from
- * another thread or process is taken for a fault. */
+ * another thread or process is taken for a fault. A fault whose address is
+ * on rip's page is a fault: an instruction fetch there when rip is the
+ * address (a call through a bad pointer into an unmapped or PROT_NONE
+ * range), whose bytes before rip cannot be read; a send returns to the
+ * syscall's own executable page, which no fault of this thread names. */
 static bool sent_signal(const siginfo_t *si, const ucontext_t *uc)
 {
     if (si->si_code <= 0 || si->si_code >= 0x10000) return true;   /* SI_USER, SI_QUEUE, ... */
     uint64_t rip = uc ? uc->uc_mcontext->__ss.__rip : 0;
-    if (rip < 4096 || (rip & 0xfff) < 2) return false;   /* rip - 2 on rip's own (mapped) page */
+    if (rip < 4096 || (rip & 0xfff) < 2) return false;   /* rip - 2 on rip's own page */
+    if (((uint64_t)(uintptr_t)si->si_addr >> 12) == (rip >> 12)) return false;   /* that page faulted */
     const uint8_t *p = (const uint8_t *)(uintptr_t)(rip - 2);
     return p[0] == 0x0f && p[1] == 0x05;
 }

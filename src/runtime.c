@@ -221,8 +221,12 @@ hao_thread *hao_current(void)
  * which may translate. */
 static void traps_fork_child(void);
 static void loads_fork_child(void);
+static pid_t fork_parent;   /* abort reports: this process is a fork child of it */
+static uint64_t fork_at;
 static void fork_child(void)
 {
+    fork_parent = getppid();
+    fork_at = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     hao_ncache_invalidate();   /* a plan another thread published may not have bumped it before the fork */
     traps_fork_child();
     loads_fork_child();
@@ -376,16 +380,18 @@ bool hao_no_guest_code;
  * plan says (hao/bridge.h; NULL: UNKNOWN). */
 /* noinline: its 320 bytes of arrays would otherwise be in every native call's frame, also across the
  * native callee's callbacks into guest code */
-__attribute__((noinline)) static void native_call_stackpack(hao_cpu *c, uint64_t pc, const hao_plan *p)
+__attribute__((noinline)) static bool native_call_stackpack(hao_cpu *c, uint64_t pc, const hao_plan *p)
 {
-    /* Swift packed stack arguments (interface-unit record kind K): Apple arm64 put the arguments
+    /* Swift packed stack arguments (interface-unit record kind K, or for kind 'k' the layout the
+     * guest call site stored, swiftcc.c hao_swift_sitepack): Apple arm64 put the arguments
      * past x7 at their natural size, SysV wants one 8-byte slot each. hao_native_call copies
      * guest stack words to slots 2 onward, so build those words below the guest's frame (the
      * arguments zero-extended, the rest 0) and let it copy them from there. Native code
      * calling back into guest code runs below them (hao_callback's red-zone margin); the
-     * guest sp is restored after the call. */
+     * guest sp is restored after the call. false: no layout, nothing called. */
     uint8_t off[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
-    int n = hao_ifunit_stackpack(p->enc, off, w);
+    int n = p->kind == HAO_KIND_SITEPACK ? hao_swift_sitepack(c, pc, off, w) : hao_ifunit_stackpack(p->enc, off, w);
+    if (n <= 0) return false;
     uint64_t sp = c->x[31], words[HAO_IF_MAX_PACK] = {0};
     for (int i = 0; i < n; i++) {
         const uint8_t *a = (const uint8_t *)(uintptr_t)(sp + off[i]);
@@ -396,6 +402,7 @@ __attribute__((noinline)) static void native_call_stackpack(hao_cpu *c, uint64_t
     c->x[31] = nsp;
     hao_native_call(pc, c, (uint64_t)n);
     c->x[31] = sp;
+    return true;
 }
 
 static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
@@ -435,11 +442,11 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
     void *lent = p && (p->flags & HAO_PLAN_VIEWSELF) ? hao_swift_viewself_call(c, p->native) : NULL;
     uint64_t self = c->x[20];
     if (lent) c->x[20] = (uint64_t)(uintptr_t)lent;
-    hao_native_call(pc, c, 16);
+    if (kind != HAO_KIND_SITEPACK || !native_call_stackpack(c, pc, p)) hao_native_call(pc, c, 16);
     if (lent) { c->x[20] = self; free(lent); }
     if (genres_at) hao_swift_genres_result(genres_type, genres_at);
     if (optdata && optdata[0] == 'R' && c->x[0] == 0 && c->x[1] == HAO_OPTDATA_NIL_X86) c->x[1] = HAO_OPTDATA_NIL_ARM;
-    if (kind && kind != 'A') c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
+    if (kind && kind != 'A' && kind != HAO_KIND_SITEPACK) c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
 }
 
 /* The first word at a, or 0 when a is not readable: a register the -vv
@@ -553,6 +560,12 @@ static void native_step(void *arg)
     hao_cpu *c = &t->cpu;
     uint64_t pc = c->pc;
     const hao_plan *p;
+    {   /* abort_nesting prints these; single stores, no lock */
+        uint32_t k = t->step_n++ & (HAO_STEP_RING - 1);
+        t->step_ring[k].pc = pc;
+        t->step_ring[k].lr = c->x[30];
+        t->step_ring[k].x0 = c->x[0];
+    }
     if (seg->nc_hit && pc == seg->nc_target) p = seg->nc_plan;   /* run_loop's cache probe: not a trap, the settled plan */
     else {
         if (hao_is_trap(pc)) { run_trap(t, pc); return; }
@@ -583,6 +596,13 @@ static void native_step(void *arg)
     hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL);
     t->native_calls++;
     unsigned objc_enum_result = p && p->src == HAO_BRS_OBJCIMP ? hao_objc_enum_args(c, pc, false) : 0;
+    unsigned swift_enum = p ? __atomic_load_n(&p->swift_enum, __ATOMIC_RELAXED) : 0;   /* NSTextAlignment in a Swift signature (swiftcc.c) */
+    if (swift_enum & HAO_SWIFT_ENUM_PENDING) {
+        swift_enum = p->name ? hao_swift_textalign(p->name, true) : 0;
+        __atomic_store_n(&((hao_plan *)p)->swift_enum, (uint16_t)swift_enum, __ATOMIC_RELAXED);
+    }
+    for (unsigned k = 0; swift_enum && k < 8; k++)
+        if (swift_enum & (1u << k)) c->x[k] = hao_swift_textalign_value(c->x[k]);
     if (hao_verbose > 2) {
         Dl_info di;
         const char *sn = dladdr((void *)(uintptr_t)pc, &di) && di.dli_sname ? di.dli_sname : "?";
@@ -597,6 +617,7 @@ static void native_step(void *arg)
     } else
     native_call(c, pc, p);
     if (objc_enum_result) hao_objc_enum_result(c, objc_enum_result);
+    if (swift_enum & HAO_SWIFT_ENUM_RESULT) c->x[0] = hao_swift_textalign_value(c->x[0]);
     c->pc = c->x[30];
 }
 
@@ -2542,6 +2563,67 @@ static void sigreturn_report(int sig, int err, ucontext_t *uc, uint64_t tok, uin
     }
 }
 
+/* For an abort report: what the guest was doing on this thread, read without
+ * locks or allocation. x0 and x1, with x1's bytes when they read as a C
+ * string: at a trap's return address they are an objc_msgSend's receiver and
+ * selector. Then each enclosing segment, innermost first: the guest pc and
+ * lr where that level's guest code called the native code that entered the
+ * next one (a nested guest call shows here, not in the native backtrace's
+ * symbols). Segment records live in hao_run frames of this thread's stack. */
+static void abort_nesting(dline *l, const hao_thread *t)
+{
+    char sel[64];
+    bool str = probe_read(t->cpu.x[1], sel, sizeof sel - 1);
+    if (str) {
+        sel[sizeof sel - 1] = 0;
+        for (size_t k = 0; k < sizeof sel - 1 && sel[k]; k++)
+            if (sel[k] < 0x20 || sel[k] > 0x7e) { str = false; break; }
+    }
+    dl_prefix(l);
+    dl_add(l, "  guest x0=%#llx x1=%#llx%s%s%s, depth %d\n", (unsigned long long)t->cpu.x[0],
+           (unsigned long long)t->cpu.x[1], str ? " \"" : "", str ? sel : "", str ? "\"" : "", t->depth);
+    dl_flush(l);
+    const hao_seg *s = t->seg;
+    for (int k = 0; s && k < 16; k++, s = s->prev) {
+        dl_prefix(l);
+        dl_add(l, "  segment %d:", s->depth);
+        if (s->outer && (s->outer->pc || s->outer->x[30])) {
+            uint64_t pc = s->outer->pc;
+            dl_add(l, " entered from guest pc=%#llx", (unsigned long long)pc);
+            Dl_info d = {0};
+            if (hao_image_for_code(pc)) dl_guest_addr(l, pc);
+            else if (dladdr((void *)(uintptr_t)pc, &d) && d.dli_sname)   /* the native call it was making */
+                dl_add(l, " (%s + %llu)", d.dli_sname, (unsigned long long)(pc - (uint64_t)(uintptr_t)d.dli_saddr));
+            dl_add(l, " lr=%#llx", (unsigned long long)s->outer->x[30]);
+            dl_guest_addr(l, s->outer->x[30]);
+        } else
+            dl_add(l, " entered from native code");
+        dl_add(l, "\n");
+        dl_flush(l);
+    }
+    if (fork_parent) {
+        dl_prefix(l);
+        dl_add(l, "  fork child of pid %d, %llu us after the fork\n", (int)fork_parent,
+               (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - fork_at) / 1000));
+        dl_flush(l);
+    }
+    /* the thread's last native calls and traps, oldest first: how the guest got here */
+    uint32_t n = t->step_n, k0 = n > HAO_STEP_RING ? n - HAO_STEP_RING : 0;
+    for (uint32_t k = k0; k < n; k++) {
+        uint64_t pc = t->step_ring[k & (HAO_STEP_RING - 1)].pc, lr = t->step_ring[k & (HAO_STEP_RING - 1)].lr;
+        dl_prefix(l);
+        dl_add(l, "  step %d: x0=%#llx call", (int)(k - n), (unsigned long long)t->step_ring[k & (HAO_STEP_RING - 1)].x0);
+        Dl_info d = {0};
+        if (hao_is_trap(pc)) dl_add(l, " trap %s", traps[(pc - (uint64_t)(uintptr_t)trap_base) / 16].name ? traps[(pc - (uint64_t)(uintptr_t)trap_base) / 16].name : "?");
+        else if (dladdr((void *)(uintptr_t)pc, &d) && d.dli_sname) dl_add(l, " %s", d.dli_sname);
+        else dl_add(l, " %#llx", (unsigned long long)pc);
+        dl_add(l, " lr=%#llx", (unsigned long long)lr);
+        dl_guest_addr(l, lr);
+        dl_add(l, "\n");
+        dl_flush(l);
+    }
+}
+
 #include <execinfo.h>
 /* SIGABRT/SIGTRAP/SIGILL under the diagnostics log: a report, then the
  * default action taken here (never after a __sigreturn, which may be what
@@ -2569,6 +2651,7 @@ void hao_on_abort(int sig, siginfo_t *si, void *ctx, uint64_t tok)
         dl_add(&l, "signal %d (no guest state on this thread)", sig);
     dl_add(&l, "\n");
     dl_flush(&l);
+    if (t) abort_nesting(&l, t);
     /* backtrace_symbols_fd's format, several whole lines per write */
     void *bt[48];
     int n = backtrace(bt, 48);

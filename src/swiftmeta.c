@@ -66,6 +66,7 @@
 #include "hao/runtime.h"
 #include "hao/bridge.h"
 #include "hao/swift_reverse.h"
+#include "hao/swiftvalue.h"
 #include "near_map.h"
 #include <dlfcn.h>
 #include <mach-o/loader.h>
@@ -1542,6 +1543,21 @@ static void *nat_get_keypath;
 static void trap_get_keypath(hao_thread *t, uint64_t arg);   /* key paths, below */
 static void *nat_instantiate_ls[2];
 static void trap_instantiate_ls(hao_thread *t, uint64_t arg);   /* layout string templates, below */
+static void *nat_init_struct_ls;
+
+/* swift_cvw_initStructMetadataWithLayoutString(structType, layoutFlags, numFields, fieldTypes, fieldTags,
+ * fieldOffsets): the struct's extra inhabitant count then gets arm64's (swiftvalue.c
+ * hao_swift_struct_layout_done). The arrays are the caller's, still live when the call returns. */
+static void trap_init_struct_ls(hao_thread *t, uint64_t arg)
+{
+    (void)arg;
+    uint64_t md = t->cpu.x[0], n = t->cpu.x[2], fields = t->cpu.x[3], tags = t->cpu.x[4];
+    hao_thunk_native_args(t);
+    t->native_calls++;
+    hao_native_call((uint64_t)(uintptr_t)nat_init_struct_ls, &t->cpu, 16);
+    hao_swift_struct_layout_done((void *)(uintptr_t)md, n, (const void *const *)(uintptr_t)fields,
+                                 (const uint8_t *)(uintptr_t)tags);
+}
 
 static void trap_continuation_init(hao_thread *t, uint64_t arg)
 {
@@ -1569,6 +1585,7 @@ static const struct { const char *name; void **fn; hao_trap_fn trap; uint64_t ar
     {"_swift_getKeyPath", &nat_get_keypath, trap_get_keypath, 0},
     {"_swift_cvw_instantiateLayoutString", &nat_instantiate_ls[0], trap_instantiate_ls, 0},
     {"_swift_generic_instantiateLayoutString", &nat_instantiate_ls[1], trap_instantiate_ls, 1},
+    {"_swift_cvw_initStructMetadataWithLayoutString", &nat_init_struct_ls, trap_init_struct_ls, 0},
 };
 
 static hao_name_index swiftrt_ix = HAO_NAME_INDEX(swiftrt_traps, NULL);
@@ -1580,8 +1597,10 @@ bool hao_swiftmeta_interpose(const char *name, uint64_t *addr)
 #define tab swiftrt_traps
     long k = hao_name_find(&swiftrt_ix, name);
     if (k < 0) return false;
-    /* without thunks only swift_getKeyPath, which binds shared-cache patterns' slots (data) */
-    if (hao_opt.no_swift_thunks && tab[k].trap != trap_get_keypath) return false;
+    /* without thunks only swift_getKeyPath, which binds shared-cache patterns' slots (data), and the
+     * struct layout, a value representation */
+    if (hao_opt.no_swift_thunks && tab[k].trap != trap_get_keypath && tab[k].trap != trap_init_struct_ls)
+        return false;
     if (!*tab[k].fn) *tab[k].fn = dlsym(RTLD_DEFAULT, name + 1);
     if (!*tab[k].fn) return false;
     *addr = hao_trap_address(name, tab[k].trap, tab[k].arg);

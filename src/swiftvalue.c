@@ -692,6 +692,34 @@ static int guest_layout(const void *type)
 /* For the walk (Tables.h): a listed type guest code lays out is a frozen one. */
 int native_frozen_type(const void *type) { return native_frozen(type); }
 
+/* A guest struct built with layout-string value witnesses whose layout
+ * depends on a resilient field (Foundation's UUID or Date) is laid out at
+ * run time: its metadata completion function passes every field's metadata
+ * to swift_cvw_initStructMetadataWithLayoutString, a frozen Data's too,
+ * and the native runtime sets the struct's extra inhabitant count to its
+ * fields' maximum, Data's x86_64 252. The struct's guest-compiled
+ * getEnumTagSinglePayload and storeEnumTagSinglePayload witnesses pick the
+ * field whose count equals the one they are handed: Data's inline encoding
+ * for arm64's 12, else the resilient fields' witnesses, so with 252 they ask
+ * a Date for 252 empty cases and read and write a tag byte past the struct.
+ * An Optional of the struct is then nil or present at random, and copies
+ * and destroys through it release what they never retained. The count is
+ * set to arm64's (Recipe.c arm_struct_xi) before the metadata is complete;
+ * its witnesses then use Data's arm64 encoding, which only they read. */
+void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const *fields, const uint8_t *tags)
+{
+    if (hao_opt.no_swift_values || !metadata || !fields || !tags) return;
+    const void *const *m = metadata;
+    if ((uintptr_t)m[0] != 0x200 || !hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return;   /* a guest struct */
+    witnesses *v = (witnesses *)vwt(metadata);
+    uint32_t arm;
+    if (!v || !arm_struct_xi(fields, tags, (size_t)n, &arm) || arm == v->extra) return;
+    if (hao_opt.bridge_check || hao_verbose)
+        fprintf(HAO_DIAG,"hao: Swift struct metadata=%p extra inhabitants %u -> %u (arm64 field layout)\n",
+                metadata,v->extra,arm);
+    v->extra = arm;
+}
+
 /* A nil the witness made: the guest's encoding (the walk's arm64 bits:
  * extra inhabitant consumed - 1 as the value consumed - 1 for a pointer
  * word, arm64's XI of a spare-bit enum for Data?), where guest code can read
