@@ -297,8 +297,12 @@ fresh "$OUT/k6"
 (cd "$OUT" && timeout -s KILL "$T" "$HAO" --aot --cache k6/new -- "$G" >"$OUT/k6.err" 2>&1); rc=$?
 [ $rc = 0 ] && cmp -s "$OUT/k6/new/$NAME" "$AOT" && pass "K6 relative --cache: taken from the working directory, created, written" \
     || bad "K6 relative --cache: rc=$rc $(tail -2 "$OUT/k6.err")"
-timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k6" >"$OUT/k7.err" 2>&1; rc=$?
-[ $rc = 64 ] && grep -q -- "--aot \[--cache DIR\]" "$OUT/k7.err" && pass "K7 --cache without a file: usage, rc 64" || bad "K7 usage: rc=$rc $(head -2 "$OUT/k7.err")"
+timeout -s KILL "$T" "$HAO" --aot --cache >"$OUT/k7.err" 2>&1; rc=$?
+[ $rc = 64 ] && grep -q -- "--aot \[--cache DIR\]" "$OUT/k7.err" && pass "K7 --cache without a directory: usage, rc 64" || bad "K7 usage: rc=$rc $(head -2 "$OUT/k7.err")"
+if [ ! -e /usr/lib/hao/aot-list ] && [ ! -e /usr/lib/hao/stub-identities ]; then
+    timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/k6" >"$OUT/k7b.err" 2>&1; rc=$?
+    [ $rc = 1 ] && grep -q "no FILE given and neither" "$OUT/k7b.err" && pass "K7 no FILE, no image lists: rc 1" || bad "K7 no FILE: rc=$rc $(head -2 "$OUT/k7b.err")"
+fi
 
 # --- E: a planted, well-formed cache (int3 code, hash fixed) would run if
 # trusted (control), and is never reached from an untrusted environment

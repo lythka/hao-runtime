@@ -89,7 +89,7 @@ Run an ARM64 command-line program, or generate AOT caches:
 timeout -s KILL 60 build/hao /path/to/arm64-program [ARGS...]
 timeout -s KILL 60 build/hao --interp /path/to/arm64-program    # interpreter only
 timeout -s KILL 60 build/hao -v --stats /path/to/arm64-program  # diagnostics (-vv for more)
-build/hao --aot [--cache DIR] FILE...                           # AOT caches, no execution
+build/hao --aot [--cache DIR] [FILE...]                         # AOT caches, no execution
 ```
 
 Unsigned programs are refused unless `--allow-unsigned` is given.

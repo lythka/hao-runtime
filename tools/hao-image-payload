@@ -11,6 +11,8 @@
 #     OUT/root/usr/lib/hao/trusted-cdhashes      (tools/hao-trust-list: cdhashes of every Apple-signed
 #                                                 arm64-only program under ROOT, so hao verifies them
 #                                                 with no daemon running; OUT/trust.log lists the rest)
+#     OUT/root/usr/lib/hao/aot-list              (--aot, --aot-list: the programs cached, absolute,
+#                                                 one per line; `hao --aot` with no FILE reads it)
 #     OUT/root/usr/lib/hao/stub-identities       (tools/hao-trust-list --stubs: stub cdhash, Apple arm64
 #                                                 slice cdhash and path of each embedded Apple program)
 #     OUT/HaoExec.kext, OUT/stamp_identity.py   (kernel identity stamped at image build)
@@ -370,6 +372,9 @@ else:
 want = list(dict.fromkeys(want))
 if not want:
     sys.exit('hao-image-payload: no program to make AOT caches for')
+with open(os.path.join(out, 'root/usr/lib/hao/aot-list'), 'w') as f:
+    f.write(''.join('/%s\n' % w for w in want))
+os.chmod(os.path.join(out, 'root/usr/lib/hao/aot-list'), 0o644)
 # one generation per file (hard links share it); every path is recorded
 progs, by_ino, bad = [], {}, []
 for rel in want:
