@@ -105,6 +105,60 @@ through Mach on every call. On the development host a native
 per call (about 240 ns before). Which reply type gamed's first one was is
 not known; the crash reports match this failure, not a traced value.
 
+## Packed stack arguments in one merged store
+
+A native Swift function with no interface-unit record gets its packed arm64
+stack arguments from the guest call site's stores (swiftcc.c
+`hao_swift_sitepack`). Two call-site shapes still got the word copy:
+- a store that holds several arguments at multiples of 8: four constant
+  `Int32` zeros stored by one `stp xzr, xzr`. Every store looked
+  word-aligned, so no layout was looked for;
+- the store that also allocates the outgoing area (`stp xzr, xzr,
+  [sp, #-32]!`), emitted when the caller's frame has no reserved call area.
+  The scan stopped before it.
+
+`AppSubscriptions` `UserSubscriptionContextData.init` has this shape: four
+`Int32` at `[sp]`..`[sp+12]`, then the address of its `OfferType?` at
+`[sp+16]`. The word copy passed the `Int32` from the wrong words and a stale
+stack word as the `OfferType?` address. Encoding the value with the native
+`JSONEncoder` then read a tag byte out of range and jumped through the
+enum's `rawValue` table: SIGBUS under `RawRepresentable.encode(to:)`.
+
+Now:
+- A store wider than the callee's read of its first slot is split into
+  several arguments when the x86_64 callee's read widths, each at its
+  natural alignment, fill it exactly. Anything else (a read of unknown
+  width, a remainder, a single argument) refuses as before.
+- The callee's slots are read whenever a site has stores, so a merged store
+  at a multiple of 8 is found. Until a split is tried, such a site keeps the
+  word copy without a refusal line.
+- A pre-index store that writes sp (not a frame push of x29/x30, not at a
+  function start) ends the window. Its offsets count from the sp it writes.
+
+`guest/sitepack` has a new case `encode`. A guest builds that shape with
+constant zeros (`stp xzr, xzr, [sp, #-32]!`, then `str` of the `Offer?`
+address). The values go into a guest `Codable` board (keyed and unkeyed
+containers, an enum with payloads, optionals), which native `JSONEncoder`
+encodes and `JSONDecoder` decodes. Before the change JIT, `--interp` and AOT
+faulted (rc 139) in `Offer.rawValue`. Now all three print what native arm64
+prints (layout `0.4,4.4,8.4,12.4,16.8`).
+
+Five earlier cases had merged constant Bools and were expected to refuse:
+`pair0`, `pair16`, `quad`, `opts` and `mgr`. Their output differed from
+native. `box` was expected to keep the word copy and faulted. All six now
+take a layout and equal native.
+
+Limits:
+- A callee that reads only part of a wider argument (a truncating
+  conversion) next to a narrow one could split a merged store wrongly. The
+  split trusts the x86_64 read widths; no case seen does this.
+- A merged store whose callee does not show its slots (no frame-pointer
+  prologue, code the decoder refuses) still gets the word copy.
+- So do FP/SIMD stores among the arguments (`str q0` of four `Int32`).
+- An interface-unit record of kind K remains the exact source. The unit
+  generator leaves this initializer UNKNOWN, because its arm64e code reads
+  the four `Int32` with one `ldr q0`.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.

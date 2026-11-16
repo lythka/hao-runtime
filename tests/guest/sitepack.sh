@@ -3,15 +3,19 @@
 # code with no interface unit for them (HAO_NO_IFUNITS: no record may supply the layout): the packing
 # comes from the guest call site's stores, checked against the slots the x86_64 callee reads.
 #  - tests/guest/sitepack.swift, helper sitepackhelper.swift (library evolution): friend (FindMyLocate
-#    Friend.init's shape), spill (a `str q0` spill above the arguments in the call sequence), and
-#    pair0, pair16, quad, whose constant Bools LLVM merges into one strh or str w.
+#    Friend.init's shape), spill (a `str q0` spill above the arguments in the call sequence), encode
+#    (AppSubscriptions UserSubscriptionContextData.init's shape: four constant Int32 zeros in one
+#    `stp xzr, xzr, [sp, #-32]!`, then an indirect Offer?, the values encoded by the native
+#    JSONEncoder inside a guest Codable value), and pair0, pair16, quad, whose constant Bools LLVM
+#    merges into one strh or str w.
 #  - tests/guest/stackpack.swift, helper stackpackhelper.swift (no library evolution): opts and mgr
 #    (three constant Bools, two of them merged), mixed (Int16/Bool/Int32/UInt8/Int64/Bool), box (a
-#    class method; its merged Bools end at a multiple of 8, so no layout looks packed).
+#    class method; its merged Bools end at a multiple of 8).
 # Each case runs in its own process natively on arm64 and under hao on arm64e (JIT, --interp, AOT),
 # with HAO_BRIDGE_CHECK=1. A case whose call sites hao gave a layout must equal native arm64; one it
 # refused got the word copy as before (its output is not compared). The expected verdict per case is
-# below: a merged store must never be taken for one argument.
+# below: a merged store must never be taken for one argument; it is split by the callee's read
+# widths when they fill it exactly.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/sitepack.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -100,13 +104,14 @@ while read -r p c want; do
 done <<'EOF'
 sitepack friend take
 sitepack spill take
-sitepack pair0 refuse
-sitepack pair16 refuse
-sitepack quad refuse
+sitepack encode take
+sitepack pair0 take
+sitepack pair16 take
+sitepack quad take
 stackpack mixed take
-stackpack opts refuse
-stackpack mgr refuse
-stackpack box copy
+stackpack opts take
+stackpack mgr take
+stackpack box take
 EOF
 [ $fail = 0 ] && echo "sitepack: PASS" || echo "sitepack: FAIL"
 exit $fail

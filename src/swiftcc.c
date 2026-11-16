@@ -1383,16 +1383,34 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native)
  * offsets with widths 1, 2, 4 or 8, none overlapping, contiguous from 0 up to
  * alignment padding, at least one at an offset that is not 8 times its
  * position (otherwise the word copy is already right), the callee reading
- * every one of the K slots and none narrower than the store. Stores above
- * the K arguments are the caller's locals (a `str q0` spill, the frame
- * record) and are not looked at. Fewer than K stores (a merged store, or an
- * argument stored outside the window), a SIMD/FP store among them (FP stack
+ * every one of the K slots and none narrower than the store (but see the
+ * split below). Stores above the K arguments are the caller's locals (a
+ * `str q0` spill, the frame record) and are not looked at. Fewer than K
+ * arguments from the stores (an argument stored outside the window, a merged
+ * store the split below does not take), a SIMD/FP store among them (FP stack
  * arguments are placed differently), a store through a register offset or a
  * hole leaves the word copy. When the callee's code does not show its slots
  * (no frame-pointer prologue, an instruction the decoder does not know, its
  * image's function starts missing), every store must be an argument and every
  * store wider than a byte must hold an address computed in the window (sp-
  * or x29-relative, ADR/ADRP), which no merge of narrower arguments is.
+ *
+ * A store wider than the callee's read of its first slot is taken as several
+ * arguments only when the callee's read widths, each placed at its natural
+ * alignment, fill it exactly: four constant Int32 zeros stored by one `stp
+ * xzr, xzr` that the callee reads as 4-byte slots (AppSubscriptions
+ * UserSubscriptionContextData.init: the word copy gave its OfferType? the
+ * address of a stale stack word, and native JSON encoding of the value
+ * jumped through the enum's rawValue table with a garbage tag). Such stores
+ * can all lie at multiples of 8, so the callee is read whenever it takes
+ * more stack arguments than there are stores. Anything else about such a
+ * store (a read width not known, a remainder, fewer than two arguments)
+ * leaves the word copy; a callee that reads only part of a wider argument
+ * (a truncating conversion) beside a narrow one could be split wrongly,
+ * which no case seen does. The store that allocates the outgoing area
+ * (`stp xzr, xzr, [sp, #-32]!`, when the caller's frame has no reserved call
+ * area) is the window's last instruction, its offsets relative to the sp it
+ * writes.
  *
  * The stores describe the native function only when the instruction before
  * lr called it: a BL to a stub whose slot holds the native address, or a
@@ -1604,13 +1622,17 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
         if (hao_image_for_code(a) != im) break;
         uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, a);
         decode(i, a, &o);
-        if (o.flow != F_NEXT || o.dst == 31 || o.wb_reg == 31) break;   /* control flow, or sp written */
+        /* control flow, or sp written; a store that also allocates the area (pre-index writeback of sp) is
+         * the window's last instruction */
+        bool alloc = o.mem && !o.load && o.base == 31 && o.wb_reg == 31 && o.wb < 0 && !((i >> 26) & 1) &&
+                     !(o.rd & (bit(29) | bit(30))) && !hao_is_guest_function(a);   /* not a frame push */
+        if (o.flow != F_NEXT || o.dst == 31 || (o.wb_reg == 31 && !alloc)) break;
         win[nwin = k] = i;
         if (o.mem && !o.load && o.base == 31) {
             bool pair = (i & 0x38000000) == 0x28000000, fp = (i >> 26) & 1;
             int w = pair ? o.bytes / 2 : o.bytes;
             for (int p = 0; p <= (int)pair; p++) {
-                int64_t at = o.imm + p * w;
+                int64_t at = o.imm - (alloc ? o.wb : 0) + p * w;   /* from the sp at the call */
                 if (at < 0 || at >= 8 * HAO_IF_MAX_PACK) continue;     /* below sp, or no argument we place */
                 bool seen = false;
                 for (int j = 0; j < ns && !seen; j++) {
@@ -1625,43 +1647,63 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
             }
         } else if ((i & 0x3B200C00) == 0x38200800 && ((i >> 5) & 31) == 31 && !((i >> 22) & 1))
             return 0;                                                  /* a store to [sp, register] */
-        if (hao_is_guest_function(a)) break;
+        if (alloc || hao_is_guest_function(a)) break;
     }
     for (int x = 1; x < ns; x++)                                       /* by offset */
         for (int y = x; y > 0 && st[y - 1].off > st[y].off; y--) { __typeof__(st[0]) t = st[y]; st[y] = st[y - 1]; st[y - 1] = t; }
-    /* every general-register store at a multiple of 8: no layout of them is packed */
+    /* every general-register store at a multiple of 8: no layout of them is packed, unless one of them
+     * holds several arguments (split below); until a split is tried such a site keeps the word copy
+     * without a refusal */
     bool odd = false;
     for (int j = 0; j < ns; j++) odd |= !st[j].fp && (st[j].off & 7);
-    if (!odd) return 0;
     hao_x86_stackuse u;
-    bool shown = callee_stackuse(native, &u);
-    int n = ns;
-    if (shown) {
-        n = u.nslots - 2;
-        if (n <= 0) { *why = "the callee reads no stack argument past x7"; return 0; }
-        if (n > ns) { *why = "fewer stores than the callee's stack arguments (a merged store?)"; return 0; }
-    }
-    if (n > HAO_IF_MAX_PACK) { *why = "too many stack arguments"; return 0; }
+    bool shown = ns && callee_stackuse(native, &u), quiet = !odd;
+    int n = shown ? u.nslots - 2 : ns;
+#define REFUSE(m) do { if (!quiet) *why = (m); return 0; } while (0)
+    if (!odd && !shown) return 0;
+    if (shown && n <= 0) REFUSE("the callee reads no stack argument past x7");
+    if (n > HAO_IF_MAX_PACK) REFUSE("too many stack arguments");
     bool packed = false;
     unsigned end = 0;
-    for (int j = 0; j < n; j++) {
-        unsigned at = (unsigned)st[j].off, w = st[j].w;
-        if (st[j].fp) { *why = "an FP/SIMD store among the arguments"; return 0; }
-        if ((w != 1 && w != 2 && w != 4 && w != 8) || at % w) { *why = "a store not naturally aligned"; return 0; }
-        if (at != ((end + w - 1) & ~(w - 1))) { *why = "a hole among the stores"; return 0; }
-        if (shown) {
-            uint8_t r = u.width[j + 2];
-            if (!r) { *why = "the callee does not read an argument's slot"; return 0; }
-            if (r != HAO_X86_WIDTH_UNKNOWN && r < w) { *why = "the callee reads a slot narrower than its store"; return 0; }
-        } else if (w > 1 && !sitepack_address(win, nwin, st[j].k, st[j].src)) {
-            *why = "callee not readable, and a store wider than a byte may be merged arguments";
-            return 0;
+    int j = 0;
+    for (int s = 0; j < n; s++) {
+        if (s == ns) REFUSE("fewer stores than the callee's stack arguments (a merged store?)");
+        unsigned at = (unsigned)st[s].off, w = st[s].w;
+        if (st[s].fp) REFUSE("an FP/SIMD store among the arguments");
+        if ((w != 1 && w != 2 && w != 4 && w != 8) || at % w) REFUSE("a store not naturally aligned");
+        uint8_t r = shown ? u.width[j + 2] : 0;
+        if (shown && !r) REFUSE("the callee does not read an argument's slot");
+        if (shown && r != HAO_X86_WIDTH_UNKNOWN && r < w) {
+            /* one store of several arguments: the callee's read widths at natural alignment fill it */
+            unsigned p = at;
+            int first = j;
+            quiet = false;
+            if (at != ((end + r - 1) & ~(r - 1u))) REFUSE("a hole among the stores");
+            while (p < at + w && j < n) {
+                r = u.width[j + 2];
+                if (r != 1 && r != 2 && r != 4 && r != 8) REFUSE("a merged store with a slot of unknown width");
+                p = (p + r - 1) & ~(r - 1u);
+                if (p + r > at + w) break;
+                off[j] = (uint8_t)p;
+                width[j] = (uint8_t)r;
+                packed |= p != 8u * (unsigned)j;
+                p += r;
+                j++;
+            }
+            if (p != at + w || j - first < 2) REFUSE("the callee reads a slot narrower than its store");
+            end = p;
+            continue;
         }
+        if (at != ((end + w - 1) & ~(w - 1))) REFUSE("a hole among the stores");
+        if (!shown && w > 1 && !sitepack_address(win, nwin, st[s].k, st[s].src))
+            REFUSE("callee not readable, and a store wider than a byte may be merged arguments");
         off[j] = (uint8_t)at;
         width[j] = (uint8_t)w;
         packed |= at != 8u * (unsigned)j;
         end = at + w;
+        j++;
     }
+#undef REFUSE
     return packed ? n : 0;
 }
 
