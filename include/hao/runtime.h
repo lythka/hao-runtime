@@ -441,6 +441,7 @@ void hao_jit_stats(void);
 /* `hao --aot [--cache DIR] FILE`: write FILE's AOT cache into cache_dir (absolute), or with NULL into
  * the directory this process writes to; 0 or -1 (reported) */
 int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir);
+int hao_aot_check_file(const char *path, const char *cache_dir, bool print);
 uint64_t hao_thunk_for(uint64_t guest);
 uint64_t hao_thunk_target(uint64_t thunk);
 bool hao_in_code_cache(uint64_t a);
