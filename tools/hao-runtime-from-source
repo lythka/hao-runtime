@@ -1,0 +1,47 @@
+#!/bin/bash
+# hao-runtime-from-source ROOT X86 ARCHIVE OUT
+#   Rebuild a published hao-runtime archive from this checkout (the commit ARCHIVE names, clean) and compare.
+#   ROOT     the release's System root (read-only mount of the IPSW's system image), any mount point
+#   X86      its x86_64 dyld shared cache folder (the IPSW's Rosetta cryptex, System/Library/dyld)
+#   ARCHIVE  the published hao-runtime-VERSION-public.tar.gz: its interface units, async provider and AOT list are
+#            the inputs this checkout does not build
+#   OUT      a new folder: OUT/payload, OUT/GENERATE.md, OUT/hao-runtime-VERSION-public.tar.gz
+# Needs Xcode (27.2 for the published bytes), python3.14 and git. The AOT caches need a macOS 27 host; elsewhere
+# NO_AOT=1 skips them and the records differ.
+set -euo pipefail
+[ $# -eq 4 ] || { sed -n '2,10p' "$0" >&2; exit 2; }
+H=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$1 X86=$2 ARCHIVE=$(cd "$(dirname "$3")" && pwd)/$(basename "$3") OUT=$4
+[ ! -e "$OUT" ] || { echo "hao-runtime-from-source: $OUT exists" >&2; exit 2; }
+[ -z "$(git -C "$H" status --porcelain)" ] || { echo "hao-runtime-from-source: $H has changes" >&2; exit 1; }
+xcrun clang --version | head -1
+mkdir -p "$OUT/inputs"; OUT=$(cd "$OUT" && pwd); IN=$OUT/inputs
+tar -xzf "$ARCHIVE" -C "$IN"
+P=$(echo "$IN"/hao-runtime-*-public)
+M=$P/payload/payload-manifest.json
+COMMIT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$M")
+[ "$(git -C "$H" rev-parse HEAD)" = "$COMMIT" ] || { echo "hao-runtime-from-source: checkout is not $COMMIT" >&2; exit 1; }
+UV=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["units_version"] or "")' "$M")
+mkdir -p "$IN/async"
+cp "$P/payload/root/usr/lib/hao/libhao_async_contract.dylib" "$P/payload/root/usr/lib/hao/async-contract.json" "$IN/async/"
+AOT=(--aot-list "$P/payload/aot-list.txt" --aot-jobs 8); [ "${NO_AOT:-}" = 1 ] && AOT=()
+make -C "$H" -j8 > "$OUT/make.log" 2>&1
+"$H/tools/hao-image-payload" --x86-cache "$X86" --units "$P/payload/root/usr/lib/hao/if" ${UV:+--units-version "$UV"} \
+  --async-provider "$IN/async" "${AOT[@]}" "$OUT/payload" "$ROOT" > "$OUT/build.log" 2>&1 \
+  || { tail -5 "$OUT/build.log" >&2; exit 1; }
+rm -rf "$IN"
+python3 -I "$H/tools/hao-public-archive" "$OUT"
+A=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1); B=$(shasum -a 256 "$OUT"/hao-runtime-*-public.tar.gz | cut -d' ' -f1)
+echo "published $A"; echo "rebuilt   $B"
+[ "$A" = "$B" ] && { echo identical; exit 0; }
+python3 -I - "$ARCHIVE" "$OUT"/hao-runtime-*-public.tar.gz <<'EOF'
+import sys, tarfile
+def load(p):
+    with tarfile.open(p) as t:
+        return {m.name: (m.mode, t.extractfile(m).read()) for m in t.getmembers() if m.isfile()}
+a, b = map(load, sys.argv[1:])
+for n in sorted(set(a) | set(b)):
+    if a.get(n) != b.get(n):
+        print('differs:', n)
+EOF
+exit 1

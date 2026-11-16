@@ -19,7 +19,7 @@
 #     OUT/replace/                               (27.x only: ROOT/usr/lib/dyld with the x86_64
 #                                                 PID-1 boot-spec fix, if that dyld needs it)
 #     OUT/hao-install.py, OUT/hao_fat.py, OUT/hao_codesig.py (run by the image builder)
-#     OUT/build.json                             (release, mode, inputs and hashes)
+#     OUT/build.json                             (release, mode, inputs and hashes; dated by the commit)
 #     OUT/payload-manifest.json                  (the runtime -> patcher contract, hao-assets "payload" check:
 #                                                 version, commit, clean, os_build, cache_uuid, units_version,
 #                                                 units_sha256, layout_version and the sha256 of every other
@@ -86,7 +86,8 @@
 #   libhao.dylib of the same payload. Fails closed: every program gets a valid cache or
 #   one of three recorded outcomes (nothing to translate; translated code larger than
 #   the generator's 64 MB buffer; an image hao does not load: legacy LC_DYLD_INFO fixups);
-#   any other generation error fails the build. OUT/aot.json lists each program;
+#   any other generation error fails the build. OUT/aot.json lists each program (paths
+#   relative to ROOT, no times) and OUT/aot-list.txt is the list as given;
 #   build.json aot holds the counts, bytes, skips and the libhao UUID. Off by default:
 #   the 936 embedded 27.0 programs make 919 caches, about 2.1 GB.
 #   Nothing else here is tied to one release.
@@ -202,6 +203,18 @@ if [ $rc != 0 ]; then
     echo "hao-image-payload: hao-embed failed (exit $rc; see $LOG)" >&2
     exit 1
 fi
+# embed.log names programs relative to ROOT, so the record does not depend on where ROOT is mounted
+python3 -I - "$LOG" "$ROOT" <<'EOF'
+import os, sys
+log, root = sys.argv[1:]
+pre = sorted({'\t' + r.rstrip('/') + '/' for r in (root, os.path.realpath(root))}, key=len, reverse=True)
+out = []
+for l in open(log).read().splitlines(True):
+    for p in pre:
+        l = l.replace(p, '\t')
+    out.append(l)
+open(log, 'w').write(''.join(out))
+EOF
 # Every stub against its program's arm slice by tools/stub_identity_gate.py's rules (fail closed: a DIFF stops
 # the build); OUT/embed/identity/{summary.md,diff.tsv,programs.tsv}, build.json stub_identity.
 if ! python3 "$H/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"} \
@@ -370,7 +383,7 @@ for rel in want:
     if k in by_ino:
         by_ino[k]['paths'].append(rel)
     else:
-        by_ino[k] = {'paths': [rel], 'file': real}
+        by_ino[k] = {'paths': [rel], 'file': os.path.relpath(real, rroot)}
         progs.append(by_ino[k])
 if bad:
     sys.exit('hao-image-payload: --aot-list: ' + '; '.join(bad[:10]))
@@ -384,15 +397,18 @@ SKIPS = [(re.compile(r'^hao-aot: output buffer overflow$'), 'too large: translat
          (re.compile(r'^hao-aot: .*: legacy LC_DYLD_INFO fixups not supported'), 'hao does not load this image (legacy LC_DYLD_INFO fixups)')]
 
 
+secs = {}
+
+
 def one(p):
     t = time.monotonic()
     try:
-        r = subprocess.run([hao, '--aot', '--cache', cache, '--', p['file']], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+        r = subprocess.run([hao, '--aot', '--cache', cache, '--', os.path.join(rroot, p['file'])], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, errors='replace', timeout=600)
         rc, err = r.returncode, (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
         rc, err = -9, 'timed out after 600 s'
-    p['seconds'] = round(time.monotonic() - t, 3)
+    secs[id(p)] = time.monotonic() - t
     lines = err.splitlines()
     m = LINE.match(lines[-1]) if rc == 0 and lines else None
     if m:
@@ -438,21 +454,21 @@ summary = {'source': source, 'list_sha256': hashlib.sha256(open(alist, 'rb').rea
            'programs': len(want), 'files': len(progs), 'caches': len(files),
            'bytes': sum(os.path.getsize(os.path.join(aotdir, n)) for n in files),
            'blocks': sum(p['blocks'] for p in ok), 'guest_insns': sum(p['insns'] for p in ok),
-           'libhao_uuid': gen, 'jobs': njobs, 'seconds': wall,
-           'generator_cpu_seconds': round(sum(p['seconds'] for p in progs), 1),
+           'libhao_uuid': gen, 'jobs': njobs,
            'skipped': [{'path': p['paths'][0], 'why': p['why']} for p in progs if p['status'] == 'skipped'],
            'failures': [{'path': p['paths'][0], 'why': p['why']} for p in errors]}
 json.dump({'summary': summary, 'programs': progs}, open(os.path.join(out, 'aot.json'), 'w'), indent=1)
-print('AOT caches: %d for %d programs, %.1f MB, %d skipped, %d failed, %.1f s (%d jobs); libhao %s' % (
-    len(files), len(want), summary['bytes'] / 2**20, len(summary['skipped']), len(errors), wall, njobs, gen))
+print('AOT caches: %d for %d programs, %.1f MB, %d skipped, %d failed, %.1f s, %.1f s generator CPU (%d jobs); libhao %s' % (
+    len(files), len(want), summary['bytes'] / 2**20, len(summary['skipped']), len(errors), wall, sum(secs.values()), njobs, gen))
 for p in errors[:20]:
     print('hao-image-payload: AOT: %s: %s' % (p['paths'][0], p['why']), file=sys.stderr)
 sys.exit(1 if errors else 0)
 EOF
 fi
+[ -z "$ALIST" ] || { cp "$ALIST" "$OUT/aot-list.txt"; chmod 644 "$OUT/aot-list.txt"; }
 [ -n "$UNITS_VERSION" ] || { [ -z "$UNITS" ] || UNITS_VERSION=$(basename "$UNITS"); }
 python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" "$UNITS_VERSION" <<'EOF'
-import datetime, hashlib, json, os, plistlib, struct, subprocess, sys
+import hashlib, json, os, plistlib, struct, subprocess, sys
 out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min, units_version = sys.argv[1:]
 census = os.path.join(out, 'census', 'summary.json')
 census = json.load(open(census)) if os.path.exists(census) else None
@@ -528,7 +544,8 @@ commit = subprocess.run(['git', '-C', h, 'rev-parse', '--short', 'HEAD'], captur
 dirty = bool(subprocess.run(['git', '-C', h, 'status', '--porcelain', '--', '.'], capture_output=True, text=True).stdout.strip())
 built = {'hao': 'hao', 'libhao.dylib': 'libhao.dylib', 'libhao_identity.dylib': 'libhao_identity.dylib',
          'hao-stub': 'hao-stub', 'front/stub.o': 'front/stub.o'}
-json.dump({'unit': 'hao-image-payload', 'revision': 10, 'date': datetime.date.today().isoformat(),
+json.dump({'unit': 'hao-image-payload', 'revision': 11,
+           'date': subprocess.run(['git', '-C', h, 'log', '-1', '--format=%cs'], capture_output=True, text=True).stdout.strip(),
            'hao_commit': commit, 'hao_dirty': dirty,
            'async_contract_package_abis': [1],
            'release': {'version': ver['ProductVersion'], 'build': ver['ProductBuildVersion']},
