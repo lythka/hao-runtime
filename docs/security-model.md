@@ -245,7 +245,7 @@ check off.
 A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
 never for a release image. It also reads the test switches
 (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
-`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`) from an open
+`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`) from an open
 process's environment, and the bridging and signal bring-up knobs as boot
 arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a
 process to the guarded or set-ID rules.
@@ -313,6 +313,11 @@ FILE can rewrite it during generation without effect on what is checked or
 translated. Who signed the guest and what it is entitled to are not asked:
 those decide whether hao runs a program, not what its code is, and only an
 image with that cdhash ever loads the cache.
+
+`hao --aot` with no FILE runs itself once per program of `/usr/lib/hao/aot-list`
+(written by `tools/hao-image-payload`), else per path of
+`/usr/lib/hao/stub-identities`, each as `hao --aot FILE` above. A list that is
+not a root-owned regular file writable only by root is not used.
 
 System directories hold caches for signed code only. `hao --aot` writes none
 for an unsigned guest there (as root without `--cache`, or with `--cache` or

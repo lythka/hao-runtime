@@ -71,7 +71,7 @@ image works; those are tested on the target system.
   process none.
 - The scripts that use a test switch (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`,
   `HAO_AOT_LIMIT_KB`, `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`,
-  `HAO_CODE_ALIAS`) need a build compiled with `-DHAO_TEST_SWITCHES`; a
+  `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`) need a build compiled with `-DHAO_TEST_SWITCHES`; a
   release build ignores them.
 - `HAO_BRIDGE_CHECK=1` reports native-boundary mismatches, such as unbalanced
   native frames and results that differ from the signature. `HAO_NX_STATS=1`

@@ -33,6 +33,7 @@ typedef struct {
                                     through unpatched (tests; swiftvalue.c) */
     char cache[1024];           /* HAO_CACHE ("" = unset) */
     char guest_root[1024];      /* HAO_GUEST_ROOT ("" = unset) */
+    char aot_list_dir[1024];    /* HAO_AOT_LIST_DIR: where hao --aot with no FILE reads its lists (tests; "" = /usr/lib/hao) */
     char if_dir[1024];          /* HAO_IF_DIR: interface units (hao/bridge.h) instead of /usr/lib/hao/if ("" = unset) */
     char async_contract_library[1024]; /* explicitly selected own-code async provider; open tier only */
     char trust_list[1024];      /* HAO_TRUST_LIST: extra cdhash list for CLI guests (guest_sig.c; "" = unset) */
