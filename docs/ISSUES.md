@@ -1,5 +1,22 @@
 # Runtime issues and measured scope
 
+## Swift `dynamic` functions under the image's interface units
+
+A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
+itself)`. The runtime compares `itself` with `*link`, so that argument must
+reach the native runtime as the guest address. hao binds this function and
+`swift_getOrigOfReplaceable` EXACT with no argument scan. That rule ran only
+when no interface unit typed the function. The 26B131 libswiftCore unit
+types both EXACT with argument mask 0x3 and 0x1, so on the image `itself`
+was replaced by a native thunk. The comparison failed and the function
+tail-called itself forever. Music hung this way at launch: no window, 100 %
+CPU, with and without AOT. The rule now comes before the unit. Test:
+`guest/dynfunc` writes a unit with the image's rows for the host's
+libswiftCore (the same 26B131 build); without the fix, JIT hangs under both
+-O and -Onone. Limits: guest `@_dynamicReplacement` records are still not
+applied, and the generated unit's masks for these two rows are a generator
+finding.
+
 ## `hao --aot` with no FILE
 
 The install instructions say to run `sudo /usr/libexec/hao --aot` once
