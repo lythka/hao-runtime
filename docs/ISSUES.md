@@ -26,9 +26,13 @@ its usage. With no FILE it now caches the image's default set: each path of
 on an image without that list, each program of `/usr/lib/hao/stub-identities`.
 It runs `hao --aot FILE` for each, up to four at a time. As root the caches
 go to `/private/var/db/hao`. A listed file that is not present is counted and
-skipped. Test: `guest/aotdefault`. Limits: a run caches every program again,
-including ones that already have a valid cache; the time on the target Mac
-has not been measured.
+skipped. A program that already has a cache it would load (same identity,
+same libhao) is skipped, so a rerun writes only missing and stale caches;
+each program prints an `[N/M]` line. `hao --aot --check [FILE...]` writes
+nothing and reports each cache valid, missing or stale (exit 1 if any is
+not valid; for one FILE, 3 missing and 4 stale). Test: `guest/aotdefault`.
+Limits: the time on the target Mac has not been measured; a stale cache is
+replaced, not removed, so a program that left the list keeps its old file.
 
 ## libswiftos `_swift_os_log` and `_swift_os_signpost_with_format` from guest code
 

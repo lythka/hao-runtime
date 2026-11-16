@@ -29,7 +29,8 @@
 static void usage(void)
 {
     fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n"
-                    "       hao --aot [--cache DIR] [--] [FILE...]\n");
+                    "       hao --aot [--check] [--cache DIR] [--] [FILE...]\n"
+                    "(internal: use `hao run` / `hao aot`)\n");
     exit(64);
 }
 
@@ -249,7 +250,7 @@ static FILE *aot_open_list(const char *path, uid_t owner)
     return f;
 }
 
-static int aot_default(const char *cache)
+static int aot_default(const char *cache, bool check)
 {
     hao_opts_init(NULL);
     const char *dir = hao_opt.aot_list_dir[0] ? hao_opt.aot_list_dir : "/usr/lib/hao";
@@ -263,45 +264,66 @@ static int aot_default(const char *cache)
     if (!f) { fprintf(stderr, "hao-aot: no FILE given and neither %s nor %s is usable\n", lpath, spath); return 1; }
     char self[1100];
     if (self_path(self, sizeof self) != 0) { fprintf(stderr, "hao-aot: cannot find this program's path\n"); fclose(f); return 1; }
+    char **paths = NULL, *line = NULL;
+    size_t cap = 0, np = 0, pcap = 0;
+    ssize_t len;
+    int missing = 0;
+    while ((len = getline(&line, &cap, f)) > 0) {
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = 0;
+        char *p = line;
+        if (!p[0] || p[0] == '#') continue;
+        if (stubs) {
+            for (int k = 0; k < 3; k++) {
+                while (*p && *p != ' ') p++;
+                while (*p == ' ') p++;
+            }
+            if (!*p) continue;
+        }
+        char path[PATH_MAX];
+        struct stat st;
+        if (snprintf(path, sizeof path, "%s%s", p[0] == '/' ? "" : "/", p) >= (int)sizeof path || lstat(path, &st) != 0 ||
+            !S_ISREG(st.st_mode)) { missing++; continue; }
+        if (np == pcap) {
+            char **q = realloc(paths, (pcap = pcap ? 2 * pcap : 1024) * sizeof *paths);
+            if (!q) { fprintf(stderr, "hao-aot: out of memory\n"); return 1; }
+            paths = q;
+        }
+        if (!(paths[np] = strdup(path))) { fprintf(stderr, "hao-aot: out of memory\n"); return 1; }
+        np++;
+    }
+    free(line);
+    fclose(f);
     int jobs = 1;
     size_t jl = sizeof jobs;
     if (sysctlbyname("hw.activecpu", &jobs, &jl, NULL, 0) != 0 || jobs < 1) jobs = 1;
     if (jobs > 4) jobs = 4;
-    fprintf(stderr, "hao-aot: no FILE given: the programs %s names, %d at a time\n", stubs ? spath : lpath, jobs);
-    char *line = NULL;
-    size_t cap = 0;
-    ssize_t len;
-    int running = 0, ok = 0, failed = 0, missing = 0;
-    for (;;) {
-        len = getline(&line, &cap, f);
-        if (len > 0) {
-            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = 0;
-            char *p = line;
-            if (!p[0] || p[0] == '#') continue;
-            if (stubs) {
-                for (int k = 0; k < 3; k++) {
-                    while (*p && *p != ' ') p++;
-                    while (*p == ' ') p++;
-                }
-                if (!*p) continue;
+    if (check) fprintf(stderr, "hao-aot: no FILE given: checking the %zu programs %s names\n", np, stubs ? spath : lpath);
+    else fprintf(stderr, "hao-aot: no FILE given: the %zu programs %s names, %d at a time\n", np, stubs ? spath : lpath, jobs);
+    int running = 0, ok = 0, failed = 0, valid = 0, absent = 0, stale = 0;
+    for (size_t i = 0; i <= np; i++) {
+        if (i < np) {
+            int r = hao_aot_check_file(paths[i], cache, false);
+            if (check) {
+                const char *what = r == 0 ? "valid" : r == 3 ? "missing" : r == 4 ? "stale" : "not checkable";
+                fprintf(stderr, "hao-aot: [%zu/%zu] %s: %s\n", i + 1, np, paths[i], what);
+                if (r == 0) valid++; else if (r == 3) absent++; else if (r == 4) stale++; else failed++;
+                continue;
             }
-            char path[PATH_MAX];
-            if (snprintf(path, sizeof path, "%s%s", p[0] == '/' ? "" : "/", p) >= (int)sizeof path) { missing++; continue; }
-            struct stat st;
-            if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) { missing++; continue; }
+            if (r == 0) { valid++; fprintf(stderr, "hao-aot: [%zu/%zu] %s: valid, skipped\n", i + 1, np, paths[i]); continue; }
+            fprintf(stderr, "hao-aot: [%zu/%zu] %s\n", i + 1, np, paths[i]);
             char *av[7];
             int n = 0;
             av[n++] = self;
             av[n++] = "--aot";
             if (cache) { av[n++] = "--cache"; av[n++] = (char *)cache; }
             av[n++] = "--";
-            av[n++] = path;
+            av[n++] = paths[i];
             av[n] = NULL;
             pid_t pid;
-            if (posix_spawn(&pid, self, NULL, NULL, av, *_NSGetEnviron()) != 0) { failed++; continue; }
-            running++;
+            if (posix_spawn(&pid, self, NULL, NULL, av, *_NSGetEnviron()) != 0) failed++;
+            else running++;
         }
-        while (running > 0 && (running >= jobs || len < 0)) {
+        while (running > 0 && (running >= jobs || i == np)) {
             int status;
             pid_t w = wait(&status);
             if (w < 0) { if (errno == EINTR) continue; running = 0; break; }
@@ -309,11 +331,15 @@ static int aot_default(const char *cache)
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) ok++;
             else failed++;
         }
-        if (len < 0) break;
     }
-    free(line);
-    fclose(f);
-    fprintf(stderr, "hao-aot: %d programs cached, %d failed, %d listed but not present\n", ok, failed, missing);
+    for (size_t i = 0; i < np; i++) free(paths[i]);
+    free(paths);
+    if (check) {
+        fprintf(stderr, "hao-aot: %d valid, %d missing, %d stale, %d not checkable, %d listed but not present\n", valid, absent, stale,
+                failed, missing);
+        return (absent || stale || failed) ? 1 : 0;
+    }
+    fprintf(stderr, "hao-aot: %d programs cached, %d already valid, %d failed, %d listed but not present\n", ok, valid, failed, missing);
     return failed ? 1 : 0;
 }
 
@@ -325,6 +351,8 @@ static int aot_main(int argc, char **argv)
      * into the system directory of the machine it runs on. */
     int bad = 0, k = 2;
     const char *cache = NULL;
+    bool check = false;
+    if (k < argc && !strcmp(argv[k], "--check")) { check = true; k++; }
     char abs[PATH_MAX];
     if (k < argc && !strcmp(argv[k], "--cache")) {
         if (k + 1 >= argc || !argv[k + 1][0]) usage();
@@ -340,9 +368,18 @@ static int aot_main(int argc, char **argv)
         k += 2;
     }
     if (k < argc && !strcmp(argv[k], "--")) k++;
-    if (k >= argc) return aot_default(cache);
+    if (k >= argc) return aot_default(cache, check);
     hao_opts_init(NULL);
     hao_verbose = 1;
+    if (check) {
+        int worst = 0;
+        for (; k < argc; k++) {
+            int r = hao_aot_check_file(argv[k], cache, true);
+            if (r < 0) worst = 1;
+            else if (r > worst && worst != 1) worst = r;
+        }
+        return worst;
+    }
     for (; k < argc; k++)
         if (hao_aot_generate_file(argv[k], true, cache) < 0) bad++;   /* maps a private copy of the file (jit.c) */
     return bad ? 1 : 0;

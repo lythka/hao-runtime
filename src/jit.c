@@ -5274,6 +5274,74 @@ bool hao_aot_load(hao_image *im)
     return false;
 }
 
+/* Whether one of dirs holds a cache this image would load: 0 (valid; where
+ * names it), 1 (no file in any) or 2 (a file, none valid; why says the last
+ * reason). The same checks as hao_aot_load, without the install. */
+static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where, size_t wn, char *why, size_t n)
+{
+    const uint8_t *gen = aot_gen();
+    if (!gen) { snprintf(why, n, "this hao build has no LC_UUID"); return 2; }
+    char name[64], w[512];
+    aot_name(im, name, sizeof name, "aot");
+    uint64_t lo[HAO_MAX_RANGES], hi[HAO_MAX_RANGES];
+    hao_aot_expect x;
+    aot_expect(im, gen, lo, hi, &x);
+    aot_id id;
+    bool seen = false;
+    why[0] = 0;
+    for (int d = 0; d < nd; d++) {
+        struct stat st;
+        int fd = hao_aot_open_trusted(&dirs[d], name, &st, w, sizeof w);
+        if (fd < 0) { if (w[0]) { seen = true; snprintf(why, n, "%s/%s: %s", dirs[d].path, name, w); } continue; }
+        seen = true;
+        if (x.id_kind == HAO_AOT_ID_CODE && aot_dir_system(&dirs[d], dirs[d].path, -1)) {
+            close(fd);
+            snprintf(why, n, "%s/%s: not code signed, in a system directory", dirs[d].path, name);
+            continue;
+        }
+        uint64_t fsz = (uint64_t)st.st_size;
+        uint8_t *buf = aot_read_all(fd, fsz);
+        close(fd);
+        if (!buf) { snprintf(why, n, "%s/%s: cannot read it", dirs[d].path, name); continue; }
+        hao_aot_view v;
+        int r = hao_aot_check(buf, fsz, &x, &v, w, sizeof w);
+        if (r == HAO_AOT_NEED_ID) {
+            r = -1;
+            if (aot_image_id(im, &id, w, sizeof w) && id.kind == x.id_kind) {
+                x.id_hash = id.hash;
+                x.code_id = id.id;
+                r = hao_aot_check(buf, fsz, &x, &v, w, sizeof w);
+            }
+        }
+        aot_free_all(buf, fsz);
+        if (r == 0) { snprintf(where, wn, "%s/%s", dirs[d].path, name); return 0; }
+        snprintf(why, n, "%s/%s: %s", dirs[d].path, name, w);
+    }
+    return seen ? 2 : 1;
+}
+
+/* hao --aot --check: 0 valid, 3 missing, 4 stale, -1 not checkable. Writes nothing. */
+int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
+{
+    hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
+    int w, nd;
+    char why[700], where[PATH_MAX + 80], err[512];
+    if (cache_dir) {
+        if (!hao_aot_dir_explicit(hao_env_tier(), cache_dir, &dirs[0], why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return -1; }
+        nd = 1;
+    } else nd = aot_dirs(dirs, &w, why, sizeof why);
+    if (nd <= 0) { fprintf(stderr, "hao-aot: no trusted AOT cache directory%s%s\n", why[0] ? ": " : "", why); return -1; }
+    hao_image *im = hao_map_image_only(path, err, sizeof err);
+    if (!im) { fprintf(stderr, "hao-aot: %s: %s\n", path, err); return -1; }
+    if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); hao_unload_image(im); return -1; }
+    int r = aot_state(im, dirs, nd, where, sizeof where, why, sizeof why);
+    hao_unload_image(im);
+    if (r == 0) { if (print) fprintf(stderr, "hao-aot: %s: valid (%s)\n", path, where); return 0; }
+    if (r == 1) { if (print) fprintf(stderr, "hao-aot: %s: missing\n", path); return 3; }
+    if (print) fprintf(stderr, "hao-aot: %s: stale (%s)\n", path, why);
+    return 4;
+}
+
 /* Open (creating as needed) a cache directory to write into. The existing
  * part is canonicalised, then the path is walked from "/" with O_NOFOLLOW
  * and each element is checked with fstat, so nothing can be redirected
@@ -5657,6 +5725,18 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
     if (!same) { fprintf(stderr, "hao-aot: %s: its private copy was replaced before it was mapped: no cache written\n", path); goto out; }
     snprintf(im->path, sizeof im->path, "%s", path);
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); goto out; }
+    {
+        /* a cache this image would already load, here or in a directory this process reads: nothing to write */
+        hao_aot_dir rd[HAO_AOT_MAX_DIRS];
+        int rw, rn = cache_dir ? 0 : aot_dirs(rd, &rw, why, sizeof why);
+        char where[PATH_MAX + 80];
+        if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
+        if (rn > 0 && aot_state(im, rd, rn, where, sizeof where, why, sizeof why) == 0) {
+            if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
+            rc = 0;
+            goto out;
+        }
+    }
     aot_sig s;
     aot_id id;
     if (!aot_image_sig(im, &s)) {
