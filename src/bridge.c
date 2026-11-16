@@ -15,6 +15,7 @@
  */
 #include "hao/runtime.h"
 #include "hao/bridge.h"
+#include "hao/swiftvalue.h"
 #include "hao/vafmt.h"
 #include "hao/gmap.h"
 #include "hao/gen_stamp.h"
@@ -1882,7 +1883,9 @@ const hao_plan *hao_bridge_plan_for_call(hao_thread *t, uint64_t pc)
     }
     if (p || !__atomic_load_n(&ready, __ATOMIC_ACQUIRE)) return p;
     if (in_signal_handler(t)) { __atomic_fetch_add(&st_bare_skipped, 1, __ATOMIC_RELAXED); return NULL; }
-    return bind_bare(t, pc);
+    p = bind_bare(t, pc);
+    if (p && p->cls != HAO_BR_REFUSED && !p->redirect) hao_swift_witness_probe(t, pc);   /* swiftvalue.c */
+    return p;
 }
 
 /* ------------------------------------------------------ diagnostics */

@@ -5,6 +5,10 @@
 // and leaves their nils in the guest's encoding (arm64 extra inhabitant 1, where x86_64's is 2); returned to
 // native code as they are, overlay's copy of V took the 1 for a live payload and retained it (swift_retain at
 // 0x8). Generic code is kept unspecialized so the witnesses are called, as in ControlCenter.
+// "inlined" lines: a View whose body the optimizer specializes and into which it inlines overlay builds
+// `_OverlayModifier<P?>` itself, its nil written inline in the arm64 encoding, and copies and destroys it
+// through SwiftUI's own value witnesses for that frozen struct (an outlined copy); those calls get the
+// native encoding as an Optional's witness calls do.
 // tests/guest/overlaynil.sh; output must equal native arm64.
 import SwiftUI
 
@@ -26,8 +30,21 @@ func render<P: View>(_ p: P, _ hovered: Bool) -> String {
     ZStack { if inner { Leaf(box: Box(7)) } }.padding(2).allowsHitTesting(false)
 }
 
+struct Tile<Placeholder: View>: View {
+    let placeholder: Placeholder
+    let hovered: Bool
+    var body: some View { Color.clear.overlay(alignment: .center) { if hovered { placeholder } } }
+}
+@inline(never) func inlined(_ hovered: Bool, _ inner: Bool) -> String {
+    let b = Tile(placeholder: placeholder(inner), hovered: hovered).body
+    return "\(MemoryLayout.size(ofValue: b)) \(String(describing: type(of: b)).count)"
+}
+
 @main struct Main {
     static func main() {
+        for hovered in [false, true] {
+            for inner in [false, true] { print("inlined", hovered, inner, inlined(hovered, inner)) }
+        }
         for hovered in [false, true] {
             for inner in [false, true] {
                 // V = P?: P a SwiftUI struct, its nil an inner guest Optional's inhabitant (the control)

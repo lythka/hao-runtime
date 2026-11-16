@@ -19,6 +19,10 @@ bool hao_swift_value_native(struct hao_thread *, uint64_t pc);
 void hao_swift_witness_setup(void);
 bool hao_swift_witness_native(struct hao_thread *, uint64_t pc);
 extern uint64_t hao_swift_witness_lo, hao_swift_witness_hi;
+/* The first guest call of the native function at PC (no exported name): if
+ * it is a frozen native struct's value witness called through that struct's
+ * metadata, its calls convert like those above. */
+void hao_swift_witness_probe(struct hao_thread *, uint64_t pc);
 /* A callback's guest code returns its indirect result INDIRECT (0: none) to
  * native code: the nils hao wrote in the guest's encoding into a value made
  * there since MARK (t->swift_made_n at the callback's entry) get the native
