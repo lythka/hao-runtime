@@ -1,5 +1,40 @@
 # Runtime issues and measured scope
 
+## Swift.Float16 through native metadata
+
+x86_64 macOS libswiftCore declares `Swift.Float16` as a stub: its metadata
+(`$ss7Float16VN`) is a struct with no fields whose value witnesses are the
+empty tuple's (size 0, stride 1), and it has none of the type's members or
+conformances (only `init()`, the metadata accessor and the descriptor are
+exported). Guest code binds its Float16 metadata to it, directly and through
+mangled names. Generic code saw size 0: `MemoryLayout<Float16>.size` was 0,
+a generic copy copied nothing (`copied(1.5)` returned a stale 2.25), and
+`Float16?`, tuples and collections holding Float16 were laid out wrong
+(`(Float16, Int8, Float16)` size 1; a copied `Float16?` nil read as present).
+
+Now (`src/swift.c` `float16_layout`), when the first Swift guest image is
+registered and libswiftCore is loaded, that metadata's value witness pointer
+is set to `Builtin.Int16`'s table (`$sBi16_WV`: size and stride 2, alignment
+2, POD, no extra inhabitants), which is Float16's arm64 layout
+(`Builtin.FPIEEE16`). Only a stub is changed: a struct with no fields whose
+witnesses have size 0. Native x86_64 code cannot use the type.
+
+`tests/guest/svarchdiff.swift` compares generic sizes, strides and
+alignments (`Float16`, `Float16?`, a tuple, an array), copies, Optionals,
+a dictionary, a tuple and an `Any` cast with native arm64 under JIT,
+`--interp` and AOT: on 0e75f64 they differed; now they are equal. The walk
+still refuses values holding Float16 (`archdiff_gen.inc`, entry
+"Multi-payload enum rules from generated tables").
+
+Limits: x86_64 libswiftCore has no Float16 members or conformances.
+- Printing or interpolating a Float16 through `Any` finds no conformance and
+  prints the reflected stub, `Float16()`; native arm64 prints the number.
+- Guest code that imports a Float16 conformance or member (generic code over
+  `BinaryFloatingPoint`, `Float16.SIMD*Storage`) gets an unresolved-import
+  message at load; a call of a missing member stops at that trap, and a
+  missing conformance descriptor faults in `swift_getWitnessTable`.
+  Providing them would take a native implementation of each member.
+
 ## dlopen of @rpath, @loader_path and @executable_path names from guest code
 
 Guest code's `dlopen` reaches dyld through `libhao_identity`'s interposer.
@@ -1781,7 +1816,8 @@ description prints `Float16()`, and a generic copy through the native
 witnesses copies nothing (`copied(1.5)` returned 2.25, a stale value).
 The walk refusal does not cause this and does not fix it; the walk of a
 guest struct holding `Float16` would itself be sound (the field holds no
-pointer and the struct's offsets are the guest's). Not addressed here.
+pointer and the struct's offsets are the guest's). Not addressed here (see
+"Swift.Float16 through native metadata").
 
 Remaining limitations:
 - The tables describe 26B131. On another build a native type finds no row:
