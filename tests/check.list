@@ -21,6 +21,7 @@ guest/crypto	300	par	tests/guest/crypto.sh
 guest/cuvalist	300	par	tests/guest/cuvalist.sh
 guest/deepcallback	120	par	tests/guest/deepcallback.sh
 guest/cxxabi	300	par	tests/guest/cxxabi.sh
+guest/cxxbool	300	par	tests/guest/cxxbool.sh
 guest/datacall	300	par	tests/guest/datacall.sh
 guest/dsc	300	par	tests/guest/dsc.sh
 guest/dscswift	300	par	tests/guest/dscswift.sh

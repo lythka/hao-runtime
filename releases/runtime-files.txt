@@ -393,6 +393,10 @@ tests/guest/cxxabi.cpp
 tests/guest/cxxabi.sh
 tests/guest/cxxabihelper.cpp
 tests/guest/cxxabihelper.h
+tests/guest/cxxbool.mm
+tests/guest/cxxbool.sh
+tests/guest/cxxboolhelper.h
+tests/guest/cxxboolhelper.mm
 tests/guest/cxxstr.cpp
 tests/guest/cxxstrhelper.cpp
 tests/guest/cxxstrhelper.h
