@@ -749,6 +749,7 @@ tools/hao-image-payload
 tools/hao-install.py
 tools/hao-public-archive
 tools/hao-runtime-from-source
+tools/hao-runtime-on-mac
 tools/hao-trust-list
 tools/hao.entitlements
 tools/hao_catalog_gate.py

@@ -6,7 +6,8 @@ tar.gz (sorted, mtime 0, root:wheel, gzip mtime 0). Prints the file count, size 
 import gzip, hashlib, io, json, os, struct, sys, tarfile
 
 TOOLS = ('hao-embed', 'dyld-ignition-fix.py', 'hao-trust-list', 'hao_fat.py', 'hao_codesig.py', 'hao_macho.py',
-         'stub_identity_gate.py', 'hao_ifunit.py', 'hao.entitlements', 'hao-public-archive', 'hao-runtime-from-source')
+         'stub_identity_gate.py', 'hao_ifunit.py', 'hao.entitlements', 'hao-public-archive', 'hao-runtime-from-source',
+         'hao-runtime-on-mac')
 BUILT = ('hao-stub', 'front/stub.o', 'libhao.dylib', 'libhao_identity.dylib')
 
 GENERATE = """# hao runtime {version}: what is published and what you make yourself
@@ -33,13 +34,20 @@ x86_64 shared cache `{cache}`, libhao LC_UUID `{uuid}`.
 
 Inputs: the {os_build} System root, mounted read-only at `ROOT`, and its x86_64 dyld shared cache directory
 `X86` (from the IPSW's Rosetta cryptex). Python 3.12 or later and `codesign`; no compiler or linker.
-Every output must have the sha256 the manifests record.
+Every output must have the sha256 the manifests record. One command makes both files below and checks every
+file `payload-manifest.json` lists (exit 0 only if all match; the AOT caches come after the first boot):
+
+       python3 tools/hao-runtime-on-mac ROOT X86
+
+What it runs:
 
 1. Embedded stubs ({embedded} programs; `payload/embed/stubs/`), filled from the skeletons:
 
-       python3 tools/hao-embed --stub build/hao-stub --stubs payload/embed --root ROOT --x86-cache X86 \\
-         --skeletons payload/embed/skeletons \\
-         $(python3 -c 'import json,sys; [print(sys.argv[1] + "/" + f["path"]) for f in json.load(open("payload/embed/manifest.json"))["files"]]' ROOT)
+       python3 tools/hao-embed --stub build/hao-stub --stubs OUT --root ROOT --x86-cache X86 \\
+         --skeletons payload/embed/skeletons --require sbin/launchd --require usr/libexec/xpcproxy --list LIST
+
+   LIST holds `ROOT/PATH` for each entry of `payload/embed/manifest.json`, one per line; the stubs go from
+   `OUT/stubs/` to `payload/embed/stubs/` (OUT's manifest and logs are not the published ones).
 
    Each `stubs/*.stub` must match `stub_sha256` in `payload/embed/manifest.json`.
 {dyld}
