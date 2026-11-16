@@ -950,7 +950,14 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
     uint64_t gh = 0, nh = 0;
     bool thunk = r && (r->flags & HAO_IFR_THUNK) && !hao_opt.no_thunks && hao_thunks_pair(v->str + r->thunk, &gh, &nh);
     if (r && (r->flags & HAO_IFR_THUNK) && !thunk) __atomic_fetch_add(&st_thunk_missing, 1, __ATOMIC_RELAXED);
-    if (r && (r->flags & HAO_IFR_THUNK) && !thunk && !(r->flags & HAO_IFR_SIG)) {
+    if (!tsrc && hao_swift_fixed_abi(gname)) {
+        /* before the unit: a unit's argument mask for these may mark the caller's own
+         * address as code, and a thunk in its place breaks the comparison */
+        p->cls = HAO_BR_EXACT;
+        p->src = HAO_BRS_SWIFTABI;
+        p->flags |= HAO_PLAN_MASKED;
+        p->argmask = 0;
+    } else if (r && (r->flags & HAO_IFR_THUNK) && !thunk && !(r->flags & HAO_IFR_SIG)) {
         /* The unit requires this adapter and supplies no abi.c equivalent.
          * Losing the pair does not make the raw calling convention safe. */
         p->cls = HAO_BR_REFUSED;
@@ -990,11 +997,6 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
                         tkind ? tkind : '-', tenc ? " " : "", tenc ? tenc : "");
             }
         }
-    } else if (!tsrc && hao_swift_fixed_abi(gname)) {
-        p->cls = HAO_BR_EXACT;
-        p->src = HAO_BRS_SWIFTABI;
-        p->flags |= HAO_PLAN_MASKED;
-        p->argmask = 0;
     } else if (tsrc) {
         p->cls = HAO_BR_TYPED;
         p->src = (uint8_t)tsrc;
