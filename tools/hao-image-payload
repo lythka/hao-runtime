@@ -11,6 +11,7 @@
 #     OUT/root/usr/lib/hao/trusted-cdhashes      (tools/hao-trust-list: cdhashes of every Apple-signed
 #                                                 arm64-only program under ROOT, so hao verifies them
 #                                                 with no daemon running; OUT/trust.log lists the rest)
+#     OUT/root/System/Library/LaunchDaemons/hao.aot.plist  (`hao --aot --auto` after the first login, again after an update)
 #     OUT/root/usr/lib/hao/aot-list              (--aot, --aot-list: the programs cached, absolute,
 #                                                 one per line; `hao --aot` with no FILE reads it)
 #     OUT/root/usr/lib/hao/stub-identities       (tools/hao-trust-list --stubs: stub cdhash, Apple arm64
@@ -160,6 +161,8 @@ RELEASE=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],
 mkdir -p "$OUT/root/usr/libexec" "$OUT/root/usr/lib/hao/aot" "$OUT/embed"
 chmod 755 "$OUT/root/usr/lib/hao" "$OUT/root/usr/lib/hao/aot"
 install -m 755 "$B/hao" "$OUT/root/usr/libexec/hao"
+mkdir -p "$OUT/root/System/Library/LaunchDaemons"
+install -m 644 "$H/releases/launchd/hao.aot.plist" "$OUT/root/System/Library/LaunchDaemons/hao.aot.plist"
 install -m 755 "$B/libhao.dylib" "$OUT/root/usr/lib/hao/libhao.dylib"
 install -m 755 "$B/libhao_identity.dylib" "$OUT/root/usr/lib/hao/libhao_identity.dylib"
 if [ -n "$ASYNC_PROVIDER" ]; then
