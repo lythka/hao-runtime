@@ -559,6 +559,29 @@ const char *hao_native_block_sig(uint64_t a, uint64_t inv)
     return NULL;
 }
 
+/* The signature address of the native block at a whose invoke is inv, read as the argument scan
+ * reads (read_words: no Mach call for an ordinary readable address); 0 when a is no such block or it
+ * has no signature. Only the words the answer needs: the per-call check of a block-typed invoke plan
+ * (bridge.c hao_bridge_block_recheck) compares it with the plan's own string and checks the whole
+ * block (hao_native_block_sig) when they differ. */
+uint64_t hao_native_block_sigptr(const hao_thread *t, uint64_t a, uint64_t inv)
+{
+    uint64_t b[3], sig;
+    if (a < 0x1000 || a >= 0x0000800000000000ull || (a & 7)) return 0;
+    if (!read_words(t, a + 8, b, 3, RW_SCAN) || b[1] != inv) return 0;   /* flags, invoke, descriptor */
+    uint32_t flags = (uint32_t)b[0];
+    if (!(flags & BLOCK_HAS_SIGNATURE) || (flags & BLOCK_SMALL_DESCRIPTOR) || !b[2] || (b[2] & 7)) return 0;
+    if (!read_words(t, b[2] + 8 * ((flags & BLOCK_HAS_COPY_DISPOSE) ? 4 : 2), &sig, 1, RW_SCAN)) return 0;
+    return sig;
+}
+
+/* a lies in the shared cache: a string there is never freed (no lock, no Mach call) */
+bool hao_native_static_addr(uint64_t a)
+{
+    pthread_once(&block_cache_once, block_cache_bounds);
+    return a >= block_cache_lo && a < block_cache_hi;
+}
+
 /* A native block reached guest code where its type is known to be a
  * block (a '@?' argument of a signature callback or a method's block
  * result). Record its invoke function's type from the block's signature:
