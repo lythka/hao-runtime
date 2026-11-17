@@ -758,13 +758,14 @@ class X86Libraries:
         """The paths dyld tries when NAME is not loaded from its own: DYLD_FALLBACK_FRAMEWORK_PATH's default for a
         framework (~/Library/Frameworks, /Library/Frameworks, /System/Library/Frameworks), else
         DYLD_FALLBACK_LIBRARY_PATH's (/usr/local/lib, /usr/lib); in a RESTRICTED process (the stub has the
-        hardened runtime) only the system one. ~ is a user's folder, written /Users here."""
+        hardened runtime) only the system one. ~ is a user's folder, which /Users/Shared stands for here (it is
+        unprotected storage as any user's folder is)."""
         parts = name.split("/")
         fw = next((k for k, c in enumerate(parts) if c.endswith(".framework")), None)
         if fw is not None:
             tail = "/".join(parts[fw:])
             dirs = ["/System/Library/Frameworks"] if restricted else \
-                ["/Users/Library/Frameworks", "/Library/Frameworks", "/System/Library/Frameworks"]
+                ["/Users/Shared/Library/Frameworks", "/Library/Frameworks", "/System/Library/Frameworks"]
         else:
             tail = parts[-1]
             dirs = ["/usr/lib"] if restricted else ["/usr/local/lib", "/usr/lib"]
