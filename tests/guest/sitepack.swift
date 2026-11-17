@@ -70,7 +70,7 @@ struct Board: Codable {
 @main struct Main {
     static func main() {
         switch CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "" {
-        case "list": print("friend pair0 pair16 quad spill encode")
+        case "list": print("friend pair0 pair16 quad spill encode method")
         case "friend": friends()
         case "pair0":
             for n in 0..<2 {
@@ -93,7 +93,12 @@ struct Board: Codable {
                 print("spill: \(spill(SIMD4<Float>(Float(n), 2, 3, 4), n == 0 ? nil : Tag("tag-\(n)"), flag(n), flag(n + 1)))")
             }
         case "encode": encode()
-        default: print("usage: sitepack list|friend|pair0|pair16|quad|spill|encode")
+        case "method":
+            let o = Offers()
+            for n in 0..<3 {
+                print("method: \(o.changing(1, 2, 3, 4, 5, 6, 7, 8, true, nil, nil, false, flag(n) ? "t\(n)" : nil, nil, true, num(n)))")
+            }
+        default: print("usage: sitepack list|friend|pair0|pair16|quad|spill|encode|method")
         }
     }
 

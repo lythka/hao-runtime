@@ -120,3 +120,14 @@ public struct Context: Codable {
         self.offer = offer; self.offerID = nil; self.grouped = false
     }
 }
+
+// a class method called through its dispatch thunk,
+// constant Bool? arguments merged into one store on the stack
+open class Offers {
+    public init() {}
+    open func changing(_ x0: Int, _ x1: Int, _ x2: Int, _ x3: Int, _ x4: Int, _ x5: Int, _ x6: Int, _ x7: Int,
+                       _ a: Bool?, _ b: Bool?, _ c: Bool?, _ d: Bool?, _ t: String?, _ e: Bool?, _ f: Bool?, _ n: Int) -> String {
+        let s = { (v: Bool?) in v.map { "\($0)" } ?? "nil" }
+        return "\(x0 + x7) a=\(s(a)) b=\(s(b)) c=\(s(c)) d=\(s(d)) t=\(t ?? "nil") e=\(s(e)) f=\(s(f)) n=\(n)"
+    }
+}

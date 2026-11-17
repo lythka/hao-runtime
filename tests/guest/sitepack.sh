@@ -7,7 +7,9 @@
 #    (AppSubscriptions UserSubscriptionContextData.init's shape: four constant Int32 zeros in one
 #    `stp xzr, xzr, [sp, #-32]!`, then an indirect Offer?, the values encoded by the native
 #    JSONEncoder inside a guest Codable value), and pair0, pair16, quad, whose constant Bools LLVM
-#    merges into one strh or str w.
+#    merges into one strh or str w, and method (
+#    an open class's method through its dispatch thunk, which reads no stack itself; the
+#    implementation its method descriptor names does).
 #  - tests/guest/stackpack.swift, helper stackpackhelper.swift (no library evolution): opts and mgr
 #    (three constant Bools, two of them merged), mixed (Int16/Bool/Int32/UInt8/Int64/Bool), box (a
 #    class method; its merged Bools end at a multiple of 8).
@@ -108,6 +110,7 @@ sitepack encode take
 sitepack pair0 take
 sitepack pair16 take
 sitepack quad take
+sitepack method take
 stackpack mixed take
 stackpack opts take
 stackpack mgr take

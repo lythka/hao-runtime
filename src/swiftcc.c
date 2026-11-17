@@ -1537,8 +1537,31 @@ static size_t native_code(uint64_t fn, uint32_t skip[2 * SITEPACK_SKIPS], int *n
     return (size_t)(end - fn);
 }
 
-/* The stack-argument slots of the native function NATIVE (following up to three trampolines): false
- * when its code does not show them (hao_x86_stackargs). */
+/* A Swift class method's dispatch thunk (`...Tj`) only jumps through the vtable, so its code shows no
+ * stack argument: the implementation its exported method descriptor (`...Tq`: Flags, then a relative
+ * pointer to the implementation) names takes the same arguments, as does every override. 0 if FN is
+ * not such a thunk, or the method is async or has no implementation here. */
+static uint64_t dispatch_impl(uint64_t fn)
+{
+    Dl_info di;
+    if (!dladdr((const void *)(uintptr_t)fn, &di) || !di.dli_sname || (uint64_t)(uintptr_t)di.dli_saddr != fn) return 0;
+    size_t n = strlen(di.dli_sname);
+    char q[1024];
+    if (n < 3 || n >= sizeof q || strncmp(di.dli_sname, "$s", 2) || strcmp(di.dli_sname + n - 2, "Tj")) return 0;
+    memcpy(q, di.dli_sname, n + 1);
+    q[n - 1] = 'q';
+    const uint8_t *d = dlsym(RTLD_DEFAULT, q);
+    if (!d) return 0;
+    uint32_t flags;
+    int32_t rel;
+    memcpy(&flags, d, 4);
+    memcpy(&rel, d + 4, 4);
+    if ((flags & 0x40) || !rel) return 0;
+    return (uint64_t)(uintptr_t)(d + 4 + rel);
+}
+
+/* The stack-argument slots of the native function NATIVE (following up to three trampolines, and a
+ * dispatch thunk to its implementation): false when its code does not show them (hao_x86_stackargs). */
 static bool callee_stackuse(uint64_t native, hao_x86_stackuse *u)
 {
     uint64_t fn = untag(native);
@@ -1550,6 +1573,8 @@ static bool callee_stackuse(uint64_t native, hao_x86_stackuse *u)
         return (e[1] >> 1) & 1;
     }
     bool shown = false;
+    uint64_t impl = dispatch_impl(fn);
+    if (impl) fn = impl;
     for (int hop = 0, t = 0; hop < 4 && !t; hop++) {
         uint32_t skip[2 * SITEPACK_SKIPS];
         int nskip;
