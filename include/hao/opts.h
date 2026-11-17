@@ -17,7 +17,7 @@ typedef struct {
     unsigned watchdog;          /* HAO_WATCHDOG=N seconds (open tier: it takes SIGALRM and exits 124) */
     unsigned jit_cache_mb;      /* HAO_JIT_CACHE_MB=N: translated-code space (0 = default) */
     unsigned aot_limit_kb;      /* HAO_AOT_LIMIT_KB=N: AOT loading's memory limit instead of the kernel's (tests; jit.c aot_fits) */
-    /* boolean knobs: environment HAO_<NAME>; boot argument hao_<name>=1 for those listed below */
+    /* boolean knobs: environment HAO_<NAME> (empty or 0 = off); boot argument hao_<name>=1 for those listed below */
     bool nx_stats, crash_trace, jit_helpers_only, no_aot, no_chain, no_msgsend, no_closures, no_swiftreg,
          no_block_thunks, no_fixup_thunks, no_struct_thunks, aot_learn, no_jit_memory, bridge_check, bridge_abort,
          no_varsniff, no_libval, bridge_stats, no_ifunits, no_swift_thunks, no_thunks, no_swift_values,
