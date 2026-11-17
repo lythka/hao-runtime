@@ -214,19 +214,20 @@ def macho_uuid(path):
     return None
 
 
+# include/hao/cpufeat.h HAO_CPU_BASELINE: aes, pclmul, avx, f16c, rdrand (every supported Mac)
+AOT_CPU_BASELINE = 0x1f
+
+
 def check_aot_caches(system, errors):
-    """The caches in usr/lib/hao/aot (include/hao/aot.h: magic, version 7, the
-    guest UUID at 16, the generating libhao/CPU profile at 32 and the kind of code
-    identity at 96, in a 136-byte header): keep those of the installed libhao
-    that are bound to a signed guest's cdhash (kind 1; hao serves no other
-    kind from a system directory), remove the rest; returns a record."""
+    """The caches in usr/lib/hao/aot (include/hao/aot.h: magic, version 8, the
+    guest UUID at 16, the generating libhao at 32, the kind of code identity at
+    96 and the CPU profile at 136, in a 144-byte header): keep those of the
+    installed libhao that are bound to a signed guest's cdhash (kind 1; hao
+    serves no other kind from a system directory) and need no CPU feature
+    beyond the baseline (an image's caches must load on every Mac it boots),
+    remove the rest; returns a record."""
     d = os.path.join(system, AOT_DIRS[0])
     gen = macho_uuid(os.path.join(system, "usr/lib/hao/libhao.dylib"))
-    gen_profiles = set()
-    if gen is not None:
-        aes_gen = bytearray.fromhex(gen)
-        aes_gen[15] ^= 1
-        gen_profiles = {gen, aes_gen.hex()}  # jit.c's only two CPU profiles
     rec = {"libhao_uuid": gen, "caches": 0, "bytes": 0, "removed_stale": []}
     if not os.path.isdir(d) or os.path.islink(d):
         return rec
@@ -237,10 +238,11 @@ def check_aot_caches(system, errors):
         if os.path.islink(f) or not os.path.isfile(f):
             continue   # ensure_aot_dirs reported it
         with open(f, "rb") as fh:
-            h = fh.read(136)
-        if len(h) == 136 and h[:8] == b"HAOAOT2\0" and int.from_bytes(h[8:12], "little") == 7 and \
-                int.from_bytes(h[12:16], "little") == 136 and int.from_bytes(h[96:100], "little") == 1 and \
-                h[16:32].hex() == name[:32] and gen is not None and h[32:48].hex() in gen_profiles:
+            h = fh.read(144)
+        if len(h) == 144 and h[:8] == b"HAOAOT2\0" and int.from_bytes(h[8:12], "little") == 8 and \
+                int.from_bytes(h[12:16], "little") == 144 and int.from_bytes(h[96:100], "little") == 1 and \
+                int.from_bytes(h[136:144], "little") & ~AOT_CPU_BASELINE == 0 and \
+                h[16:32].hex() == name[:32] and gen is not None and h[32:48].hex() == gen:
             rec["caches"] += 1
             rec["bytes"] += os.path.getsize(f)
         else:

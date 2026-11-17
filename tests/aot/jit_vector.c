@@ -869,6 +869,31 @@ int main(void)
             uint32_t i = 0x4e280800u | op << 12 | size << 22 | rn << 5 | rd;
             check(i, 0, &in, false); check(i, 0, &in, true);
         }
+    /* CRC32B/H/W/X and CRC32CB/H/W/X with every sf, the unallocated sf/size
+     * pairs and the zero register in each field. CRC32C must not reach the
+     * helper (SSE4.2 crc32); CRC32 (IEEE) is the helper's table. */
+    for (unsigned sf = 0; sf < 2; sf++) for (unsigned c = 0; c < 2; c++) for (unsigned sz = 0; sz < 4; sz++)
+        for (unsigned k = 0; k < 256; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, 0, 0);
+            if (k & 4) in.x[rn] = ~0ull;
+            uint32_t i = sf << 31 | 0x1AC04000u | rm << 16 | c << 12 | sz << 10 | rn << 5 | rd;
+            vector_helper_calls = 0;
+            check(i, 0, &in, k & 8);
+            if (c && (sz == 3) == sf && vector_helper_calls && fails++ < 20)
+                printf("MISMATCH CRC32C %08x used the helper\n", i);
+        }
+    /* PMULL/PMULL2 in every size and Q, the unsigned and 16/32-bit
+     * neighbours undefined, aliased and high registers. .1Q is pclmulqdq
+     * under a profile with PCLMULQDQ, else the helper; .8H is the helper. */
+    for (unsigned q = 0; q < 2; q++) for (unsigned u = 0; u < 2; u++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned k = 0; k < 128; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm);
+            for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 2; e++) in.v[r].d[e] = rnd();
+            uint32_t i = q << 30 | u << 29 | 0x0E20E000u | size << 22 | rm << 16 | rn << 5 | rd;
+            check(i, 0, &in, k & 4);
+        }
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)
         for (unsigned op = 1; op < 8; op++) for (unsigned k = 0; k < 64; k++) {

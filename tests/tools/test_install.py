@@ -88,29 +88,35 @@ class InstallPaths(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
     def test_aot_cpu_profiles(self):
-        """Only base/AES generator identities survive installation."""
+        """Only caches of the installed libhao (its plain UUID) that need no CPU feature beyond the baseline survive."""
         version = next(int(line.split()[-1]) for line in
                        (TOOLS.parent / 'include/hao/aot.h').read_text().splitlines()
                        if line.startswith('#define HAO_AOT_VERSION '))
         cache = self.payload / 'root/usr/lib/hao/aot'
         cache.mkdir()
         names = []
-        for i, (byte, flip) in enumerate(((15, 0), (15, 1), (15, 2), (15, 128), (0, 1))):
+        # (generator UUID byte, XOR, CPU profile, header version, header size); the first three are kept
+        cases = ((15, 0, 0, version, 144), (15, 0, 0x3, version, 144), (15, 0, 0x1F, version, 144),
+                 (15, 1, 0, version, 144),       # the format-7 AES-NI identity: another build now
+                 (0, 1, 0, version, 144), (15, 0, 0x80, version, 144), (15, 0, 0x20, version, 144),   # avx2, fma
+                 (15, 0, 0, 7, 136))
+        for i, (byte, flip, cpu, v, size) in enumerate(cases):
             guest = bytes.fromhex(f'{i + 10:032x}')
-            h = bytearray(136); h[:8] = b'HAOAOT2\0'
-            struct.pack_into('<II', h, 8, version, 136)
+            h = bytearray(size); h[:8] = b'HAOAOT2\0'
+            struct.pack_into('<II', h, 8, v, size)
             h[16:32] = guest; h[32:48] = bytes.fromhex('1' * 32)
             h[32 + byte] ^= flip
             struct.pack_into('<I', h, 96, 1)
+            if size >= 144: struct.pack_into('<Q', h, 136, cpu)
             name = guest.hex() + '.aot'; names.append(name)
             (cache / name).write_bytes(h)
         rc, out = self.run_install()
         self.assertEqual(rc, 0, out)
         installed = self.system / 'usr/lib/hao/aot'
-        self.assertEqual(sorted(p.name for p in installed.iterdir()), names[:2])
+        self.assertEqual(sorted(p.name for p in installed.iterdir()), names[:3])
         record = json.loads((self.system / 'usr/lib/hao/install.json').read_text())['aot_caches']
-        self.assertEqual(record['caches'], 2)
-        self.assertEqual(record['removed_stale'], names[2:])
+        self.assertEqual(record['caches'], 3)
+        self.assertEqual(record['removed_stale'], names[3:])
 
     def test_manifest_names_are_relative(self):
         other = self.outside / 'prog'

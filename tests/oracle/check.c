@@ -1,7 +1,9 @@
 /*
  * x86_64 checker: replays oracle records through hao's interpreter and its
  * block translator and compares the result with the native arm64 run.
- *   check RECORDS.bin [--show N] [--bad FILE]
+ *   check RECORDS.bin [--show N] [--bad FILE] [--cpu MASK]
+ * --cpu: the JIT pass translates for the host's optional CPU features
+ * (hao/cpufeat.h) within MASK (baseline, host or hex; 0: none of them).
  *
  * Compared bit-exactly: x0-x30 (except the platform register x18), SP, NZCV,
  * FPCR, FPSR.QC, v0-v31 (NaN payloads included) and the scratch memory
@@ -24,6 +26,7 @@
 #include "known.h"
 #include "hao/cpu.h"
 #include "hao/opts.h"
+#include "hao/cpufeat.h"
 #include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
@@ -132,6 +135,13 @@ int main(int argc, char **argv)
     for (int k = 2; k < argc; k++) {
         if (!strcmp(argv[k], "--show") && k + 1 < argc) show = atoi(argv[++k]);
         else if (!strcmp(argv[k], "--bad") && k + 1 < argc) badpath = argv[++k];
+        else if (!strcmp(argv[k], "--cpu") && k + 1 < argc) {
+            /* the JIT under a profile without the features the mask clears (hao/cpufeat.h) */
+            uint64_t keep;
+            char why[160];
+            if (!hao_cpu_profile_parse(argv[++k], HAO_CPU_ALL, &keep, why, sizeof why)) { fprintf(stderr, "%s\n", why); return 2; }
+            hao_opt.cpu_clear = HAO_CPU_ALL & ~keep;
+        }
     }
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror("open"); return 1; }
@@ -268,6 +278,9 @@ int main(int argc, char **argv)
             if (mode == OM_KNOWN && (!a || !b)) fails++;
         }
     }
+    char cn[160];
+    uint64_t prof = hao_cpu_features() & HAO_CPU_JIT;
+    printf("jit CPU profile %#llx (%s)\n", (unsigned long long)prof, prof ? hao_cpu_names(prof, cn, sizeof cn) : "none");
     for (int pass = 0; pass < 2; pass++) {
         counts *C = &cnt[pass];
         printf("%s %-6s records %ld | native ran %ld: match %ld, mismatch %ld, hao-fault %ld, hao-undef %ld (+%ld known unimplemented)"

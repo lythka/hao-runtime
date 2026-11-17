@@ -122,8 +122,9 @@ aot/wide-fp-mutations	600	par	tests/aot/wide_fp_mutations.sh
 
 aot/estimate-mutations	600	par	tests/aot/estimate_mutations.sh
 
-aot/aes-mutations	600	par	tests/aot/aes_mutations.sh
-aot/aes-profile	120	par	tests/aot/aes_profile.sh
+aot/crypto-mutations	900	par	tests/aot/crypto_mutations.sh
+aot/cpu-profile	120	par	tests/aot/cpu_profile.sh
+aot/cpu-haswell	900	par	tests/aot/cpu_haswell.sh
 guest/satshift	900	par	tests/guest/satshift.sh
 guest/halfops	900	par	tests/guest/halfops.sh
 guest/satmul	300	par	tests/guest/satmul.sh

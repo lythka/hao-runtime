@@ -104,6 +104,10 @@ void x_imul_rr(xbuf *b, int w, int dst, int src);
 void x_bsr(xbuf *b, int w, int dst, int src);
 void x_bsf(xbuf *b, int w, int dst, int src);
 void x_bswap(xbuf *b, int w, int r);
+/* SSE4.2 crc32 dst, src (CRC-32C, the reflected Castagnoli polynomial, no
+ * inversion): the low `size` bytes (1, 2, 4 or 8) of src into the 32-bit
+ * value in dst, which is written zero-extended. EFLAGS untouched. */
+void x_crc32(xbuf *b, int size, int dst, int src);
 void x_cmov_rr(xbuf *b, int cc, int w, int dst, int src);
 void x_cmov_rm(xbuf *b, int cc, int w, int dst, xmem m);
 void x_setcc(xbuf *b, int cc, int r);
@@ -185,9 +189,10 @@ void x_sse_rri(xbuf *b, int pfx, uint8_t op, int dst, int src, uint8_t imm);
 void x_sse_shift_ri(xbuf *b, uint8_t op, int digit, int xmm, uint8_t imm);
 /* The 66 0F 38 xx (SSSE3/SSE4.1/SSE4.2: pshufb, pabs*, pmulld, pmin/pmax*,
  * pcmpeqq, pcmpgtq) and 66 0F 3A xx ib (palignr, round*) forms, register to
- * register; dst is the ModRM reg field. The optional AES opcodes also use
- * the 0F 38 form and require CPUID admission by the caller. Other emitted
- * forms are in the x86-64-v2 profile; none is VEX-encoded. */
+ * register; dst is the ModRM reg field. The optional AES opcodes (0F 38)
+ * and PCLMULQDQ (0F 3A 44) use these forms too; the caller admits them by
+ * its translation profile (hao/cpufeat.h). Other emitted forms are in the
+ * x86-64-v2 profile; none is VEX-encoded. */
 void x_sse38_rr(xbuf *b, uint8_t op, int dst, int src);
 void x_sse3a_rri(xbuf *b, uint8_t op, int dst, int src, uint8_t imm);
 
