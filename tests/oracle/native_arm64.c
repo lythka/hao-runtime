@@ -122,7 +122,8 @@ static uint32_t field_regs(uint32_t i)
 }
 static bool names18(uint32_t i)
 {
-    return (i & 31) == 18 || ((i >> 5) & 31) == 18 || ((i >> 10) & 31) == 18 || ((i >> 16) & 31) == 18;
+    bool f10 = (i & 0x5FE00000) != 0x1AC00000;   /* data processing (2 source): bits 14:10 are opcode (CRC32W is 18) */
+    return (i & 31) == 18 || ((i >> 5) & 31) == 18 || (f10 && ((i >> 10) & 31) == 18) || ((i >> 16) & 31) == 18;
 }
 
 /* One simd record in eight lands in a cryptographic-extension group (Arm ARM
@@ -148,6 +149,7 @@ static const struct { uint32_t mask, value; bool vonly; } crypto[] = {
     {0xFFFFF000, 0xCEC08000, true},  /* SHA512SU0, SM4E */
     {0xFFE00000, 0xCEC00000, true},  /* the rest of Op0 = 110 */
     {0xBF000000, 0x8E000000, false}, /* bit 30 clear */
+    {0xBF20FC00, 0x0E20E000, true},  /* PMULL/PMULL2, every size and U (pclmulqdq for .1Q) */
 };
 static bool crypto_vonly(uint32_t i)
 {
@@ -451,7 +453,11 @@ int main(int argc, char **argv)
         else {
             uint32_t insn = (uint32_t)rnd();
             static const uint32_t dp[] = {0x8, 0x9, 0x5, 0xD}, simd[] = {0x7, 0xF}, mem[] = {0x4, 0x6, 0xC, 0xE};
-            if (mode == OM_DP) insn = (insn & ~(0xFu << 25)) | dp[rr(4)] << 25;
+            if (mode == OM_DP) {
+                insn = (insn & ~(0xFu << 25)) | dp[rr(4)] << 25;
+                if (!rr(16))                                           /* CRC32{,C}{B,H,W,X}, any sf */
+                    insn = rr(2) << 31 | 0x1AC04000u | rr(2) << 12 | rr(4) << 10 | ((uint32_t)rnd() & 0x001F03FFu);
+            }
             else if (mode == OM_SIMD) {
                 insn = (insn & ~(0xFu << 25)) | simd[rr(2)] << 25;
                 if (!rr(8)) {   /* see crypto[] */

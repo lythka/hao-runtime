@@ -251,6 +251,13 @@ void x_unary(xbuf *b, int op, int w, int r) { enc_rr(b, 0, w, 0, OP1(0xF7), op, 
 void x_imul_rr(xbuf *b, int w, int dst, int src) { enc_rr(b, 0, w, 0, OP2(0x0F, 0xAF), dst, src); }
 void x_bsr(xbuf *b, int w, int dst, int src) { enc_rr(b, 0, w, 0, OP2(0x0F, 0xBD), dst, src); }
 void x_bsf(xbuf *b, int w, int dst, int src) { enc_rr(b, 0, w, 0, OP2(0x0F, 0xBC), dst, src); }
+void x_crc32(xbuf *b, int size, int dst, int src)
+{
+    if (size != 1 && size != 2 && size != 4 && size != 8) { bad(b); return; }
+    /* F2 (66 for a word source) [REX] 0F 38 F0 (byte source) / F1 */
+    enc_rr(b, P_F2 | (size == 2 ? P_66 : 0), size == 8, size == 1 && src >= 4 && src < 8,
+           (const uint8_t[]){0x0F, 0x38, (uint8_t)(size == 1 ? 0xF0 : 0xF1)}, 3, dst, src);
+}
 void x_bswap(xbuf *b, int w, int r)
 {
     if (!okreg(b, r)) return;

@@ -4,6 +4,7 @@
  */
 #include "hao/opts.h"
 #include "hao/aot.h"
+#include "hao/cpufeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -129,6 +130,12 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     if ((v = env_get(o, envp, "HAO_JIT_CACHE_MB", tier)) && atoi(v) > 0) o->jit_cache_mb = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_AOT_LIMIT_KB", tier)) && atoi(v) > 0) o->aot_limit_kb = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_AOT_LIST_DIR", tier))) snprintf(o->aot_list_dir, sizeof o->aot_list_dir, "%s", v);
+    if ((v = env_get(o, envp, "HAO_CPU_FEATURES", tier))) {
+        uint64_t keep = 0;
+        char why[8];
+        if (!hao_cpu_profile_parse(v, HAO_CPU_ALL, &keep, why, sizeof why)) keep = 0;
+        o->cpu_clear = HAO_CPU_ALL & ~keep;
+    }
     for (size_t k = 0; k < NKNOBS; k++) {
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)
@@ -144,3 +151,5 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     if ((v = env_get(o, envp, "HAO_SWIFT_POP", tier))) snprintf(o->swift_pop, sizeof o->swift_pop, "%s", v);
     o->ready = true;
 }
+
+uint64_t hao_cpu_features(void) { return hao_cpu_host() & ~hao_opt.cpu_clear; }

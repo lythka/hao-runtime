@@ -52,7 +52,7 @@ class ReleaseTests(unittest.TestCase):
         self.aot_name = 'root/usr/lib/hao/aot/' + '2' * 32 + '.aot'
         code = bytes(16)
         self.add(self.aot_name, self.aot_file(identity, code))
-        self.packages['aot'].update(format_version=7, runtime_uuid='1' * 32, guests={self.aot_name: dict(
+        self.packages['aot'].update(format_version=r.AOT_VERSION, runtime_uuid='1' * 32, guests={self.aot_name: dict(
             uuid=identity['uuid'], guest_id=identity['guest_id'], unsigned_sha256=identity['unsigned_sha256'],
             header=r.aot_identity(self.generated / self.aot_name),
             paths={'usr/bin/fixture': identity['sha256']})})
@@ -61,11 +61,11 @@ class ReleaseTests(unittest.TestCase):
         ver.write_bytes(plistlib.dumps({'ProductBuildVersion': 'fixture-build'}))
         self.save()
 
-    def aot_file(self, identity, code, version=7, kind=1, hash_type=2, code_id=bytes.fromhex('c0' * 20) + bytes(12)):
-        """An AOT cache of the fixture guest: format v7, bound to a (made up) SHA-256 cdhash."""
+    def aot_file(self, identity, code, version=r.AOT_VERSION, kind=1, hash_type=2, code_id=bytes.fromhex('c0' * 20) + bytes(12), cpu=0x3):
+        """An AOT cache of the fixture guest: format v8, bound to a (made up) SHA-256 cdhash, translated for aes,pclmul."""
         return r.AOT.pack(b'HAOAOT2\0', version, r.AOT.size, bytes.fromhex('2' * 32), bytes.fromhex('1' * 32), 4096,
                           identity['guest_id'], 0, 0, len(code), r.AOT.size + len(code), r.hao_ifunit.hash64(code),
-                          kind, hash_type, code_id) + code
+                          kind, hash_type, code_id, cpu) + code
 
     def add(self, name, data):
         digest = hashlib.sha256(data).hexdigest()
@@ -171,17 +171,44 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(r.Invalid, 'guest/runtime identity mismatch'): r.validate(self.bundle)
 
     def test_aot_cpu_generator_profiles(self):
+        # the generator identity is the runtime's UUID as it is (format 7's AES-NI XOR names another build)
         for byte, flip in ((15, 0), (15, 1), (15, 2), (15, 128), (0, 1)):
             data = bytearray(self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16)))
             data[32 + byte] ^= flip
             self.add(self.aot_name, data)
             self.packages['aot']['guests'][self.aot_name]['header'] = r.aot_identity(self.generated / self.aot_name)
             self.save()
-            if byte == 15 and flip in (0, 1):
+            if not flip:
                 self.assertEqual(self.preflight()['aot_caches'], 1)
             else:
                 with self.assertRaisesRegex(r.Invalid, 'guest/runtime identity mismatch'):
                     self.preflight()
+
+    def test_cpu_feature_tables_agree(self):
+        # the packaging tools' copies of include/hao/cpufeat.h: feature names by bit and the baseline mask
+        import re
+        repo = Path(r.__file__).resolve().parent.parent
+        src = (repo / 'src/cpufeat.c').read_text()
+        names = re.search(r'names\[\] = \{([^}]*)\}', src).group(1)
+        self.assertEqual(tuple(re.findall(r'"([a-z0-9]+)"', names)), r.CPU_FEATURES)
+        hdr = (repo / 'include/hao/cpufeat.h').read_text()
+        bits = {m[0]: 1 << int(m[1]) for m in re.findall(r'#define (HAO_CPU_\w+)\s+\(1ull << (\d+)\)', hdr)}
+        baseline = re.search(r'#define HAO_CPU_BASELINE\s+\(([^)]*)\)', hdr).group(1)
+        mask = sum(bits[n.strip()] for n in baseline.split('|'))
+        self.assertEqual(mask, r.CPU_BASELINE)
+        self.assertIn('AOT_CPU_BASELINE = %#x' % mask, (repo / 'tools/hao-install.py').read_text())
+        self.assertIn('CPU_BASELINE = %#x' % mask, (repo / 'tools/hao-image-payload').read_text())
+        self.assertIn('& ~%#x == 0' % mask, (repo / 'tools/hao-aot-extend').read_text())
+
+    def test_aot_cpu_profile_within_baseline(self):
+        # what every supported Mac has loads; a cache that needs FMA, AVX2 or an unnamed bit does not ship
+        for cpu, ok in ((0, True), (0x3, True), (0x1F, True), (0x20, False), (0x80, False), (1 << 40, False)):
+            self.rebind_aot(cpu=cpu)
+            self.assertEqual(self.packages['aot']['guests'][self.aot_name]['header']['cpu_features'],
+                             [f for k, f in enumerate(r.CPU_FEATURES) if cpu >> k & 1] + (['bit40'] if cpu >> 40 & 1 else []))
+            if ok: self.assertEqual(self.preflight()['aot_caches'], 1)
+            else:
+                with self.assertRaisesRegex(r.Invalid, 'beyond the baseline'): self.preflight()
 
     def test_aot_profile_does_not_change_runtime_dependency(self):
         aes_uuid = bytearray.fromhex(self.packages['runtime']['runtime_uuid']); aes_uuid[15] ^= 1
@@ -197,7 +224,8 @@ class ReleaseTests(unittest.TestCase):
 
     def test_aot_header_binds_the_guest_code(self):
         header = self.packages['aot']['guests'][self.aot_name]['header']
-        self.assertEqual((r.AOT.size, header['id_kind'], header['id_hash'], header['code_id']), (136, 1, 2, 'c0' * 20))
+        self.assertEqual((r.AOT.size, header['id_kind'], header['id_hash'], header['code_id'], header['cpu_features']),
+                         (144, 1, 2, 'c0' * 20, ['aes', 'pclmul']))
         # a cache translated from other code under the same UUID, load commands and runtime: not the recorded one
         self.add(self.aot_name, self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16), code_id=bytes.fromhex('c1' * 20) + bytes(12)))
         self.save()
@@ -208,8 +236,8 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(r.Invalid, 'not bound to a signed guest'): r.validate(self.bundle)
 
     def test_old_aot_versions_rejected(self):
-        for version in (5, 6):
-            self.packages['aot']['format_version'] = 7
+        for version in (5, 6, 7):
+            self.packages['aot']['format_version'] = r.AOT_VERSION
             self.add(self.aot_name, self.aot_file(r.macho(self.guest, r.hao_fat.CPU_ARM64), bytes(16), version=version)); self.save()
             with self.assertRaisesRegex(r.Invalid, 'unsupported AOT format'): self.preflight()
             self.packages['aot']['format_version'] = version; self.save()

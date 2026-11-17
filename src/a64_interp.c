@@ -705,13 +705,33 @@ static int ldst(hao_cpu *c, uint32_t i, uint64_t pc)
 
 /* ---------------------------------------------- data processing (register) */
 
-static uint32_t crc32_update(uint32_t crc, uint64_t data, int bytes, uint32_t poly)
+/* CRC32 (IEEE, reflected 0xEDB88320) and CRC32C (Castagnoli, reflected
+ * 0x82F63B78), no inversion, by slicing: crc_tab[p][k][b] is the CRC of byte
+ * b followed by k zero bytes, so all the bytes of one instruction combine in
+ * a single step (CRC32X reads eight tables instead of 64 shift-xor rounds).
+ * Filled before main, so the interpreter never fills it in a signal handler. */
+static uint32_t crc_tab[2][8][256];
+__attribute__((constructor)) static void crc_tables(void)
 {
-    for (int b = 0; b < bytes; b++) {
-        crc ^= (uint8_t)(data >> (8 * b));
-        for (int k = 0; k < 8; k++) crc = (crc >> 1) ^ (poly & (0u - (crc & 1)));
+    static const uint32_t poly[2] = {0xEDB88320u, 0x82F63B78u};
+    for (int p = 0; p < 2; p++) {
+        for (uint32_t n = 0; n < 256; n++) {
+            uint32_t c = n;
+            for (int k = 0; k < 8; k++) c = (c >> 1) ^ (poly[p] & (0u - (c & 1)));
+            crc_tab[p][0][n] = c;
+        }
+        for (int k = 1; k < 8; k++)
+            for (uint32_t n = 0; n < 256; n++) crc_tab[p][k][n] = (crc_tab[p][k - 1][n] >> 8) ^ crc_tab[p][0][crc_tab[p][k - 1][n] & 0xff];
     }
-    return crc;
+}
+
+static uint32_t crc32_update(uint32_t crc, uint64_t data, int bytes, bool castagnoli)
+{
+    const uint32_t (*t)[256] = crc_tab[castagnoli];
+    uint64_t x = (bytes == 8 ? data : data & ((1ull << (8 * bytes)) - 1)) ^ crc;
+    uint32_t r = bytes < 4 ? crc >> (8 * bytes) : 0;
+    for (int b = 0; b < bytes; b++) r ^= t[bytes - 1 - b][(x >> (8 * b)) & 0xff];
+    return r;
 }
 
 static int dp_reg(hao_cpu *c, uint32_t i)
@@ -830,9 +850,8 @@ static int dp_reg(hao_cpu *c, uint32_t i)
         case 16: case 17: case 18: case 19:
         case 20: case 21: case 22: case 23: {
             int bytes = 1 << (opc & 3);
-            uint32_t poly = (opc & 4) ? 0x82F63B78u : 0xEDB88320u;
             if ((bytes == 8) != sf) return HAO_EXIT_UNDEF;
-            r = crc32_update((uint32_t)rx(c, rn), rx(c, rm), bytes, poly);
+            r = crc32_update((uint32_t)rx(c, rn), rx(c, rm), bytes, (opc & 4) != 0);
             wx(c, rd, r);
             return 0;
         }

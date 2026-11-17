@@ -7,6 +7,7 @@
 #include "hao/identity.h"
 #include "hao/native_bundle.h"
 #include "hao/bridge.h"
+#include "hao/cpufeat.h"
 #include <cpuid.h>
 #include <crt_externs.h>
 #include <sys/sysctl.h>
@@ -29,7 +30,7 @@
 static void usage(void)
 {
     fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n"
-                    "       hao --aot [--check] [--cache DIR] [--] [FILE...] | hao --aot --auto\n"
+                    "       hao --aot [--check] [--cache DIR] [--cpu=baseline|host|HEX] [--] [FILE...] | hao --aot --auto\n"
                     "(internal: use `hao run` / `hao aot`)\n");
     exit(64);
 }
@@ -250,7 +251,7 @@ static FILE *aot_open_list(const char *path, uid_t owner)
     return f;
 }
 
-static int aot_default(const char *cache, bool check)
+static int aot_default(const char *cache, bool check, const char *cpu_spec, uint64_t cpu)
 {
     hao_opts_init(NULL);
     const char *dir = hao_opt.aot_list_dir[0] ? hao_opt.aot_list_dir : "/usr/lib/hao";
@@ -302,7 +303,7 @@ static int aot_default(const char *cache, bool check)
     int running = 0, ok = 0, failed = 0, valid = 0, absent = 0, stale = 0;
     for (size_t i = 0; i <= np; i++) {
         if (i < np) {
-            int r = hao_aot_check_file(paths[i], cache, false);
+            int r = hao_aot_check_file(paths[i], cache, false, cpu);
             if (check) {
                 const char *what = r == 0 ? "valid" : r == 3 ? "missing" : r == 4 ? "stale" : "not checkable";
                 fprintf(stderr, "hao-aot: [%zu/%zu] %s: %s\n", i + 1, np, paths[i], what);
@@ -311,11 +312,12 @@ static int aot_default(const char *cache, bool check)
             }
             if (r == 0) { valid++; fprintf(stderr, "hao-aot: [%zu/%zu] %s: valid, skipped\n", i + 1, np, paths[i]); continue; }
             fprintf(stderr, "hao-aot: [%zu/%zu] %s\n", i + 1, np, paths[i]);
-            char *av[7];
+            char *av[8], cpu_arg[80];
             int n = 0;
             av[n++] = self;
             av[n++] = "--aot";
             if (cache) { av[n++] = "--cache"; av[n++] = (char *)cache; }
+            if (cpu_spec) { snprintf(cpu_arg, sizeof cpu_arg, "--cpu=%s", cpu_spec); av[n++] = cpu_arg; }
             av[n++] = "--";
             av[n++] = paths[i];
             av[n] = NULL;
@@ -372,7 +374,7 @@ static int aot_auto(void)
         sleep(120);   /* the first login's own start-up first */
     }
     fprintf(stderr, "hao-aot: --auto: start for %s\n", want);
-    int rc = aot_default(NULL, false);
+    int rc = aot_default(NULL, false, NULL, hao_cpu_features());
     snprintf(tmp, sizeof tmp, "%s.tmp", marker);
     fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (fd < 0) { fprintf(stderr, "hao-aot: --auto: %s: %s\n", tmp, strerror(errno)); return 1; }
@@ -386,44 +388,56 @@ static int aot_auto(void)
 
 static int aot_main(int argc, char **argv)
 {
-    /* hao --aot [--cache DIR] [--] BINARY...: generate AOT caches (no execution).
+    /* hao --aot [--cache DIR] [--cpu=SPEC] [--] BINARY...: generate AOT caches (no execution).
      * --cache names the output directory on the command line: a guarded
      * process (root, for one) ignores HAO_CACHE, and would otherwise write
-     * into the system directory of the machine it runs on. */
+     * into the system directory of the machine it runs on.
+     * --cpu names the optional CPU features the code may use (hao/cpufeat.h):
+     * host (the default), baseline (the Ivy Bridge set every supported Mac
+     * has; what release payloads use, so their caches do not depend on the
+     * build machine) or a hexadecimal mask. Each can only drop features this
+     * host has: a cache is never made with code this machine cannot run. */
     int bad = 0, k = 2;
-    const char *cache = NULL;
+    const char *cache = NULL, *cpu_spec = NULL;
     bool check = false;
     if (argc == 3 && !strcmp(argv[k], "--auto")) return aot_auto();
-    if (k < argc && !strcmp(argv[k], "--check")) { check = true; k++; }
     char abs[PATH_MAX];
-    if (k < argc && !strcmp(argv[k], "--cache")) {
-        if (k + 1 >= argc || !argv[k + 1][0]) usage();
-        cache = argv[k + 1];
-        if (cache[0] != '/') {          /* relative to where the command was typed */
-            char cwd[PATH_MAX];
-            if (!getcwd(cwd, sizeof cwd) || snprintf(abs, sizeof abs, "%s/%s", cwd, cache) >= (int)sizeof abs) {
-                fprintf(stderr, "hao-aot: --cache %s: cannot make the path absolute\n", cache);
-                return 1;
+    for (; k < argc; k++) {
+        if (!strcmp(argv[k], "--check")) check = true;
+        else if (!strncmp(argv[k], "--cpu=", 6) && argv[k][6]) cpu_spec = argv[k] + 6;
+        else if (!strcmp(argv[k], "--cache")) {
+            if (k + 1 >= argc || !argv[k + 1][0]) usage();
+            cache = argv[++k];
+            if (cache[0] != '/') {          /* relative to where the command was typed */
+                char cwd[PATH_MAX];
+                if (!getcwd(cwd, sizeof cwd) || snprintf(abs, sizeof abs, "%s/%s", cwd, cache) >= (int)sizeof abs) {
+                    fprintf(stderr, "hao-aot: --cache %s: cannot make the path absolute\n", cache);
+                    return 1;
+                }
+                cache = abs;
             }
-            cache = abs;
-        }
-        k += 2;
+        } else break;
+    }
+    hao_opts_init(NULL);
+    uint64_t cpu = hao_cpu_features();
+    if (cpu_spec) {
+        char why[160];
+        if (!hao_cpu_profile_parse(cpu_spec, cpu, &cpu, why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return 64; }
     }
     if (k < argc && !strcmp(argv[k], "--")) k++;
-    if (k >= argc) return aot_default(cache, check);
-    hao_opts_init(NULL);
+    if (k >= argc) return aot_default(cache, check, cpu_spec, cpu);
     hao_verbose = 1;
     if (check) {
         int worst = 0;
         for (; k < argc; k++) {
-            int r = hao_aot_check_file(argv[k], cache, true);
+            int r = hao_aot_check_file(argv[k], cache, true, cpu);
             if (r < 0) worst = 1;
             else if (r > worst && worst != 1) worst = r;
         }
         return worst;
     }
     for (; k < argc; k++)
-        if (hao_aot_generate_file(argv[k], true, cache) < 0) bad++;   /* maps a private copy of the file (jit.c) */
+        if (hao_aot_generate_file(argv[k], true, cache, cpu) < 0) bad++;   /* maps a private copy of the file (jit.c) */
     return bad ? 1 : 0;
 }
 

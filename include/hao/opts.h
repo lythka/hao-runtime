@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
     int verbose;                /* -v/-vv, HAO_VERBOSE=N, PID 1: hao=v|V, hao_verbose=N */
@@ -17,6 +18,9 @@ typedef struct {
     unsigned watchdog;          /* HAO_WATCHDOG=N seconds (open tier: it takes SIGALRM and exits 124) */
     unsigned jit_cache_mb;      /* HAO_JIT_CACHE_MB=N: translated-code space (0 = default) */
     unsigned aot_limit_kb;      /* HAO_AOT_LIMIT_KB=N: AOT loading's memory limit instead of the kernel's (tests; jit.c aot_fits) */
+    uint64_t cpu_clear;         /* HAO_CPU_FEATURES=HEX (tests): the optional CPU features (hao/cpufeat.h) the mask
+                                   leaves out, which hao then never uses; it can only clear bits (a value that is not
+                                   hexadecimal clears all of them) */
     /* boolean knobs: environment HAO_<NAME>; boot argument hao_<name>=1 for those listed below */
     bool nx_stats, crash_trace, jit_helpers_only, no_aot, no_chain, no_msgsend, no_closures, no_swiftreg,
          no_block_thunks, no_fixup_thunks, no_struct_thunks, aot_learn, no_jit_memory, bridge_check, bridge_abort,
@@ -60,8 +64,8 @@ extern hao_opts_t hao_opt;
  *
  * flags and the environment are filtered by hao_env_switch_allowed(). The
  * test switches (HAO_LIBVAL_USER, HAO_SIGRETURN_USER, HAO_AOT_LIMIT_KB,
- * HAO_BRIDGE_ABORT, HAO_NO_JIT_MEMORY, HAO_CODE_ALIAS) are read only by a
- * HAO_TEST_SWITCHES build, from an open-tier environment. */
+ * HAO_BRIDGE_ABORT, HAO_NO_JIT_MEMORY, HAO_CODE_ALIAS, HAO_CPU_FEATURES) are
+ * read only by a HAO_TEST_SWITCHES build, from an open-tier environment. */
 void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *bootargs, bool pid1, int tier);
 /* Runtime (src/trust.c): once per process, from environ and kern.bootargs. */
 void hao_opts_init(const char *flags);
