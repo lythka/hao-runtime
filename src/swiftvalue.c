@@ -1213,6 +1213,7 @@ static void storage_value(const void *type, char *value, bool guest_made)
 {
     witness_patches w;
     const char *why = "stored value has unresolved active representation at its final destruction";
+    if (!(vwt(type)->flags & 0x10000)) return;
     if (guest_made) witness_walk(type,value,&w,why,0,0);
     else {
         /* Storage native code made: what the walk proves is converted; a value
