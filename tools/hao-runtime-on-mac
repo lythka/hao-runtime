@@ -180,9 +180,13 @@ def main(argv):
         with open(lst, 'w') as f:
             f.write(''.join(os.path.join(root, e['path']) + '\n' for e in embed['files']))
         out = os.path.join(work, 'embed')
+        drop = os.path.join(work, 'dropped-constraints')   # the payload build's decision, from its manifest
+        with open(drop, 'w') as f:
+            f.write(''.join(e['path'] + '\n' for e in embed['files'] if e.get('constraints', {}).get('dropped')))
         cmd = [sys.executable, '-I', os.path.join(top, 'tools', 'hao-embed'), '--stub', os.path.join(top, 'build', 'hao-stub'),
                '--stubs', out, '--root', root, '--x86-cache', x86, '--skeletons', os.path.join(pay, 'embed', 'skeletons'),
-               '--require', 'sbin/launchd', '--require', 'usr/libexec/xpcproxy', '--list', lst]
+               '--require', 'sbin/launchd', '--require', 'usr/libexec/xpcproxy', '--allow-dropped-constraints', drop,
+               '--list', lst]
         with open(os.path.join(work, 'embed.log'), 'w') as log:
             rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
         if rc != 0:

@@ -179,7 +179,7 @@ fi
 ditto "$KEXT" "$OUT/HaoExec.kext"
 cp "$H/kext/stamp_identity.py" "$H/tools/hao-install.py" "$H/tools/hao_fat.py" "$H/tools/hao_codesig.py" "$OUT/"
 EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"}
-       --save-skeletons "$OUT/embed/skeletons")
+       --save-skeletons "$OUT/embed/skeletons" --allow-dropped-constraints "$H/releases/dropped-constraints.txt")
 LOG=$OUT/embed/embed.log
 rc=0
 case $MODE in

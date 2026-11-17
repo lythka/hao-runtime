@@ -435,6 +435,7 @@ def generate(bundle, system, native_cache, build, out, only=()):
         require(not any(op['drop_x86'] for op in stubs), 'translate-mode recipe not supported by generation v1')
         run([sys.executable, toolroot / 'hao-embed', '--stub', build / 'hao-stub', '--root', system,
              '--x86-cache', Path(native_cache).parent, '--stubs', out / 'embed',
+             '--allow-dropped-constraints', toolroot.parent / 'releases/dropped-constraints.txt',
              *[system / op['path'] for op in stubs]], 'generate-stubs')
     for op in packages['image']['plan']['operations']:
         if op['op'] != 'replace-v1' or op['artifact'] not in selected: continue

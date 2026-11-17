@@ -1,5 +1,30 @@
 # Runtime issues and measured scope
 
+## Launch constraints were left out of stub signatures
+
+A program's launch and library constraints (code-signature slots 8-11:
+self, parent, responsible, library) are evaluated on the signature the
+kernel validates, the stub's, and `hao-embed` signed stubs without them,
+so an embedded program could be started by a parent its own constraint
+refuses. `hao-embed` now gives codesign each constraint's requirements and
+checks that the stub seals the program's blob byte for byte. codesign
+expresses only a constraint of requirements (category 0); a program with
+another kind is refused unless it is listed in
+`releases/dropped-constraints.txt` (`--allow-dropped-constraints`), and the
+manifest records what was carried and dropped; `stub_identity_gate.py`
+compares the slots. Measured on 26B131: of 963 embedded programs, 29 carry
+constraints (25 self, 26 parent, none responsible or library); 49 blobs are
+carried byte for byte and one is dropped, the category self constraint of
+usr/libexec/xpcproxy. The App cryptex's 2 constrained programs are
+byte-identical copies of two of those 29. Test:
+`tests/tools/run.sh` (a parent constraint carried; a category one refused,
+then dropped when listed; the gate). Limits: the carried self constraints
+ask for a platform binary on the system volume, which an ad hoc stub is not,
+so where the kernel enforces launch constraints those programs will not
+start; not run on an Intel image yet. Constraints Apple attaches to platform
+programs through the trust cache are not in the signature and do not apply
+to a stub.
+
 ## Stubs linked native libraries from storage others can change
 
 Every stub has `disable-library-validation`, and hao sets `CS_REQUIRE_LV`
