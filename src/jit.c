@@ -4563,11 +4563,11 @@ static void *translate(uint64_t pc)
 /* Which guest instruction a host pc inside translated code belongs to.
  * Translated code updates cpu.pc only at block exits (and not at all
  * between chained blocks), so a signal handler gets the precise pc by
- * re-emitting the block: emission is deterministic and its length does not
- * depend on where the bytes go. Async-signal-safe: no locks, no allocation;
- * one locate at a time (a concurrent one reports false). */
-static uint8_t loc_buf[MAX_BLOCK_BYTES];
-static int loc_busy;
+ * re-emitting the block: emission is deterministic. The re-emission only
+ * measures (xb_init_count) at the block's own address, so its RIP and branch
+ * displacements are those of the first emission and it writes nothing.
+ * Async-signal-safe and reentrant: no locks, no allocation, no shared
+ * state; about 1 KiB of stack besides the tctx. */
 
 static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc);
 
@@ -4586,9 +4586,9 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
         code = rmap[lo].code, pc = rmap[lo].pc;
     }
     hao_image *im = hao_image_for_code(pc);
-    if (!im || __atomic_exchange_n(&loc_busy, 1, __ATOMIC_ACQUIRE)) return false;
-    static uint32_t insns[MAX_BLOCK_INSNS], off[MAX_BLOCK_INSNS + 1];
-    static bool fl[MAX_BLOCK_INSNS + 1];
+    if (!im) return false;
+    uint32_t insns[MAX_BLOCK_INSNS], off[MAX_BLOCK_INSNS + 1];
+    bool fl[MAX_BLOCK_INSNS + 1];
     int ni = fetch_block(pc, im, insns);
     tctx t;
     memset(&t, 0, sizeof t);
@@ -4597,7 +4597,7 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
     t.rec_fl = fl;
     t.base = im->base;
     t.base_slot = im->jit_slot;
-    xb_init(&t.b, loc_buf, sizeof loc_buf);
+    xb_init_count(&t.b, (const void *)(uintptr_t)code, MAX_BLOCK_BYTES);
     bool ok = false;
     if (ni > 0) {
         emit_block(&t, pc, insns, ni);
@@ -4610,7 +4610,6 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
             ok = true;
         }
     }
-    __atomic_store_n(&loc_busy, 0, __ATOMIC_RELEASE);
     return ok;
 }
 

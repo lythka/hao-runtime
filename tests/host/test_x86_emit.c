@@ -396,6 +396,30 @@ int main(int argc, char **argv)
         if (x_patch32(&b, at + 8, 0) || !b.bad) { fprintf(stderr, "x_patch32 outside the buffer not rejected\n"); fails++; }
         xb_init(&b, t, 2); x_mov_ri(&b, RAX, 1);
         if (!b.overflow) { fprintf(stderr, "overflow not reported\n"); fails++; }
+        /* A counting buffer measures what a real one emits at the same
+         * address, RIP displacements and patches included, and writes nothing. */
+        {
+            uint8_t u[64];
+            xbuf c;
+            size_t len[2];
+            for (int k = 0; k < 2; k++) {
+                xbuf *x = k ? &c : &b;
+                memset(u, 0xCC, sizeof u);
+                if (k) xb_init_count(x, u, sizeof u); else xb_init(x, u, sizeof u);
+                x_mov_ld_rip(x, 8, RAX, u + 40);
+                size_t j = x_jcc8(x, XCC_E);
+                x_mov_ri(x, RCX, 0x123456789ull);
+                x_patch8(x, j, xb_len(x));
+                len[k] = xb_len(x);
+                if (x->bad || x->overflow) { fprintf(stderr, "count mode: emission failed\n"); fails++; }
+            }
+            if (len[0] != len[1]) { fprintf(stderr, "count mode: length %zu, emitted %zu\n", len[1], len[0]); fails++; }
+            for (size_t k = 0; k < sizeof u; k++)
+                if (u[k] != 0xCC) { fprintf(stderr, "count mode wrote byte %zu\n", k); fails++; break; }
+            xb_init_count(&c, u, sizeof u);
+            x_mov_ld_rip(&c, 8, RAX, u + 0x100000000ll);
+            if (!c.bad || xb_len(&c)) { fprintf(stderr, "count mode: RIP range not checked\n"); fails++; }
+        }
         if (fails) return 1;
     }
     begin(); x_mfence(&B); end("mfence");

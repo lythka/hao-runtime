@@ -1,5 +1,23 @@
 # Runtime issues and measured scope
 
+## Guest signals on several threads at once in translated code
+
+A guest handler's context gets the exact pc by re-emitting the interrupted
+block (`hao_jit_locate`). The re-emission used one shared buffer behind a
+try-flag, so when two threads took a signal at the same time one of them
+got `cpu.pc` instead: the last block exit, possibly many blocks back, and
+NZCV from memory while the live flags were in RFLAGS. The re-emission now
+only measures (`xb_init_count`) at the block's own address and keeps its
+records on the stack, so it shares nothing and its RIP displacements are the
+first emission's. Test: `guest/signals` mode `locate` (8 threads spinning in
+one loop, a signal to each, 400 rounds): before the fix 140-380 contexts per
+run had a pc outside the loop; after it none, under JIT and AOT. Limits:
+in the interpreter (`--interp`, no JIT memory, the JIT's helper) an
+asynchronous signal can see a register written at the instruction's own pc,
+or the next pc before the write (the mode counts 300-400 such contexts a
+run; it compares only its first line there). Resumption is not affected: a handler that does not
+move the pc resumes where the thread stood.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

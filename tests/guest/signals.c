@@ -7,6 +7,10 @@
  *   prof      ITIMER_PROF samples land in the running guest function
  *   jitlock   SIGALRM every 300 us while code is being translated, with a
  *             handler that runs code nobody ran before
+ *   locate    a signal to each of several threads spinning in one loop, at
+ *             once and many times: every handler sees a pc inside the loop
+ *             with registers that agree with it, and every thread resumes
+ *             exactly where it was
  *   native    a guest handler on native threads that never ran guest code
  *             and are inside malloc
  *   mlocked   the same on native threads that hold every malloc zone lock
@@ -296,6 +300,76 @@ static int jitlock(void)
     return 0;
 }
 
+/* ---------------------------------------------------------- locate
+ * loc_spin(stop, inloop): x9 and x10 count up in step, one ADD each per
+ * pair, until *stop. Between the two ADDs of a pair x9 == x10 + 1, else
+ * x9 == x10, so a context whose pc is not where the thread stands shows it,
+ * and resuming at a wrong pc leaves x9 != x10 for good (the return value).
+ * The flags of the CMP decide the B.EQ, so a resume with wrong NZCV leaves
+ * the loop before *stop. */
+#define LOC_PAIRS 24
+#define LOC_PAIR "add x9, x9, #1\n add x10, x10, #1\n"
+#define LOC_P4 LOC_PAIR LOC_PAIR LOC_PAIR LOC_PAIR
+__asm__(".text\n .p2align 2\n .globl _loc_spin\n_loc_spin:\n"
+        " mov x9, #0\n mov x10, #0\n mov w11, #1\n str w11, [x1]\n"
+        "Lloc_loop:\n" LOC_P4 LOC_P4 LOC_P4 LOC_P4 LOC_P4 LOC_P4
+        " ldr w11, [x0]\n cmp w11, #0\n b.eq Lloc_loop\n"
+        " sub x0, x9, x10\n ret\n");
+long loc_spin(volatile int *stop, volatile int *inloop);
+#define LOC_THREADS 8
+#define LOC_ROUNDS 400
+static volatile int loc_stop, loc_in[LOC_THREADS], loc_hits, loc_outside, loc_regs;
+static void loc_h(int sig, siginfo_t *si, void *ctx)
+{
+    (void)sig; (void)si;
+    ucontext_t *uc = ctx;
+    uintptr_t loop = STRIP(loc_spin) + 16, pc = GET_PC(uc);
+    if (pc < loop || pc >= loop + (2 * LOC_PAIRS + 3) * 4) __atomic_fetch_add(&loc_outside, 1, __ATOMIC_RELAXED);
+    else {
+        uintptr_t k = (pc - loop) / 4;
+        uint64_t want = SS(uc).__x[10] + (k < 2 * LOC_PAIRS && (k & 1));
+        if (SS(uc).__x[9] != want) __atomic_fetch_add(&loc_regs, 1, __ATOMIC_RELAXED);
+    }
+    __atomic_fetch_add(&loc_hits, 1, __ATOMIC_RELEASE);
+}
+static void *loc_thread(void *arg)
+{
+    long d = loc_spin(&loc_stop, &loc_in[(intptr_t)arg]);
+    return (void *)(intptr_t)(d != 0 ? 1 : !loc_stop ? 2 : 0);
+}
+static int locate(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = loc_h;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGUSR2, &sa, NULL);
+    pthread_t th[LOC_THREADS];
+    for (intptr_t k = 0; k < LOC_THREADS; k++) pthread_create(&th[k], NULL, loc_thread, (void *)k);
+    for (int k = 0; k < LOC_THREADS; k++)
+        while (!loc_in[k]) usleep(100);
+    int lost = 0;
+    for (int r = 0; r < LOC_ROUNDS; r++) {
+        int want = __atomic_load_n(&loc_hits, __ATOMIC_ACQUIRE) + LOC_THREADS;
+        for (int k = 0; k < LOC_THREADS; k++) pthread_kill(th[k], SIGUSR2);
+        int w = 0;
+        while (__atomic_load_n(&loc_hits, __ATOMIC_ACQUIRE) < want && w++ < 20000) usleep(50);
+        if (w > 20000) lost++;
+    }
+    loc_stop = 1;
+    int skew = 0, early = 0;
+    for (int k = 0; k < LOC_THREADS; k++) {
+        void *v;
+        pthread_join(th[k], &v);
+        skew += (intptr_t)v == 1;
+        early += (intptr_t)v == 2;
+    }
+    printf("locate: %d threads x %d rounds, lost=%d outside-loop=%d skewed=%d left-early=%d\n",
+           LOC_THREADS, LOC_ROUNDS, lost, loc_outside, skew, early);
+    printf("locate: contexts whose registers disagree with their pc: %d\n", loc_regs);
+    return 0;
+}
+
 /* ---------------------------------------------------------- native */
 void *sighelper_malloc_loop(void *stop);
 static volatile int handled;
@@ -493,11 +567,12 @@ int main(int argc, char **argv)
     if (!strcmp(m, "uctx")) return uctx();
     if (!strcmp(m, "prof")) return prof();
     if (!strcmp(m, "jitlock")) return jitlock();
+    if (!strcmp(m, "locate")) return locate();
     if (!strcmp(m, "native")) return native();
     if (!strcmp(m, "mlocked")) return mlocked();
     if (!strcmp(m, "noalloc")) return noalloc();
     if (!strcmp(m, "restart")) return restart();
     if (!strncmp(m, "segv", 4)) return segv(m);
-    fprintf(stderr, "usage: signals disp|uctx|prof|jitlock|native|mlocked|noalloc|restart|segvnative|segvreset|segvrecurse|segvjmp\n");
+    fprintf(stderr, "usage: signals disp|uctx|prof|jitlock|locate|native|mlocked|noalloc|restart|segvnative|segvreset|segvrecurse|segvjmp\n");
     return 2;
 }
