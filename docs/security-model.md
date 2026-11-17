@@ -490,8 +490,10 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   the stub. `SecCodeCopySigningInformation` still describes the stub.
 - In the command-line route, native library initializers run before hao's
   check. If one of them asks for the main executable's path or sections, it
-  is answered from the file `HAO_EXEC` names, unchecked. A file that fails
-  the check never runs.
+  is answered from the file `HAO_EXEC` names, unchecked. Its header and
+  load commands are read once into memory (at most 4 MiB of them), and a
+  segment whose carried sections span more than 64 MiB is not answered
+  for. A file that fails the check never runs.
 - A stub made before `tools/hao-embed` wrote the `__hao_slice` record does
   not name its ARM slice. hao verifies such a program's ARM slice by the
   slice's own signature only, so a copy with another validly signed slice

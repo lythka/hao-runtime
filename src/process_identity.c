@@ -137,24 +137,38 @@ static intptr_t slide_of(const struct mach_header_64 *mh)
 
 static bool in_file(uint64_t off, uint64_t len, uint64_t size) { return off <= size && len <= size - off; }
 
-/* The arm64 slice hao runs (src/macho.c choose_slice): plain arm64e > other arm64e > arm64. */
-static bool arm_slice(const uint8_t *f, uint64_t fsize, uint64_t *off, uint64_t *len)
+/* LEN bytes of the file at OFF, whole, into BUF. */
+static bool read_at(int fd, void *buf, uint64_t len, uint64_t off)
+{
+    for (uint64_t got = 0; got < len;) {
+        uint64_t want = len - got;
+        ssize_t r = pread(fd, (uint8_t *)buf + got, want > (1u << 30) ? (1u << 30) : (size_t)want, (off_t)(off + got));
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return false;
+        got += (uint64_t)r;
+    }
+    return true;
+}
+
+/* The arm64 slice hao runs (src/macho.c choose_slice): plain arm64e > other arm64e > arm64.
+ * h[0..hlen) is the start of a file of fsize bytes. */
+static bool arm_slice(const uint8_t *h, uint64_t hlen, uint64_t fsize, uint64_t *off, uint64_t *len)
 {
     uint32_t magic;
-    if (fsize < 4) return false;
-    memcpy(&magic, f, 4);
+    if (hlen < 4) return false;
+    memcpy(&magic, h, 4);
     if (magic == MH_MAGIC_64) {
-        if (fsize < sizeof(struct mach_header_64) || ((const struct mach_header_64 *)f)->cputype != CPU_TYPE_ARM64) return false;
+        if (hlen < sizeof(struct mach_header_64) || ((const struct mach_header_64 *)h)->cputype != CPU_TYPE_ARM64) return false;
         *off = 0; *len = fsize;
         return true;
     }
     if (magic != FAT_CIGAM && magic != FAT_CIGAM_64) return false;
-    uint32_t n = OSSwapBigToHostInt32(((const struct fat_header *)f)->nfat_arch);
+    uint32_t n = OSSwapBigToHostInt32(((const struct fat_header *)h)->nfat_arch);
     uint64_t esz = magic == FAT_CIGAM_64 ? sizeof(struct fat_arch_64) : sizeof(struct fat_arch);
-    if (n == 0 || n > 64 || !in_file(sizeof(struct fat_header), n * esz, fsize)) return false;
+    if (n == 0 || n > 64 || !in_file(sizeof(struct fat_header), n * esz, hlen)) return false;
     int best = 0;
     for (uint32_t k = 0; k < n; k++) {
-        const uint8_t *a = f + sizeof(struct fat_header) + k * esz;
+        const uint8_t *a = h + sizeof(struct fat_header) + k * esz;
         uint32_t cpu, sub;
         uint64_t o, z;
         if (magic == FAT_CIGAM_64) {
@@ -174,19 +188,35 @@ static bool arm_slice(const uint8_t *f, uint64_t fsize, uint64_t *off, uint64_t 
     return best > 0;
 }
 
-static void load_carried(const uint8_t *f, uint64_t fsize)
+/* What one carried segment may hold, and the load commands read to find
+ * them (the loader's own bound, src/macho.c MAX_CMDS). */
+#define CARRY_MAX (64u << 20)
+#define CARRY_CMDS_MAX (4u << 20)
+
+/* The carried segments of the guest file open on fd (fsize bytes). This
+ * runs before hao has checked the file's signature, on whatever the file
+ * holds, so it reads the header and load commands once into memory and
+ * decides from that copy only, and every section is read into its
+ * segment's copy only where it fits the allocation. A segment whose
+ * carried sections span more than CARRY_MAX, or whose addresses wrap, is
+ * not carried. */
+static void load_carried(int fd, uint64_t fsize)
 {
-    uint64_t so, sl;
-    if (!arm_slice(f, fsize, &so, &sl) || sl < sizeof(struct mach_header_64)) return;
-    const uint8_t *mo = f + so;
-    const struct mach_header_64 *mh = (const void *)mo;
-    if (mh->magic != MH_MAGIC_64 || mh->filetype != MH_EXECUTE || !in_file(sizeof *mh, mh->sizeofcmds, sl)) return;
-    const uint8_t *lc = mo + sizeof *mh, *end = lc + mh->sizeofcmds;
+    uint8_t head[sizeof(struct fat_header) + 64 * sizeof(struct fat_arch_64)];
+    uint64_t hl = fsize < sizeof head ? fsize : sizeof head, so, sl;
+    if (!read_at(fd, head, hl, 0) || !arm_slice(head, hl, fsize, &so, &sl) || sl < sizeof(struct mach_header_64)) return;
+    struct mach_header_64 mh;
+    if (!read_at(fd, &mh, sizeof mh, so) || mh.magic != MH_MAGIC_64 || mh.filetype != MH_EXECUTE ||
+        mh.sizeofcmds > CARRY_CMDS_MAX || !in_file(sizeof mh, mh.sizeofcmds, sl) ||
+        mh.ncmds > mh.sizeofcmds / sizeof(struct load_command))
+        return;
+    uint8_t *cmds = malloc(mh.sizeofcmds ? mh.sizeofcmds : 1);
+    cseg *v = calloc(mh.ncmds ? mh.ncmds : 1, sizeof *v);
+    if (!cmds || !v || !read_at(fd, cmds, mh.sizeofcmds, so + sizeof mh)) { free(cmds); free(v); return; }
+    const uint8_t *lc = cmds, *end = cmds + mh.sizeofcmds;
     intptr_t main_slide = slide_of(main_header());
-    cseg *v = calloc(mh->ncmds ? mh->ncmds : 1, sizeof *v);
-    if (!v) return;
     uint32_t nv = 0;
-    for (uint32_t i = 0; i < mh->ncmds; i++) {
+    for (uint32_t i = 0; i < mh.ncmds; i++) {
         const struct load_command *c = (const void *)lc;
         if (end - lc < (long)sizeof *c || c->cmdsize < sizeof *c || c->cmdsize > (uint64_t)(end - lc)) break;
         if (c->cmd == LC_SEGMENT_64 && c->cmdsize >= sizeof(struct segment_command_64)) {
@@ -195,33 +225,39 @@ static void load_carried(const uint8_t *f, uint64_t fsize)
             uint32_t ns = sg->nsects <= (c->cmdsize - sizeof *sg) / sizeof *s ? sg->nsects : 0, keep = 0;
             bool text = !strncmp(sg->segname, "__TEXT", 16);
             for (uint32_t k = 0; k < ns; k++) keep += carried(sg->segname, s[k].sectname, sg->initprot, s[k].flags);
-            if (keep && (text || sg->vmsize <= (64u << 20))) {
-                /* __TEXT: only the carried sections' bytes (laid out at their
-                 * offsets from the first); other segments: all of it. */
-                uint64_t lo = text ? UINT64_MAX : sg->vmaddr, hi = text ? 0 : sg->vmaddr + sg->vmsize;
-                for (uint32_t k = 0; k < ns; k++)
-                    if (carried(sg->segname, s[k].sectname, sg->initprot, s[k].flags)) {
-                        if (s[k].addr < lo) lo = s[k].addr;
-                        if (s[k].addr + s[k].size > hi) hi = s[k].addr + s[k].size;
-                    }
+            /* __TEXT: only the carried sections' bytes (laid out at their
+             * offsets from the first); other segments: all of it. */
+            uint64_t lo = text ? UINT64_MAX : sg->vmaddr, hi = 0, e;
+            bool fits = keep && (text || !__builtin_add_overflow(sg->vmaddr, sg->vmsize, &hi));
+            for (uint32_t k = 0; fits && k < ns; k++)
+                if (carried(sg->segname, s[k].sectname, sg->initprot, s[k].flags)) {
+                    if (__builtin_add_overflow(s[k].addr, s[k].size, &e)) fits = false;
+                    if (s[k].addr < lo) lo = s[k].addr;
+                    if (e > hi) hi = e;
+                }
+            if (fits && hi >= lo && hi - lo <= CARRY_MAX) {
+                uint64_t span = hi - lo;
                 struct segment_command_64 *cmd = calloc(1, sizeof *cmd + keep * sizeof *s);
-                uint8_t *mem = hi > lo && hi - lo <= (64u << 20) ? calloc(1, hi - lo) : calloc(1, 1);
-                if (!cmd || !mem) { free(cmd); free(mem); continue; }
+                uint8_t *mem = calloc(1, span ? span : 1);
+                if (!cmd || !mem) { free(cmd); free(mem); lc += c->cmdsize; continue; }
                 *cmd = *sg;
                 cmd->cmdsize = (uint32_t)(sizeof *cmd + keep * sizeof *s);
                 cmd->nsects = keep;
                 cmd->vmaddr = (uint64_t)((intptr_t)mem - main_slide);
-                cmd->vmsize = hi > lo ? hi - lo : 0;
+                cmd->vmsize = span;
                 cmd->fileoff = cmd->filesize = 0;
                 struct section_64 *d = (struct section_64 *)(cmd + 1);
                 for (uint32_t k = 0, j = 0; k < ns; k++) {
                     if (!carried(sg->segname, s[k].sectname, sg->initprot, s[k].flags)) continue;
+                    uint64_t at = s[k].addr - lo;
                     d[j] = s[k];
-                    d[j].addr = cmd->vmaddr + (s[k].addr - lo);
+                    d[j].addr = cmd->vmaddr + at;
                     d[j].offset = 0;
-                    if (s[k].size && in_file(s[k].offset, s[k].size, sl) && s[k].addr >= lo && s[k].addr + s[k].size <= hi)
-                        memcpy(mem + (s[k].addr - lo), mo + s[k].offset, s[k].size);
-                    else d[j].size = 0;
+                    if (!s[k].size || at > span || s[k].size > span - at || !in_file(s[k].offset, s[k].size, sl) ||
+                        !read_at(fd, mem + at, s[k].size, so + s[k].offset)) {
+                        if (at <= span) memset(mem + at, 0, s[k].size < span - at ? s[k].size : span - at);
+                        d[j].size = 0;
+                    }
                     j++;
                 }
                 v[nv++] = (cseg){cmd, mem, text};
@@ -229,6 +265,7 @@ static void load_carried(const uint8_t *f, uint64_t fsize)
         }
         lc += c->cmdsize;
     }
+    free(cmds);
     csegs = v;
     ncsegs = nv;
 }
@@ -239,10 +276,7 @@ static void carried_init(void)
     int fd = open(guest_path, O_RDONLY | O_CLOEXEC);
     struct stat st;
     if (fd < 0) return;
-    if (fstat(fd, &st) == 0 && st.st_size > 0) {
-        void *f = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (f != MAP_FAILED) { load_carried(f, (uint64_t)st.st_size); munmap(f, (size_t)st.st_size); }
-    }
+    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) load_carried(fd, (uint64_t)st.st_size);
     close(fd);
 }
 
