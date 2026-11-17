@@ -87,7 +87,10 @@ element the walk cannot certify is refused in storage guest code made; in
 other storage one in the guest's encoding that cannot be converted is
 refused and anything else left as found (the open entry above). Registered
 storage is kept in a set whose removed slots are reused and compacted
-(`svpolicy` anymany: 200000 arrays). This hook replaces symbol interposition of
+(`svpolicy` anymany: 200000 arrays); a rebuild publishes the new table
+before freeing the old one, and a fork child recounts the table it holds.
+A box hao may not rewrite passes when every nil in it is already in its
+reader's encoding (`host/swiftvalue`: an `Any` boxing a native `C??` nil). This hook replaces symbol interposition of
 `swift_arrayDestroy`: the array storage's deinit calls it directly inside
 libswiftCore (measured), where no interposition reaches. Guest calls of an
 opaque existential's own witnesses (`Any`, `any P`) are intercepted like an

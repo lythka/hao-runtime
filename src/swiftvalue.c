@@ -58,11 +58,13 @@ static bool native_function(uint64_t pc)
 {
     return pc && !hao_is_trap(pc) && !hao_image_for_code(pc) && !hao_guest_of_entry(pc);
 }
+static void storage_fork_child(void);
 void hao_swift_value_fork_child(void)
 {
     lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     witness_setup_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     storage_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    storage_fork_child();
     hao_sv_native_leaf_fork_child();
     tables_fork_child();
 }
@@ -962,53 +964,69 @@ static heap_destroy_fn *array_destroy_original, *box_destroy_original;
 /* Storage guest code made and the runtime has not destroyed yet: an open-
  * addressed set of object addresses (0 empty, 1 a removed entry, which an
  * insert reuses), rebuilt without removed entries when live and removed ones
- * fill three quarters of it. Read and written under storage_lock only. */
-static uint64_t *guest_storage;
-static size_t guest_storage_cap, guest_storage_live, guest_storage_gone;
-static size_t storage_slot(const uint64_t *t, size_t cap, uint64_t object, bool insert)
+ * fill three quarters of it. Read and written under storage_lock only. A
+ * rebuild fills a new table, publishes it with one pointer store and only
+ * then frees the old one, so a fork child, whatever point the parent was
+ * at, holds a whole table (storage_fork_child recounts it). */
+typedef struct { size_t cap, live, gone; uint64_t e[]; } storage_set;
+static storage_set *guest_storage;
+static size_t storage_slot(const storage_set *t, uint64_t object, bool insert)
 {
-    size_t h = (size_t)((object >> 4) * 0x9E3779B97F4A7C15ull) & (cap - 1), reuse = SIZE_MAX;
+    size_t cap = t->cap, h = (size_t)((object >> 4) * 0x9E3779B97F4A7C15ull) & (cap - 1), reuse = SIZE_MAX;
     for (size_t n = 0; n < cap; ++n, h = (h + 1) & (cap - 1)) {
-        if (t[h] == object) return h;
-        if (t[h] == 1 && reuse == SIZE_MAX) reuse = h;
-        if (!t[h]) return insert && reuse != SIZE_MAX ? reuse : h;
+        if (t->e[h] == object) return h;
+        if (t->e[h] == 1 && reuse == SIZE_MAX) reuse = h;
+        if (!t->e[h]) return insert && reuse != SIZE_MAX ? reuse : h;
     }
     return insert ? reuse : SIZE_MAX;
 }
 /* Register OBJECT (LIVE) or retire it; false when it cannot be registered. */
 static bool storage_note_locked(uint64_t object, bool live)
 {
+    storage_set *t = guest_storage;
     if (!live) {
-        size_t at = guest_storage ? storage_slot(guest_storage,guest_storage_cap,object,false) : SIZE_MAX;
-        if (at != SIZE_MAX && guest_storage[at] == object) { guest_storage[at] = 1; guest_storage_live--; guest_storage_gone++; }
+        size_t at = t ? storage_slot(t,object,false) : SIZE_MAX;
+        if (at != SIZE_MAX && t->e[at] == object) { t->e[at] = 1; t->live--; t->gone++; }
         return true;
     }
-    if (!guest_storage || 4 * (guest_storage_live + guest_storage_gone + 1) > 3 * guest_storage_cap) {
-        size_t cap = guest_storage_cap ? guest_storage_cap : 1024;
-        while (2 * (guest_storage_live + 1) > cap) cap *= 2;   /* at most half full after the rebuild */
+    if (!t || 4 * (t->live + t->gone + 1) > 3 * t->cap) {
+        size_t cap = t ? t->cap : 1024, live = t ? t->live : 0;
+        while (2 * (live + 1) > cap) cap *= 2;   /* at most half full after the rebuild */
         if (cap > ((size_t)1 << 26)) return false;
-        uint64_t *t = calloc(cap,sizeof *t);
-        if (!t) return false;
-        for (size_t i = 0; guest_storage && i < guest_storage_cap; ++i)
-            if (guest_storage[i] > 1) t[storage_slot(t,cap,guest_storage[i],true)] = guest_storage[i];
-        free(guest_storage);
-        guest_storage = t; guest_storage_cap = cap; guest_storage_gone = 0;
+        storage_set *n = calloc(1,sizeof *n + cap * sizeof(uint64_t));
+        if (!n) return false;
+        n->cap = cap;
+        for (size_t i = 0; t && i < t->cap; ++i)
+            if (t->e[i] > 1) { n->e[storage_slot(n,t->e[i],true)] = t->e[i]; n->live++; }
+        __atomic_store_n(&guest_storage,n,__ATOMIC_RELEASE);
+        free(t);
+        t = n;
     }
-    size_t at = storage_slot(guest_storage,guest_storage_cap,object,true);
+    size_t at = storage_slot(t,object,true);
     if (at == SIZE_MAX) return false;
-    if (guest_storage[at] != object) {
-        if (guest_storage[at] == 1) guest_storage_gone--;
-        guest_storage[at] = object;
-        guest_storage_live++;
+    if (t->e[at] != object) {
+        if (t->e[at] == 1) t->gone--;
+        t->e[at] = object;
+        t->live++;
     }
     return true;
+}
+/* In a fork child: the published table is whole; its counters are
+ * recounted from its entries (the parent may have been between writes). */
+static void storage_fork_child(void)
+{
+    storage_set *t = guest_storage;
+    if (!t) return;
+    t->live = t->gone = 0;
+    for (size_t i = 0; i < t->cap; ++i) { if (t->e[i] == 1) t->gone++; else if (t->e[i]) t->live++; }
 }
 /* Whether OBJECT is registered, retiring it: its final destruction. */
 static bool storage_take(void *object)
 {
     hao_crit_enter(); pthread_mutex_lock(&storage_lock);
-    size_t at = guest_storage ? storage_slot(guest_storage,guest_storage_cap,(uint64_t)(uintptr_t)object,false) : SIZE_MAX;
-    bool registered = at != SIZE_MAX && guest_storage[at] == (uint64_t)(uintptr_t)object;
+    storage_set *t = guest_storage;
+    size_t at = t ? storage_slot(t,(uint64_t)(uintptr_t)object,false) : SIZE_MAX;
+    bool registered = at != SIZE_MAX && t->e[at] == (uint64_t)(uintptr_t)object;
     if (registered) storage_note_locked((uint64_t)(uintptr_t)object,false);
     pthread_mutex_unlock(&storage_lock); hao_crit_leave();
     return registered;
