@@ -477,6 +477,20 @@ missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
 payload (the contract checker the patcher vendors) still checks only listed
 files.
 
+## The payload tools needed the cryptexes grafted into ROOT
+
+`hao-image-payload`, `hao-embed`, `hao-trust-list`, `stub_identity_gate.py` and the AOT list read the OS and
+App cryptexes' programs under `ROOT/System/Volumes/Preboot/Cryptexes/NAME`, where the installed system mounts
+them. A read-only mount of the IPSW's system image has nothing there (each cryptex is an image of its own), so
+a build from the IPSW's images alone found fewer programs and failed on the AOT list. Each tool, and
+`hao-runtime-from-source` and `hao-runtime-on-mac`, now takes `--cryptex NAME=DIR`: paths under that mount
+point are read from DIR and recorded as under ROOT (`tools/hao_root.py`), so the payload is byte for byte the
+one built from a grafted root. `hao-runtime-from-source --checkout DIR` rebuilds an archive of an older commit
+with these tools. Measured: the 26B131 archive of af5aa59 rebuilt identical from the system image with the
+OS and App cryptexes mounted beside it, and from a grafted root. Test: `tests/tools/run.sh` (`--cryptex`).
+Limits: a cryptex's absolute symbolic links resolve on the host, as with a grafted root; `--units` without
+`--x86-cache` still looks for the x86_64 cache only under ROOT.
+
 ## The installer took every file under the payload's root/
 
 `hao-install.py` copied every regular file under `PAYLOAD/root` into the

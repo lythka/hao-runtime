@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""hao-runtime-on-mac ROOT X86 [DIR]: make the payload's Apple-derived files from Apple's own, on the user's Mac.
+"""hao-runtime-on-mac [--cryptex NAME=DIR]... ROOT X86 [DIR]: make the payload's Apple-derived files from Apple's own,
+on the user's Mac.
 
 DIR is an extracted hao-runtime-VERSION-public archive (default: the folder above this script). ROOT is the release's
-System root (read-only mount of the IPSW's system image), X86 its x86_64 dyld shared cache folder. Writes
+System root (read-only mount of the IPSW's system image), X86 its x86_64 dyld shared cache folder; the IPSW's OS
+and App cryptexes, mounted read-only on their own, are named with --cryptex OS=DIR --cryptex App=DIR. Writes
 DIR/payload/embed/stubs/ (each program's stub, filled from embed/skeletons) and DIR/payload/replace/dyld, then checks
 every file payload-manifest.json lists (AOT caches may be absent: they are made after the first boot) and that
 DIR/payload holds nothing else: no file the manifest does not list, no symbolic link or special file.
@@ -173,6 +175,10 @@ def inventory(pay, files):
 
 
 def main(argv):
+    cryptex = []   # --cryptex NAME=DIR: the IPSW's cryptex NAME mounted at DIR, not under ROOT (tools/hao_root.py)
+    while len(argv) >= 3 and argv[1] == '--cryptex':
+        cryptex += ['--cryptex', argv[2]]
+        argv = argv[:1] + argv[3:]
     if len(argv) not in (3, 4):
         sys.exit(__doc__.strip().split('\n\n')[0])
     if os.geteuid() == 0:
@@ -200,7 +206,7 @@ def main(argv):
             f.write(''.join('%s %s %s %s\n' % (e['path'], d['slot'], d['cdhash'], d['sha256'])
                             for e in embed['files'] for d in e.get('constraints', {}).get('dropped', [])))
         cmd = [sys.executable, '-I', os.path.join(top, 'tools', 'hao-embed'), '--stub', os.path.join(top, 'build', 'hao-stub'),
-               '--stubs', out, '--root', root, '--x86-cache', x86, '--skeletons', os.path.join(pay, 'embed', 'skeletons'),
+               '--stubs', out, '--root', root, *cryptex, '--x86-cache', x86, '--skeletons', os.path.join(pay, 'embed', 'skeletons'),
                '--require', 'sbin/launchd', '--require', 'usr/libexec/xpcproxy', '--allow-dropped-constraints', drop,
                '--list', lst]
         with open(os.path.join(work, 'embed.log'), 'w') as log:

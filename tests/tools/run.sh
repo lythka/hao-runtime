@@ -10,7 +10,8 @@
 # tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/onmac_pin_check.py),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike) and
-# tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file).
+# tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file) and
+# tests/tools/test_root.py (--cryptex: a cryptex beside ROOT, the same outputs as in place).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
 # Supply KC explicitly for read-only kernel collection checks; stamp cases
 # are skipped without it. Exit 1 if any case failed.
@@ -202,7 +203,7 @@ cp "$G" "$d/src/sbin/launchd"; cp "$G" "$d/src/usr/libexec/xpcproxy"; cp /usr/li
 python3 -I "$repo/tools/dyld-ignition-fix.py" "$d/src/usr/lib/dyld" "$d/dyld.want" >/dev/null 2>&1
 mkdir -p "$d/arch/build/front"; for f in hao-stub front/stub.o libhao.dylib libhao_identity.dylib; do cp "$B/$f" "$d/arch/build/$f"; done
 cp "$d/orig/manifest.json" "$d/arch/payload/embed/"
-for t in hao-embed dyld-ignition-fix.py hao-runtime-on-mac hao_fat.py hao_codesig.py hao_macho.py stub_identity_gate.py hao.entitlements; do
+for t in hao-embed dyld-ignition-fix.py hao-runtime-on-mac hao_fat.py hao_codesig.py hao_macho.py hao_root.py stub_identity_gate.py hao.entitlements; do
     cp "$repo/tools/$t" "$d/arch/tools/"
 done
 python3 -I - "$d" <<'PY'
@@ -306,6 +307,11 @@ BX=$(ls -d /System/Applications/*.app/Contents/MacOS/* 2>/dev/null | grep -v ' '
 if r=$(timeout 300 python3 -I "$here/test_trustlist.py" "$G" /bin/ls ${BX:+"$BX"} 2>&1); then
     pass "hao-trust-list: $(echo "$r" | tr '\n' ';')"
 else bad "hao-trust-list: $(echo "$r" | grep FAIL)"; fi
+# --- --cryptex: a cryptex mounted beside ROOT gives the same trust list, stubs, manifest, log and gate verdicts
+# as the cryptex in place under ROOT (tools/hao_root.py)
+if r=$(timeout 300 python3 -I "$here/test_root.py" "$OUT/root" "$G" /bin/ls "$B/hao-stub" "$X86" 2>&1); then
+    pass "--cryptex: $(echo "$r" | tr '\n' ';')"
+else bad "--cryptex: $(echo "$r" | grep FAIL)"; fi
 # --- codesign's working copies only under a parent nobody else can change; the directory and files checked by
 # inode before codesign reads them
 d=$OUT/private; rm -rf "$d"; mkdir -p "$d"

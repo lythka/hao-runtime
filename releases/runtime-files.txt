@@ -668,6 +668,7 @@ tests/tools/test_contract.py
 tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
 tests/tools/test_release.py
+tests/tools/test_root.py
 tests/tools/test_trustlist.py
 tests/translate/run.sh
 tools/check_distribution.py
@@ -690,6 +691,7 @@ tools/hao_fat.py
 tools/hao_ifunit.py
 tools/hao_macho.py
 tools/hao_release.py
+tools/hao_root.py
 tools/stub_identity_gate.py
 tools/value-contracts/README.md
 tools/value-contracts/optional-data-26A428.json
