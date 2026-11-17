@@ -2943,6 +2943,26 @@ While IXC is clear (a new thread, or after software clears it) translated
 code calls the helper, until an inexact result sets it; code whose fused
 results are all exact stays there. Not measured on Intel hardware.
 
+## Upper ymm state at the native boundary
+
+Translated code and libhao are legacy SSE. A native function that returns
+with dirty upper ymm halves (hand-written AVX without `vzeroupper`), or a
+native caller that has them when it calls into guest code, would leave
+every SSE instruction of the guest with a false dependency from Skylake on.
+Where CPUID reports AVX and OSXSAVE and XCR0 enables SSE and AVX state
+(under Rosetta only with ROSETTA_ADVERTISE_AVX=1), the JIT entry stub,
+`hao_native_call` after its call and `hao_callback_entry` execute
+`vzeroupper`; SysV treats the uppers as dead at each point. Without AVX
+state nothing is emitted or executed. The flag is set when the JIT stubs
+are built, so a process without executable memory for the JIT does not
+clear them. `guest/ymmupper` checks both edges with and without
+ROSETTA_ADVERTISE_AVX=1 (before: `ff` in both with it set). The
+signal-resume path is unchanged. The performance effect has not been
+measured: Rosetta has no such penalty.
+
+`-ffp-contract=off` is now in CFLAGS so that plain C arithmetic in the FP
+reference code cannot be fused if the target level is ever raised; at
+`-march=x86-64-v2` the built `libhao.dylib` is byte-identical.
 
 ## Guest calls of private-library functions that take a `va_list`
 
