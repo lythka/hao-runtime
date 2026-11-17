@@ -918,7 +918,9 @@ static void map_island_room(hao_image *img, uint64_t room, bool reserved)
     if (reserved) munmap((void *)(uintptr_t)at, room);
     void *p = mmap((void *)(uintptr_t)at, room, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (p == MAP_FAILED) return;
-    if (!island_reach((uint64_t)(uintptr_t)p, room, img->base, img->base + img->vmsize)) { munmap(p, room); return; }
+    /* read/execute only: entries are written in W^X windows (jit.c) */
+    if (!island_reach((uint64_t)(uintptr_t)p, room, img->base, img->base + img->vmsize) ||
+        mprotect(p, room, PROT_READ | PROT_EXEC)) { munmap(p, room); return; }
     img->isl_lo = img->isl_next = (uint64_t)(uintptr_t)p;
     img->isl_hi = img->isl_lo + room;
 }

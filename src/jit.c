@@ -30,6 +30,9 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include "hao/a64_imm.h"
 #include "hao/aot.h"
 #include "hao/gmap.h"
@@ -302,6 +305,163 @@ static void block_commit(uint8_t *start, size_t len)
 {
     cache_ptr = start + ((len + 15) & ~(size_t)15);
     if (cache_ptr > cache_end) cache_ptr = cache_end;
+}
+
+/* ------------------------------------------------------- W^X
+ * hao's executable memory, the code cache and the Swift islands
+ * (swiftmeta.c), is never writable where it runs. Each region of it is a
+ * MAP_JIT mapping, read/execute only, and a second mapping of the same
+ * memory, read/write only, at an address the kernel picks at random, which
+ * only wx_reg holds (hao_wx_region). Writers change the bytes through the
+ * second mapping: hao_wx_begin gives the address to write for an executable
+ * address, hao_wx_end ends the write. A rel32 rewritten in place (block
+ * chaining) is one aligned 4-byte store there, seen whole by the threads
+ * that run the first.
+ *
+ * Under Rosetta a write through the second mapping is not seen by code
+ * Rosetta has already translated from the first, and only a change of the
+ * first mapping to writable drops those translations: hao_wx_end makes the
+ * changed pages writable and read/execute again (nothing is written through
+ * them). Toggling the first mapping's protection around the write itself
+ * does not work there: a store to a page another thread runs faults with
+ * SIGBUS now and then even though the page was made writable. An Intel Mac
+ * needs neither step.
+ *
+ * A region the kernel gives no second mapping for (no memory entry) is
+ * written in place instead: its pages are writable and executable for the
+ * write (hao_wx_begin to hao_wx_end, one such window at a time, wx_lock).
+ * Not mach_vm_remap: xnu refuses to remap MAP_JIT memory.
+ *
+ * The second mapping is not inherited: a fork child maps every region again
+ * (hao_jit_fork_child). Callers hold a hao critical section and open no
+ * window inside another. A failed protection change stops the process. */
+#define WX_PAGE 4096u
+#define WX_REGIONS 8192
+typedef struct { uintptr_t x, w, size; } wx_region;
+static wx_region wx_reg[WX_REGIONS];
+static uint32_t wx_n;                  /* published with release: entries below it are complete */
+static pthread_mutex_t wx_lock = PTHREAD_MUTEX_INITIALIZER;   /* adding a region; an in-place window */
+static uintptr_t wx_lo, wx_hi;         /* the open in-place window (a fork child closes it) */
+static int wx_ping = -1;               /* under Rosetta: drop its translations after a write */
+static uint64_t st_wx, st_wx_inplace;
+
+static void wx_protect(uintptr_t lo, uintptr_t hi, int prot)
+{
+    if (!mprotect((void *)lo, hi - lo, prot)) return;
+    int e = errno;
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG, "executable memory [%#lx, %#lx) cannot be made %s: %s\n", (unsigned long)lo, (unsigned long)hi,
+            prot & PROT_WRITE ? "writable" : "read/execute only", strerror(e));
+    abort();
+}
+
+/* A read/write mapping of [x, x+size) at a random address, or 0. x must be writable now. */
+static uintptr_t wx_alias(uintptr_t x, size_t size)
+{
+    memory_object_size_t sz = size;
+    mach_port_t entry = MACH_PORT_NULL;
+    if (mach_make_memory_entry_64(mach_task_self(), &sz, (memory_object_offset_t)x, VM_PROT_READ | VM_PROT_WRITE, &entry,
+                                  MACH_PORT_NULL) != KERN_SUCCESS)
+        return 0;
+    mach_vm_address_t w = 0;
+    kern_return_t kr = sz < size ? KERN_FAILURE :
+        mach_vm_map(mach_task_self(), &w, size, 0, VM_FLAGS_ANYWHERE | VM_FLAGS_RANDOM_ADDR, entry, 0, FALSE,
+                    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    mach_port_deallocate(mach_task_self(), entry);
+    return kr == KERN_SUCCESS ? (uintptr_t)w : 0;
+}
+
+/* Make [x, x+size), MAP_JIT memory of hao's (page aligned), a W^X region: read/execute only, written
+ * through its second mapping. Nothing may run there yet. Once per region; false (x is left as it was) when
+ * the table is full or the protection cannot be set. */
+bool hao_wx_region(void *x, size_t size)
+{
+    uintptr_t a = (uintptr_t)x;
+    bool ok = false;
+    pthread_mutex_lock(&wx_lock);
+    if (wx_ping < 0) {
+        int tr = 0;
+        size_t n = sizeof tr;
+        wx_ping = sysctlbyname("sysctl.proc_translated", &tr, &n, NULL, 0) == 0 && tr == 1;
+    }
+    uint32_t k = wx_n;
+    for (uint32_t i = 0; i < k; i++)
+        if (wx_reg[i].x == a) { ok = true; goto out; }
+    if (k == WX_REGIONS || (a | size) & (WX_PAGE - 1) || mprotect(x, size, PROT_READ | PROT_WRITE | PROT_EXEC)) goto out;
+    uintptr_t w = wx_alias(a, size);
+    if (mprotect(x, size, PROT_READ | PROT_EXEC)) {
+        if (w) munmap((void *)w, size);
+        goto out;
+    }
+    wx_reg[k] = (wx_region){a, w, size};
+    __atomic_store_n(&wx_n, k + 1, __ATOMIC_RELEASE);
+    ok = true;
+out:
+    pthread_mutex_unlock(&wx_lock);
+    return ok;
+}
+
+static const wx_region *wx_find(uintptr_t a, size_t n)
+{
+    uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < k; i++)
+        if (a >= wx_reg[i].x && a - wx_reg[i].x < wx_reg[i].size && n <= wx_reg[i].size - (a - wx_reg[i].x)) return &wx_reg[i];
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG, "write of %zu bytes at %#lx: not hao's executable memory\n", n, (unsigned long)a);
+    abort();
+}
+
+/* The address to write the n bytes of executable memory at x through */
+void *hao_wx_begin(void *x, size_t n)
+{
+    uintptr_t a = (uintptr_t)x;
+    const wx_region *r = wx_find(a, n);
+    __atomic_fetch_add(&st_wx, 1, __ATOMIC_RELAXED);
+    if (r->w) return (void *)(r->w + (a - r->x));
+    pthread_mutex_lock(&wx_lock);
+    wx_lo = a & ~(uintptr_t)(WX_PAGE - 1);
+    wx_hi = (a + n + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
+    wx_protect(wx_lo, wx_hi, PROT_READ | PROT_WRITE | PROT_EXEC);
+    st_wx_inplace++;
+    return x;
+}
+
+/* The n bytes at x written since hao_wx_begin(x, ...) are complete */
+void hao_wx_end(void *x, size_t n)
+{
+    uintptr_t a = (uintptr_t)x;
+    const wx_region *r = wx_find(a, n);
+    if (!r->w) {
+        wx_protect(wx_lo, wx_hi, PROT_READ | PROT_EXEC);
+        wx_lo = wx_hi = 0;
+        pthread_mutex_unlock(&wx_lock);
+    } else if (wx_ping && n) {
+        uintptr_t lo = a & ~(uintptr_t)(WX_PAGE - 1), hi = (a + n + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
+        wx_protect(lo, hi, PROT_READ | PROT_WRITE | PROT_EXEC);
+        wx_protect(lo, hi, PROT_READ | PROT_EXEC);
+    }
+}
+
+/* n bytes of src to executable memory at x */
+void hao_wx_write(void *x, const void *src, size_t n)
+{
+    memcpy(hao_wx_begin(x, n), src, n);
+    hao_wx_end(x, n);
+}
+
+/* fork child: the second mappings were not inherited; another thread's in-place window is closed */
+static void wx_fork_child(void)
+{
+    if (wx_hi) wx_protect(wx_lo, wx_hi, PROT_READ | PROT_EXEC);
+    wx_lo = wx_hi = 0;
+    wx_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < k; i++) {
+        if (!wx_reg[i].w) continue;
+        wx_protect(wx_reg[i].x, wx_reg[i].x + wx_reg[i].size, PROT_READ | PROT_WRITE | PROT_EXEC);
+        wx_reg[i].w = wx_alias(wx_reg[i].x, wx_reg[i].size);
+        wx_protect(wx_reg[i].x, wx_reg[i].x + wx_reg[i].size, PROT_READ | PROT_EXEC);
+    }
 }
 
 /* Warnings are noted under the lock and printed after it (no I/O inside). */
@@ -4530,7 +4690,7 @@ static void *translate(uint64_t pc)
             /* fill and claim the slot before publishing it (see jit_lock) */
             uint8_t *slot = cache_alloc(16);
             if (!slot) { cache_exhausted(); return NULL; }
-            memcpy(slot, &im->base, 8);
+            hao_wx_write(slot, &im->base, 8);
             __atomic_store_n(&im->jit_slot, slot, __ATOMIC_RELEASE);
         }
         t.base = im->base;
@@ -4539,12 +4699,19 @@ static void *translate(uint64_t pc)
     size_t avail;
     uint8_t *start = block_open(&avail);
     if (!start) { cache_exhausted(); return NULL; }
-    xb_init(&t.b, start, avail);
+    /* written through the W^X second mapping (at most MAX_BLOCK_BYTES); the
+     * base slot is addressed rip-relative, at the same distance there */
+    size_t room = avail < MAX_BLOCK_BYTES ? avail : MAX_BLOCK_BYTES;
+    uint8_t *w = hao_wx_begin(start, room);
+    xb_init(&t.b, w, room);
+    if (t.base_slot) t.base_slot = w + (t.base_slot - start);
     emit_block(&t, pc, insns, n);
+    hao_wx_end(start, t.b.overflow || t.b.bad ? 0 : xb_len(&t.b));
     if (t.b.overflow) {
         /* nothing was claimed. At the end of the cache the block did not
-         * fit; otherwise an internal rel8 was out of range (a hao bug) */
-        if (t.b.p >= t.b.end) cache_exhausted();
+         * fit; otherwise an internal rel8 was out of range or the block
+         * outgrew MAX_BLOCK_BYTES (a hao bug) */
+        if (t.b.p >= t.b.end && room == avail) cache_exhausted();
         else __atomic_fetch_or(&warn_pending, WARN_OVERFLOW, __ATOMIC_RELAXED);
         return NULL;
     }
@@ -4985,8 +5152,10 @@ static bool aot_install(hao_image *im, const hao_aot_view *v, char *why, size_t 
     uint8_t *code = NULL;
     if (!__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) && table_room(nb)) code = cache_alloc((size_t)cs);
     if (code) {
-        memcpy(code, v->code, (size_t)cs);
-        memcpy(code, &im->base, 8);       /* the base slot */
+        uint8_t *w = hao_wx_begin(code, (size_t)cs);
+        memcpy(w, v->code, (size_t)cs);
+        memcpy(w, &im->base, 8);          /* the base slot */
+        hao_wx_end(code, (size_t)cs);
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
         for (; k < nb; k++)
             if (!insert(im->base + v->ents[k].guest_off, code + v->ents[k].code_off)) { cache_exhausted(); break; }
@@ -5077,7 +5246,7 @@ static bool aot_lazy_install(hao_image *im, const hao_aot_view *v, const uint8_t
     uint8_t *code = NULL;
     if (i < AOT_LAZY_MAX && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) code = cache_alloc((size_t)z->cs);
     if (code) {
-        memcpy(code, &im->base, 8);       /* the base slot */
+        hao_wx_write(code, &im->base, 8);  /* the base slot */
         z->dst = code;
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
         im->aot = code;
@@ -5115,18 +5284,23 @@ static void *aot_lazy_take(uint64_t pc)
     uint32_t a = z->v.ents[i].code_off, e = i + 1 < z->nb ? z->v.ents[i + 1].code_off : (uint32_t)z->cs;
     uint8_t *code = z->dst + a;
     if (!z->filled[i]) {
-        memcpy(code, z->v.code + a, e - a);
-        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);   /* before the cut test: a link to itself stays */
         lo = 0, hi = z->nl;
         while (lo < hi) {
             uint32_t m = lo + (hi - lo) / 2;
             if (z->v.links[m].site < a) lo = m + 1; else hi = m;
         }
+        uint64_t wend = e;   /* the block and its link sites (each within the blob: aot_lazy_ok) */
+        for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
+            if ((uint64_t)z->v.links[k].site + 4 > wend) wend = (uint64_t)z->v.links[k].site + 4;
+        uint8_t *w = hao_wx_begin(code, wend - a);
+        memcpy(w, z->v.code + a, e - a);
+        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);   /* before the cut test: a link to itself stays */
         for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
             if (!z->filled[z->v.links[k].target]) {
                 int32_t unlinked = 0;
-                memcpy(z->dst + z->v.links[k].site, &unlinked, 4);
+                memcpy(w + (z->v.links[k].site - a), &unlinked, 4);
             }
+        hao_wx_end(code, wend - a);
         st_aot_blocks++;
         st_aot_lazy_bytes += e - a;
     }
@@ -5926,7 +6100,8 @@ static void build_stubs(void)
 static int jit_state;
 
 /*
- * The code cache is one MAP_JIT region. When the kernel refuses it there is
+ * The code cache is one MAP_JIT region, read/execute only and written
+ * through a second mapping (W^X, above). When the kernel refuses it there is
  * no other source of executable memory worth having: a MAC policy refused it
  * (the process's sandbox denies dynamic-code-generation, or AMFI found no
  * allow-jit entitlement in a hardened process), and plain RWX memory either
@@ -5993,6 +6168,15 @@ static void jit_init_once(void)
     thunk_area = thunk_ptr = cache_ptr; cache_ptr += THUNK_AREA; thunk_end = cache_ptr;
     sig_area = sig_ptr = cache_ptr; cache_ptr += SIG_AREA; sig_end = cache_ptr;
     scratch = cache_ptr; cache_ptr += SCRATCH_SIZE;
+    if (!hao_wx_region(cache, size)) {   /* W^X from here on */
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "translated code cannot be kept read/execute only; running interpreted\n");
+        munmap(cache, size);
+        cache = cache_ptr = cache_end = NULL;
+        hao_use_jit = 0;
+        __atomic_store_n(&jit_state, -1, __ATOMIC_RELEASE);
+        return;
+    }
     __atomic_store_n(&jit_state, 1, __ATOMIC_RELEASE);
 }
 
@@ -6154,7 +6338,10 @@ int hao_jit_run_block(hao_thread *th)
         bool ok = next && !(site & 3) && site >= (uint64_t)(uintptr_t)cache && site + 4 <= (uint64_t)(uintptr_t)cache_end;
         if (ok) {
             int32_t rel = (int32_t)((intptr_t)next - (intptr_t)(site + 4));
-            __atomic_store_n((int32_t *)(uintptr_t)site, rel, __ATOMIC_RELEASE);
+            hao_crit_enter();
+            __atomic_store_n((int32_t *)hao_wx_begin((void *)(uintptr_t)site, 4), rel, __ATOMIC_RELEASE);
+            hao_wx_end((void *)(uintptr_t)site, 4);
+            hao_crit_leave();
             __atomic_fetch_add(&st_links, 1, __ATOMIC_RELAXED);
         } else if (next)
             __atomic_fetch_add(&st_link_skips, 1, __ATOMIC_RELAXED);
@@ -6174,7 +6361,7 @@ void hao_jit_stats(void)
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
             " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu"
-            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu\n",
+            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu wx_writes=%llu wx_inplace=%llu\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
@@ -6183,7 +6370,7 @@ void hao_jit_stats(void)
             (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
             (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved,
             (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED), (unsigned long long)st_aot_lazy_blobs,
-            (unsigned long long)(st_aot_lazy_bytes >> 10));
+            (unsigned long long)(st_aot_lazy_bytes >> 10), (unsigned long long)st_wx, (unsigned long long)st_wx_inplace);
     uint64_t counts[HG_COUNT][2];
     for (unsigned g = 0; g < HG_COUNT; g++)
         for (unsigned k = 0; k < 2; k++)
@@ -6264,8 +6451,9 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
             t.win = code;
             t.win_base = base;
             t.win_n = n;
-            xb_init(&t.b, tscratch, SCRATCH_SIZE);
+            xb_init(&t.b, hao_wx_begin(tscratch, SCRATCH_SIZE), SCRATCH_SIZE);
             emit_block(&t, pc, code + k, m);
+            hao_wx_end(tscratch, t.b.overflow || t.b.bad ? 0 : xb_len(&t.b));
             if (t.b.overflow || t.b.bad) { es->last_m = 0; return -4; }
             es->last_pc = pc; es->last_m = m; es->last_base = base; es->last_n = n;
             if (n <= 2 * MAX_BLOCK_INSNS) memcpy(es->last_code, code, 4u * (unsigned)n);
@@ -6307,6 +6495,7 @@ void hao_jit_fork_child(void)
     jit_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     thunk_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     pw_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    wx_fork_child();
 }
 
 static void full_once(int *flag, const char *what)
@@ -6330,11 +6519,12 @@ uint64_t hao_thunk_for(uint64_t guest)
     if (s && !fresh) r = s[1];
     else if (s && thunk_ptr + 32 <= thunk_end) {
         xbuf b;
-        xb_init(&b, thunk_ptr, 32);
+        xb_init(&b, hao_wx_begin(thunk_ptr, 32), 32);
         movabs(&b, R11, guest);
         x_alu_rr(&b, XXOR, 0, R10, R10);                    /* no signature */
         x_jmp_m(&b, xm(XRIP, 0));                           /* jmp [rip+0] */
         xb_u64(&b, (uint64_t)(uintptr_t)hao_callback_entry);
+        hao_wx_end(thunk_ptr, 32);
         if (b.overflow || b.bad) abort();
         r = (uint64_t)(uintptr_t)thunk_ptr;
         __atomic_store_n(&thunk_ptr, thunk_ptr + 32, __ATOMIC_RELEASE);
@@ -6388,13 +6578,14 @@ uint64_t hao_sig_thunk(uint64_t guest, void *sig)
     else if (!s || sig_ptr + SIG_SLOT > sig_end) __atomic_fetch_or(&warn_pending, WARN_SIGS, __ATOMIC_RELAXED);
     else {
         xbuf b;
-        xb_init(&b, sig_ptr, SIG_SLOT);
+        xb_init(&b, hao_wx_begin(sig_ptr, SIG_SLOT), SIG_SLOT);
         movabs(&b, R11, guest);
         movabs(&b, R10, key[1]);
         x_jmp_m(&b, xm(XRIP, 0));                               /* jmp [rip+0] */
         xb_u64(&b, (uint64_t)(uintptr_t)hao_callback_entry);
+        while (!b.overflow && xb_len(&b) < SIG_SLOT) x_int3(&b);
+        hao_wx_end(sig_ptr, SIG_SLOT);
         if (b.overflow || b.bad) abort();
-        while (xb_len(&b) < SIG_SLOT) x_int3(&b);
         r = (uint64_t)(uintptr_t)sig_ptr;
         __atomic_store_n(&sig_ptr, sig_ptr + SIG_SLOT, __ATOMIC_RELEASE);
         s[2] = r;

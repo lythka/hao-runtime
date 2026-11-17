@@ -162,6 +162,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/varsniff | PASS | 2 | |
 | guest/xinhab | XFAIL | 2 | see known failures |
 | guest/xpac | PASS | 1 | |
+| guest/wx | PASS | 4 | no memory writable and executable at once after translated code, chained branches, thunks and Swift island entries have run (Rosetta's own memory aside) |
 | guest/run-async | PASS | 9 | |
 | guest/keypath-identity | PASS | 2 | |
 | guest/late-method-signatures | PASS | 10 | |

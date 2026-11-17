@@ -2377,7 +2377,8 @@ void *hao_dsc_island(uint64_t lo, uint64_t hi, uint64_t size)
             if (!hao_near_range(a, lo, hi, size)) continue;
             munmap((void *)(uintptr_t)a, size);
             void *p = mmap((void *)(uintptr_t)a, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-            if (p == (void *)(uintptr_t)a) {
+            /* read/execute only: entries are written in W^X windows (jit.c) */
+            if (p == (void *)(uintptr_t)a && !mprotect(p, size, PROT_READ | PROT_EXEC)) {
                 carved[ncarved].lo = cand[c];
                 carved[ncarved++].hi = cand[c] + size;
                 res = p;
