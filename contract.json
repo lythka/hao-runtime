@@ -2,6 +2,7 @@
   "contract_version": 1,
   "role": "runtime",
   "checks": [
+    {"kind": "hygiene", "allow": {"tests/aot/policy.c": ["home folder"]}},
     {"kind": "generated-lock", "lock": "generated.lock", "globs": ["src/*_gen.inc"], "stamp_header": "include/hao/gen_stamp.h"}
   ]
 }

@@ -8,7 +8,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-diagtime)}
+OUT=${OUT:-$(mktemp -d -t hao-guest-diagtime)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-30}
 mkdir -p "$OUT"

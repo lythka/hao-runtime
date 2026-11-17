@@ -1082,9 +1082,9 @@ function pointer, a block's invoke) is bound on its first call
 (`bridge.c` `bind_bare`). Before calling it hao checks that it is
 executable host memory, so data or arm64 code is never run as x86 code.
 The check asked the kernel with `mach_vm_region_recurse`, descending into
-the shared-region submap. On the laptop's Intel kernel, in a translated
-process's map, that took tens of milliseconds per call. `HAO_PERF` on the
-test laptop (ControlCenter, 26B131) put 4.1 s of a first open after a
+the shared-region submap. On Intel hardware (MacBookPro9,2, 26B131), in a
+translated process's map, that took tens of milliseconds per call. `HAO_PERF`
+there (ControlCenter) put 4.1 s of a first open after a
 restart in plan lookups, against 0.1 s warm, and 9.3 s of ControlCenter's
 launch. All of that time was in `mach_vm_region_recurse` under
 `hao_bridge_plan_for_call`, about 46 ms for each of the open's 53
@@ -1105,7 +1105,7 @@ kernel. A call through a pointer to libc's `optarg` (`__DATA`) is still
 refused ("not executable host memory").
 
 Limits: the time saved is known only as the cost removed (the profile
-above); a before/after on the laptop is pending. Data in an
+above); a before/after on Intel hardware is not measured. Data in an
 executable segment (`__TEXT,__const`) counts as host code, as it does for
 the kernel's answer.
 
@@ -1119,7 +1119,7 @@ of use. That lookup walks every loaded image's export trie, through
 libhao_identity's dlsym interposer. `common_byte_optional_case` alone
 made ten lookups for each value a guest witness call passes.
 
-On laptop 2 (image d588923, libhao 399e78e) these lookups were most of
+On Intel hardware (MacBookPro9,2, 26B131) these lookups were most of
 the CPU of the interactions measured:
 - ControlCenter's panel layout: at least 80 of the 127 samples under the
   witness-patch collection were in `dlsym`'s trie search.
@@ -1147,8 +1147,8 @@ Limits:
   sampler sees only Rosetta's frames. The reflection walk
   (`swift_reflectionMirror_*` per field) and the crossings are the
   candidates.
-- Not yet measured on Intel hardware: bench2 measures it before and after
-  on laptop 2.
+- The time saved is not yet measured on Intel hardware.
+
 ## A guest C callback that returns a struct indirectly: SIPathFilterCreate
 
 SpotlightIndex keeps a path filter's `evaluate(ctx, path)` callback, made
@@ -2578,9 +2578,9 @@ the shared interpreter models them as described in the half-control section.
 
 ## Nils of standard Swift types: pointer words, single inhabitants, tag bytes, Data
 
-hao-research's walk of the Optional fields that 26B131 applications store
-(inventory of 598 guest binaries and 187 arm64e-only cache images) found the
-walk refusing the nils of common standard types. Since 596461f a refusal
+Among the Optional fields that 26B131 applications store (598 guest
+binaries and 187 arm64e-only cache images), the walk refused the nils of
+common standard types. Since 596461f a refusal
 passes the value through unpatched (logged), so these were unconverted, and
 `Data?` the one whose nil differs at the first level: a native-made nil
 reads as a present `Data` in guest code, and the reverse.
@@ -2653,10 +2653,10 @@ Data-only build of it gave 2 lines that differ from native arm64 (a guest
 nil read as present by native code); now all 179 lines of the test equal
 native arm64 under JIT, `--interp` and AOT.
 
-`src/mpenum_gen.inc` is now hao-research's r3 (e0c0f3d), row format 2
-(`HAO_MPENUM_ROWS 2`): the r2 counts and flags plus arm64's XI count, both
-architectures' extra tag bits, and for rows without flag 4 both common
-spare-bit masks. `Tables.h` `mpenum_row` carries them.
+`src/mpenum_gen.inc` now has row format 2 (`HAO_MPENUM_ROWS 2`): the
+earlier counts and flags plus arm64's XI count, both architectures' extra
+tag bits, and for rows without flag 4 both common spare-bit masks.
+`Tables.h` `mpenum_row` carries them.
 
 Remaining limitations:
 - Data?: only the nils are translated; a `Data??` deeper than 12 Optionals
@@ -2681,7 +2681,7 @@ Rule B also admitted an enum whose payload layout differs by architecture as
 long as its x86_64 tags lay in bits 60-63, and every rule admitted a frozen
 native type declared differently on arm64 inside a guest-laid-out value.
 
-Two generated tables for macOS 27.2.1 (26B131, from hao-research; stamp in
+Two generated tables for macOS 27.2.1 (26B131; stamp in
 `include/hao/gen_stamp.h`, format 1) are looked up by the defining image's
 LC_UUID and the type descriptor's offset from its mach header
 (`src/swiftvalue/Tables.c`, a per-descriptor cache). A row matches only the
@@ -2701,9 +2701,8 @@ OS build.
   multi-payload layouts differ (`ComputationalGraph.Output.Errors`: a tag
   byte on x86_64, spare bits on arm64).
 
-Both are hao-research's r2 exports (6dff5fb), after its x86_64 slide-info
-v2 parser fix (r1 had 1899 and 36 rows; no r1 row changed); mpenum_gen.inc
-is since r3 (row format 2, below).
+`mpenum_gen.inc` has since moved to row format 2 (see the section on nils
+of standard Swift types).
 
 Rules now:
 
@@ -2711,8 +2710,8 @@ Rules now:
   type the walk meets and in `selected()`): a listed type counts only where
   guest code can lay its bytes out, that is when its module froze it
   (`frozenstruct_gen.inc`, by qualified name). No listed type is defined in
-  a guest image (the rows are x86_64 images'), and per hao-research's
-  reachability check of 26B131 no guest image or application references any
+  a guest image (the rows are x86_64 images'), and by a reachability check
+  of 26B131 no guest image or application references any
   of them except `Swift.Float16` and `Swift.Float80`, the two frozen ones.
   A resilient listed type is held by guest code only through its native
   witnesses, its bytes are x86_64 throughout, and it is walked by its native
@@ -2823,7 +2822,7 @@ Remaining limitations:
   architecture there is not refused.
 - A listed type counts as guest-laid-out only when frozen; a resilient one
   is trusted to reach guest code only through native witnesses (true of
-  every listed type on 26B131 by hao-research's reachability check, not
+  every listed type on 26B131 by the reachability check above, not
   checked at run time). They are measured on this host's
   26B123 runtimes for the images that are the same binaries, not on the
   target system or Intel hardware.
@@ -3092,8 +3091,8 @@ process, hao prints three things under the stable prefix `Swift value
 survey:`: the value's innermost refusing types (`refused at offset N depth D:
 ... type=...`, from a second walk in survey mode), the schema of the value,
 and one `passed through unpatched: REASON (... type=...) root=... guest lr=...
-pc=...` line. Up to 1024 pairs are reported per process. This is the owner's
-choice: refusing by default hides what ARM apps send.
+pc=...` line. Up to 1024 pairs are reported per process. This is a
+deliberate choice: refusing by default hides what ARM apps send.
 
 The cost is that a nil in the guest's encoding inside such a value can make
 native code misbehave or crash later, away from the boundary. Read a crash
@@ -3105,14 +3104,13 @@ the publication and witness paths are reached from SwiftUI/AttributeGraph on
 the target. `swiftlayout` section S checks the survey walk itself (a value
 with two refusing fields prints both).
 
-Laptop (26B131, MBP9,2, live swap): Weather.app, which aborted at
+On Intel hardware (26B131), Weather, which aborted at
 `Swift.Optional<(Swift.Bool) -> ()>` under the refusing default, now passes
 `Optional<SwiftUI.Binding<Swift.Bool>>` and
 `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>` through
-with survey lines and runs about 50 s. It then aborts in native code
-outside hao: VFX → `-[MTLIOAccelDevice newIndirectArgumentEncoderWithLayout:]`
-in the image's Metal driver. Its window has not been shown yet, so whether
-the passed-through values render correctly is still unconfirmed.
+with survey lines. Its window is not shown (it stops later in native code
+outside hao), so whether passed-through values render correctly is not
+confirmed.
 
 Both enum rules are used by the walk only. The ownership transfers in
 `Aggregate.c` and `graph()`, which picks the types whose native witnesses a

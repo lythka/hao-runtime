@@ -30,7 +30,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-tools-aotpayload)}
+OUT=${OUT:-$(mktemp -d -t hao-pkgtest-aotpayload)}
 B=$repo/build
 X86=${X86_CACHE:-}
 for c in /System/Volumes/Preboot/Cryptexes/Rosetta/System/Library/dyld /System/Library/dyld; do
@@ -109,9 +109,9 @@ for n in os.listdir(d):
 assert int(b['cpu_profile'], 16) == profiles, b
 PY
 
-# payload-manifest.json: the runtime -> patcher contract, checked by the vendored hao-assets checker with the
+# payload-manifest.json: the runtime -> patcher contract, checked by the vendored hao-patcher checker with the
 # OS build the payload's build.json names and install layout 1; one changed file and a dirty flag are refused
-python3 -I - "$repo" "$P" <<'PY' && pass "A payload-manifest.json passes the hao-assets payload check; a changed file and a dirty build are refused" || bad "A payload-manifest.json"
+python3 -I - "$repo" "$P" <<'PY' && pass "A payload-manifest.json passes the contract payload check; a changed file and a dirty build are refused" || bad "A payload-manifest.json"
 import json, os, runpy, shutil, sys, tempfile
 repo, p = sys.argv[1:]
 check = runpy.run_path(os.path.join(repo, 'tools/hao-contract/hao_contract.py'))['check_payload']
