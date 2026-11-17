@@ -109,19 +109,7 @@ declare `async_contract_package_abis: [1]` in its build recipe.
 descriptor against the input System's build and stages them beside
 `libhao.dylib`. See the [async contract interface](async-contract.md).
 
-## Contract export for 26A428
-
-[`releases/contracts/26A428/0.1.0-analytical.5`](../releases/contracts/26A428/0.1.0-analytical.5/README.md)
-is a generated contract delta for macOS 27 build 26A428: 490 records in 110
-UUID interface units, plus a paired Swift companion library. Its manifests
-record the generator's provenance and hashes. `make` does not consume or
-install it.
-
-To use it in an image, start from the exact 26A428 base named in
-`release.json`, merge by library UUID and symbol, keep identical rows as
-no-ops, reject conflicting rows, and keep existing thunk libraries. Do not
-replace base units with delta files. Rebuild runtime-bound AOT caches for the
-selected runtime and package the complete compatibility input with it.
+## Interface units and the image
 
 A unit is used only for a loaded library with its UUID. `hao-image-payload
 --units` therefore fails if a unit names no image of the image's
