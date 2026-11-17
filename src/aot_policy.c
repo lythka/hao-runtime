@@ -32,6 +32,14 @@ uint64_t hao_aot_hash64(const void *p, size_t n, uint64_t seed)
     return h ^ (h >> 32);
 }
 
+uint64_t hao_aot_file_hash(const void *file, uint64_t size)
+{
+    hao_aot_hdr h;
+    memcpy(&h, file, sizeof h);
+    h.payload_hash = 0;
+    return hao_aot_hash64((const uint8_t *)file + sizeof h, (size_t)(size - sizeof h), hao_aot_hash64(&h, sizeof h, 0));
+}
+
 uint64_t hao_aot_guest_id(const void *mach_header, uint64_t avail, uint64_t slice_size)
 {
     const struct mach_header_64 *h = mach_header;
@@ -128,7 +136,7 @@ int hao_aot_check(const void *buf, uint64_t size, const hao_aot_expect *x, hao_a
     if (h.code_size < 16) REJ("code area of %llu bytes", (unsigned long long)h.code_size);
     if ((uint64_t)h.nlinks > h.code_size / 5) REJ("%u links in %llu code bytes", h.nlinks, (unsigned long long)h.code_size);
     const uint8_t *payload = b + sizeof h;
-    if (hao_aot_hash64(payload, (size_t)(size - sizeof h), 0) != h.payload_hash) REJ("payload hash mismatch");
+    if (hao_aot_file_hash(b, size) != h.payload_hash) REJ("payload hash mismatch");
     const hao_aot_ent *ents = (const hao_aot_ent *)(const void *)payload;
     const hao_aot_link *links = (const hao_aot_link *)(const void *)(payload + ents_sz);
     const uint8_t *code = payload + ents_sz + links_sz;

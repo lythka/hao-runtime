@@ -49,8 +49,9 @@
 /* ------------------------------------------------------------ format v8
  * file = hdr | ents[nblocks] | links[nlinks] | code[code_size]
  * code[0..15] is the base slot (the image base, patched at load).
- * payload_hash = hao_aot_hash64(ents..end of code). It is an integrity
- * check only; trust comes from ownership and from the code identity. */
+ * payload_hash = hao_aot_file_hash(): the header (payload_hash read as
+ * zero, so cpu_profile and every other field are covered), then ents..end
+ * of code. It is an integrity check only; trust comes from ownership and from the code identity. */
 #define HAO_AOT_MAGIC "HAOAOT2"
 #define HAO_AOT_VERSION 8
 #define HAO_AOT_MAX_FILE (1024ull << 20)
@@ -114,6 +115,10 @@ typedef struct {
 int hao_aot_check(const void *buf, uint64_t size, const hao_aot_expect *x, hao_aot_view *v, char *why, size_t n);
 
 uint64_t hao_aot_hash64(const void *p, size_t n, uint64_t seed);
+/* payload_hash of a whole file of size >= sizeof(hao_aot_hdr): hao_aot_hash64
+ * of the header with payload_hash zero, as the seed of hao_aot_hash64 over
+ * the rest. */
+uint64_t hao_aot_file_hash(const void *file, uint64_t size);
 /* A cheap name for a guest slice beyond its UUID: slice size, mach header
  * and load commands (segment layout, code-signature location). Not
  * cryptographic and not a statement about the code: see code_id. */

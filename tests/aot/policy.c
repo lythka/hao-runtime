@@ -288,7 +288,8 @@ static size_t build(uint8_t *f, hao_aot_expect *x)
     memcpy(q, e, sizeof e); q += sizeof e;
     memcpy(q, &l, sizeof l); q += sizeof l;
     memcpy(q, code, sizeof code);
-    h.payload_hash = hao_aot_hash64(f + sizeof h, (size_t)(h.file_size - sizeof h), 0);
+    memcpy(f, &h, sizeof h);
+    h.payload_hash = hao_aot_file_hash(f, (size_t)h.file_size);
     memcpy(f, &h, sizeof h);
     *x = (hao_aot_expect){uuid, gen, 0x10000, 0x1234, rlo, rhi, 1, HAO_AOT_ID_CDHASH, 2, cdhash};
     return (size_t)h.file_size;
@@ -297,7 +298,7 @@ static size_t build(uint8_t *f, hao_aot_expect *x)
 static void rehash(uint8_t *f, size_t n)
 {
     hao_aot_hdr *h = (hao_aot_hdr *)f;
-    h->payload_hash = hao_aot_hash64(f + sizeof *h, n - sizeof *h, 0);
+    h->payload_hash = hao_aot_file_hash(f, n);
 }
 
 /* After an accepted check, verify independently that the loader would only
@@ -385,6 +386,11 @@ static void test_format(void)
     MUT("nlinks huge", h->nlinks = 0x40000000u, 0, "do not add up");
     MUT("payload byte flipped, hash not fixed", f[n - 1] ^= 1, 0, "hash");
     MUT("entry byte flipped, hash not fixed", e[0].code_off ^= 0x100, 0, "hash");
+    /* the header is hashed too: a profile with a feature cleared would let code using it load where it cannot run */
+    MUT("CPU profile bit cleared, hash not fixed", (h->cpu_profile = HAO_CPU_AES | HAO_CPU_PCLMUL, rehash(f, n), x.cpu = HAO_CPU_AES,
+        h->cpu_profile = HAO_CPU_AES), 0, "hash");
+    MUT("CPU profile bit set, hash not fixed", (h->cpu_profile |= HAO_CPU_AES, x.cpu = HAO_CPU_AES), 0, "hash");
+    MUT("guest_id changed, hash not fixed", (x.guest_id ^= 1, h->guest_id ^= 1), 0, "hash");
     MUT("code_off 0x7ffffff0", e[1].code_off = 0x7ffffff0, 1, "outside the code area");
     MUT("code_off = code_size", e[2].code_off = 64, 1, "outside the code area");
     MUT("code_off in the base slot", e[0].code_off = 0, 1, "outside the code area");
@@ -419,6 +425,7 @@ static void test_format(void)
     for (unsigned k = 0; k < sizeof cp / sizeof *cp; k++) {
         n = build(f, &x);
         h->cpu_profile = cp[k].profile;
+        rehash(f, n);
         x.cpu = cp[k].host;
         int r = hao_aot_check(f, n, &x, &v, why, sizeof why);
         if (!cp[k].missing) CHECK(r == 0, "profile %#llx on host %#llx accepted (%s)", (unsigned long long)cp[k].profile,

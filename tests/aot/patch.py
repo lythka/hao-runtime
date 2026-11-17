@@ -90,8 +90,9 @@ def main():
                     data[code_at + i] = 0xCC
         else:
             sys.exit("patch.py: unknown edit " + e)
-    if rehash:
-        h["payload_hash"] = hash64(data[HDR.size:])
+    if rehash:   # the header with payload_hash zero, then the rest (include/hao/aot.h hao_aot_file_hash)
+        h["payload_hash"] = 0
+        h["payload_hash"] = hash64(data[HDR.size:], hash64(HDR.pack(*[h[f] for f in FIELDS])))
     HDR.pack_into(data, 0, *[h[f] for f in FIELDS])
     if truncate is not None:
         data = data[:truncate]
