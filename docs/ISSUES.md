@@ -1,5 +1,15 @@
 # Runtime issues and measured scope
 
+## Long demangled Swift names
+
+The bind-time rules that read a native Swift function's demangled name
+(narrow async results, async parameters, NSTextAlignment, generic Optional
+results, View self) demangled into stack buffers of 1 to 4 KB, and
+`swift_demangle` cuts a longer name there. The result type is at the end,
+so a narrow async result with a long name was not extended. A name that
+does not fit is now demangled again on the heap. Test: `test_bridge`
+(`demangle`, a 3000-character module).
+
 ## Swift value witness table and nil ring capacity
 
 The native value witnesses whose guest calls convert Optional nils were a
