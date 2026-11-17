@@ -1,0 +1,6 @@
+# Programs tools/hao-embed may embed without a launch constraint it cannot carry (--allow-dropped-constraints).
+# codesign seals only a constraint of requirements (category 0) into the stub's signature; these programs have a
+# category constraint (an Apple-defined set) that no ad hoc stub could meet. Every other constraint is carried
+# byte for byte. One path per line, relative to the image root; a listed program keeps the rest of its
+# constraints. Each entry is a release decision.
+usr/libexec/xpcproxy

@@ -37,6 +37,7 @@ input.
 """
 import argparse
 import collections
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -280,9 +281,10 @@ def load_embed():
 
 
 # --- the comparison -------------------------------------------------------------------------------------------------
-def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own_rpaths=None):
+def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own_rpaths=None, dropped=()):
     """[(field, verdict, arm value, stub value, note)] for the arm slice ARM and its stub STUB (bytes).
-    EMBED: the hao-embed module; SRC_PATH: the program's path (for dependency resolution with X86)."""
+    EMBED: the hao-embed module; SRC_PATH: the program's path (for dependency resolution with X86); DROPPED: the
+    constraint slots (self, parent, responsible, library) the manifest says were left out."""
     rows = []
 
     def add(field, ok, a, s, note="", known=None):
@@ -431,6 +433,14 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     add("sig.team", ai["team"] == si["team"], ai["team"] or "-", si["team"] or "-", known=DENIED_FIELDS["sig.team"])
     add("sig.platform", ai["platform"] == si["platform"], str(ai["platform"]), str(si["platform"]),
         known=DENIED_FIELDS["sig.platform"])
+    # launch and library constraints: the kernel evaluates the stub's signature
+    ac, sc = hao_codesig.constraints(arm), hao_codesig.constraints(stub)
+    for slot, nm in sorted(hao_codesig.CONSTRAINT_SLOTS.items()):
+        a_, s_ = ac.get(slot), sc.get(slot)
+        show = lambda b: hashlib.sha256(b).hexdigest()[:16] if b else "-"
+        add("sig.constraint-" + nm, a_ == s_, show(a_), show(s_), "the program's constraint, sealed byte for byte",
+            known="left out (hao-embed --allow-dropped-constraints: codesign cannot express it)"
+            if nm in dropped and s_ is None else None)
     for slot, nm in ((1, "sig.slot-1"), (3, "sig.slot-3")):
         a_, s_ = hao_codesig.special_slots(arm, slot), hao_codesig.special_slots(stub, slot)
         common = set(a_) & set(s_)
@@ -441,7 +451,7 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
 
 
 def pairs(a):
-    """[(label, src_path or None, arm bytes, stub bytes)] from the command line."""
+    """[(label, src_path or None, arm bytes, stub bytes, dropped constraint slots)] from the command line."""
     embed = None
     out = []
     if a.stubs:
@@ -450,7 +460,8 @@ def pairs(a):
         for e in m["files"]:
             src = os.path.join(a.root, e["path"])
             arm = embed.arm_slice(open(src, "rb").read())
-            out.append((e["path"], src, arm, open(os.path.join(a.stubs, e["stub"]), "rb").read()))
+            out.append((e["path"], src, arm, open(os.path.join(a.stubs, e["stub"]), "rb").read(),
+                        e.get("constraints", {}).get("dropped", [])))
         return out
     embed = load_embed()
     for f in a.files:
@@ -459,7 +470,7 @@ def pairs(a):
         x = [p for c, _, p in hao_fat.slices(data) or [] if c == hao_fat.CPU_X86_64]
         if arm is None or not x:
             raise SystemExit(f"stub_identity_gate: {f}: not an embedded file (needs an arm64 and an x86_64 slice)")
-        out.append((f, f, arm, x[0]))
+        out.append((f, f, arm, x[0], []))
     return out
 
 
@@ -491,9 +502,9 @@ def main():
         return 2
     counts = collections.Counter()
     diffs, per = [], []
-    for label, src, arm, stub in progs:
+    for label, src, arm, stub, dropped in progs:
         try:
-            rows = compare(arm, stub, embed, src, x86, a.host_test)
+            rows = compare(arm, stub, embed, src, x86, a.host_test, dropped=dropped)
         except (ValueError, struct.error, IndexError) as e:
             rows = [("parse", "DIFF", "-", "-", str(e))]
         nd = sum(r[1] == "DIFF" for r in rows)

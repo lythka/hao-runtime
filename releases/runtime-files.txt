@@ -157,6 +157,7 @@ releases/contracts/26A428/0.1.0-analytical.5/contracts/fff36466fa7c30479704fcc02
 releases/contracts/26A428/0.1.0-analytical.5/export-manifest.json
 releases/contracts/26A428/0.1.0-analytical.5/release.json
 releases/contracts/26A428/0.1.0-analytical.5/swift-thunks.json
+releases/dropped-constraints.txt
 releases/launchd/hao.aot.plist
 releases/runtime-files.txt
 releases/value-contracts/optional-data-26A428.json

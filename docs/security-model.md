@@ -530,6 +530,14 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   restubs such a program when the payload embeds it and otherwise fails the
   install while one is left in the System volume; a copy kept elsewhere (a
   user's folder) is not found.
+- A stub seals its program's launch and library constraints (signature
+  slots 8-11) byte for byte; `tools/hao-embed` refuses a program with a
+  constraint codesign cannot express (a category constraint) unless
+  `releases/dropped-constraints.txt` lists it, and then the stub has none
+  for that slot. A self constraint that asks for a platform binary cannot be
+  met by an ad hoc stub, so such a program does not start where the kernel
+  enforces launch constraints. Launch constraints that come from a trust
+  cache rather than the signature do not apply to a stub.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests

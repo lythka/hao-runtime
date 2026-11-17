@@ -193,10 +193,88 @@ def parse(blob):
         sealed[slot] = b
     out["cd"] = cd
     out["cdhash"] = digest(out["hash_type"], cd)[:20]
+    out["sealed"] = sealed
     out["ents"], out["der_ents"] = sealed.get(CSSLOT_ENTITLEMENTS), sealed.get(CSSLOT_DER_ENTITLEMENTS)
     out["dlv"] = (_xml_true(out["ents"][8:], DLV) if out["ents"] is not None else
                   out["der_ents"] is not None and _der_true(out["der_ents"][8:], DLV))
     return out
+
+
+CONSTRAINT_SLOTS = {8: "self", 9: "parent", 10: "responsible", 11: "library"}
+
+
+def _der(b, i, end):
+    """(value, next offset) of the DER element at I in B (before END), as CoreEntitlements encodes entitlements
+    and launch constraints: INTEGER, BOOLEAN, UTF8String, a dictionary ([16] of SEQUENCE key, value) or an array
+    (SEQUENCE). ValueError for anything else or a length past END."""
+    if i + 2 > end:
+        raise ValueError("DER: truncated")
+    tag, n, j = b[i], b[i + 1], i + 2
+    if n & 0x80:
+        k = n & 0x7F
+        if not 1 <= k <= 4 or j + k > end:
+            raise ValueError("DER: bad length")
+        n, j = int.from_bytes(b[j:j + k], "big"), j + k
+    e = j + n
+    if e > end:
+        raise ValueError("DER: element past its container")
+    if tag == 0x02:
+        return int.from_bytes(b[j:e], "big", signed=True), e
+    if tag == 0x01:
+        return b[j:e] != b"\0", e
+    if tag == 0x0C:
+        return b[j:e].decode(), e
+    if tag in (0xB0, 0x31):
+        d, k = {}, j
+        while k < e:
+            if b[k] != 0x30:
+                raise ValueError("DER: dictionary entry is not a SEQUENCE")
+            _, q = _der_len(b, k, e)
+            key, v = _der(b, q, e)
+            if not isinstance(key, str):
+                raise ValueError("DER: dictionary key is not a string")
+            d[key], k = _der(b, v, e)
+        return d, e
+    if tag == 0x30:
+        a, k = [], j
+        while k < e:
+            v, k = _der(b, k, e)
+            a.append(v)
+        return a, e
+    raise ValueError("DER: tag %#x" % tag)
+
+
+def _der_len(b, i, end):
+    """(content length, content offset) of the DER element at I."""
+    n, j = b[i + 1], i + 2
+    if n & 0x80:
+        k = n & 0x7F
+        n, j = int.from_bytes(b[j:j + k], "big"), j + k
+    return n, j
+
+
+def constraint(blob):
+    """The dictionary a launch or library constraint blob (CSMAGIC_EMBEDDED_LAUNCH_CONSTRAINT, header included)
+    holds: {"ccat": category, "comp": 1, "reqs": {...} (category 0), "vers": 1}. ValueError if malformed."""
+    if len(blob) < 12 or struct.unpack_from(">I", blob)[0] != CSMAGIC_EMBEDDED_LAUNCH_CONSTRAINT or blob[8] != 0x70:
+        raise ValueError("not a launch constraint blob")
+    n, j = _der_len(blob, 8, len(blob))
+    version, k = _der(blob, j, j + n)
+    d, k = _der(blob, k, j + n)
+    if version != 1 or not isinstance(d, dict) or k != j + n:
+        raise ValueError("launch constraint: unexpected layout")
+    return d
+
+
+def constraints(mo):
+    """{slot: blob (header included)} of the launch and library constraints (CONSTRAINT_SLOTS) the signature of
+    the thin Mach-O MO seals; {} if unsigned. ValueError if the signature is malformed."""
+    sig = signature_range(mo)
+    if not sig or not sig[1]:
+        return {}
+    if sig[0] + sig[1] > len(mo):
+        raise ValueError("code signature outside the slice")
+    return {k: v for k, v in parse(mo[sig[0]:sig[0] + sig[1]])["sealed"].items() if k in CONSTRAINT_SLOTS}
 
 
 def check(mo):
