@@ -109,6 +109,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/fenv | PASS | 1 | |
 | guest/hostcode | PASS | 2 | calls through dlsym pointers: the host-code check answers from the image (0 kernel walks); a pointer to native data is still refused |
 | guest/fma32 | PASS | 2 | |
+| guest/fma64 | PASS | 8 | double FMADD family, FMLA/FMLS .2D and by element against native: JIT, `--interp`, helpers-only, AOT |
 | guest/fmtpos | PASS | 2 | native variadics with six to eight fixed integer arguments |
 | guest/footprint | PASS | 59 | `footprint(1)` |
 | guest/fork | PASS | 45 | |
@@ -221,7 +222,8 @@ binary64 sum declines. This checks admission even when its lost low bits do
 not affect the final half result; production helper routing is unchanged.
 `aot/fmla-mutations` first requires an unmutated control to pass, then builds
 private copies with FP32 odd/negation/index logic or FP16 rounding increment,
-subnormal shift, H:L:M decode, exactness admission or product negation broken.
+subnormal shift, H:L:M decode, exactness admission or product negation broken,
+or the FP64 exact product, IXC admission or operand window.
 Each must produce a result/state or admission mismatch. The exactness
 mutation is detected by helper routing, not by an assumed result difference. `guest/fma32` and `guest/jitinsns` compare
 native arm64 with JIT, interpreter, helpers-only and AOT, including these

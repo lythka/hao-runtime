@@ -446,6 +446,8 @@ tests/guest/fetchgiveup.c
 tests/guest/fetchgiveup.sh
 tests/guest/fma32.c
 tests/guest/fma32.sh
+tests/guest/fma64.c
+tests/guest/fma64.sh
 tests/guest/fmtpos.m
 tests/guest/fmtpos.sh
 tests/guest/fmtposhelper.m
