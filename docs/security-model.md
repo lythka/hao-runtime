@@ -413,8 +413,9 @@ The stub's signature does not cover the ARM slice, so the stub names the
 slice it was made for. `tools/hao-embed` writes the hash type and cdhash of
 the ARM slice's CodeDirectory into the stub's `__TEXT,__hao_slice`, which the
 stub's own signature does cover, and refuses to embed a program whose ARM
-slice is unsigned or does not verify. Before it loads the slice, hao verifies
-it (structure, CodeDirectory, every page hash) and requires its cdhash to be
+slice is unsigned or does not verify. Before anything else of the guest's
+or anything the environment selects is loaded, hao verifies the slice
+(structure, CodeDirectory, every page hash) and requires its cdhash to be
 the one the stub names; otherwise it exits with status 126. A copy of an
 embedded program with another ARM slice in it, even one with a valid
 signature of its own, does not run under the program's identity and

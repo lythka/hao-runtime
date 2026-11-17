@@ -535,6 +535,19 @@ int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, 
     return 0;
 }
 
+int hao_libval_stub_bound(hao_slice *sl, char *why, size_t n)
+{
+    unsigned long size = 0;
+    const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
+                                        HAO_SLICE_SECTION, &size);
+    if (!record) {
+        snprintf(why, n, "its x86_64 slice does not name its ARM code (no __TEXT,%s record: a stub made before "
+                 "hao-embed wrote one); embed the program again", HAO_SLICE_SECTION);
+        return -1;
+    }
+    return hao_libval_bound(record, size, sl, why, n);
+}
+
 /* ------------------------------------------------- library validation */
 
 static int mode = HAO_LIBVAL_UNDECIDED;
@@ -761,12 +774,9 @@ int hao_libval_image(hao_image *img, hao_slice *sl, char *why, size_t n)
         unsigned long size = 0;
         const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
                                             HAO_SLICE_SECTION, &size);
-        if (!record && entry_mode != HAO_ENTRY_CLI) {
-            snprintf(why, n, "its x86_64 slice does not name its ARM code (no __TEXT,%s record: a stub made before "
-                     "hao-embed wrote one); embed the program again", HAO_SLICE_SECTION);
+        if (entry_mode != HAO_ENTRY_CLI ? hao_libval_stub_bound(sl, why, n) != 0
+                                        : record && hao_libval_bound(record, size, sl, why, n) != 0)
             return -1;
-        }
-        if (record && hao_libval_bound(record, size, sl, why, n) != 0) return -1;
         return mode == HAO_LIBVAL_UNDECIDED ? decide(sl, why, n) : 0;
     }
     if (!integrity) return 0;
