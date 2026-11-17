@@ -505,8 +505,10 @@ What this trusts, and what stops an attacker:
   `anchor apple` with an Apple identifier, for example an Apple-signed x86_64
   program from an earlier release with an inserted library. The lists do not
   widen that. Where AMFI's dyld policy is in force, dyld ignores `DYLD_*` for a
-  listed stub, because hao-embed signs platform and hardened programs' stubs
-  with the hardened runtime, and the guarded tier covers hao's own switches.
+  listed stub, because hao-embed signs the stubs of platform, hardened and
+  library-validated (library flag) programs with the hardened runtime, and
+  never with allow-dyld-environment-variables when the program requires
+  library validation, and the guarded tier covers hao's own switches.
 - **A translator bug reachable from input** inside such a process is the same
   class of risk as a memory bug in the native Apple program.
 

@@ -1110,10 +1110,14 @@ def slice_record(arm):
 
 
 def hardened(data):
-    """True if the program's own signature makes dyld ignore DYLD_* variables (tools/hao_codesig.py)."""
+    """True if the stub gets the hardened runtime: the program's own signature makes dyld ignore DYLD_* variables,
+    or requires library validation (library flag, runtime or platform, without disable-library-validation;
+    tools/hao_codesig.py). Natively nothing such a program has not validated loads into it; a stub without the
+    hardened runtime would let dyld insert DYLD_INSERT_LIBRARIES before hao restores library validation."""
     if data is None:
         return False
-    return hao_codesig.dyld_env_blocked(hao_codesig.info(arm_slice(data) or b""))
+    i = hao_codesig.info(arm_slice(data) or b"")
+    return hao_codesig.dyld_env_blocked(i) or hao_codesig.library_validated(i)
 
 
 BOUND_SLOTS = ((hao_codesig.CSSLOT_INFOSLOT, "Info.plist"), (hao_codesig.CSSLOT_RESOURCEDIR, "_CodeSignature/CodeResources"))
@@ -1250,6 +1254,8 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test)
     ident, ents = identity(src)
     ents = public_only(ents) if host_test else dict(ents)
+    if data is not None and hao_codesig.library_validated(hao_codesig.info(arm_slice(data) or b"")):
+        ents.pop(hao_codesig.DYLD_ENV, None)   # a library-validated program's stub honours no DYLD_* variable
     ents.update(JIT_ENTITLEMENTS)
     entfile = os.path.join(work, "ents.plist")
     with open(entfile, "wb") as f:

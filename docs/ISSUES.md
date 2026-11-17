@@ -85,6 +85,12 @@ linked (manifest `not_linked`: "outside protected storage") and hao's binder
 loads it with the program's image, after library validation is set.
 Measured on 26B131: 963 embedded programs, 5 link a library from disk, all
 in protected storage, so no stub of that image changes.
+A program whose signature requires library validation (the library flag,
+with or without the hardened runtime) now also gets a hardened-runtime stub,
+without allow-dyld-environment-variables, so dyld ignores
+DYLD_INSERT_LIBRARIES for it as natively (26B131: 2 more stubs, 956 of
+963 hardened; test: the insert reaches a plain program's stub, not this
+one, and hao still runs it).
 `stub_identity_gate.py` fails a stub that loads anything else at launch
 (`dylibs.protected`: libhao only from /usr/lib/hao), and needs the x86_64
 cache to say so (without one it fails). Test:
