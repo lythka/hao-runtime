@@ -3136,7 +3136,8 @@ with dirty upper ymm halves (hand-written AVX without `vzeroupper`), or a
 native caller that has them when it calls into guest code, would leave
 every SSE instruction of the guest with a false dependency from Skylake on.
 Where CPUID reports AVX and OSXSAVE and XCR0 enables SSE and AVX state
-(under Rosetta only with ROSETTA_ADVERTISE_AVX=1), the JIT entry stub,
+(the host word's `HAO_CPU_AVX`, `src/cpufeat.c`; under Rosetta only with
+ROSETTA_ADVERTISE_AVX=1), the JIT entry stub,
 `hao_native_call` after its call and `hao_callback_entry` execute
 `vzeroupper`; SysV treats the uppers as dead at each point. Without AVX
 state nothing is emitted or executed. The flag is set when the JIT stubs
