@@ -199,6 +199,41 @@ def parse(blob):
     return out
 
 
+# Load commands whose linkedit data the loader may read (src/libval.c unsealed_use).
+_LINKEDIT_DATA = {0x1E, 0x26, 0x29, 0x2B, 0x2E, 0x80000033, 0x80000034, 0x36, 0x37, 0x38, 0x3A}
+LC_SEGMENT_64, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_SYMTAB, LC_DYSYMTAB = 0x19, 0x22, 0x80000022, 0x2, 0xB
+
+
+def unsealed_use(mo, limit):
+    """What the loader would use from outside the hashed range [0, LIMIT) of
+    the thin Mach-O MO (src/libval.c unsealed_use): an executable segment's
+    file range, or a range of linkedit data a load command names, that ends
+    past it, in the signature's own bytes, which its hashes do not all seal.
+    None if nothing does. The load commands are hao_fat.load_commands-valid."""
+    for cmd, off, size in hao_fat.load_commands(mo, "Mach-O"):
+        ranges, what = [], "linkedit data"
+        if cmd == LC_SEGMENT_64 and size >= 72:
+            fileoff, filesize = struct.unpack_from("<QQ", mo, off + 40)
+            if struct.unpack_from("<i", mo, off + 60)[0] & 4:
+                ranges, what = [(fileoff, filesize)], "an executable segment"
+        elif cmd in _LINKEDIT_DATA and size >= 16:
+            ranges = [struct.unpack_from("<II", mo, off + 8)]
+        elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and size >= 48:
+            v = struct.unpack_from("<10I", mo, off + 8)
+            ranges = [(v[i], v[i + 1]) for i in range(0, 10, 2)]
+        elif cmd == LC_SYMTAB and size >= 24:
+            symoff, nsyms, stroff, strsize = struct.unpack_from("<4I", mo, off + 8)
+            ranges = [(symoff, nsyms * 16), (stroff, strsize)]
+        elif cmd == LC_DYSYMTAB and size >= 80:
+            v = struct.unpack_from("<18I", mo, off + 8)
+            # tocoff ntoc, modtaboff nmodtab, extrefsymoff (unused), indirectsymoff nindirect, extreloff nextrel, locreloff nlocrel
+            ranges = [(v[6], v[7] * 8), (v[8], v[9] * 56), (v[12], v[13] * 4), (v[14], v[15] * 8), (v[16], v[17] * 8)]
+        for start, length in ranges:
+            if length and (start > limit or length > limit - start):
+                return what
+    return None
+
+
 def check(mo):
     """What hao decides about the signature of the thin 64-bit Mach-O MO
     before it runs or maps it (src/libval.c hao_slice_verify): parse()'s
@@ -219,6 +254,9 @@ def check(mo):
         limit, page = out["code_limit"], 1 << out["page_shift"]
         if limit < off or limit > len(mo) or len(mo) > max(limit, off + size):
             raise ValueError("it covers [0, %#x) of a %#x-byte slice whose signature is at %#x" % (limit, len(mo), off))
+        past = unsealed_use(mo, limit)
+        if past:
+            raise ValueError("%s reaches past the hashed range [0, %#x), into the signature" % (past, limit))
         if (limit + page - 1) // page != out["n_code_slots"]:
             raise ValueError("the CodeDirectory hashes %d pages of a %d-byte code range" % (out["n_code_slots"], limit))
         hs, slots = out["hash_size"], out["hash_off"]

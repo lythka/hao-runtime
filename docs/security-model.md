@@ -79,8 +79,12 @@ hao validates the embedded signature as xnu does: the superblob structure, the
 CodeDirectory of highest hash rank and its cdhash, every page hash up to the
 code limit, and the special slots of every blob the superblob carries
 (requirements, entitlements, DER entitlements, launch constraints). The code
-limit must reach the signature and nothing may follow it, so every byte the
-loader maps or reads is hashed. This is necessary because hao maps guest
+limit must reach the signature and nothing may follow it. The signature's
+own bytes past the code limit are not all sealed by its hashes, so no
+executable segment and no linkedit data a load command names (fixups,
+exports, function starts, symbol tables) may reach into them; a slice where
+one does is invalid. So every byte the loader maps as code or reads is
+hashed. This is necessary because hao maps guest
 `__TEXT` as data, and the kernel enforces page hashes only for executable
 mappings. The Info.plist, resource-directory and application slots name files
 outside the Mach-O; exec does not check them, and neither does hao.

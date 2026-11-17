@@ -1017,6 +1017,34 @@ int main(int argc, char **argv)
         free(t);
     }
 
+    /* Nothing the loader uses may lie in the signature's own bytes past the hashed range, which its hashes do not
+     * all seal (src/libval.c unsealed_use): an executable segment, or linkedit data a load command names. */
+    {
+        char path[1100], err[512];
+        snprintf(path, sizeof path, "%s/unsealed.bin", scratch);
+        size_t so = sig_at(seed);
+        struct { const char *what; uint32_t cmd; const char *seg; size_t at; uint64_t v; int w64; } c[] = {
+            {"executable segment reaching into the signature", LC_SEGMENT_64, "__TEXT", 48, 0, 1},
+            {"function starts in the signature", LC_FUNCTION_STARTS, NULL, 8, 0, 0},
+            {"symbol table in the signature", LC_SYMTAB, NULL, 8, 0, 0},
+        };
+        for (size_t i = 0; i < sizeof c / sizeof *c; i++) {
+            uint8_t *t = copy_of(seed, n);
+            size_t o = find_cmd(t, c[i].cmd, c[i].seg);
+            if (c[i].w64) wr64(t, o + c[i].at, so + 0x10 - rd32(t, o + 40));   /* __TEXT filesize: to 16 bytes into the signature */
+            else wr32(t, o + c[i].at, (uint32_t)so);                             /* dataoff / symoff: the signature's start */
+            put_file(path, t, n, n);
+            int fd = open(path, O_RDONLY);
+            hao_slice *sl = fd >= 0 ? hao_slice_open(fd, err, sizeof err) : NULL;
+            bool refused = sl && hao_slice_verify(sl, NULL, err, sizeof err) != 0 && strstr(err, "reaches past the hashed range");
+            if (!sl) printf("FAIL %s: %s\n", c[i].what, err);
+            note(refused, c[i].what);
+            hao_slice_close(sl);
+            if (fd >= 0) close(fd);
+            free(t);
+        }
+    }
+
     /* the loader's gate (src/libval.c): the main executable's policy and each library, in processes of their own */
     fflush(stdout);
     fails += in_child(gate_plain, seed, n, lib, ln, &passes);
