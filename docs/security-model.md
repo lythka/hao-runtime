@@ -222,7 +222,7 @@ be trusted:
 | Process | Switches honoured |
 |---|---|
 | Open: an ordinary user's process | all |
-| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS`, `HAO_DIAG_TIME`, `HAO_SWIFT_VALUE_SURVEY` |
+| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS`, `HAO_DIAG_TIME` |
 | Set-ID: credentials changed at exec | none |
 
 The guarded list holds only switches that run the same code through another

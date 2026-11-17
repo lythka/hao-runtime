@@ -1155,7 +1155,10 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * hao's diagnostics go to the console and, when one is configured, to a log
  * file, each line (or report, hao_diag_block) with one write(2):
  *   console  stderr; with boot argument hao_crash=1, /dev/console on a high
- *            close-on-exec descriptor (PID 1's stderr is the console);
+ *            close-on-exec descriptor (PID 1's stderr is the console), which
+ *            gets only one line per process and destination naming where the
+ *            lines went (con_notice): they hold register values, addresses
+ *            and guest data;
  *   log      with hao_crash=1, /private/var/log/hao/console.log; HAO_DIAG_DIR
  *            (an absolute directory, ordinary processes) names another.
  * On hardware nothing records /dev/console; the file is read afterwards over
@@ -1174,8 +1177,10 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * can write it, and DIR/user only when it is sticky and DIR's owner's.
  * PID 1 starts before launchd's boot tasks mount the Data volume: an open
  * that finds no directory yet (or the System volume's own /private/var) is
- * retried at the next write. Writes stop at hao_diag_log_cap bytes (64 MB a
- * boot; console.log.0 keeps the boot before), after one line that says so.
+ * retried at the next write. Each write to the file is made under DIR/.lock
+ * and cut at hao_diag_log_cap bytes (64 MB a boot, for all the processes
+ * that share the file; console.log.0 keeps the boot before), after one line
+ * that says so.
  * The write path makes system calls on descriptors opened here and formats
  * into stack buffers, nothing else (crash diagnostics come from signal
  * handlers); a log descriptor the program closed and reused is dropped.
@@ -1208,7 +1213,12 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
 FILE *hao_diag_file;
 size_t hao_diag_log_cap = (size_t)64 << 20;
 static int diag_con = 2;          /* the console */
+static bool diag_con_notice;      /* hao_crash: the console gets only where the lines went (con_notice) */
+static int diag_noticed;          /* the notices given (con_notice) */
 static int diag_log = -1;         /* the log, -1: none (yet) */
+static int diag_lock = -1;        /* DIR/.lock, held over each write to the log (diag_file_put) */
+static dev_t diag_lock_dev;
+static ino_t diag_lock_ino;
 static int diag_retry;            /* 1: open the log at the next write */
 static dev_t diag_log_dev;        /* the log's identity: a program that closes descriptors it did not open may */
 static ino_t diag_log_ino;        /* reuse the number for a file of its own, which hao must not write to */
@@ -1566,7 +1576,7 @@ static bool diag_before_data_volume(int dfd)
 }
 
 /* DIR/.lock open, or -1 with errno: the file whose flock serialises the
- * check-rotate-create below. Only the log's writer can open it (0600, and
+ * check-rotate-create below and each write to the log (diag_file_put). Only the log's writer can open it (0600, and
  * it must be this process's own), so no other user can hold the lock: a
  * lock on DIR itself (0755) could be taken by anyone, which delayed every
  * process's start and lost its log. A process that may not write DIR gets
@@ -1588,8 +1598,9 @@ static int diag_lock_open(int dfd)
     return fd;
 }
 
-/* DIR/console.log open for appending, this boot's; -1 with errno. mk: create the directory if absent. */
-static int diag_log_open(const char *dir, bool mk)
+/* DIR/console.log open for appending, this boot's; -1 with errno. mk: create the directory if absent. *lock:
+ * DIR/.lock, open while the log is. */
+static int diag_log_open(const char *dir, bool mk, int *lock)
 {
     struct stat ds;
     if (mk && stat(dir, &ds) != 0 && errno == ENOENT) mkdir(dir, 0755);   /* no write check (a sandbox report) when present */
@@ -1616,8 +1627,9 @@ static int diag_log_open(const char *dir, bool mk)
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))) { close(fd); fd = -1; e = EINVAL; }
     if (fd >= 0 && st.st_uid != geteuid()) { close(fd); fd = -1; e = EACCES; }   /* another user's file */
-    /* register dumps and image bases: the owner's alone (a file an earlier hao made 0644 too, before it rotates) */
-    if (fd >= 0 && st.st_uid == geteuid() && (st.st_mode & 077)) fchmod(fd, 0600);
+    /* register dumps and image bases: the owner's alone (a file an earlier hao made 0644 too, before it rotates);
+     * a file that cannot be made so is not used */
+    if (fd >= 0 && (st.st_mode & 077) && fchmod(fd, 0600) != 0) { close(fd); fd = -1; e = EACCES; }
     if (fd >= 0 && (pread(fd, got, (size_t)hl, 0) != hl || memcmp(got, hdr, (size_t)hl))) {
         /* another boot's file */
         close(fd);
@@ -1627,7 +1639,8 @@ static int diag_log_open(const char *dir, bool mk)
     if (fd < 0 && e == ENOENT) {
         fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         e = errno;
-        if (fd >= 0) { fchmod(fd, 0600); diag_write_all(fd, hdr, (size_t)hl); }
+        if (fd >= 0 && fchmod(fd, 0600) != 0) { close(fd); fd = -1; e = EACCES; }
+        if (fd >= 0) diag_write_all(fd, hdr, (size_t)hl);
     }
     if (fd >= 0 && fstat(fd, &st) == 0) { diag_log_dev = st.st_dev; diag_log_ino = st.st_ino; }
     if (fd >= 0 && mk && mkdirat(dfd, "user", 0700) == 0) {
@@ -1635,10 +1648,87 @@ static int diag_log_open(const char *dir, bool mk)
         int ufd = openat(dfd, "user", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (ufd >= 0) { fchmod(ufd, 01777); close(ufd); }
     }
-    close(lfd);   /* releases the lock */
+    flock(lfd, LOCK_UN);
+    if (fd >= 0) *lock = lfd;
+    else close(lfd);
     close(dfd);
     errno = e;
     return fd;
+}
+
+/* The log's lock from now on (lfd, already a high descriptor). */
+static void diag_lock_set(int lfd)
+{
+    struct stat st;
+    if (fstat(lfd, &st) == 0) { diag_lock_dev = st.st_dev; diag_lock_ino = st.st_ino; }
+    __atomic_store_n(&diag_lock, lfd, __ATOMIC_RELEASE);
+}
+
+/* Room under the cap kept for the line that says the cap was reached. */
+#define DIAG_CAP_LINE 200
+
+/* Append b to the log fd under DIR/.lock, so that the cap holds for all the
+ * processes that share the file: a write is cut at the cap, and the writer
+ * that reaches it adds one line saying so. Past the cap bytes are dropped.
+ * 1: written; 2: cut or dropped at the cap; 0: not written (the lock not
+ * taken, a write failed): the caller sends them to the unified log.
+ * Async-signal-safe. */
+static int diag_file_put(int fd, const char *b, size_t n)
+{
+    int lfd = __atomic_load_n(&diag_lock, __ATOMIC_ACQUIRE);
+    struct stat ls, st;
+    if (lfd < 0 || fstat(lfd, &ls) != 0 || ls.st_dev != diag_lock_dev || ls.st_ino != diag_lock_ino) return 0;
+    bool locked = false;
+    for (int k = 0; k < 200 && !(locked = flock(lfd, LOCK_EX | LOCK_NB) == 0); k++) nanosleep(&(struct timespec){0, 1000000}, NULL);
+    if (!locked) return 0;
+    uint64_t lim = hao_diag_log_cap > DIAG_CAP_LINE ? hao_diag_log_cap - DIAG_CAP_LINE : 0;
+    bool ok = fstat(fd, &st) == 0, full = ok && (uint64_t)st.st_size + n >= lim;
+    if (ok && (uint64_t)st.st_size < lim) {
+        size_t k = full ? (size_t)(lim - (uint64_t)st.st_size) : n;
+        ok = diag_write_all(fd, b, k);
+        if (ok && full) {
+            char m[DIAG_CAP_LINE];
+            int l = snprintf(m, sizeof m, "%shao[%s:%d]: console.log reached its cap of %zu KB: later lines are not kept\n",
+                             k && b[k - 1] != '\n' ? "\n" : "", getprogname(), (int)getpid(), hao_diag_log_cap >> 10);
+            if (l > 0) diag_write_all(fd, m, (size_t)l < sizeof m ? (size_t)l : sizeof m - 1);
+        }
+    }
+    flock(lfd, LOCK_UN);
+    return !ok ? 0 : full ? 2 : 1;
+}
+
+/* With hao_crash the console (/dev/console, PID 1's stderr) gets no
+ * diagnostics, which hold register values, addresses and guest data: once
+ * per process and destination, one line naming where they went. */
+enum { NOTE_LOG = 1, NOTE_UNI = 2, NOTE_CAP = 4 };
+static void con_notice(int what)
+{
+    if (!diag_con_notice || (__atomic_fetch_or(&diag_noticed, what, __ATOMIC_ACQ_REL) & what)) return;
+    char m[1200];
+    int k = snprintf(m, sizeof m, "hao[%s:%d]: diagnostics %s%s%s\n", getprogname(), (int)getpid(),
+                     what == NOTE_LOG ? "written to " : what == NOTE_UNI ? "written to the unified log (subsystem com.hao)"
+                                                                         : "not kept: the log in ",
+                     what == NOTE_UNI ? "" : diag_dir, what == NOTE_LOG ? "/console.log" : what == NOTE_CAP ? " is at its cap" : "");
+    if (k > 0) diag_write_all(diag_con, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
+}
+
+/* A fork child shares its parent's open lock, so the parent's flock would
+ * not keep it out: it opens its own on the same descriptor number. */
+static void diag_fork_child(void)
+{
+    uni_fork_child();
+    diag_noticed = 0;
+    int lfd = diag_lock;
+    if (lfd < 0) return;
+    char p[1100];
+    snprintf(p, sizeof p, "%s/.lock", diag_dir);
+    int fd = open(p, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    if (fd >= 0 && fstat(fd, &st) == 0 && st.st_dev == diag_lock_dev && st.st_ino == diag_lock_ino && dup2(fd, lfd) == lfd) {
+        fcntl(lfd, F_SETFD, FD_CLOEXEC);
+    } else
+        diag_lock = -1;   /* no lock: the unified log */
+    if (fd >= 0 && fd != lfd) close(fd);
 }
 
 /* The kept lines, once, to the file just opened: writers that still see the
@@ -1657,26 +1747,32 @@ static void pend_flush(int fd)
                      getprogname(), (int)getpid(), (unsigned long long)n, lost ? "" : "\n");
     if (lost && k > 0 && (size_t)k < sizeof m)
         k += snprintf(m + k, sizeof m - (size_t)k, " (%llu bytes did not fit and are lost)\n", (unsigned long long)lost);
-    if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
-    if (n) diag_write_all(fd, diag_pend, (size_t)n);
+    if (k > 0) diag_file_put(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
+    if (n) diag_file_put(fd, diag_pend, (size_t)n);
 }
 
 static int diag_log_fd(void)
 {
     int fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
     if (fd >= 0 || !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) return fd;
-    fd = diag_log_open(diag_dir, true);
+    int lfd = -1;
+    fd = diag_log_open(diag_dir, true, &lfd);
     if (fd < 0) {
         if (errno != ENOENT && errno != EROFS) __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
         return -1;
     }
     fd = diag_high_fd(fd);
+    lfd = diag_high_fd(lfd);
     int none = -1;
-    if (!__atomic_compare_exchange_n(&diag_log, &none, fd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    if (!__atomic_compare_exchange_n(&diag_lock, &none, lfd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         close(fd);   /* another thread opened it first */
-        fd = none;
-    } else
+        close(lfd);
+        fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
+    } else {
+        diag_lock_set(lfd);
+        __atomic_store_n(&diag_log, fd, __ATOMIC_RELEASE);
         pend_flush(fd);
+    }
     __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
     return fd;
 }
@@ -1691,10 +1787,11 @@ static void diag_emit(const char *b, size_t n, bool may_start)
 {
     if (!n) return;
     int e = errno;
-    diag_write_all(diag_con, b, n);
+    if (!diag_con_notice) diag_write_all(diag_con, b, n);
     int fd = diag_log_fd();
     if (fd < 0 && __atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
         pend_put(b, n);
+        con_notice(NOTE_LOG);
         if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
         errno = e;
         return;
@@ -1704,20 +1801,11 @@ static void diag_emit(const char *b, size_t n, bool may_start)
         __atomic_store_n(&diag_log, -1, __ATOMIC_RELEASE);   /* closed by the program: no file from now on */
         fd = -1;
     }
-    if (fd < 0) {
-        if (diag_dir[0] && !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) uni_put(b, n, may_start);
-    } else if ((uint64_t)st.st_size < hao_diag_log_cap) {   /* past the cap: dropped on purpose */
-        if (!diag_write_all(fd, b, n)) {
-            uni_put(b, n, may_start);   /* a sandbox's write check, a full volume, an I/O error */
-            errno = e;
-            return;
-        }
-        if ((uint64_t)st.st_size + n >= hao_diag_log_cap) {
-            char m[200];
-            int k = snprintf(m, sizeof m, "hao[%s:%d]: console.log reached its cap of %zu KB: later lines go to the console only\n",
-                             getprogname(), (int)getpid(), hao_diag_log_cap >> 10);
-            if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
-        }
+    int put = fd >= 0 ? diag_file_put(fd, b, n) : 0;   /* past the cap: dropped on purpose */
+    if (put) con_notice(put == 1 ? NOTE_LOG : NOTE_CAP);
+    else if (diag_dir[0] && !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
+        uni_put(b, n, may_start);   /* no file; a sandbox's write check, a full volume, an I/O error */
+        con_notice(NOTE_UNI);
     }
     errno = e;
 }
@@ -1822,19 +1910,20 @@ void hao_diag_init(void)
     }
     if (hao_opt.diag_dir[0] == '/') { snprintf(diag_dir, sizeof diag_dir, "%s", hao_opt.diag_dir); mk = true; }
     else if (crash) { snprintf(diag_dir, sizeof diag_dir, "/private/var/log/hao"); mk = geteuid() == 0; }
+    diag_con_notice = crash && diag_dir[0];
     if (diag_dir[0]) {
-        int fd = diag_log_open(diag_dir, mk), e = errno;
+        int lfd = -1, fd = diag_log_open(diag_dir, mk, &lfd), e = errno;
         char ud[sizeof diag_dir];
         if (fd < 0 && (e == EACCES || e == EPERM) && geteuid() != 0 && diag_user_dir(diag_dir, ud, sizeof ud)) {
             memcpy(diag_dir, ud, sizeof diag_dir);   /* retries (diag_log_fd) open the same */
             mk = false;
-            fd = diag_log_open(diag_dir, false);
+            fd = diag_log_open(diag_dir, false, &lfd);
             e = errno;
         }
         /* e, not errno: diag_user_dir's failed lookups (ENOENT) are no reason to retry */
-        if (fd >= 0) diag_log = diag_high_fd(fd);
+        if (fd >= 0) { diag_lock_set(diag_high_fd(lfd)); diag_log = diag_high_fd(fd); }
         else if (mk && (e == ENOENT || e == EROFS)) diag_retry = 1;
-        pthread_atfork(NULL, NULL, uni_fork_child);
+        pthread_atfork(NULL, NULL, diag_fork_child);
         if (diag_log < 0 && !diag_retry) uni_start();   /* a sandboxed process: the unified log from the start */
     }
     if (diag_con == 2 && !diag_dir[0] && !diag_stamp) return;   /* stderr alone, as before */

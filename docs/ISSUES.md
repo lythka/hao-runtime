@@ -8,12 +8,23 @@ and `/private/var/log/hao`. A process that cannot write a log there (an App
 Sandbox one) starts a drain thread at startup and sent each line to the unified log as a public record, which any
 user can read with `log show`. The records are now private: `log show`
 prints `<private>` unless the Mac logs private data (a configuration
-profile). A log directory that a user other than its owner may write, or a
-`console.log` owned by another user, is no longer used. `hao_crash=1` is now
+profile). A log directory that a user other than its owner may write, a
+`console.log` owned by another user, or one whose mode cannot be made 0600 is
+no longer used. The console (`/dev/console`, PID 1's stderr) no longer gets
+the lines themselves, only one line per process and destination naming where
+they went (the log, the unified log, or a log at its cap). Each write to the
+log is made under the log's lock and cut at the 64 MB cap, which now holds
+for all the processes that share the file, kept lines flushed after the Data
+volume mounts included; one line says the cap was reached. `hao_crash=1` is now
 read with the other switches (`hao/opts.h`); `HAO_CRASH=1` sets it in a test
 build. Test: `tests/aot/run.sh` case M (a 0777 and a 0555 log directory:
 no log in the first, every record private; before the change the first got a
-log and the second a public record).
+log and the second a public record; a log just under the cap gets one cap
+line and stays under it, where before a process wrote past it and no cap
+line). Not tested on the host: the console notice (nothing here captures
+`/dev/console`) and a failed `fchmod`. Known: a user can create
+`DIR/user/<uid>` for another uid first, which leaves that uid without a log
+file (its lines then go to the private unified log; nothing is disclosed).
 
 Measured on the 27.2 host under Rosetta (load about 30 on 16 CPUs), test
 build, 40 interleaved runs per cell, medians, with switch off / with a log
@@ -35,8 +46,9 @@ measured: the target Mac, and how many programs report lines there.
 The `Swift value survey:` lines for a Swift value hao passes to native code
 unpatched (see "Refusal policy" below) were printed in every process, and
 with `hao_crash=1` reached the console, the log and the unified log. They
-are now printed only with `HAO_SWIFT_VALUE_SURVEY=1` (a guarded process
-honours it too) or boot argument `hao_swift_value_survey=1`. The
+are now printed only with `HAO_SWIFT_VALUE_SURVEY=1` (ordinary processes:
+the lines carry guest data and addresses to the caller's stderr) or boot
+argument `hao_swift_value_survey=1` (every process). The
 pass-through itself is unchanged. Without the switch a declined value costs
 no lock, walk or output. With it, each first (type, reason) pair costs the
 survey walk and the schema dump: for a three-field value with two refusing
