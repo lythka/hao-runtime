@@ -4977,7 +4977,9 @@ static int aot_cmp_code(void *ents, const void *a, const void *b)
 }
 
 /* Where an image's cache lies in the code cache and the profile it was
- * translated under, for hao_jit_locate: set before im->aot is published. */
+ * translated under, for hao_jit_locate: published (release) before any of
+ * its blocks is inserted, entered in the reverse map or recorded for lazy
+ * copying, so a fault in one always finds it. */
 static void aot_publish(hao_image *im, uint8_t *code, uint64_t size, uint64_t cpu)
 {
     im->aot_size = size;
@@ -5020,10 +5022,12 @@ static bool aot_install(hao_image *im, const hao_aot_view *v, char *why, size_t 
         memcpy(code, v->code, (size_t)cs);
         memcpy(code, &im->base, 8);       /* the base slot */
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
+        /* the profile before any block is visible: a block run and faulted in
+         * before it was published would be re-emitted under the JIT's */
+        aot_publish(im, code, cs, v->hdr->cpu_profile);
         for (; k < nb; k++)
             if (!insert(im->base + v->ents[k].guest_off, code + v->ents[k].code_off)) { cache_exhausted(); break; }
         for (uint32_t j = 0; order && j < nb; j++) rmap_add(code + v->ents[order[j]].code_off, im->base + v->ents[order[j]].guest_off);
-        aot_publish(im, code, cs, v->hdr->cpu_profile);
         st_aot_blocks += k;
     } else
         avail = cache_ptr < cache_end ? (size_t)(cache_end - cache_ptr) : 0;
@@ -5626,7 +5630,8 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
      * overwrites with the loading image's: zero in the file, so one guest and
      * one libhao always give the same bytes (reproducible payloads). */
     memset(q, 0, 8);
-    h.payload_hash = hao_aot_hash64(file + sizeof h, (size_t)(h.file_size - sizeof h), 0);
+    memcpy(file, &h, sizeof h);
+    h.payload_hash = hao_aot_file_hash(file, h.file_size);
     memcpy(file, &h, sizeof h);
     /* the loader's own checks, so generation and loading cannot drift apart */
     if (hao_aot_check(file, h.file_size, &x, NULL, why, sizeof why) != 0) {

@@ -12,7 +12,9 @@ features rather than the ones it was made with. Now `hao_cpu_host()`
 translation takes its profile from its context: the process's for the JIT,
 the file's for an AOT block. AOT format 8 records `cpu_profile` in the header
 and keeps the plain libhao UUID as `gen`. A cache loads only if the host has
-every recorded feature; the rejection names the missing ones.
+every recorded feature; the rejection names the missing ones. The integrity
+hash covers the header too, so an edited profile is rejected. A cache's
+profile is published before any of its blocks can run.
 `hao --aot --cpu=baseline|host|HEX` can only drop features the host has.
 Release payloads use `baseline`, the Ivy Bridge set. `HAO_CPU_FEATURES=HEX`
 (test-switch builds only) can only clear features. New lowerings: CRC32C to

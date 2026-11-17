@@ -127,6 +127,7 @@ patched C11-other-build-gen-byte "another hao build" flip.gen
 patched C11b-version-4 "format version" hdr.version=4
 patched C11d-version-7 "format version" hdr.version=7
 patched C15-cpu-profile-beyond-host "translated for CPU features this machine lacks: bit40" hdr.cpu_profile=0x10000000000
+patched C15b-cpu-profile-edited-hash-not-fixed "payload hash mismatch" hdr.cpu_profile=0 nohash
 patched C12-guest-uuid "guest UUID differs" flip.uuid
 patched C12b-guest-id "guest load commands differ" hdr.guest_id=+1
 patched C12c-vmsize "vmsize" hdr.vmsize=+0x4000
