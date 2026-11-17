@@ -209,11 +209,27 @@ hardened-runtime or library-flag binary without its own
 A signed image's pages are hashed once in its process, whichever of these
 routes then decides about it.
 
-`HAO_NO_LIBVAL=1` (open-tier processes only) turns library validation off
-for a program that does not require it. For one that does, it is ignored
-and hao says so (`hao: HAO_NO_LIBVAL ignored: ...`): natively neither the
-hardened runtime nor the kernel takes library validation from the
-environment.
+Natively neither the hardened runtime nor the kernel lets a program's
+environment load code into it or vouch for code. So for a main executable
+whose verified signature requires library validation, hao ignores every
+open-tier switch that adds code or trust, before anything they name is
+read or loaded, and names each on standard error (`HAO_IF_DIR ignored: the
+program requires library validation`):
+
+| Switch | What it does in an open-tier process | For a program that requires library validation |
+|---|---|---|
+| `HAO_NO_LIBVAL=1` | turns library validation off | ignored; library validation is on |
+| `HAO_CACHE=DIR` | reads AOT caches (native code) from DIR | ignored; system and the user's own cache directories only |
+| `HAO_GUEST_ROOT=DIR` | takes guest OS libraries and the arm64e shared cache from under DIR | ignored |
+| `HAO_IF_DIR=DIR` | reads interface units and loads the `.thunks` libraries (native code, whose initializers run) from DIR | ignored; `/usr/lib/hao/if` |
+| `HAO_ASYNC_CONTRACT_LIBRARY=FILE` | loads FILE as the native async provider | ignored; the packaged provider |
+| `HAO_TRUST_LIST=FILE` | takes the cdhashes in FILE as Apple's | ignored; `/usr/lib/hao/trusted-cdhashes` only |
+
+The CLI route decides this on the slice its signature check takes, the
+embedded route on the slice the loader then builds the image from, so the
+decision and the image come from the same bytes. The other open-tier
+switches select hao's own engines, diagnostics or bring-up behaviour, not
+code or trust. Guarded and set-ID processes ignore all of these anyway.
 
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
@@ -268,7 +284,8 @@ check off.
 
 A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
 never for a release image. It also reads the test switches
-(`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
+(`HAO_LIBVAL_USER`, which also keeps `HAO_TRUST_LIST` for a program that
+requires library validation, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
 `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`) from an open
 process's environment, and the bridging and signal bring-up knobs as boot
 arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a

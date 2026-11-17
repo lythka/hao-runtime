@@ -508,6 +508,8 @@ tests/guest/libval.sh
 tests/guest/libvallate.c
 tests/guest/libvalplug.c
 tests/guest/libvalswap.c
+tests/guest/lvswitches.sh
+tests/guest/lvswitchesmark.c
 tests/guest/longstack.swift
 tests/guest/longstackhelper.swift
 tests/guest/msgfnptr.m

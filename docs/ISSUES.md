@@ -38,13 +38,19 @@ development Mac under Rosetta, none on an Intel kernel yet.
   8204 cases agree).
 - `HAO_NO_LIBVAL` in an open-tier process turned library validation off
   for any program; it is now ignored, with a diagnostic, for a program that
-  requires it (`test_macho` gate_nolv_hardened).
+  requires it (`test_macho` gate_nolv_hardened). So are `HAO_CACHE`,
+  `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_ASYNC_CONTRACT_LIBRARY` and
+  `HAO_TRUST_LIST`, before anything they name loads: a `.thunks` library in
+  `HAO_IF_DIR` ran its initializer in a hardened program
+  (`guest/lvswitches`, the marker before, none after).
 
 Limits: the stub's own link-time native dependencies still load, with
 `disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs
 `tools/hao-embed` to keep them to libraries only root can replace. A root
 process that remounts the root file system writable can still change a
-mapped file. Entitlement checks still search the XML and DER text.
+mapped file. Entitlement checks still search the XML and DER text. A
+user's own AOT cache directory is still read for a program that requires
+library validation, in that user's open-tier processes.
 
 ## Swift `dynamic` functions under the image's interface units
 
