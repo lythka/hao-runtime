@@ -214,6 +214,17 @@ int main(int argc, char **argv)
     printf("demangle   %s  Swift %s%s, C++ %s%s\n", s == 0 && x == 0 ? "PASS" : "FAIL", s < 0 ? "no demangler" : s ? "differs: " : "as expected",
            s > 0 ? sw : "", x < 0 ? "no demangler" : x ? "differs: " : "as expected", x > 0 ? cx : "");
     if (s || x) fail = 1;
+    /* a demangled name longer than the rules' stack buffers is read whole: ready() async -> Bool in a
+     * 3000-character module keeps its narrow result */
+    if (s >= 0) {
+        char long_sym[3100];
+        int at = snprintf(long_sym, sizeof long_sym, "_$s3000");
+        memset(long_sym + at, 'm', 3000);
+        strcpy(long_sym + at + 3000, "5readySbyYaF");
+        char kind = hao_swift_async_result_kind(long_sym);
+        printf("demangle   %s  a long demangled name is read whole (kind %d)\n", kind == 'b' ? "PASS" : "FAIL", kind);
+        if (kind != 'b') fail = 1;
+    }
     if (bad) fail = 1;
     return fail;
 }
