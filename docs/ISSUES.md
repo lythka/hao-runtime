@@ -80,7 +80,10 @@ spelling; every path dyld could try for a dependency (each rpath
 expansion and the default fallback paths: /usr/lib and
 /System/Library/Frameworks for a hardened stub, also /usr/local/lib and
 /Library/Frameworks otherwise) must be protected, whether or not an earlier
-one looks loadable, since a build cannot prove what dyld will load; each x86_64 slice of a library, in each
+one looks loadable, since a build cannot prove what dyld will load; a
+path is walked as dyld opens it (no lexical "..") and is a shared-cache hit
+only as that exact string; a payload stub names libhao and libhao_identity
+by their /usr/lib/hao paths, so no rpath is searched for them; each x86_64 slice of a library, in each
 rpath context it is reached in, is judged on its own; a chain deeper than
 16 libraries is not protected. Any other is not
 linked (manifest `not_linked`: "outside protected storage") and hao's binder

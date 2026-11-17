@@ -239,7 +239,8 @@ firmlinks to the data volume) or in the OS or App cryptex, when every path
 dyld would try first, every directory and link on the way, and every
 library that file loads at launch are such files too: every path in dyld's
 search order (each rpath expansion and the fallback paths), not only the
-one expected to load.
+one expected to load. The stub names libhao and libhao_identity by their
+/usr/lib/hao paths, so dyld searches no rpath for them.
 Any other native dependency (a bundle's framework, a file under /Library) is
 loaded by hao's binder with the program's image, after library validation is
 on.
