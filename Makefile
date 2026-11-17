@@ -228,6 +228,12 @@ $(B)/test_images: tests/loader/test_images.c src/macho.c src/code.c src/libval.c
 	@mkdir -p $(B)
 	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_images.c src/macho.c src/code.c src/libval.c && codesign -s - -f $@
 
+# The carried-section reader of libhao_identity (src/process_identity.c), under
+# ASan, on crafted guest files.
+$(B)/test_identity: tests/loader/test_identity.c src/process_identity.c src/oslog.c src/native_bundle_identity.c include/hao/identity.h include/hao/native_bundle.h $(MIN_STAMP)
+	@mkdir -p $(B)
+	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_identity.c src/oslog.c src/native_bundle_identity.c -lobjc && codesign -s - -f $@
+
 # Unit test of the interface-unit parser (src/ifunit.c), under ASan/UBSan: one
 # corruption per rule and every single-bit edit of the fuzz seeds.
 $(B)/test_ifunit: tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c include/hao/bridge.h include/hao/aot.h $(MIN_STAMP)
@@ -255,7 +261,7 @@ $(B)/test_round16: tests/aot/round16.c $(B)/libhaocore.a
 $(B)/test_ioreg: tests/host/ioreg.c src/ioreg.c $(MIN_STAMP)
 	$(CC) $(CFLAGS) -framework CoreFoundation -o $@ $< && codesign -s - -f $@
 
-unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap $(B)/test_x86args $(B)/test_ioreg
+unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_identity $(B)/test_ifunit $(B)/test_gmap $(B)/test_x86args $(B)/test_ioreg
 	timeout -s KILL 30 $(B)/test_ioreg
 	timeout -s KILL 120 $(B)/test_round16
 	timeout -s KILL 90 $(B)/test_helper_descriptor
@@ -268,6 +274,7 @@ unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/te
 	@mkdir -p $(B)/loader-test
 	$(B)/test_macho tests/fuzz/corpus/macho $(B)/loader-test
 	$(B)/test_images tests/fuzz/corpus/macho $(B)/loader-test
+	$(B)/test_identity $(B)/loader-test
 	$(B)/test_ifunit tests/fuzz/corpus/ifunit
 
 # AOT cache trust and format checks, plus the policy unit test

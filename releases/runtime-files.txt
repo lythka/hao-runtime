@@ -706,6 +706,7 @@ tests/host/swiftvalue.swift
 tests/host/test_x86_emit.c
 tests/host/traps.c
 tests/host/x86args.c
+tests/loader/test_identity.c
 tests/loader/test_ifunit.c
 tests/loader/test_images.c
 tests/loader/test_macho.c
