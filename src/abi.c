@@ -11,6 +11,7 @@
  */
 #include "hao/runtime.h"
 #include "hao/bridge.h"
+#include <dlfcn.h>
 #include <objc/runtime.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -857,10 +858,18 @@ void hao_sysv_call(uint64_t fn, const uint64_t gpr[6], const uint8_t xmm[8][16],
 /* calls whose signature abi.c does not marshal (they go through the register bridge): counted for
  * hao_bridge_stats, never silent */
 uint64_t hao_abi_refused;
-static void sig_refused(const char *enc, const char *why)
+/* A call whose signature is known but cannot be placed is refused, not made
+ * through the register bridge, which would pass it in the wrong places:
+ * diagnostic, then abort, as a REFUSED binding (bridge.c). */
+__attribute__((noreturn, cold)) static void sig_refused(const hao_cpu *c, uint64_t fn, const char *enc, const char *why)
 {
     __atomic_fetch_add(&hao_abi_refused, 1, __ATOMIC_RELAXED);
-    HAO_LOG(1, "signature %s not marshalled: %s\n", enc, why);
+    Dl_info di;
+    const char *name = dladdr((void *)(uintptr_t)fn, &di) && di.dli_sname ? di.dli_sname : "?";
+    HAO_LOG(0, "bridge: REFUSED call to %s (%#llx): signature %s not marshalled: %s; lr=%#llx\n", name,
+            (unsigned long long)fn, enc, why, (unsigned long long)c->x[30]);
+    fflush(HAO_DIAG);
+    abort();
 }
 
 /* Guest functions and blocks among the code slots of an argument (htype.code) bound for native code
@@ -888,12 +897,15 @@ static void code_slots(uint8_t *p, int size, uint64_t code)
 
 /* Guest -> native call driven by an ObjC type encoding.
  * `nself`: number of leading implicit args already in the encoding
- * (ObjC encodings include self and _cmd). */
+ * (ObjC encodings include self and _cmd). False only when the encoding
+ * cannot be read at all (the caller's register bridge then applies, as for
+ * any call without a signature); a signature that is read but cannot be
+ * placed stops the process (sig_refused). */
 bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
 {
     hsig *s = hao_sig(enc);
     if (!s) return false;
-    if (s->unmarshalable) { sig_refused(enc, "too many arguments or too large an aggregate"); return false; }
+    if (s->unmarshalable) sig_refused(c, fn, enc, "too many arguments, too large an aggregate or a malformed encoding");
     uint8_t store[MAXARGS][ARGBUF] __attribute__((aligned(16)));
     uint8_t ldbuf[LDBUF] __attribute__((aligned(16)));   /* native layouts of long double aggregates */
     int ldo = 0;
@@ -902,17 +914,17 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
     const htype *r = &s->ret;
     uint8_t *ldret = NULL;                              /* a long double aggregate's native result */
     if (r->ld && !r->nst0) {
-        if (r->nsize > LDBUF) { sig_refused(enc, "result too large"); return false; }
+        if (r->nsize > LDBUF) sig_refused(c, fn, enc, "result too large");
         ldret = ldbuf; ldo = (r->nsize + 15) & ~15;
     }
     for (int k = 0; k < s->nargs; k++) {
-        if (arg_copy_size(&s->args[k]) > ARGBUF) { sig_refused(enc, "argument too large"); return false; }
+        if (arg_copy_size(&s->args[k]) > ARGBUF) sig_refused(c, fn, enc, "argument too large");
         av[k] = arm64_get_arg(c, &st, &s->args[k], store[k]);
         if (s->args[k].code && av[k] == store[k] && !s->args[k].ld)
             code_slots(store[k], arg_copy_size(&s->args[k]), s->args[k].code);   /* a by-reference one: below */
         if (s->args[k].ld) {
             const htype *a = &s->args[k];
-            if (ldo + a->nsize > LDBUF) { sig_refused(enc, "arguments too large"); return false; }
+            if (ldo + a->nsize > LDBUF) sig_refused(c, fn, enc, "arguments too large");
             ld_to_native(a, av[k], ldbuf + ldo);
             av[k] = ldbuf + ldo;
             ldo += (a->nsize + 15) & ~15;
@@ -925,7 +937,7 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
     bool mem_ret = r->kind == 's' && (r->ld ? !r->nst0 : sysv_class_mem(r));
     bool in_place = mem_ret && !r->ld && arm64_indirect_ret(r);
     uint8_t ret[RETBUF] __attribute__((aligned(16)));
-    if (!in_place && !r->ld && (r->kind == 'D' ? (int)sizeof(long double) : r->size) > RETBUF) { sig_refused(enc, "result too large"); return false; }
+    if (!in_place && !r->ld && (r->kind == 'D' ? (int)sizeof(long double) : r->size) > RETBUF) sig_refused(c, fn, enc, "result too large");
     memset(ret, 0, sizeof ret);
     /* x86_64 SysV layout. The stack area is sized from the signature (an upper bound of
      * each argument's slots, alignment included), so an ordinary call's frame stays small
@@ -935,7 +947,7 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
         const htype *a = &s->args[k];
         nstack += a->ld ? (a->nsize + 7) / 8 + 1 : a->kind == 'D' ? 3 : a->kind == 's' ? (a->size + 7) / 8 + 1 : 1;
     }
-    if (nstack > NSTACK) { sig_refused(enc, "too many stack arguments"); return false; }
+    if (nstack > NSTACK) sig_refused(c, fn, enc, "too many stack arguments");
     uint64_t gpr[6] = {0}, stack[nstack ? nstack : 1], out[6] = {0};
     uint8_t xmm[8][16];
     memset(xmm, 0, sizeof xmm);
@@ -1009,8 +1021,7 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc)
     arm64_set_ret(c, &s->ret, ret);
     return true;
 too_many:
-    sig_refused(enc, "too many stack arguments");
-    return false;
+    sig_refused(c, fn, enc, "too many stack arguments");
 }
 
 /* ------------------------------------------------- native -> guest closure */
@@ -1186,6 +1197,14 @@ void hao_note_native_block(uint64_t block);   /* blocks.c */
 void hao_callback_with_sig(hao_cb_frame *f, void *sigp)
 {
     hsig *s = sigp;
+    if (s->unmarshalable) {
+        Dl_info di;
+        const char *name = dladdr((void *)(uintptr_t)f->ret, &di) && di.dli_sname ? di.dli_sname : "?";
+        HAO_LOG(0, "bridge: REFUSED callback into guest %#llx from %s: its signature is not marshalled (too many "
+                "arguments, too large an aggregate or a malformed encoding)\n", (unsigned long long)f->target, name);
+        fflush(HAO_DIAG);
+        abort();
+    }
     uint8_t store[MAXARGS][16] __attribute__((aligned(16)));
     const uint8_t *vals[MAXARGS];
     uint64_t sret;
@@ -1268,8 +1287,15 @@ static uint64_t guest_entry_for_sig(uint64_t guest, const char *enc, bool known_
     bool precise_void = s && s->simple && !s->ambiguous && !s->unmarshalable &&
                         s->ret.kind == 'v' &&
                         (known_void || (s->nargs > 0 && s->args[0].block));
+    if (s && s->unmarshalable) {
+        /* refused when called (hao_callback_with_sig), not run through the plain register bridge */
+        uint64_t code = hao_sig_thunk(guest, s);
+        if (code) return code;
+        note_guest_sig(guest, s);
+        return hao_thunk_for(guest);
+    }
     if (known_void && !precise_void) return hao_thunk_for(guest);
-    if (!s || (s->simple && !precise_void) || s->unmarshalable) return hao_thunk_for(guest);
+    if (!s || (s->simple && !precise_void)) return hao_thunk_for(guest);
     /* one signature thunk per (guest function, signature), shared by
      * callers that ask again for the same method or block invoke: jit.c
      * keeps them by (guest, sig) */
