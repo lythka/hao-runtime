@@ -138,14 +138,26 @@ h = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
 files = {'embed/stubs/' + n: h(os.path.join(d, 'orig/stubs', n)) for n in os.listdir(os.path.join(d, 'orig/stubs'))}
 files['replace/dyld'] = h(os.path.join(d, 'dyld.want'))
 files['root/usr/lib/hao/aot/00000000000000000000000000000000.aot'] = '0' * 64
-json.dump({'files': files}, open(os.path.join(d, 'arch/payload/payload-manifest.json'), 'w'))
+pay = os.path.join(d, 'arch/payload')
+for b, _, ns in os.walk(pay):
+    for n in ns:
+        files[os.path.relpath(os.path.join(b, n), pay)] = h(os.path.join(b, n))
+json.dump({'files': files}, open(os.path.join(pay, 'payload-manifest.json'), 'w'))
 PY
+mkdir -p "$d/arch/payload/replace"; ln -s "$d/victim" "$d/arch/payload/replace/dyld"   # an output path is replaced, never followed
 python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" >"$d/run.log" 2>&1; r1=$?
+[ ! -e "$d/victim" ] && [ ! -L "$d/arch/payload/replace/dyld" ] && pass "hao-runtime-on-mac: a symbolic link at an output path is replaced, not written through" \
+    || bad "hao-runtime-on-mac: wrote through the link at replace/dyld"
+echo '<plist/>' > "$d/arch/payload/extra.plist"
+python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" >"$d/extra.log" 2>&1; r4=$?
+rm "$d/arch/payload/extra.plist"
+[ $r4 = 1 ] && grep -q 'extra.plist: not in payload-manifest.json' "$d/extra.log" \
+    && pass "hao-runtime-on-mac: a payload file the manifest does not list fails the check" || bad "hao-runtime-on-mac: unlisted file rc $r4: $(tail -2 "$d/extra.log")"
 python3 -I -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["files"]["replace/dyld"]="1"*64; json.dump(m,open(p,"w"))' \
     "$d/arch/payload/payload-manifest.json"
 python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" "$d/arch" >"$d/bad.log" 2>&1; r2=$?
 python3 -I "$here/test_onmac_pin.py" "$d"/orig/stubs/* "$d/dyld.want" >"$d/pin.log" 2>&1; r3=$?
-if [ $r1 = 0 ] && grep -q '3 files match payload-manifest.json, 0 differ' "$d/run.log" && [ $r2 = 1 ] && grep -q 'replace/dyld: sha256 differs' "$d/bad.log" \
+if [ $r1 = 0 ] && grep -q '[0-9]* files match payload-manifest.json, 0 differ' "$d/run.log" && [ $r2 = 1 ] && grep -q 'replace/dyld: sha256 differs' "$d/bad.log" \
     && [ $r3 = 0 ]; then
     pass "hao-runtime-on-mac: stubs and dyld fix from the archive layout match the manifest; a wrong hash fails; a larger signature reservation (macOS 26 codesign) is trimmed to the pinned bytes"
 else bad "hao-runtime-on-mac: rc $r1 $r2 $r3: $(tail -3 "$d/run.log" "$d/bad.log" "$d/pin.log")"; fi

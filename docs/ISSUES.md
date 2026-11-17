@@ -1,5 +1,20 @@
 # Runtime issues and measured scope
 
+## hao-runtime-on-mac checked only the files the manifest lists
+
+`tools/hao-runtime-on-mac` compared each file of `payload-manifest.json`
+with its sha256 but accepted any other file in the payload, wrote its
+stubs and the dyld fix with plain opens that follow a symbolic link at the
+output path, and ran as root if started so. It now refuses root, writes
+each output to a new file in its private work directory and renames it into
+place (a link there is replaced, not written through), makes `replace/dyld`
+only when the manifest lists it, and fails when the payload holds a file the
+manifest does not list, a link or special file, or a listed file that is
+missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
+(hao-runtime-on-mac cases). Limits: the image builder's own check of a
+payload (the contract checker the patcher vendors) still checks only listed
+files.
+
 ## The installer took every file under the payload's root/
 
 `hao-install.py` copied every regular file under `PAYLOAD/root` into the
