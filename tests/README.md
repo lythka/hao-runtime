@@ -165,6 +165,9 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/xinhab | XFAIL | 2 | see known failures |
 | guest/xpac | PASS | 1 | |
 | guest/ymmupper | PASS | 1 | upper ymm halves a native callee leaves dirty are clear after the call and on a native-to-guest callback, JIT and `--interp`, with and without ROSETTA_ADVERTISE_AVX=1 |
+| guest/wx | PASS | 4 | no memory writable and executable at once, and no writable mapping of executable memory, after translated code, chained branches, thunks and Swift island entries have run (Rosetta's own memory aside); the program's `__DATA_CONST` read-only |
+| guest/wxguard | PASS | 1 | guest mprotect, munmap, mmap MAP_FIXED, Mach VM calls and the raw mprotect on hao's executable memory are refused, and on `__DATA_CONST` with write (natively allowed) |
+| guest/refuse | PASS | 3 | a call or callback whose signature cannot be placed stops with `bridge: REFUSED` (with HAO_NO_CLOSURES at registration); a callback's result without a buffer goes to hao's own area, not over the guest stack, and one larger than the area faults in its guard |
 | guest/run-async | PASS | 9 | |
 | guest/keypath-identity | PASS | 2 | |
 | guest/late-method-signatures | PASS | 10 | |

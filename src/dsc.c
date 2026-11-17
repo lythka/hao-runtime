@@ -889,10 +889,13 @@ static uint64_t pool_slot(uint64_t pc, uint64_t value)
     return slot;
 }
 
-/* the one writer of guest instructions: the cache mapping and its alias (hao/code.h) */
+/* the one writer of guest instructions: the cache mapping and its alias (hao/code.h). An ADRP
+ * retargeted without its reader would load from the wrong page: a write that fails stops the process. */
 static void put_insn(uint64_t pc, uint32_t w)
 {
-    hao_code_write((uint64_t)(uintptr_t)at(pc), D.code_delta, &w, 4);
+    if (hao_code_write((uint64_t)(uintptr_t)at(pc), D.code_delta, &w, 4)) return;
+    fprintf(stderr, "hao: dsc: cannot rewrite the instruction at %#llx; stopping\n", (unsigned long long)pc);
+    abort();
 }
 
 /* adrp xd, page(target) at pc; ldr xt, [xn, #(slot & 0xfff)] (all unslid) */
@@ -2405,7 +2408,8 @@ void *hao_dsc_island(uint64_t lo, uint64_t hi, uint64_t size)
             uint64_t a = cand[c] + (uint64_t)D.slide;
             if (!hao_near_range(a, lo, hi, size)) continue;
             munmap((void *)(uintptr_t)a, size);
-            void *p = mmap((void *)(uintptr_t)a, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+            /* read/write, not executable: the caller makes it a W^X region (jit.c hao_wx_region) */
+            void *p = mmap((void *)(uintptr_t)a, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
             if (p == (void *)(uintptr_t)a) {
                 carved[ncarved].lo = cand[c];
                 carved[ncarved++].hi = cand[c] + size;

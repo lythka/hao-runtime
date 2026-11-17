@@ -64,6 +64,7 @@
  * HAO_TEST_SWITCHES build); no thunks without JIT memory.
  */
 #include "hao/runtime.h"
+#include "hao/code.h"
 #include "hao/bridge.h"
 #include "hao/swift_reverse.h"
 #include "hao/swiftvalue.h"
@@ -1032,17 +1033,38 @@ uint64_t hao_swiftmeta_island_target(uint64_t a)
     return 0;
 }
 
+/* Island memory is read/execute only (W^X, jit.c): entries are written through the address island_open
+ * gives, for the one write; NULL when this process cannot write it (a frozen fork child) */
+static uint8_t *island_open(void *p, size_t n, hao_wx_win *win)
+{
+    hao_crit_enter();
+    uint8_t *w = hao_wx_begin(p, n, win);
+    if (!w) hao_crit_leave();
+    return w;
+}
+
+static void island_close(hao_wx_win *win, size_t n)
+{
+    hao_wx_end(win, n);
+    hao_crit_leave();
+}
+
+/* movabs r11, guest; r10 = HAO_CB_SWIFTCC (an entry for hao_callback: a Swift function, whose indirect
+ * result's buffer comes in rax) or 0 (a bridge of its own); jmp [rip+0]; .quad the bridge (ISLAND_BRIDGE) */
+#define ISLAND_BRIDGE 22
 static void emit_entry(uint8_t *e, uint64_t guest, uint64_t bridge)
 {
     static const uint8_t pre[2] = {0x49, 0xbb};                /* movabs r11, imm64 */
-    static const uint8_t mid[9] = {0x45, 0x31, 0xd2,           /* xor r10d, r10d */
-                                   0xff, 0x25, 0, 0, 0, 0};     /* jmp [rip+0] */
+    static const uint8_t swiftcc[6] = {0x41, 0xba, HAO_CB_SWIFTCC, 0, 0, 0};   /* mov r10d, HAO_CB_SWIFTCC */
+    static const uint8_t none[6] = {0x45, 0x31, 0xd2, 0x0f, 0x1f, 0x00};       /* xor r10d, r10d; nop */
+    static const uint8_t jmp[6] = {0xff, 0x25, 0, 0, 0, 0};     /* jmp [rip+0] */
     uint64_t cb = bridge ? bridge : (uint64_t)(uintptr_t)hao_callback_entry;
     memcpy(e, pre, 2);
     memcpy(e + 2, &guest, 8);
-    memcpy(e + 10, mid, 9);
-    memcpy(e + 19, &cb, 8);
-    memset(e + 27, 0xcc, ISLAND_SLOT - 27);                    /* int3 */
+    memcpy(e + 10, bridge ? none : swiftcc, 6);
+    memcpy(e + 16, jmp, 6);
+    memcpy(e + ISLAND_BRIDGE, &cb, 8);
+    memset(e + ISLAND_BRIDGE + 8, 0xcc, ISLAND_SLOT - ISLAND_BRIDGE - 8);   /* int3 */
 }
 
 /* Write e[0..n) (sorted by field, each field once) into the image: a rel32
@@ -1080,9 +1102,9 @@ static size_t rewrite(hao_image *img, const struct ent *e, size_t n)
         if (j == k) { st_unplaced++, k++; continue; }
         uint64_t lo = e[k].field & ~(pg - 1), hi = align_up(e[j - 1].field + 8, pg);
         if (hi > ra + rs) hi = ra + rs;
-        int prot = (info.protection & VM_PROT_READ ? PROT_READ : 0) | (info.protection & VM_PROT_WRITE ? PROT_WRITE : 0);
-        bool ro = !(prot & PROT_WRITE);
-        if (ro && mprotect((void *)(uintptr_t)lo, hi - lo, prot | PROT_WRITE)) { st_unplaced += j - k; k = j; continue; }
+        /* through code.c's guest writer: one at a time with sealed-data stores, the protection read under its lock */
+        int prot = hao_guest_write_begin(lo, hi);
+        if (prot < 0) { st_unplaced += j - k; k = j; continue; }
         for (; k < j; k++) {
             int32_t rel = (int32_t)(int64_t)(e[k].target - e[k].field);
             if (e[k].abs) memcpy((void *)(uintptr_t)e[k].field, &e[k].target, 8);
@@ -1091,7 +1113,7 @@ static size_t rewrite(hao_image *img, const struct ent *e, size_t n)
             if (e[k].bridge) st_reverse++;
             done++;
         }
-        if (ro) mprotect((void *)(uintptr_t)lo, hi - lo, prot);
+        hao_guest_write_end(prot);
     }
     return done;
 }
@@ -1274,16 +1296,21 @@ size_t hao_swiftmeta_slots(hao_image *img, hao_swift_slot_fn fn, void *ctx)
 static uint64_t st_isl_room, st_isl_gap, st_isl_search, st_isl_failed;
 static uint8_t *island_place(hao_image *img, uint64_t lo, uint64_t hi, uint64_t size)
 {
+    /* each piece of memory a W^X region (jit.c) before an entry is written: the room once, as a whole */
     uint64_t at = __atomic_load_n(&img->isl_next, __ATOMIC_ACQUIRE);
     while (img->isl_lo && at + size <= img->isl_hi && hao_near_range(at, lo, hi, size))
         if (__atomic_compare_exchange_n(&img->isl_next, &at, at + size, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            if (!hao_wx_region((void *)(uintptr_t)img->isl_lo, img->isl_hi - img->isl_lo)) return NULL;
             st_isl_room++;
             return (uint8_t *)(uintptr_t)at;
         }
     uint8_t *p = img->dsc ? hao_dsc_island(lo, hi, size) : NULL;
-    if (p) { st_isl_gap++; return p; }
-    if ((p = hao_map_near(lo, hi, size))) st_isl_search++;
-    return p;
+    if (p && hao_wx_region(p, size)) { st_isl_gap++; return p; }
+    if ((p = hao_map_near(lo, hi, size))) {
+        if (hao_wx_region(p, size)) { st_isl_search++; return p; }
+        munmap(p, size);
+    }
+    return NULL;
 }
 
 void hao_swiftmeta_image(hao_image *img)
@@ -1364,16 +1391,24 @@ void hao_swiftmeta_image(hao_image *img)
     }
     size_t t = 0;
     uint64_t prev = 0, prev_bridge = 0;
+    hao_wx_win win;
+    uint8_t *iw = island_open(isl, size, &win);
+    if (!iw) {
+        st_unplaced += w.n;
+        free(w.e);
+        return;
+    }
     for (size_t k = 0; k < w.n; k++) {
         uint64_t g = w.e[k].target;
         bool different = !k || g != prev || w.e[k].bridge != prev_bridge;
         if (k && different) t++;
-        if (different) emit_entry(isl + t * ISLAND_SLOT, g, w.e[k].bridge);
+        if (different) emit_entry(iw + t * ISLAND_SLOT, g, w.e[k].bridge);
         prev = g;
         prev_bridge = w.e[k].bridge;
         w.e[k].target = (uint64_t)(uintptr_t)(isl + t * ISLAND_SLOT);   /* now: the entry */
     }
-    memset(isl + nt * ISLAND_SLOT, 0xcc, size - nt * ISLAND_SLOT);
+    memset(iw + nt * ISLAND_SLOT, 0xcc, size - nt * ISLAND_SLOT);
+    island_close(&win, size);
     /* publish the island before any field points at it */
     islands[slot].lo = (uint64_t)(uintptr_t)isl;
     islands[slot].hi = (uint64_t)(uintptr_t)isl + nt * ISLAND_SLOT;
@@ -1650,7 +1685,11 @@ static uint64_t dyn_entry(hao_image *img, uint64_t g, uint64_t field)
         /* a cache image's [base, base+vmsize) is its __TEXT, where patterns and layout strings lie */
         uint8_t *isl = island_place(img, img->base, img->base + img->vmsize, size);
         if (!isl) { st_isl_failed++; return 0; }
-        memset(isl, 0xcc, size);
+        hao_wx_win win;
+        uint8_t *iw = island_open(isl, size, &win);
+        if (!iw) return 0;
+        memset(iw, 0xcc, size);
+        island_close(&win, size);
         islands[n].lo = islands[n].hi = (uint64_t)(uintptr_t)isl;
         islands[n].cap = (uint64_t)(uintptr_t)isl + size;
         islands[n].img = img;
@@ -1659,14 +1698,18 @@ static uint64_t dyn_entry(hao_image *img, uint64_t g, uint64_t field)
     }
     for (uint64_t e = islands[k].lo; e < islands[k].hi; e += ISLAND_SLOT) {
         uint64_t bridge;
-        memcpy(&bridge, (const void *)(uintptr_t)(e + 19), 8);
+        memcpy(&bridge, (const void *)(uintptr_t)(e + ISLAND_BRIDGE), 8);
         if (bridge == (uint64_t)(uintptr_t)hao_callback_entry && hao_swiftmeta_island_target(e) == g)
             return hao_near_range(e, field, field + 4, ISLAND_SLOT) ? e : 0;
     }
     uint64_t e = islands[k].hi;
     if (e + ISLAND_SLOT > islands[k].cap) { st_dyn_full++; return 0; }
     if (!hao_near_range(e, field, field + 4, ISLAND_SLOT)) return 0;
-    emit_entry((uint8_t *)(uintptr_t)e, g, 0);
+    hao_wx_win win;
+    uint8_t *iw = island_open((void *)(uintptr_t)e, ISLAND_SLOT, &win);
+    if (!iw) return 0;
+    emit_entry(iw, g, 0);
+    island_close(&win, ISLAND_SLOT);
     __atomic_store_n(&islands[k].hi, e + ISLAND_SLOT, __ATOMIC_RELEASE);
     st_entries++;
     return e;
