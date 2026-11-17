@@ -7,7 +7,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 LIB=$(cd "${LIB:-$repo/build}" && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-diagsig)}
+OUT=${OUT:-$(mktemp -d -t hao-sigdiag)}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 cc="clang -arch x86_64 -mmacosx-version-min=27.0 -std=gnu11 -O1"
 $cc -dynamiclib -o "$OUT/diagsig_interpose.dylib" "$here/diagsig_interpose.c" || { echo "build failed"; exit 1; }
