@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #define HAO_MAX_DEPS 256
 #define HAO_MAX_RANGES 16
@@ -196,6 +197,9 @@ void hao_slice_hand(hao_slice *sl);
  * only a root-owned file without write bits or ACL on the read-only volume
  * the system booted from). */
 extern int hao_slice_test_path;
+/* The rule hao_slice_open maps a file by: owner uid, mode, its volume's
+ * statfs flags, and whether the file has no ACL (the lookup said ENOENT). */
+bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none);
 
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply
  * fixups. The file is untrusted: every offset, size and count is validated
@@ -314,12 +318,15 @@ enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL };
 enum { HAO_ENTRY_CLI = 1, HAO_ENTRY_EMBEDDED = 2 };
 /* The next image loaded is the main executable, started through ENTRY
  * (anything but HAO_ENTRY_CLI is taken as HAO_ENTRY_EMBEDDED): its
- * signature sets the policy (enabled = false: off, HAO_NO_LIBVAL=1 in an
- * ordinary process; no boot argument turns it off). A main executable that
- * requires library validation is refused when the process cannot be made
- * to require it (CS_REQUIRE_LV). */
+ * signature sets the policy. enabled = false (HAO_NO_LIBVAL=1 in an
+ * ordinary process; no boot argument turns it off) turns library
+ * validation off for a program that does not require it, and is ignored,
+ * with a diagnostic, for one that does. A main executable that requires
+ * library validation is refused when the process cannot be made to
+ * require it (CS_REQUIRE_LV). */
 void hao_libval_expect_main(bool enabled, int entry);
-/* The loader's unit tests: 1 makes setting CS_REQUIRE_LV fail. */
+/* The loader's unit tests: 1 makes setting CS_REQUIRE_LV fail, 2 reading
+ * the status back fail, 3 the flag not stick. */
 extern int hao_libval_test_setlv;
 /* The loader's gate, after an image's load commands validate and before it
  * is mapped: sl is the slice the image is then built from. img->fd and the

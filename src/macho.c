@@ -958,19 +958,24 @@ int hao_slice_test_path;
  * file, so the directories above its name do not matter: they decide which
  * file a path reaches, and fd already is one. (The owner and mode rule is
  * aot_policy.c's hao_aot_stat_ok for a system file; the loader's unit tests
- * link this file without it.) */
+ * link this file without it.) hao_slice_fixed_rule is the decision on what
+ * file_fixed reads. */
+bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none)
+{
+    const uint32_t system = MNT_ROOTFS | MNT_RDONLY | MNT_LOCAL;
+    return uid == 0 && !(mode & (S_IWGRP | S_IWOTH)) && (mnt_flags & system) == system && acl_none;
+}
+
 static bool file_fixed(int fd, const struct stat *st)
 {
     if (hao_slice_test_path) return hao_slice_test_path == 1;
-    if (st->st_uid != 0 || (st->st_mode & (S_IWGRP | S_IWOTH))) return false;
     struct statfs fs;
-    const uint32_t system = MNT_ROOTFS | MNT_RDONLY | MNT_LOCAL;
-    if (fstatfs(fd, &fs) != 0 || (fs.f_flags & system) != system) return false;
+    if (fstatfs(fd, &fs) != 0 || !hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, true)) return false;
     errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
     int e = errno;
     if (a) acl_free(a);
-    return a == NULL && e == ENOENT;
+    return hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, a == NULL && e == ENOENT);
 }
 
 static hao_slice *slice_pending;       /* hao_slice_hand */

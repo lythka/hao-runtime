@@ -208,6 +208,12 @@ hardened-runtime or library-flag binary without its own
 A signed image's pages are hashed once in its process, whichever of these
 routes then decides about it.
 
+`HAO_NO_LIBVAL=1` (open-tier processes only) turns library validation off
+for a program that does not require it. For one that does, it is ignored
+and hao says so (`hao: HAO_NO_LIBVAL ignored: ...`): natively neither the
+hardened runtime nor the kernel takes library validation from the
+environment.
+
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
 `DYLD_EXIT_REASON_DYLIB_MISSING`). In a test build (`HAO_TEST_SWITCHES`),
@@ -246,9 +252,9 @@ The guarded list holds only switches that run the same code through another
 of hao's engines or print. Everything that chooses code or a path
 (`HAO_CACHE`, `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_TRUST_LIST`,
 `HAO_ASYNC_CONTRACT_LIBRARY`, `HAO_DIAG_DIR`, the command-line options carried
-in `HAO_FLAGS`), turns a check off (`HAO_NO_LIBVAL`, `--allow-unsigned`) or
-changes how native calls, signals or memory behave is for open processes
-only. Root is guarded whatever started it: `sudo` and login sessions pass
+in `HAO_FLAGS`), turns a check off (`HAO_NO_LIBVAL`, for a program that does
+not require library validation; `--allow-unsigned`) or changes how native
+calls, signals or memory behave is for open processes only. Root is guarded whatever started it: `sudo` and login sessions pass
 variables from users who are not root. With `-v`, hao names each switch it
 ignored.
 

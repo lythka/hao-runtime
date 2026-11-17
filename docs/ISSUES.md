@@ -36,6 +36,9 @@ development Mac under Rosetta, none on an Intel kernel yet.
   past the hashed range into the signature is invalid in `src/libval.c` and
   `tools/hao_codesig.py` alike (`test_macho`; `tests/tools/test_codesig.py`,
   8204 cases agree).
+- `HAO_NO_LIBVAL` in an open-tier process turned library validation off
+  for any program; it is now ignored, with a diagnostic, for a program that
+  requires it (`test_macho` gate_nolv_hardened).
 
 Limits: the stub's own link-time native dependencies still load, with
 `disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs

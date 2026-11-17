@@ -538,6 +538,7 @@ int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, 
 static int mode = HAO_LIBVAL_UNDECIDED;
 static bool expect_main;
 static int entry_mode;              /* HAO_ENTRY_CLI, else the main executable is an embedded program's */
+static bool off_asked;              /* HAO_NO_LIBVAL: off, for a program that does not require it */
 static char reason[160];
 static hao_imgsig_fn verifier;      /* guest_sig.c's signer check (NULL: the loader's unit tests) */
 static bool force_user;             /* HAO_LIBVAL_USER: signers in user space even where the kernel answers */
@@ -561,10 +562,7 @@ void hao_libval_expect_main(bool enabled, int entry)
 {
     expect_main = true;
     entry_mode = entry;
-    if (!enabled && mode == HAO_LIBVAL_UNDECIDED) {
-        mode = HAO_LIBVAL_OFF;
-        snprintf(reason, sizeof reason, "turned off (hao_no_libval)");
-    }
+    off_asked = !enabled;
 }
 int hao_libval_mode(void) { return mode; }
 const char *hao_libval_reason(void) { return reason; }
@@ -595,19 +593,32 @@ static int decide(hao_slice *sl, char *why, size_t n)
     if (cs->team && strlen(cs->team) < sizeof main_team) snprintf(main_team, sizeof main_team, "%s", cs->team);
     if (!hao_codesig_library_validated(cs)) {
         mode = HAO_LIBVAL_OFF;
-        snprintf(reason, sizeof reason, "%s", !cs->cd ? "unsigned" : cs->dlv ? "disable-library-validation" :
-                 "neither platform nor hardened");
+        snprintf(reason, sizeof reason, "%s", off_asked ? "turned off (hao_no_libval)" : !cs->cd ? "unsigned" :
+                 cs->dlv ? "disable-library-validation" : "neither platform nor hardened");
         return 0;
     }
     snprintf(reason, sizeof reason, "%s%s%s", cs->platform ? "platform" : "",
              cs->platform && (cs->flags & (CS_RUNTIME | CS_REQUIRE_LV)) ? ", " : "",
              cs->flags & CS_RUNTIME ? "runtime" : cs->flags & CS_REQUIRE_LV ? "library flag" : "");
+    if (off_asked) {
+        /* natively the hardened runtime and the kernel ignore whatever the environment says about it */
+        char msg[300];
+        snprintf(msg, sizeof msg, "HAO_NO_LIBVAL ignored: the program requires library validation (%s)", reason);
+        if (report_line) report_line(msg);
+        else fprintf(stderr, "hao: %s\n", msg);
+        size_t l = strlen(reason);
+        snprintf(reason + l, sizeof reason - l, "; HAO_NO_LIBVAL ignored");
+    }
+    /* hao_libval_test_setlv (tests): 1 setting the flag fails, 2 reading it back fails, 3 it does not stick */
     uint32_t f = CS_REQUIRE_LV, now = 0;
-    int r = hao_libval_test_setlv ? (errno = EPERM, -1) : csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
+    int t = hao_libval_test_setlv;
+    int r = t == 1 ? (errno = EPERM, -1) : t == 3 ? 0 : csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
     int e = errno;
-    if (r != 0 || csops(getpid(), CS_OPS_STATUS, &now, sizeof now) != 0 || !(now & CS_REQUIRE_LV)) {
+    int q = t == 2 ? -1 : csops(getpid(), CS_OPS_STATUS, &now, sizeof now);
+    if (t == 3) now &= ~CS_REQUIRE_LV;
+    if (r != 0 || q != 0 || !(now & CS_REQUIRE_LV)) {
         snprintf(why, n, "it requires library validation (%s), and this process cannot be made to require it "
-                 "(CS_REQUIRE_LV: %s)", reason, r ? strerror(e) : "flags unchanged");
+                 "(CS_REQUIRE_LV: %s)", reason, r ? strerror(e) : q ? "status not readable" : "flags unchanged");
         reason[0] = 0;
         return -1;
     }
