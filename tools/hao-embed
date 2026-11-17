@@ -725,7 +725,7 @@ class X86Libraries:
         op = self.os_path(f)
         return op is not None and self.walk(op)[1] is None
 
-    def search(self, name, loader, exe, rpaths):
+    def search(self, name, loader, exe, rpaths, restricted=False):
         """The OS paths dyld tries, in order, for NAME loaded by LOADER (an OS path) in a process whose main
         executable is EXE, with the rpath stack RPATHS [(LC_RPATH, OS path of the image that has it)]: the
         loader's own rpaths, then those of the images that loaded it. @executable_path is always EXE's directory,
@@ -737,9 +737,28 @@ class X86Libraries:
                 return os.path.dirname(owner) + p[len("@loader_path"):]
             return p if p.startswith("/") else None
         if name.startswith("@rpath/"):
-            return [b + "/" + name[len("@rpath/"):] for b in (expand(rp, o) for rp, o in rpaths) if b is not None]
-        p = expand(name, loader)
-        return [p] if p is not None else []
+            out = [b + "/" + name[len("@rpath/"):] for b in (expand(rp, o) for rp, o in rpaths) if b is not None]
+        else:
+            p = expand(name, loader)
+            out = [p] if p is not None else []
+        return out + self.fallback(name, restricted)
+
+    @staticmethod
+    def fallback(name, restricted):
+        """The paths dyld tries when NAME is not loaded from its own: DYLD_FALLBACK_FRAMEWORK_PATH's default for a
+        framework (~/Library/Frameworks, /Library/Frameworks, /System/Library/Frameworks), else
+        DYLD_FALLBACK_LIBRARY_PATH's (/usr/local/lib, /usr/lib); in a RESTRICTED process (the stub has the
+        hardened runtime) only the system one. ~ is a user's folder, written /Users here."""
+        parts = name.split("/")
+        fw = next((k for k, c in enumerate(parts) if c.endswith(".framework")), None)
+        if fw is not None:
+            tail = "/".join(parts[fw:])
+            dirs = ["/System/Library/Frameworks"] if restricted else \
+                ["/Users/Library/Frameworks", "/Library/Frameworks", "/System/Library/Frameworks"]
+        else:
+            tail = parts[-1]
+            dirs = ["/usr/lib"] if restricted else ["/usr/local/lib", "/usr/lib"]
+        return [d + "/" + tail for d in dirs] if tail else []
 
     def x86_dylibs(self, host):
         """[(cpu subtype, slice, loadable)] for the x86_64 library slices (MH_DYLIB, every subtype: dyld picks
@@ -770,22 +789,23 @@ class X86Libraries:
             out.append((sub, p, ok))
         return out
 
-    def unprotected(self, name, loader, exe, rpaths, depth=0, stack=None):
-        """None if dyld, loading NAME for LOADER in a process whose main executable is EXE (OS paths; RPATHS as
-        search takes them), finds it in the shared cache or through protected storage only: every path it tries
-        before the one it loads (a file someone could put at an earlier one would load instead; one that exists
-        but has no x86_64 library slice does not stop dyld, which tries the next), every directory and link on
-        the way, that file, and for each of its x86_64 slices (dyld may pick any) that slice's non-lazy
-        dependencies, with its own rpaths before the inherited ones. Otherwise why not: the first path that is
-        not protected, or a chain deeper than MAX_DEP_DEPTH (not checked, so not protected). Each (file, slice,
-        rpath context) is validated once (_closure); one already being validated further up is a cycle, judged
-        there."""
+    def unprotected(self, name, loader, exe, rpaths, restricted=False, depth=0, stack=None):
+        """None if every path dyld could try for NAME, loaded by LOADER in a process whose main executable is EXE
+        (OS paths; RPATHS as search takes them; RESTRICTED: the stub has the hardened runtime), is in protected
+        storage: all of search's paths, the fallback paths included, whether or not an earlier one looks
+        loadable (hao-embed cannot prove dyld will load a file: it may be unreadable to the process, or the
+        wrong CPU, platform or OS), each directory and link on the way, and for every x86_64 library slice of
+        each file there, that slice's non-lazy dependencies, with its own rpaths before the inherited ones. A
+        shared-cache install name or path ends the search (dyld takes the cache's image, which always loads).
+        Otherwise why not: the first path that is not protected, or a chain deeper than MAX_DEP_DEPTH. Each
+        (executable, file, slice, rpath context, restricted) is validated once (_closure); one already being
+        validated further up is a cycle, judged there."""
         stack = set() if stack is None else stack
         if name in self.ids:
             return None    # an install name of the shared cache: dyld takes the cache's image
         if depth > MAX_DEP_DEPTH:
             return "%s: a chain of more than %d dependencies" % (name, MAX_DEP_DEPTH)
-        for op in self.search(name, loader, exe, rpaths):
+        for op in self.search(name, loader, exe, rpaths, restricted):
             if os.path.normpath(op) in self.ids:
                 return None
             real, why = self.walk(op)
@@ -794,11 +814,8 @@ class X86Libraries:
             host = os.path.join(self.root, real.lstrip("/"))
             if not os.path.isfile(host):
                 continue
-            slices = self.x86_dylibs(host)
-            if not slices:
-                continue   # dyld cannot load it into the stub and goes on to the next path
-            for sub, mo, _ in slices:
-                key = (exe, real, sub, hashlib.sha256(mo).digest(), tuple(rpaths))
+            for sub, mo, _ in self.x86_dylibs(host):
+                key = (exe, real, sub, hashlib.sha256(mo).digest(), tuple(rpaths), restricted)
                 if key in stack:
                     continue
                 if key not in self._closure:
@@ -807,17 +824,13 @@ class X86Libraries:
                     res = None
                     for kind, dep, _, _ in dylib_commands(mo):
                         if kind != "lazy":
-                            res = self.unprotected(dep, real, exe, own, depth + 1, stack)
+                            res = self.unprotected(dep, real, exe, own, restricted, depth + 1, stack)
                             if res:
                                 break
                     stack.discard(key)
                     self._closure[key] = res
                 if self._closure[key]:
                     return self._closure[key]
-            if all(ok for _, _, ok in slices) and any(sub & 0xFFFFFF == 3 for sub, _, _ in slices):
-                return None   # dyld loads this file: the search ends here
-            # dyld may fail to load it (another CPU subtype, platform or a newer OS) and go on: the later paths
-            # must be protected too
         return None
 
     def _file(self, path):
@@ -925,7 +938,7 @@ def native_deps(path, data, x86, stub_deps=()):
             continue
         if x86.os_path(exe) is not None:
             eo = x86.os_path(exe)
-            why = x86.unprotected(name, eo, eo, [(r, eo) for r in rpaths])
+            why = x86.unprotected(name, eo, eo, [(r, eo) for r in rpaths], hardened(data))
         else:
             why = exe + " (not under the root)"
         if why:

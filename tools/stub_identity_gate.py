@@ -407,7 +407,8 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     if x86 is not None and src_path:
         eo = x86.os_path(os.path.realpath(src_path))
         rp = [(r, eo) for r in embed.macho_rpaths_mo(arm)]
-        bad_deps = [n for _, n, _, _ in sdeps if eo is None or x86.unprotected(n, eo, eo, rp)]
+        restricted = bool(cd_fields(stub)[1] & CS_RUNTIME)   # the stub's hardened runtime: dyld's restricted fallbacks
+        bad_deps = [n for _, n, _, _ in sdeps if eo is None or x86.unprotected(n, eo, eo, rp, restricted)]
     else:
         bad_deps = ["(not checked: no x86_64 shared cache)"]
     add("dylibs.protected", not bad_own and not bad_deps, f"{len(sdeps)} native",

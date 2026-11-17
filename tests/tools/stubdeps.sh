@@ -92,25 +92,28 @@ mkdir -p sroot/usr/bin/lib sroot/Library/Tools/lib sroot/System/Library/CoreServ
 printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>ProductVersion</key><string>%s</string></dict></plist>\n' \
     "$(sw_vers -productVersion)" >sroot/System/Library/CoreServices/SystemVersion.plist
 cp lib/libfat.dylib sroot/usr/bin/lib/; cp lib/libfat.dylib sroot/Library/Tools/lib/
-cp prog sroot/usr/bin/prog; cp prog sroot/Library/Tools/prog
+# these programs have the hardened runtime, as most of an image's do: dyld's restricted fallback paths
+# (/usr/lib, /System/Library/Frameworks) are protected; prog11 (no hardened runtime) also falls back to /usr/local
+cp prog sroot/usr/bin/prog; cp prog sroot/Library/Tools/prog; cp prog sroot/usr/bin/prog11
+codesign -s - -f -o runtime sroot/usr/bin/prog sroot/Library/Tools/prog 2>/dev/null || exit 2
 # rpath P: the program linked against @rpath/libfat.dylib with the rpath list P...
 rprog() { local out=$1; shift
     clang -arch arm64e -O1 -o "$out" "$here/stubdeps_main.c" -framework CoreFoundation -weak_framework Security -Llib -lfat \
-        -L. -lguest "$@" && codesign -s - -f "$out" 2>/dev/null || exit 2; }
+        -L. -lguest "$@" && codesign -s - -f -o runtime "$out" 2>/dev/null || exit 2; }
 rprog sroot/usr/bin/prog3 -Wl,-rpath,/Library/Frameworks -Wl,-rpath,@executable_path/lib   # an earlier rpath under /Library
 mkdir -p sroot/usr/local/lib; cp lib/libfat.dylib sroot/usr/local/lib/
 rprog sroot/usr/bin/prog4 -Wl,-rpath,/usr/LOCAL/lib                                      # a firmlink in other case
 ln -s ../usr/bin/lib sroot/Library/L
 rprog sroot/usr/bin/prog5 -Wl,-rpath,/Library/L                                          # a link under /Library to usr/bin
 python3 "$EMBED" --stub "$B/hao-stub" --stubs spay --root sroot --x86-cache "$X86" sroot/usr/bin/prog sroot/Library/Tools/prog \
-    sroot/usr/bin/prog3 sroot/usr/bin/prog4 sroot/usr/bin/prog5 >spay.log 2>&1 || bad "deps: --stubs: $(cat spay.log)"
+    sroot/usr/bin/prog3 sroot/usr/bin/prog4 sroot/usr/bin/prog5 sroot/usr/bin/prog11 >spay.log 2>&1 || bad "deps: --stubs: $(cat spay.log)"
 python3 -I - spay/manifest.json <<'PY' && pass "deps: @rpath/libfat.dylib linked from usr/bin/lib; not from Library/Tools/lib, behind a /Library rpath, through /usr/LOCAL or through a link under /Library to usr/bin (outside protected storage)" || bad "deps: protected storage: $(cat spay.log)"
 import json, sys
 m = {e["path"]: e for e in json.load(open(sys.argv[1]))["files"]}
 why = lambda p: [w for n, w in m[p]["not_linked"] if n == "@rpath/libfat.dylib"]
 assert why("usr/bin/prog") == [], m["usr/bin/prog"]["not_linked"]
 for p, w in (("Library/Tools/prog", "/Library"), ("usr/bin/prog3", "/Library"), ("usr/bin/prog4", "/usr/local"),
-             ("usr/bin/prog5", "/Library")):
+             ("usr/bin/prog5", "/Library"), ("usr/bin/prog11", "/usr/local")):
     assert why(p) and why(p)[0].startswith("outside protected storage (%s)" % w), (p, why(p))
 assert m["usr/bin/prog"]["links"] == m["Library/Tools/prog"]["links"] + 1
 PY
@@ -135,14 +138,14 @@ printf 'int main(void) { return 0; }\n' >m.c
 # libL needs both, so libC is reached twice in one closure
 for a in arm64e x86_64; do dl ctx/libL.$a $a @rpath/libL.dylib -Lsroot/usr/bin/ctx -lA -lB -Wl,-rpath,@loader_path; done
 fat sroot/usr/bin/ctx/libL.dylib ctx/libL.arm64e ctx/libL.x86_64
-clang -arch arm64e -o sroot/usr/bin/prog7 m.c -Lsroot/usr/bin/ctx -lL -Wl,-rpath,@executable_path/ctx && codesign -s - -f sroot/usr/bin/prog7 2>/dev/null || exit 2
+clang -arch arm64e -o sroot/usr/bin/prog7 m.c -Lsroot/usr/bin/ctx -lL -Wl,-rpath,@executable_path/ctx && codesign -s - -f -o runtime sroot/usr/bin/prog7 2>/dev/null || exit 2
 # libU: x86_64 slice with rpath @loader_path, x86_64h slice with /Library/X first, both needing @rpath/libD
 for a in arm64e x86_64 x86_64h; do
     r=@loader_path/../ctx; [ $a = x86_64h ] && r=/Library/X
     dl ctx/libU.$a $a @rpath/libU.dylib -Lsroot/usr/bin/ctx -lD -Wl,-rpath,$r -Wl,-rpath,@loader_path/../ctx
 done
 fat sroot/usr/bin/uni/libU.dylib ctx/libU.arm64e ctx/libU.x86_64 ctx/libU.x86_64h
-clang -arch arm64e -o sroot/usr/bin/prog8 m.c -Lsroot/usr/bin/uni -lU -Wl,-rpath,@executable_path/uni && codesign -s - -f sroot/usr/bin/prog8 2>/dev/null || exit 2
+clang -arch arm64e -o sroot/usr/bin/prog8 m.c -Lsroot/usr/bin/uni -lU -Wl,-rpath,@executable_path/uni && codesign -s - -f -o runtime sroot/usr/bin/prog8 2>/dev/null || exit 2
 # a library dyld might not load into the stub ends nothing either: x86_64h only (usr/bin/libh), or built for
 # a newer macOS than the image's (usr/bin/libn); the next path is under /Library
 mkdir -p sroot/usr/bin/libh sroot/usr/bin/libn
