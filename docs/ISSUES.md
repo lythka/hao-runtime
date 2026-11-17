@@ -96,6 +96,18 @@ read/write/execute there. That is a weakening of the development host
 only. A new random address for every write mapping left 19 MB of page
 tables (`guest/footprint` spread); the 256 MB window keeps them bounded.
 
+A guest could still change these mappings itself: mprotect, munmap or
+mmap MAP_FIXED of a code cache page reached the kernel unchanged (and
+under JIT unmapping one ended the process with SIGBUS). Guest calls of
+mprotect, munmap, mmap with MAP_FIXED, mach_vm_/vm_protect, _deallocate,
+_allocate, _map and _remap with VM_FLAGS_OVERWRITE, a remap of hao's
+memory, and the raw system calls and Mach traps behind them are now
+refused (EACCES, KERN_PROTECTION_FAILURE) where they overlap hao's
+executable memory or the thunks' table, and where they would make an
+image's sealed constant data writable or executable or remap it
+(natively a program may make its own `__DATA_CONST` writable). Test:
+`guest/wxguard` (9 of 9 refused; before, 0 of 9 and JIT died).
+
 A fork child has no memory entries (they are not inherited). Under
 Rosetta it takes them again (the region briefly read/write, not
 executable, while the child's only thread is in hao). On an Intel Mac

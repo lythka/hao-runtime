@@ -440,13 +440,15 @@ static const wx_region *wx_find(uintptr_t a, size_t n)
     return NULL;
 }
 
-/* Is [a, a+n) in hao's executable memory (a guest may not change its protection: interpose.c) */
+/* Does [a, a+n) overlap hao's executable memory or the thunks' table (a guest may not change their
+ * mappings: interpose.c) */
 bool hao_wx_covers(uint64_t a, uint64_t n)
 {
     uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
     for (uint32_t i = 0; i < k; i++)
         if (a < wx_reg[i].x + wx_reg[i].size && a + n > wx_reg[i].x) return true;
-    return false;
+    uint64_t t = (uint64_t)(uintptr_t)thunk_tab;
+    return t && a < t + THUNK_TAB && a + n > t;
 }
 
 /* The address to write the n bytes of executable memory at x through (one write: hao_wx_end), or

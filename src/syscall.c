@@ -8,6 +8,7 @@
  *           carry set on error, results rax/rdx
  */
 #include "hao/runtime.h"
+#include <mach/mach.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <mach/mach_time.h>
@@ -25,6 +26,30 @@ static void svc_result(hao_cpu *c, long r, int err)
     if (err) { nzcv |= 2; r = err; }
     c->x[0] = (uint64_t)r;
     hao_set_nzcv(c, nzcv);
+}
+
+/* Raw calls that would change the mapping or protection of hao's executable memory or sealed
+ * constant data (interpose.c hao_guest_vm_guarded): mprotect, munmap, mmap over it, and the Mach
+ * traps of mach_vm_deallocate, mach_vm_protect, mach_vm_map and mach_vm_allocate on this task.
+ * Refused as the libc and libsystem calls are; returns whether it was. */
+static bool raw_vm_guarded(hao_cpu *c, long xnum, const uint64_t *a)
+{
+    long n = xnum & 0xffffff;
+    if ((xnum >> 24) == 2) {
+        bool refused = (n == SYS_mprotect && hao_guest_vm_guarded(a[0], a[1], (int)a[2], false)) ||
+                       (n == SYS_munmap && hao_guest_vm_guarded(a[0], a[1], 0, true)) ||
+                       (n == SYS_mmap && ((int)a[3] & MAP_FIXED) && hao_guest_vm_guarded(a[0], a[1], (int)a[2], true));
+        if (refused) svc_result(c, 0, EACCES);
+        return refused;
+    }
+    if ((xnum >> 24) != 1 || (mach_port_t)a[0] != mach_task_self()) return false;
+    const mach_vm_address_t *p = (const mach_vm_address_t *)(uintptr_t)a[1];
+    bool refused = (n == 12 && hao_guest_vm_guarded(a[1], a[2], 0, true)) ||                        /* _kernelrpc_mach_vm_deallocate_trap */
+                   (n == 14 && hao_guest_vm_guarded(a[1], a[2], (int)a[4], false)) ||               /* _kernelrpc_mach_vm_protect_trap */
+                   (n == 10 && p && ((int)a[3] & VM_FLAGS_OVERWRITE) && hao_guest_vm_guarded(*p, a[2], 0, true)) ||   /* ..._allocate_trap */
+                   (n == 15 && p && ((int)a[4] & VM_FLAGS_OVERWRITE) && hao_guest_vm_guarded(*p, a[2], 0, true));     /* ..._map_trap */
+    if (refused) c->x[0] = KERN_PROTECTION_FAILURE;   /* a Mach trap's result is its kern_return_t */
+    return refused;
 }
 
 /* BSD calls that would bypass hao's own state if passed through: the
@@ -93,6 +118,7 @@ void hao_guest_svc(hao_thread *t)
     if (shift) xnum = 0x2000000L | (long)c->x[0];
     for (int k = 0; k < 9; k++) args[k] = c->x[k + shift];
     if ((xnum >> 24) == 2 && raw_mediated(t, xnum & 0xffffff, args)) return;
+    if (raw_vm_guarded(c, xnum, args)) return;
     /* execve, __mac_execve, posix_spawn: a hao stub gets the tagged-pointer
      * switch in its environment, as through libSystem (process_identity.c) */
     long bsd = xnum & 0xffffff;

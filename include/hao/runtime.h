@@ -460,6 +460,10 @@ void hao_jit_fork_child(void);         /* fork child: re-initialise the module's
 typedef struct { uintptr_t x, map, len; } hao_wx_win;
 bool hao_wx_region(void *x, size_t size);
 bool hao_wx_covers(uint64_t a, uint64_t n);
+/* interpose.c: a guest call that would change the mapping (map: map over, unmap) or the protection
+ * (prot) of [a, a+n) where it overlaps hao's executable memory, the thunks' table or (map, or prot with
+ * write or execute) an image's sealed constant data: refused (EACCES / KERN_PROTECTION_FAILURE) */
+bool hao_guest_vm_guarded(uint64_t a, uint64_t n, int prot, bool map);
 void *hao_wx_begin(void *x, size_t n, hao_wx_win *win);
 void hao_wx_end(hao_wx_win *win, size_t written);
 bool hao_wx_write(void *x, const void *src, size_t n);
