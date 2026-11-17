@@ -94,10 +94,15 @@ bool hao_ids_prepare(hao_image *img)
         if (!trap[k]) return false;
     }
     for (unsigned k = 0; k < 5; k++) __atomic_store_n(&entry_fn[k], base + e[k].host, __ATOMIC_RELEASE);
+    /* true even when a write fails: code that may differ from its signed bytes gets no AOT cache */
+    installed = img;
     for (unsigned k = 0; k < 5; k++) {
         uint32_t w[4] = {0x58000050, 0xd61f0200, (uint32_t)trap[k], (uint32_t)(trap[k] >> 32)};
-        hao_code_write(img->base + e[k].guest, img->code_delta, w, sizeof w);
+        if (!hao_code_write(img->base + e[k].guest, img->code_delta, w, sizeof w)) {
+            hao_diag_prefix(stderr);
+            fprintf(stderr, "cannot patch guest code at %#llx\n", (unsigned long long)(img->base + e[k].guest));
+            break;
+        }
     }
-    installed = img;
     return true;
 }

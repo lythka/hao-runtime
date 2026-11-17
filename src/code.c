@@ -23,6 +23,10 @@
  */
 #include "hao/code.h"
 #include <mach-o/loader.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -71,24 +75,53 @@ static poison_t *poison_of(uint64_t a)
 
 /* ------------------------------------------------------------------ writer */
 
-void hao_code_write(uint64_t a, int64_t delta, const void *src, size_t n)
+/* The protection of the page at p now (-1: not mapped). */
+static int page_prot(uint64_t p)
 {
-    if (!n) return;
-    uint64_t lo = a & ~(PG - 1), hi = (a + n + PG - 1) & ~(PG - 1);
-    mprotect((void *)(uintptr_t)lo, hi - lo, PROT_READ | PROT_WRITE);
-    memcpy((void *)(uintptr_t)a, src, n);
-    /* HAO_CODE_ALIAS: a page that is still poisoned stays so */
-    for (uint64_t p = lo; p < hi; p += PG) {
-        poison_t *e = poison_of(p);
-        if (e && !__atomic_load_n(&e->open[(p - e->lo) / PG], __ATOMIC_ACQUIRE)) mprotect((void *)(uintptr_t)p, PG, PROT_NONE);
+    mach_vm_address_t r = p;
+    mach_vm_size_t sz = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t obj = MACH_PORT_NULL;
+    if (mach_vm_region(mach_task_self(), &r, &sz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS ||
+        r > p)
+        return -1;
+    return info.protection & (PROT_READ | PROT_WRITE | PROT_EXEC);
+}
+
+/* n bytes at a, page by page: writable for the copy, then the protection
+ * the page had (HAO_CODE_ALIAS: PROT_NONE while poisoned, readable once a
+ * guest load opened it). False when a page could not be made writable: the
+ * pages before it are written. A page that cannot be made read-only again
+ * stops the process: guest code must not stay writable. */
+static bool write_pages(uint64_t a, const void *src, size_t n, bool poisoned)
+{
+    for (uint64_t at = a, end = a + n; at < end;) {
+        uint64_t p = at & ~(PG - 1), k = end - at < p + PG - at ? end - at : p + PG - at;
+        int prot = page_prot(p);
+        if (prot < 0 || mprotect((void *)(uintptr_t)p, PG, PROT_READ | PROT_WRITE)) return false;
+        memcpy((void *)(uintptr_t)at, (const uint8_t *)src + (at - a), k);
+        poison_t *e = poisoned ? poison_of(p) : NULL;
+        if (e) prot = __atomic_load_n(&e->open[(p - e->lo) / PG], __ATOMIC_ACQUIRE) ? PROT_READ : PROT_NONE;
+        if (mprotect((void *)(uintptr_t)p, PG, prot)) {
+            fprintf(stderr, "hao: guest code page %#llx cannot be made read-only again; stopping\n", (unsigned long long)p);
+            abort();
+        }
+        at += k;
     }
-    if (delta) {
-        uint64_t b = a + (uint64_t)delta, blo = b & ~(PG - 1), bhi = (b + n + PG - 1) & ~(PG - 1);
-        mprotect((void *)(uintptr_t)blo, bhi - blo, PROT_READ | PROT_WRITE);
-        memcpy((void *)(uintptr_t)b, src, n);
-        mprotect((void *)(uintptr_t)blo, bhi - blo, PROT_READ);
-    }
-    __atomic_fetch_add(&st_writes, 1, __ATOMIC_RELAXED);
+    return true;
+}
+
+bool hao_code_write(uint64_t a, int64_t delta, const void *src, size_t n)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;   /* two writers of one page */
+    if (!n) return true;
+    if (a + n < a || (delta && a + (uint64_t)delta + n < a + (uint64_t)delta)) return false;
+    pthread_mutex_lock(&lock);
+    bool ok = write_pages(a, src, n, true) && (!delta || write_pages(a + (uint64_t)delta, src, n, false));
+    pthread_mutex_unlock(&lock);
+    if (ok) __atomic_fetch_add(&st_writes, 1, __ATOMIC_RELAXED);
+    return ok;
 }
 
 /* ------------------------------------------------------------------ aliases */
