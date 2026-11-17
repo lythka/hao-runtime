@@ -1770,6 +1770,35 @@ static void diag_write(const char *b, size_t n, bool may_start)
 /* Async-signal-safe. */
 void hao_diag_write(const char *b, size_t n) { diag_write(b, n, false); }
 
+static size_t safe_put(char *b, size_t at, size_t cap, const char *s)
+{
+    while (*s && at + 1 < cap) b[at++] = *s++;
+    return at;
+}
+
+void hao_fatal_safe(const char *what, const uint64_t *v, int n)
+{
+    char b[512];
+    size_t at = safe_put(b, 0, sizeof b, "hao[");
+    at = safe_put(b, at, sizeof b, getprogname());
+    at = safe_put(b, at, sizeof b, ":");
+    char num[24];
+    int k = 0;
+    for (unsigned p = (unsigned)getpid(); k == 0 || p; p /= 10) num[k++] = (char)('0' + p % 10);
+    while (k && at + 1 < sizeof b) b[at++] = num[--k];
+    at = safe_put(b, at, sizeof b, "]: ");
+    at = safe_put(b, at, sizeof b, what);
+    for (int i = 0; i < n; i++) {
+        at = safe_put(b, at, sizeof b, " 0x");
+        k = 0;
+        for (uint64_t x = v[i]; k == 0 || x; x >>= 4) num[k++] = "0123456789abcdef"[x & 15];
+        while (k && at + 1 < sizeof b) b[at++] = num[--k];
+    }
+    at = safe_put(b, at, sizeof b, "\n");
+    hao_diag_write(b, at);
+    abort();
+}
+
 /* After a crash report: the process dies next (PID 1: the kernel panics). */
 static void diag_sync(void)
 {

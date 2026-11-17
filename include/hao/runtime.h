@@ -208,6 +208,9 @@ extern FILE *hao_diag_file;
 #define HAO_DIAG (hao_diag_file ? hao_diag_file : stderr)
 void hao_diag_init(void);                 /* once, at startup (hao_install_fault_handler) */
 void hao_diag_write(const char *b, size_t n);   /* async-signal-safe: console and log, whole */
+/* Async-signal-safe fatal line: "hao[PROG:PID]: what" and each of n values in hex, through
+ * hao_diag_write, then abort (no stdio, no dladdr, no allocation) */
+__attribute__((noreturn)) void hao_fatal_safe(const char *what, const uint64_t *v, int n);
 extern size_t hao_diag_log_cap;           /* the log's size limit (bytes) */
 /* A multi-line report written with one hao_diag_write (hao_diag_block_end):
  * fprintf into hao_diag_block's FILE (HAO_DIAG if no memory). Not in signal handlers. */

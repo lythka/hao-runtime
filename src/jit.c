@@ -362,14 +362,13 @@ static uint64_t st_wx;
 
 static void wx_fail(const char *what, uintptr_t lo, uintptr_t hi, int err)
 {
-    hao_diag_prefix(HAO_DIAG);
-    fprintf(HAO_DIAG, "executable memory [%#lx, %#lx): %s failed (%d); stopping\n", (unsigned long)lo, (unsigned long)hi, what, err);
-    abort();
+    uint64_t v[3] = {lo, hi, (uint64_t)err};
+    hao_fatal_safe(what, v, 3);   /* writes run in callbacks a signal may have interrupted: no stdio */
 }
 
 static void wx_protect(uintptr_t lo, uintptr_t hi, int prot)
 {
-    if (mprotect((void *)lo, hi - lo, prot)) wx_fail(prot & PROT_WRITE ? "making it writable" : "making it read/execute only", lo, hi, errno);
+    if (mprotect((void *)lo, hi - lo, prot)) wx_fail(prot & PROT_WRITE ? "W^X: executable memory cannot be made writable; range, error:" : "W^X: executable memory cannot be made read/execute only; range, error:", lo, hi, errno);
 }
 
 /* A read/write memory entry of [x, x+size), or MACH_PORT_NULL. x must be writable (not executable) now. */
@@ -436,7 +435,7 @@ static const wx_region *wx_find(uintptr_t a, size_t n)
     uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
     for (uint32_t i = 0; i < k; i++)
         if (a >= wx_reg[i].x && a - wx_reg[i].x < wx_reg[i].size && n <= wx_reg[i].size - (a - wx_reg[i].x)) return &wx_reg[i];
-    wx_fail("a write outside hao's regions", a, a + n, 0);
+    wx_fail("W^X: a write outside hao's executable memory; range, error:", a, a + n, 0);
     return NULL;
 }
 
@@ -466,7 +465,7 @@ void *hao_wx_begin(void *x, size_t n, hao_wx_win *win)
     mach_vm_address_t w = wx_window ? wx_window + (rnd % (WX_WINDOW / WX_PAGE)) * WX_PAGE : 0;
     kern_return_t kr = mach_vm_map(mach_task_self(), &w, hi - lo, 0, VM_FLAGS_ANYWHERE, r->entry, lo - r->x,
                                    FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
-    if (kr != KERN_SUCCESS) wx_fail("mapping it for a write", lo, hi, kr);
+    if (kr != KERN_SUCCESS) wx_fail("W^X: executable memory cannot be mapped for a write; range, error:", lo, hi, kr);
     *win = (hao_wx_win){a, (uintptr_t)w, hi - lo};
     __atomic_fetch_add(&st_wx, 1, __ATOMIC_RELAXED);
     return (void *)((uintptr_t)w + (a - lo));
@@ -475,7 +474,7 @@ void *hao_wx_begin(void *x, size_t n, hao_wx_win *win)
 /* The write is done: `written` bytes from its start changed */
 void hao_wx_end(hao_wx_win *win, size_t written)
 {
-    if (mach_vm_deallocate(mach_task_self(), win->map, win->len) != KERN_SUCCESS) wx_fail("unmapping a write", win->x, win->x + written, 0);
+    if (mach_vm_deallocate(mach_task_self(), win->map, win->len) != KERN_SUCCESS) wx_fail("W^X: a write mapping cannot be removed; range, error:", win->x, win->x + written, 0);
     if (wx_rosetta && written) {
         uintptr_t lo = win->x & ~(uintptr_t)(WX_PAGE - 1), hi = (win->x + written + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
         wx_protect(lo, hi, PROT_READ | PROT_WRITE | PROT_EXEC);
@@ -510,7 +509,7 @@ static void wx_fork_child(void)
             ok = r->entry != MACH_PORT_NULL;
         } else
             ok = false;
-        if (mprotect((void *)r->x, r->size, PROT_READ | PROT_EXEC)) wx_fail("making it read/execute only", r->x, r->x + r->size, errno);
+        if (mprotect((void *)r->x, r->size, PROT_READ | PROT_EXEC)) wx_fail("W^X: executable memory cannot be made read/execute only; range, error:", r->x, r->x + r->size, errno);
     }
     if (!ok) __atomic_store_n(&wx_frozen, 1, __ATOMIC_RELAXED);
 }

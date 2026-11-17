@@ -864,12 +864,15 @@ uint64_t hao_abi_refused;
 __attribute__((noreturn, cold)) static void sig_refused(const hao_cpu *c, uint64_t fn, const char *enc, const char *why)
 {
     __atomic_fetch_add(&hao_abi_refused, 1, __ATOMIC_RELAXED);
-    Dl_info di;
-    const char *name = dladdr((void *)(uintptr_t)fn, &di) && di.dli_sname ? di.dli_sname : "?";
-    HAO_LOG(0, "bridge: REFUSED call to %s (%#llx): signature %s not marshalled: %s; lr=%#llx\n", name,
-            (unsigned long long)fn, enc, why, (unsigned long long)c->x[30]);
-    fflush(HAO_DIAG);
-    abort();
+    /* it may run in a callback a signal interrupted: no stdio, no dladdr */
+    char what[400];
+    size_t at = 0;
+    const char *parts[] = {"bridge: REFUSED call: signature ", enc, " not marshalled: ", why, "; native function, lr:"};
+    for (unsigned k = 0; k < sizeof parts / sizeof *parts; k++)
+        for (const char *p = parts[k]; *p && at + 1 < sizeof what; p++) what[at++] = *p;
+    what[at] = 0;
+    uint64_t v[2] = {fn, c->x[30]};
+    hao_fatal_safe(what, v, 2);
 }
 
 /* Guest functions and blocks among the code slots of an argument (htype.code) bound for native code
@@ -880,6 +883,7 @@ __attribute__((noreturn, cold)) static void sig_refused(const hao_cpu *c, uint64
 /* blocks.c defines it; this weak default lets tests/abi/test_layout.m, which includes abi.c on its own
  * for the parser, link without the runtime */
 __attribute__((weak)) uint64_t hao_bridge_code_arg(uint64_t a, const char *enc) { (void)enc; return a; }
+__attribute__((weak, noreturn)) void hao_fatal_safe(const char *what, const uint64_t *v, int n) { (void)what; (void)v; (void)n; abort(); }
 static void code_slots(uint8_t *p, int size, uint64_t code)
 {
     for (; code; code &= code - 1) {
@@ -1198,12 +1202,9 @@ void hao_callback_with_sig(hao_cb_frame *f, void *sigp)
 {
     hsig *s = sigp;
     if (s->unmarshalable) {
-        Dl_info di;
-        const char *name = dladdr((void *)(uintptr_t)f->ret, &di) && di.dli_sname ? di.dli_sname : "?";
-        HAO_LOG(0, "bridge: REFUSED callback into guest %#llx from %s: its signature is not marshalled (too many "
-                "arguments, too large an aggregate or a malformed encoding)\n", (unsigned long long)f->target, name);
-        fflush(HAO_DIAG);
-        abort();
+        uint64_t v[2] = {f->target, f->ret};
+        hao_fatal_safe("bridge: REFUSED callback into guest: its signature is not marshalled (too many arguments, too large "
+                       "an aggregate or a malformed encoding); guest function, native return address:", v, 2);
     }
     uint8_t store[MAXARGS][16] __attribute__((aligned(16)));
     const uint8_t *vals[MAXARGS];
