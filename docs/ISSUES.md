@@ -98,10 +98,12 @@ MAP_JIT memory mapped read/write, never executable, until
 `hao_wx_region` (src/jit.c) takes a memory entry of it and makes it
 read/execute only (on an Intel Mac its maximum protection too). hao
 writes it through a read/write mapping of just the pages a write
-changes, made from the memory entry at a random page of a 256 MB window
-and unmapped when the write ends: a burst of up to 8 translated blocks
-(the block asked for and the blocks its direct branches reach in the
-same image, chained to each other before they are published), one
+changes, made from the memory entry at a random page of a free 8 MB slot
+of a 256 MB window reserved at a random address (no access; a guest may
+not map there), and put back to the reservation when the write ends: a
+burst of up to 8 translated blocks (the block asked for and the blocks
+its direct branches reach in the same image, chained to each other and
+entered in the translation table only once the mapping is gone), one
 chain patch, a page of thunk code, one island fill. Thunk code no longer
 holds its guest function: a slot loads it (and a signature thunk its
 hsig) from a table of its own read/write mapping, so a thunk only fills
@@ -145,6 +147,12 @@ checked and passed from there, and the result written back: another
 guest thread changing it meanwhile does not move an allowed overwrite
 onto protected memory. Sealed segments keep their maximum protection:
 hao still writes them after the seal (block descriptors, Swift fields).
+
+A lazily installed AOT block is marked filled only once its links to
+blocks not yet copied are cut and its write mapping is gone (before, a
+fork in between left a child a filled block jumping into unfilled code).
+The threat model these defend is in docs/security-model.md (Executable
+memory), with what it leaves out.
 
 A fork child has no memory entries (they are not inherited). Under
 Rosetta it takes them again (the region briefly read/write, not

@@ -324,9 +324,12 @@ static void block_commit(uint8_t *start, size_t len)
  * A write (hao_wx_begin .. hao_wx_end: a burst of translated blocks, one
  * chain patch, a page of thunk code, one island fill) maps just the pages it
  * changes from the memory entry, read/write, and unmaps them at hao_wx_end.
- * It is placed at a random page of a 256 MB window chosen at random once:
- * a new random address for each write would leave page tables behind all
- * over the address space (19 MB of them in tests/guest/footprint spread). A rel32 rewritten in place (block chaining) is one
+ * It is placed at a random page of a free 8 MB slot of a 256 MB window
+ * reserved (no access) at a random address once, replacing that part of the
+ * reservation until hao_wx_end puts it back: a new random address for each
+ * write would leave page tables behind all over the address space (19 MB
+ * of them in tests/guest/footprint spread), and a guest may not map in the
+ * window (hao_wx_covers). A rel32 rewritten in place (block chaining) is one
  * aligned 4-byte store there, seen whole by the threads that run the code.
  *
  * Under Rosetta a write through another mapping is not seen by code Rosetta
@@ -356,7 +359,10 @@ static pthread_mutex_t wx_lock = PTHREAD_MUTEX_INITIALIZER;   /* adding a region
 static int wx_rosetta = -1;            /* sysctl.proc_translated */
 static int wx_frozen;                  /* a fork child that could not take the memory entries again */
 #define WX_WINDOW (256ull << 20)
-static uintptr_t wx_window;            /* where write mappings go (hints) */
+#define WX_SLOT (8ull << 20)           /* one write mapping at most: a burst of blocks, an island fill */
+#define WX_SLOTS (WX_WINDOW / WX_SLOT) /* 32 */
+static uintptr_t wx_window;            /* reserved (no access) for the write mappings, which replace a part */
+static uint64_t wx_busy;               /* a bit per slot with a write mapping in it */
 static uint64_t wx_rand;               /* xorshift state: no lock (arc4random has one) */
 static uint64_t st_wx;
 
@@ -403,17 +409,16 @@ bool hao_wx_region(void *x, size_t size)
         int tr = 0;
         size_t n = sizeof tr;
         wx_rosetta = sysctlbyname("sysctl.proc_translated", &tr, &n, NULL, 0) == 0 && tr == 1;
-        mach_vm_address_t win = 0;   /* a free range at a random address, for the hints */
-        if (mach_vm_allocate(mach_task_self(), &win, WX_WINDOW, VM_FLAGS_ANYWHERE | VM_FLAGS_RANDOM_ADDR) == KERN_SUCCESS) {
-            mach_vm_deallocate(mach_task_self(), win, WX_WINDOW);
+        mach_vm_address_t win = 0;   /* reserved at a random address, kept: write mappings go in its slots */
+        if (mach_vm_map(mach_task_self(), &win, WX_WINDOW, 0, VM_FLAGS_ANYWHERE | VM_FLAGS_RANDOM_ADDR, MEMORY_OBJECT_NULL, 0, FALSE,
+                        VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY) == KERN_SUCCESS)
             wx_window = (uintptr_t)win;
-        }
         wx_rand = ((uint64_t)arc4random() << 32 | arc4random()) | 1;
     }
     uint32_t k = wx_n;
     for (uint32_t i = 0; i < k; i++)
         if (wx_reg[i].x == a) { ok = true; goto out; }
-    if (k == WX_REGIONS || (a | size) & (WX_PAGE - 1)) goto out;
+    if (k == WX_REGIONS || (a | size) & (WX_PAGE - 1) || !wx_window) goto out;
     mach_port_t entry = wx_entry(a, size);
     if (entry == MACH_PORT_NULL) goto out;
     if (!wx_seal_rx(a, size)) {
@@ -447,7 +452,7 @@ bool hao_wx_covers(uint64_t a, uint64_t n)
     for (uint32_t i = 0; i < k; i++)
         if (a < wx_reg[i].x + wx_reg[i].size && a + n > wx_reg[i].x) return true;
     uint64_t t = (uint64_t)(uintptr_t)thunk_tab;
-    return t && a < t + THUNK_TAB && a + n > t;
+    return (t && a < t + THUNK_TAB && a + n > t) || (wx_window && a < wx_window + WX_WINDOW && a + n > wx_window);
 }
 
 /* The address to write the n bytes of executable memory at x through (one write: hao_wx_end), or
@@ -458,12 +463,20 @@ void *hao_wx_begin(void *x, size_t n, hao_wx_win *win)
     uintptr_t a = (uintptr_t)x;
     const wx_region *r = wx_find(a, n);
     uintptr_t lo = a & ~(uintptr_t)(WX_PAGE - 1), hi = (a + n + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
+    if (hi - lo > WX_SLOT) wx_fail("W^X: a write larger than a slot of the write window; range, error:", lo, hi, 0);
     uint64_t rnd = __atomic_load_n(&wx_rand, __ATOMIC_RELAXED);
     rnd ^= rnd << 13; rnd ^= rnd >> 7; rnd ^= rnd << 17;
     __atomic_store_n(&wx_rand, rnd, __ATOMIC_RELAXED);
-    /* first free range from a random page of the window on */
-    mach_vm_address_t w = wx_window ? wx_window + (rnd % (WX_WINDOW / WX_PAGE)) * WX_PAGE : 0;
-    kern_return_t kr = mach_vm_map(mach_task_self(), &w, hi - lo, 0, VM_FLAGS_ANYWHERE, r->entry, lo - r->x,
+    /* a free slot from a random one on, and a random page in it */
+    unsigned slot = WX_SLOTS;
+    for (unsigned k = 0; k < WX_SLOTS && slot == WX_SLOTS; k++) {
+        unsigned s = (unsigned)((rnd + k) % WX_SLOTS);
+        uint64_t bit = 1ull << s;
+        if (!(__atomic_fetch_or(&wx_busy, bit, __ATOMIC_ACQ_REL) & bit)) slot = s;
+    }
+    if (slot == WX_SLOTS) wx_fail("W^X: every slot of the write window is in use; range, error:", lo, hi, 0);
+    mach_vm_address_t w = wx_window + slot * WX_SLOT + ((rnd >> 8) % ((WX_SLOT - (hi - lo)) / WX_PAGE + 1)) * WX_PAGE;
+    kern_return_t kr = mach_vm_map(mach_task_self(), &w, hi - lo, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, r->entry, lo - r->x,
                                    FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS) wx_fail("W^X: executable memory cannot be mapped for a write; range, error:", lo, hi, kr);
     *win = (hao_wx_win){a, (uintptr_t)w, hi - lo};
@@ -474,7 +487,12 @@ void *hao_wx_begin(void *x, size_t n, hao_wx_win *win)
 /* The write is done: `written` bytes from its start changed */
 void hao_wx_end(hao_wx_win *win, size_t written)
 {
-    if (mach_vm_deallocate(mach_task_self(), win->map, win->len) != KERN_SUCCESS) wx_fail("W^X: a write mapping cannot be removed; range, error:", win->x, win->x + written, 0);
+    /* the slot back to the reservation (no access), then free */
+    mach_vm_address_t w = win->map;
+    kern_return_t kr = mach_vm_map(mach_task_self(), &w, win->len, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, MEMORY_OBJECT_NULL, 0, FALSE,
+                                   VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY);
+    if (kr != KERN_SUCCESS) wx_fail("W^X: a write mapping cannot be removed; range, error:", win->x, win->x + written, kr);
+    __atomic_fetch_and(&wx_busy, ~(1ull << ((win->map - wx_window) / WX_SLOT)), __ATOMIC_RELEASE);
     if (wx_rosetta && written) {
         uintptr_t lo = win->x & ~(uintptr_t)(WX_PAGE - 1), hi = (win->x + written + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
         wx_protect(lo, hi, PROT_READ | PROT_WRITE | PROT_EXEC);
@@ -498,6 +516,14 @@ bool hao_wx_write(void *x, const void *src, size_t n)
 static void wx_fork_child(void)
 {
     wx_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    /* another thread's write mapping was not inherited: its slot is a hole now; the whole window reserved again */
+    if (wx_window) {
+        mach_vm_address_t w = wx_window;
+        if (mach_vm_map(mach_task_self(), &w, WX_WINDOW, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, MEMORY_OBJECT_NULL, 0, FALSE,
+                        VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY) != KERN_SUCCESS)
+            __atomic_store_n(&wx_frozen, 1, __ATOMIC_RELAXED);
+    }
+    wx_busy = 0;
     uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
     bool ok = true;
     for (uint32_t i = 0; i < k; i++) {
@@ -4759,12 +4785,15 @@ static void *translate(uint64_t pc)
     static struct aot_link links[BURST_LINKS];               /* jit_lock */
     static struct { uint8_t *site; uint64_t target; } exits[BURST * BURST_LINKS];
     static uint64_t queue[BURST * BURST_LINKS + 1];
+    static struct { uint64_t pc; uint8_t *code; } made_blk[BURST];   /* published after the write is closed */
     unsigned nexit = 0, qn = 0, qi = 0, made = 0;
     queue[qn++] = pc;
     void *first = NULL;
     while (qi < qn && made < BURST) {
         uint64_t p = queue[qi++];
-        if (made && (!im || hao_image_for_code(p) != im || im->aot || hao_is_trap(p) || lookup(p) || table_used >= TABLE_MAX))
+        bool dup = false;
+        for (unsigned j = 0; j < made; j++) dup |= made_blk[j].pc == p;
+        if (made && (dup || !im || hao_image_for_code(p) != im || im->aot || hao_is_trap(p) || lookup(p) || table_used + made >= TABLE_MAX))
             continue;
         uint8_t *cur = cache_ptr > start ? (uint8_t *)(((uintptr_t)cache_ptr + 15) & ~(uintptr_t)15) : start;
         size_t left = (size_t)(start + room - cur), broom = left < MAX_BLOCK_BYTES ? left : MAX_BLOCK_BYTES;
@@ -4798,10 +4827,8 @@ static void *translate(uint64_t pc)
         }
         block_commit(cur, xb_len(&t.b));
         st_bytes += xb_len(&t.b);
-        if (!insert(p, cur)) { cache_exhausted(); break; }
-        rmap_add(cur, p);
-        if (!first) first = cur;
-        made++;
+        made_blk[made].pc = p;
+        made_blk[made++].code = cur;
         for (int k = 0; k < t.nlinks && nexit < BURST * BURST_LINKS; k++) {
             exits[nexit].site = cur + t.links[k].site;
             exits[nexit++].target = t.links[k].target;
@@ -4810,14 +4837,22 @@ static void *translate(uint64_t pc)
     }
     /* direct exits to translated code: chained now (the dispatcher would, one write each) */
     for (unsigned k = 0; k < nexit && !hao_opt.no_chain; k++) {
-        void *next = lookup(exits[k].target);
+        void *next = NULL;
+        for (unsigned j = 0; j < made && !next; j++) if (made_blk[j].pc == exits[k].target) next = made_blk[j].code;
+        if (!next) next = lookup(exits[k].target);
         uintptr_t site = (uintptr_t)exits[k].site;
         if (!next || (site & 3) || hao_is_trap(exits[k].target)) continue;
         int32_t rel = (int32_t)((intptr_t)next - (intptr_t)(site + 4));
         memcpy(w + (site - (uintptr_t)start), &rel, 4);
         st_links++;
     }
-    hao_wx_end(&win, first ? (size_t)(cache_ptr - start) : 0);
+    hao_wx_end(&win, made ? (size_t)(cache_ptr - start) : 0);
+    /* published only now: no write view of their code is left */
+    for (unsigned j = 0; j < made; j++) {
+        if (!insert(made_blk[j].pc, made_blk[j].code)) { cache_exhausted(); break; }
+        rmap_add(made_blk[j].code, made_blk[j].pc);
+        if (!j) first = made_blk[j].code;
+    }
     return first;
 }
 
@@ -5246,11 +5281,15 @@ static bool aot_install(hao_image *im, const hao_aot_view *v, char *why, size_t 
     uint8_t *code = NULL;
     if (!wx_frozen && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) && table_room(nb)) code = cache_alloc((size_t)cs);
     if (code) {
-        hao_wx_win win;
-        uint8_t *w = hao_wx_begin(code, (size_t)cs, &win);   /* not frozen: not NULL */
-        memcpy(w, v->code, (size_t)cs);
-        memcpy(w, &im->base, 8);          /* the base slot */
-        hao_wx_end(&win, (size_t)cs);
+        for (uint64_t off = 0; off < cs;) {   /* a slot of the write window at a time */
+            uint64_t len = cs - off < (2u << 20) ? cs - off : (2u << 20);
+            hao_wx_win win;
+            uint8_t *w = hao_wx_begin(code + off, (size_t)len, &win);   /* not frozen: not NULL */
+            memcpy(w, v->code + off, (size_t)len);
+            if (!off) memcpy(w, &im->base, 8);   /* the base slot */
+            hao_wx_end(&win, (size_t)len);
+            off += len;
+        }
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
         for (; k < nb; k++)
             if (!insert(im->base + v->ents[k].guest_off, code + v->ents[k].code_off)) { cache_exhausted(); break; }
@@ -5391,13 +5430,14 @@ static void *aot_lazy_take(uint64_t pc)
         uint8_t *w = hao_wx_begin(code, wend - a, &win);
         if (!w) return NULL;   /* frozen: interpreted */
         memcpy(w, z->v.code + a, e - a);
-        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);   /* before the cut test: a link to itself stays */
         for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
-            if (!z->filled[z->v.links[k].target]) {
+            if (z->v.links[k].target != i && !z->filled[z->v.links[k].target]) {   /* a link to itself stays */
                 int32_t unlinked = 0;
                 memcpy(w + (z->v.links[k].site - a), &unlinked, 4);
             }
         hao_wx_end(&win, wend - a);
+        /* complete only now: a fork child that sees it filled gets it with its links cut */
+        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);
         st_aot_blocks++;
         st_aot_lazy_bytes += e - a;
     }
