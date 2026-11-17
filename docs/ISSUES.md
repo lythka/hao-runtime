@@ -137,7 +137,14 @@ refused (EACCES, KERN_PROTECTION_FAILURE) where they overlap hao's
 executable memory or the thunks' table, and where they would make an
 image's sealed constant data writable or executable or remap it
 (natively a program may make its own `__DATA_CONST` writable). Test:
-`guest/wxguard` (9 of 9 refused; before, 0 of 9 and JIT died).
+`guest/wxguard` (9 of 9 refused; before, 0 of 9 and JIT died). A remap
+of sealed constant data (a second, shared view the guest could make
+writable) is refused too. The address argument of allocate, map and
+remap (libsystem calls and raw traps) is read once into hao's storage,
+checked and passed from there, and the result written back: another
+guest thread changing it meanwhile does not move an allowed overwrite
+onto protected memory. Sealed segments keep their maximum protection:
+hao still writes them after the seal (block descriptors, Swift fields).
 
 A fork child has no memory entries (they are not inherited). Under
 Rosetta it takes them again (the region briefly read/write, not
