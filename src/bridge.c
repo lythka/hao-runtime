@@ -977,7 +977,11 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
             p->tp[0] = native;
             p->tp[1] = nh;
             p->tp[2] = (uint64_t)(uintptr_t)hao_bridge_code_arg;
-        } else if (r->flags & HAO_IFR_SIG) { p->kind = 'A'; p->enc = v->str + r->enc; }
+        } else if (r->flags & HAO_IFR_SIG) {
+            p->kind = 'A';
+            p->enc = v->str + r->enc;
+            (void)hao_sig_simple(p->enc);   /* parsed and cached now: the call path (abi.c hao_sig) only finds it */
+        }
         else if (r->kind == HAO_IF_KIND_STACKPACK && (p->flags & HAO_PLAN_SWIFTASYNC)) {
             /* a swifttailcc callee pops its own stack arguments (swiftcc.c): no repack; the
              * generator never types one */
