@@ -337,7 +337,12 @@ static bool graph(builder *b, const void *type, unsigned depth)
     unsigned at = b->nnode++;
     b->nodes[at].type = type;
     const witnesses *v = vwt(type);
-    if (v->size > 4096 || v->stride < v->size || (v->flags & 0x00800000)) { b->failed = true; return false; }
+    if (v->size > 4096 || v->stride < v->size) { b->failed = true; return false; }
+    if (v->flags & 0x00800000) {   /* IsNonCopyable: settled only by a SAME row */
+        walk_fact f;
+        if (walk_fact_of(type,&f) && f.verdict == WALK_FACT_SAME) { b->nodes[at].affected = false; return false; }
+        b->failed = true; return false;
+    }
     uintptr_t kind = b->kind(type);
     /* At a guest call of a native witness, a guest type its own (guest)
      * witnesses handle whole is the walk's owner-opaque class. */

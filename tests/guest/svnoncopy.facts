@@ -1,0 +1,4 @@
+# Fixture row of the Swift value walk's facts table (src/swiftvalue/Facts.c), for tests/guest/svnoncopy.sh:
+#   type MANGLED-KEY VERDICT
+type 15Synchronization5MutexVySiG SAME
+type 15Synchronization5MutexVyScS12ContinuationVyyyYbc_GG SAME
