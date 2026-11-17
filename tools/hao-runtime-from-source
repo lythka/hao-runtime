@@ -1,16 +1,28 @@
 #!/bin/bash
-# hao-runtime-from-source ROOT X86 ARCHIVE OUT
+# hao-runtime-from-source [--cryptex NAME=DIR]... [--checkout DIR] ROOT X86 ARCHIVE OUT
 #   Rebuild a published hao-runtime archive from this checkout (the commit ARCHIVE names, clean) and compare.
 #   ROOT     the release's System root (read-only mount of the IPSW's system image), any mount point
 #   X86      its x86_64 dyld shared cache folder (the IPSW's Rosetta cryptex, System/Library/dyld)
 #   ARCHIVE  the published hao-runtime-VERSION-public.tar.gz: its interface units, async provider and AOT list are
 #            the inputs this checkout does not build
 #   OUT      a new folder: OUT/payload, OUT/GENERATE.md, OUT/hao-runtime-VERSION-public.tar.gz
+#   --cryptex NAME=DIR  the IPSW's cryptex NAME (OS, App) mounted read-only at DIR: read as if it were at
+#            ROOT/System/Volumes/Preboot/Cryptexes/NAME, where the installed system has it (tools/hao_root.py)
+#   --checkout DIR  build and compare DIR (a clean clone at the archive's commit) instead of this checkout,
+#            with this checkout's packaging tools: for an archive made before --cryptex existed
 # Needs Xcode (27.2 for the published bytes), python3.14 and git. The AOT caches need a macOS 27 host; elsewhere
 # NO_AOT=1 skips them and the records differ.
 set -euo pipefail
-[ $# -eq 4 ] || { sed -n '2,10p' "$0" >&2; exit 2; }
-H=$(cd "$(dirname "$0")/.." && pwd)
+T=$(cd "$(dirname "$0")/.." && pwd) H= CRYPTEX=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --cryptex) [ $# -ge 2 ] || { sed -n '2,16p' "$0" >&2; exit 2; }; CRYPTEX+=(--cryptex "$2"); shift 2 ;;
+        --checkout) [ $# -ge 2 ] || { sed -n '2,16p' "$0" >&2; exit 2; }; H=$(cd "$2" && pwd); shift 2 ;;
+        *) break ;;
+    esac
+done
+[ $# -eq 4 ] || { sed -n '2,16p' "$0" >&2; exit 2; }
+H=${H:-$T}
 ROOT=$1 X86=$2 ARCHIVE=$(cd "$(dirname "$3")" && pwd)/$(basename "$3") OUT=$4
 [ ! -e "$OUT" ] || { echo "hao-runtime-from-source: $OUT exists" >&2; exit 2; }
 [ -z "$(git -C "$H" status --porcelain)" ] || { echo "hao-runtime-from-source: $H has changes" >&2; exit 1; }
@@ -24,13 +36,13 @@ COMMIT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit
 UV=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["units_version"] or "")' "$M")
 mkdir -p "$IN/async"
 cp "$P/payload/root/usr/lib/hao/libhao_async_contract.dylib" "$P/payload/root/usr/lib/hao/async-contract.json" "$IN/async/"
-AOT=(--aot-list "$P/payload/aot-list.txt" --aot-jobs 8); [ "${NO_AOT:-}" = 1 ] && AOT=()
+AOT=(--aot-list "$P/payload/aot-list.txt" --aot-jobs 8); [ "${NO_AOT:-}" != 1 ] || AOT=()
 make -C "$H" -j8 > "$OUT/make.log" 2>&1
-"$H/tools/hao-image-payload" --x86-cache "$X86" --units "$P/payload/root/usr/lib/hao/if" ${UV:+--units-version "$UV"} \
-  --async-provider "$IN/async" "${AOT[@]}" "$OUT/payload" "$ROOT" > "$OUT/build.log" 2>&1 \
+"$T/tools/hao-image-payload" ${CRYPTEX[@]+"${CRYPTEX[@]}"} --source "$H" --x86-cache "$X86" --units "$P/payload/root/usr/lib/hao/if" ${UV:+--units-version "$UV"} \
+  --async-provider "$IN/async" ${AOT[@]+"${AOT[@]}"} "$OUT/payload" "$ROOT" > "$OUT/build.log" 2>&1 \
   || { tail -5 "$OUT/build.log" >&2; exit 1; }
 rm -rf "$IN"
-python3 -I "$H/tools/hao-public-archive" "$OUT"
+python3 -I "$H/tools/hao-public-archive" "$OUT"   # the checkout's own: its generators and GENERATE.md
 A=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1); B=$(shasum -a 256 "$OUT"/hao-runtime-*-public.tar.gz | cut -d' ' -f1)
 echo "published $A"; echo "rebuilt   $B"
 [ "$A" = "$B" ] && { echo identical; exit 0; }
