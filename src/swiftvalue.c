@@ -552,9 +552,17 @@ static void witness_setup_locked(void)
     const void *any = existential ? existential(1,NULL,0,NULL) : NULL;          /* ::Any */
     if (!one || !two || !any_object || !any) return;
     const void *any_object2 = opt(0,opt(0,any_object).metadata).metadata, *any2 = opt(0,opt(0,any).metadata).metadata;
+    /* The opaque existentials' own witnesses (OpaqueExistentialBox<N>,
+     * chosen by the number of witness tables): guest code copies and
+     * destroys an Any or an `any P` through them, and they hand an inline
+     * payload to its type's witnesses (an Any holding a C?? nil). */
+    const void *description = HAO_DLSYM("$ss23CustomStringConvertibleMp");
+    const void *one_table = existential && description ? existential(1,NULL,1,&description) : NULL;
+    if (!one_table) return;
     const void *types[] = {one, two,
         tuple2(0,int_type,any_object2,NULL,NULL).metadata, tuple2(0,int_type,any2,NULL,NULL).metadata,
-        tuple2(0,int_type,string_type,NULL,NULL).metadata, tuple2(0,string_type,string_type,NULL,NULL).metadata};
+        tuple2(0,int_type,string_type,NULL,NULL).metadata, tuple2(0,string_type,string_type,NULL,NULL).metadata,
+        any, one_table};
     for (unsigned k = 0; k < sizeof types / sizeof *types; ++k) if (!types[k]) return;
     static const unsigned slots[] = {0,1,2,3,4,5,6,7,11,12,13};
     unsigned n = 0; uint64_t lo = UINT64_MAX, hi = 0;
@@ -670,17 +678,22 @@ typedef struct { int count; empty_patch p[64]; } witness_patches;
  * prove is refused (certified_patches; LR and PC name the guest call). A nil
  * inside a field of a guest-defined struct or enum is left out: native
  * witnesses hand that field to its own (guest) ones. */
+static bool witness_strip_guest(const void *type, witness_patches *w);
 static void witness_walk(const void *type, const void *value, witness_patches *w, const char *why, uint64_t lr, uint64_t pc)
 {
     w->count = certified_patches(type,value,w->p,1,NULL,why,type,lr,pc);
-    if (w->count <= 0) return;
-    byte_range guest[32];
-    int ng = guest_ranges(type,0,guest,0,32,0);
-    if (ng < 0) {   /* which nils lie in guest-defined fields is not known: none may be rewritten */
+    if (w->count > 0 && !witness_strip_guest(type,w)) {   /* which nils lie in guest-defined fields is not known */
         decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,lr,pc);
         w->count = 0;
-        return;
     }
+}
+/* Drop the patches inside guest-defined struct and enum fields (their own
+ * guest witnesses read them); false when those fields are past the bound. */
+static bool witness_strip_guest(const void *type, witness_patches *w)
+{
+    byte_range guest[32];
+    int ng = guest_ranges(type,0,guest,0,32,0);
+    if (ng < 0) return false;
     int kept = 0;
     for (int i = 0; i < w->count; ++i) {
         bool inside = false;
@@ -688,6 +701,7 @@ static void witness_walk(const void *type, const void *value, witness_patches *w
         if (!inside) w->p[kept++] = w->p[i];
     }
     w->count = kept;
+    return true;
 }
 /* Rewrite the walked outer nils to the witness's own encoding. */
 static void witness_encode(void *value, const witness_patches *w)
@@ -910,6 +924,124 @@ void hao_swift_storage_alloc(const void *metadata, uint64_t lr)
 void hao_swift_storage_element(const void *element, uint64_t lr)
 {
     storage_element(element,"storage element type has a nil native code would destroy in the guest's encoding",lr);
+}
+
+/* ------------------------------------------- final destruction of storage
+ *
+ * The runtime destroys array storage (_ContiguousArrayStorage<E>'s
+ * deallocating deinit calls swift_arrayDestroy, a direct call inside
+ * libswiftCore that no symbol interposition reaches) and generic boxes
+ * (swift_allocBox's metadata destroys the boxed value) with the element
+ * type's native witnesses, wherever the last reference is released. Guest
+ * code may have written those elements, an Any holding a C?? nil for one.
+ * For an element type that is not settled, hao takes over that storage's
+ * destroy function (HeapMetadata's, the word before the value witness table
+ * pointer; one per instantiated element type, so every such storage is
+ * covered, whoever made it) once guest code makes storage of it. Before the
+ * original destroy runs, each live element is walked as a guest call of a
+ * native witness would be (certified_patches, guest-defined fields left to
+ * their own witnesses) and its nils are rewritten in place to the native
+ * encoding: the destruction is exclusive and final, nothing reads them
+ * after. A shared existential box is never rewritten (boxed_payload refuses
+ * one that would need it). An element the walk cannot certify is refused in
+ * storage guest code made (registered below, by object address); in other
+ * storage it is destroyed as found, being native-made for all hao knows.
+ * Not covered: copies and assignments of elements (the runtime's array
+ * operations and witness calls inside native code), Dictionary and Set
+ * storage, storage of element types guest code never made storage of. */
+typedef void SWIFT heap_destroy_fn(void *__attribute__((swift_context)));
+static heap_destroy_fn *array_destroy_original, *box_destroy_original;
+static hao_gmap guest_storage = HAO_GMAP_INIT(2, 1, 8, 22);   /* object -> 1 made by guest code and live, 0 gone */
+static void storage_note(uint64_t object, uint64_t live)
+{
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    bool fresh;
+    uint64_t *slot = live || hao_gmap_get1(&guest_storage,object) ? hao_gmap_claim1(&guest_storage,object,&fresh) : NULL;
+    if (slot) { slot[1] = live; if (fresh) hao_gmap_publish1(&guest_storage,slot,object); }
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+}
+static void storage_value(const void *type, char *value, bool guest_made)
+{
+    witness_patches w;
+    const char *why = "stored value has unresolved active representation at its final destruction";
+    if (guest_made) witness_walk(type,value,&w,why,0,0);
+    else {
+        const void *unresolved;
+        unsigned passes;
+        w.count = collect_value_patches(type,value,w.p,64,&unresolved,1,NULL,&passes);
+        if (w.count > 0 && !witness_strip_guest(type,&w)) w.count = 0;
+    }
+    unsigned changed = 0;
+    for (int i = 0; i < w.count; ++i) changed += w.p[i].bits != w.p[i].receiver_bits;
+    witness_encode(value,&w);
+    if (changed && hao_opt.bridge_check)
+        fprintf(HAO_DIAG,"hao: Swift storage destroyed by the runtime: %u nils converted (metadata=%p %s)\n",changed,type,
+                guest_made ? "guest-made" : "not guest-made");
+}
+static const void *array_element(const uint64_t *metadata)
+{
+    const char *desc = (const char *)(uintptr_t)metadata[8];
+    uint32_t positive, immediate;
+    memcpy(&positive,desc + 28,4); memcpy(&immediate,desc + 32,4);
+    return positive > immediate ? (const void *)(uintptr_t)metadata[positive - immediate] : NULL;
+}
+static void SWIFT array_storage_destroy(void *__attribute__((swift_context)) object)
+{
+    const uint64_t *o = object;
+    const void *element = array_element((const uint64_t *)(uintptr_t)o[0]);
+    const uint64_t *e = hao_gmap_get1(&guest_storage,(uint64_t)(uintptr_t)object);
+    bool guest_made = e && e[1];
+    if (element && (int64_t)o[2] > 0) {   /* _ContiguousArrayStorage: HeapObject, count, capacity and flags, elements */
+        const witnesses *v = vwt(element);
+        uint64_t mask = v->flags & 255, at = (32 + mask) & ~mask, n = o[2];
+        for (uint64_t i = 0; i < n && v->stride; ++i) storage_value(element,(char *)object + at + i * v->stride,guest_made);
+    }
+    if (e) storage_note((uint64_t)(uintptr_t)object,0);
+    array_destroy_original(object);
+}
+static void SWIFT box_storage_destroy(void *__attribute__((swift_context)) object)
+{
+    const uint64_t *m = (const uint64_t *)(uintptr_t)*(const uint64_t *)object;   /* GenericBoxHeapMetadata */
+    uint32_t offset; memcpy(&offset,(const char *)m + 8,4);
+    const void *boxed = (const void *)(uintptr_t)m[2];
+    const uint64_t *e = hao_gmap_get1(&guest_storage,(uint64_t)(uintptr_t)object);
+    if (boxed) storage_value(boxed,(char *)object + offset,e && e[1]);
+    if (e) storage_note((uint64_t)(uintptr_t)object,0);
+    box_destroy_original(object);
+}
+/* Take over METADATA's destroy (word -2) when it is ORIGINAL's. */
+static bool storage_hook(uint64_t *metadata, heap_destroy_fn *original, heap_destroy_fn *wrapper)
+{
+    uint64_t now = __atomic_load_n(&metadata[-2],__ATOMIC_ACQUIRE);
+    if (now == (uint64_t)(uintptr_t)wrapper) return true;
+    if (now != (uint64_t)(uintptr_t)original) return false;
+    return __atomic_compare_exchange_n(&metadata[-2],&now,(uint64_t)(uintptr_t)wrapper,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE) ||
+           now == (uint64_t)(uintptr_t)wrapper;
+}
+/* OBJECT, just made by guest code (swift_allocObject, swift_allocBox,
+ * _allocateUninitializedArray): array storage or a generic box. */
+void hao_swift_storage_made(void *object)
+{
+    if (hao_opt.no_swift_values || !object) return;
+    uint64_t *m = (uint64_t *)(uintptr_t)*(const uint64_t *)object;
+    if (!m) return;
+    if (m[0] == 0x500) {   /* HeapGenericLocalVariable: {kind, Offset, BoxedType} */
+        if (!box_destroy_original) {
+            Dl_info a, b;
+            void *alloc = HAO_DLSYM("swift_allocBox");
+            if (!alloc || !dladdr((void *)(uintptr_t)m[-2],&a) || !dladdr(alloc,&b) || a.dli_fbase != b.dli_fbase) return;
+            __atomic_store_n(&box_destroy_original,(heap_destroy_fn *)(uintptr_t)m[-2],__ATOMIC_RELEASE);
+        }
+        const void *boxed = (const void *)(uintptr_t)m[2];
+        if (!boxed || witness_state(boxed) == WITNESS_SETTLED) return;
+        if (storage_hook(m,box_destroy_original,box_storage_destroy)) storage_note((uint64_t)(uintptr_t)object,1);
+        return;
+    }
+    if (m[0] <= 0x7ff || !(m[4] & 3) || (const void *)(uintptr_t)m[8] != HAO_DLSYM("$ss23_ContiguousArrayStorageCMn")) return;
+    if (!array_destroy_original) array_destroy_original = HAO_DLSYM("$ss23_ContiguousArrayStorageCfD");
+    const void *element = array_element(m);
+    if (!array_destroy_original || !element || witness_state(element) == WITNESS_SETTLED) return;
+    if (storage_hook(m,array_destroy_original,array_storage_destroy)) storage_note((uint64_t)(uintptr_t)object,1);
 }
 
 /* The value witnesses (slots 0-5) of TYPE, a native struct or enum whose

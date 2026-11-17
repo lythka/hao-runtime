@@ -1587,6 +1587,7 @@ static void trap_storage(hao_thread *t, uint64_t arg)
     hao_thunk_native_args(t);
     t->native_calls++;
     hao_native_call((uint64_t)(uintptr_t)(arg ? nat_alloc_array : nat_alloc_box), &t->cpu, 16);
+    hao_swift_storage_made((void *)(uintptr_t)t->cpu.x[0]);   /* the box, or the array's storage */
 }
 
 static const struct { const char *name; void **fn; hao_trap_fn trap; uint64_t arg; } swiftrt_traps[] = {

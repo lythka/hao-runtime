@@ -270,6 +270,7 @@ static void trap_alloc(hao_thread *t, uint64_t unused)
     hao_swift_storage_alloc((const void *)(uintptr_t)metadata, t->cpu.x[30]);   /* array storage (swiftvalue.c) */
     t->native_calls++;
     hao_native_call((uint64_t)(uintptr_t)native_alloc, &t->cpu, 16);
+    hao_swift_storage_made((void *)(uintptr_t)t->cpu.x[0]);
     if (!t->sig_nest) note_object(t->cpu.x[0], metadata, size);
 }
 

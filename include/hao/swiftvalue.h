@@ -49,6 +49,9 @@ void hao_swift_task_result(const void *future, uint64_t lr);
  * would destroy a nil of the element type in the guest's encoding. */
 void hao_swift_storage_alloc(const void *metadata, uint64_t lr);
 void hao_swift_storage_element(const void *element, uint64_t lr);
+/* OBJECT, array storage or a generic box guest code just made: its element
+ * type's storage gets hao's final-destruction conversion (swiftvalue.c). */
+void hao_swift_storage_made(void *object);
 void hao_swift_value_fork_child(void);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif

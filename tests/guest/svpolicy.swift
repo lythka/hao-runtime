@@ -18,6 +18,10 @@
 //   array:  an array of `C??` the guest fills with a nil and releases last: refused when its storage is
 //           made (the runtime destroys its elements natively, with no boundary hao sees).
 //   box:    a `C??` variable an escaping closure captures (a box): refused when the box is made.
+//   anyarray, anycopy, anyassign, anybox: an [Any] holding a `C??` nil written by guest code, dropped,
+//           copied (the array value) then dropped, or assigned over; a captured generic `Any` holding one
+//           (a box): the runtime destroys the storage natively; hao converts the nils at that final
+//           destruction, so each equals native arm64.
 //   unreflected: a struct compiled without reflection metadata, holding an `Any.Type??`, beside a `C??`:
 //           its fields are not known, so it is refused (zero reported fields are not an empty struct).
 import Foundation
@@ -38,6 +42,16 @@ func dropped<T>(_ v: __owned T) -> Int { _ = consume v; return 1 }
 @_semantics("optimize.sil.specialize.generic.never") @inline(never)
 func captured<T>(_ v: T) -> () -> T { var x = v; let f = { x }; x = v; return f }
 @inline(never) func box() -> String { shown(captured(C??.none)()) }
+@inline(never) func anyArray(_ extra: Int) -> [Any] {
+    var a: [Any] = []
+    a.append(C??.none as Any)
+    a.append(C??.some(nil) as Any)
+    for i in 0..<extra { a.append(i) }
+    return a
+}
+@inline(never) func anyShown(_ a: [Any]) -> String {
+    a.map { v in (v as? C??).map { shown($0) } ?? "\(v)" }.joined(separator: ",")
+}
 @inline(never) func boxed() -> Any { (C??.none, 1, 2, 3) as (C??, Int, Int, Int) }
 
 func shown(_ v: C??) -> String {
@@ -97,6 +111,19 @@ typealias Wide = (C??, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, In
             print("array", array(3))
         case "box":
             print("box", box())
+        case "anyarray":
+            print("anyarray", anyShown(anyArray(2)))
+        case "anycopy":
+            let a = anyArray(1)
+            let b = copied(a)
+            print("anycopy", anyShown(b), a.count)
+        case "anyassign":
+            var a = anyArray(3)
+            print("anyassign", anyShown(a))
+            a = anyArray(0)
+            print("anyassign", anyShown(a))
+        case "anybox":
+            print("anybox", shown(captured(C??.none as Any)() as! C??))
         case "unreflected":
             let w = copied((Unreflected(t: .none), C??.none))
             print("unreflected", w.0.t == nil, shown(w.1))

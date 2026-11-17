@@ -949,6 +949,8 @@ static int existential_payload(reflection *r, const void *type, const unsigned c
 #endif
     const void *payload = (const void *)(uintptr_t)dynamic;
     const witnesses *pv = vwt(payload);
+    int whole = 0;
+    if (settled_node(payload,&whole) && whole) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }   /* by its metadata */
     if (pv->flags & 0x00020000) return boxed_payload(r,payload,value,depth);   /* out of line: a box */
     if (pv->size > 24) return 0;
     r->boxed++;
