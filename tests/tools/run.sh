@@ -105,6 +105,23 @@ for f, want in ((sys.argv[2], True), (sys.argv[3], False)):
 PY
     pass "launch constraints: a parent constraint is sealed into the stub byte for byte; a category constraint refuses the program unless its blob is pinned (another digest is refused), then is left out; the gate: SAME, DIFF unless the release list pins it"
 else bad "launch constraints: rb $rb rc $rc rw $rw gate $rg $rg2 $rg3: $(cat "$d/a.log" "$d/b.log" "$d/c.log" "$d/w.log"; grep constraint "$d/gate.log" "$d/gate2.log" "$d/gate3.log")"; fi
+# --- a program that requires library validation (library flag) gets a hardened-runtime stub: dyld ignores
+# DYLD_INSERT_LIBRARIES for it as natively, and hao still runs it; a plain program's stub does not
+d=$OUT/lvrt; rm -rf "$d"; mkdir -p "$d"
+cp "$G" "$d/lv"; codesign -s - -f -o library "$d/lv" 2>/dev/null; cp "$G" "$d/plain"
+printf '#include <stdio.h>\n__attribute__((constructor)) static void i(void) { fprintf(stderr, "INSERTED\\n"); }\n' >"$d/ins.c"
+printf '#include <unistd.h>\nint main(int c, char **v, char **e) { execve(v[1], v + 1, e); return 127; }\n' >"$d/x.c"
+clang -arch x86_64 -dynamiclib -o "$d/ins.dylib" "$d/ins.c" && clang -arch x86_64 -o "$d/x" "$d/x.c" && codesign -s - -f "$d/ins.dylib" "$d/x" 2>/dev/null || exit 2
+for f in lv plain; do "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$d/$f.emb" "$d/$f" >"$d/$f.log" 2>&1; done
+# x (x86_64, unrestricted) keeps the variable and execs the stub; timeout and env are platform programs, which
+# dyld strips DYLD_* from, so env sets it after them
+nl=$(cd "$d" && timeout -s KILL 60 env DYLD_INSERT_LIBRARIES="$d/ins.dylib" ./x ./lv.emb 2>&1); rl=$?
+np=$(cd "$d" && timeout -s KILL 60 env DYLD_INSERT_LIBRARIES="$d/ins.dylib" ./x ./plain.emb 2>&1); rp=$?
+python3 -I "$repo/tools/stub_identity_gate.py" --host-test "$d/lv.emb" "$d/plain.emb" >"$d/gate.log" 2>&1; rg=$?
+if [ $rl = 7 ] && [ $rp = 7 ] && [ "$(echo "$nl" | grep -c INSERTED)" = 1 ] && [ "$(echo "$np" | grep -c INSERTED)" = 2 ] \
+    && codesign -dv --arch x86_64 "$d/lv.emb" 2>&1 | grep -q "flags=.*runtime" && [ $rg = 0 ]; then
+    pass "library flag: the stub has the hardened runtime, dyld inserts nothing into it, hao runs it (rc 7); a plain program's stub takes the insert; gate SAME"
+else bad "library flag: rc $rl $rp gate $rg: [$nl] [$np] $(grep DIFF "$d/gate.log")"; fi
 d=$OUT/links
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/x" --scan >/dev/null 2>"$d/scan.err"
 grep -q "needs --root" "$d/scan.err" && pass "--scan without --root: usage error" || bad "--scan without --root: $(cat "$d/scan.err")"

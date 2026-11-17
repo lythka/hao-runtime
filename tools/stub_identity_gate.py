@@ -422,13 +422,17 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     if host_test:
         aent = embed.public_only(aent)
     extra = {k: v for k, v in sent.items() if k not in aent}
-    lost = [k for k, v in aent.items() if sent.get(k) != v]
+    lv = hao_codesig.library_validated(ai)
+    lost = [k for k, v in aent.items() if sent.get(k) != v and not (lv and k == hao_codesig.DYLD_ENV)]
     add("sig.entitlements", not lost and all(embed.JIT_ENTITLEMENTS.get(k) == v for k, v in extra.items()),
         f"{len(aent)} keys", f"{len(sent)} keys", ("lost " + ",".join(lost) if lost else "") +
         (" extra " + ",".join(sorted(extra)) if extra else ""))
-    want_rt = hao_codesig.dyld_env_blocked(ai)
+    want_rt = hao_codesig.dyld_env_blocked(ai) or lv
     add("sig.runtime", bool(sflags & CS_RUNTIME) == bool(want_rt or aflags & CS_RUNTIME), hex(aflags), hex(sflags),
-        "hardened runtime when dyld ignores DYLD_* for the program natively")
+        "hardened runtime when dyld ignores DYLD_* for the program natively or it requires library validation")
+    add("sig.dyld_env", not (lv and sent.get(hao_codesig.DYLD_ENV)), "library validation" if lv else "-",
+        "allow-dyld-environment-variables" if sent.get(hao_codesig.DYLD_ENV) else "-",
+        "a library-validated program's stub has no allow-dyld-environment-variables")
     for bit, nm in CS_COPIED_FLAGS.items():
         add("sig." + nm, bool(aflags & bit) == bool(sflags & bit), hex(aflags), hex(sflags))
     add("sig.library", bool(aflags & CS_REQUIRE_LV) == bool(sflags & CS_REQUIRE_LV), hex(aflags), hex(sflags),
