@@ -332,6 +332,8 @@ bool hao_is_guest_function(uint64_t a);
 /* Find the guest image containing a code address (NULL if none). Lock-free:
  * any thread, also in a signal handler, while another thread loads. */
 hao_image *hao_image_for_code(uint64_t addr);
+/* The same without updating the lookup hint: writes nothing (hao_jit_locate) */
+hao_image *hao_image_for_code_peek(uint64_t addr);
 hao_image *hao_image_for_addr(uint64_t addr);
 /* false: addr lies in no range a guest image was ever registered with, so both lookups above
  * return NULL for it (one search of the immutable range snapshot; any thread, signal handlers) */

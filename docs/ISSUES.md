@@ -36,6 +36,53 @@ one per guest, so a user cache made for a newer Mac replaces a shipped
 baseline one in its own directory only. Nothing here ran on AVX-512
 hardware.
 
+## Guest signals on several threads at once in translated code
+
+A guest handler's context gets the exact pc by re-emitting the interrupted
+block (`hao_jit_locate`). The re-emission used one shared buffer behind a
+try-flag, so when two threads took a signal at the same time one of them
+got `cpu.pc` instead: the last block exit, possibly many blocks back, and
+NZCV from memory while the live flags were in RFLAGS. The re-emission now
+only measures (`xb_init_count`) at the block's own address and keeps its
+records on the stack, so it shares nothing and its RIP displacements are the
+first emission's; it counts no statistics and leaves the image-lookup hint
+alone. Test: `guest/signals` mode `locate` (8 threads spinning in
+one loop, a signal to each, 400 rounds): before the fix 140-380 contexts per
+run had a pc outside the loop; after it none, under JIT and AOT. Mode
+`locatefp` does the same in a loop of FADD, FMAX and FCVTNS, whose blocks
+carry an interpreter fallback; with `--stats` its JIT leg must count native + helper
+= guest_insns (before, each locate there took one off `helper`, which
+wrapped below zero). Limits:
+in the interpreter (`--interp`, no JIT memory, the JIT's helper) an
+asynchronous signal can see a register written at the instruction's own pc,
+or the next pc before the write (the mode counts 300-400 such contexts a
+run; it compares only its first line there). Resumption is not affected: a handler that does not
+move the pc resumes where the thread stood.
+
+## Fork child: disposition and name-index locks, half-made cache slots
+
+A fork while another thread held `disp_lock` (guest `sigaction`, signals.c)
+or `ix_lock` (interposer name indexes, interpose.c) left the child's first
+use waiting forever: neither was re-made in the fork child. Both are now,
+and the child drops the disposition records' page cursor (a fork between
+its two updates left a count past the page's end) and maps a new page.
+A built name index is linked after it is published, so a child whose parent
+was building one rebuilds it without linking it twice. The lock-free caches
+of constant formats (vafmt.c), BOOL type strings (objc.c) and async function
+records (swiftmeta.c) free, in the child, a slot another thread had claimed
+but not filled; a lookup of it waited forever. Tests: `test_fork` modes
+`sigaction` and `names` (in `all`, so in `make test`); before the fix 23 of
+60 children hung in `sigaction` and 60 of 60 in `names`, after it none.
+`tests/host/fork_locks.py` (in `make test`) fails when a `static
+pthread_mutex_t` in src/ is in no `*_fork_child` function of its file and
+not on its list of exceptions (the recursive `load_lock`, re-made through
+its init function; the oracle-only `scratch_lock`), or when a hook is called
+from no other hook's body and not registered with `pthread_atfork`; it first
+checks that four mutations of the tree are reported. Limits: the half-made
+slots and the cursor have no failing test (the windows are a few
+instructions; `sigaction` children now take 400 new records each);
+guest initializers still run with `load_lock` held.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

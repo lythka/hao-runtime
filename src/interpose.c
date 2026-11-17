@@ -440,8 +440,6 @@ static xrange *xr;
 static size_t nxr, capxr;
 static pthread_mutex_t xr_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void hao_interpose_fork_child(void) { xr_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
-
 /* under xr_lock: drop [lo, hi) from the set, splitting a range it cuts */
 static void xr_cut(uint64_t lo, uint64_t hi)
 {
@@ -888,9 +886,16 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
  * answers with the first entry of a name, as the linear scans it replaced
  * did. Entries `keep` rejects are left out. A built index is published
  * with release order and never changes again; builders take ix_lock, and
- * each built index joins ix_built for hao_interpose_selfcheck. */
+ * each built index joins ix_built for hao_interpose_selfcheck (a fork child
+ * may lack one its parent was linking when it forked). */
 static pthread_mutex_t ix_lock = PTHREAD_MUTEX_INITIALIZER;
 static hao_name_index *ix_built;
+
+void hao_interpose_fork_child(void)
+{
+    xr_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    ix_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
 
 const char *hao_name_at(const hao_name_index *ix, size_t k)
 {
@@ -923,9 +928,11 @@ static const uint32_t *ix_get(hao_name_index *ix)
             if (ix_kept(ix, k)) v[len++] = (uint32_t)k;
         qsort_r(v, len, sizeof *v, ix, ix_cmp);
         ix->len = len;
+        __atomic_store_n(&ix->idx, v, __ATOMIC_RELEASE);
+        /* linked after it is published: a fork child whose parent was
+         * between the two rebuilds an unpublished index and links it once */
         ix->next = ix_built;
         ix_built = ix;
-        __atomic_store_n(&ix->idx, v, __ATOMIC_RELEASE);
     }
     pthread_mutex_unlock(&ix_lock);
     hao_crit_leave();
