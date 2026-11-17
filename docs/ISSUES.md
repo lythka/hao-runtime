@@ -5,13 +5,20 @@
 `hao_diag_write`, which signal handlers use, was said to be
 async-signal-safe but formatted the log's cap line with `snprintf`, and
 while the log waited for its volume (PID 1 before the Data volume) it
-opened it, formatting the boot header and the kept-lines note. The cap line
-is now built from fixed strings and hand-converted numbers. A plain
-`hao_diag_write` no longer opens a waiting log: its lines are kept and
-written when a stdio write, a report block or a fatal report (fault, abort,
-failed sigreturn: the process dies next) opens it. Test: `test_bridge`
-(`diagsig`) writes from a signal handler while the log waits and across a
-small cap; before, the handler opened the log.
+opened it, formatting the boot header and the kept-lines note the same way;
+the fault, abort and sigreturn reports open it too. All three lines are now
+built from fixed strings and hand-converted numbers. A plain
+`hao_diag_write` no longer opens a waiting log (its lines are kept); stdio,
+report blocks and the fatal reports (`hao_diag_write_fatal`) do. A writer
+that found the log waiting and paused before keeping its line lost it once
+the log opened: the reservation and the close are now one atomic word, and
+such a writer writes to the opened log. A writer stopped for over 2 s
+mid-copy is reported in the note ("bytes still being written may be
+incomplete"). Test: `host/diagsig` inserts a library that counts formatting
+and allocation calls made inside the handler (none allowed); with the old
+boot header it fails. Limits: the unified-log ring (`uni_put`, sandboxed
+processes) has one writer at a time; a writer whose owner is suspended
+waits up to 2 s, then drops its line (counted).
 
 ## Signature parsing on the native-call path
 
