@@ -122,7 +122,11 @@ modes 0755 or 0644. A hao stub without a `__hao_slice` record (a legacy
 stub) is no longer kept: a manifest program gets this payload's stub when
 that gives the recorded result, any other such stub in the System volume
 fails the install (`legacy_stubs` in install.json), and no payload stub
-without the record is embedded. Test: `tests/tools/test_install.py` (14
+without the record is embedded. Every x86 slice of a file is examined (a
+second x86_64 subtype does not hide a stub); a stub is any executable slice
+that names libhao (a library command of any kind, or the name as a string);
+the launcher's `__hao_cli` marker exempts only the payload's own
+usr/libexec/hao, and a file the scan cannot read fails it. Test: `tests/tools/test_install.py` (14
 of its cases fail with the old installer), `tests/tools/bundle.sh`. Limits:
 the manifest's hashes are not a signature; the scan reads the whole System
 volume once; copies outside it are not found.
