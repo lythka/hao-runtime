@@ -49,4 +49,19 @@ for t in dsc crobjc; do
         [ $r = SAME ] || { diff $t.native.out $t.$mode.out | head -20; tail -5 $t.$mode.err; }
     done
 done
+# a cache whose header maps past the end of its file is refused with the reason, not mapped
+for c in /System/Cryptexes/OS /System/Volumes/Preboot/Cryptexes/OS ""; do
+    real=$c/System/Library/dyld/dyld_shared_cache_arm64e
+    [ -r "$real" ] && break
+done
+mkdir -p badroot/System/Library/dyld
+python3.14 -I -c '
+import struct, sys
+h = bytearray(open(sys.argv[1], "rb").read(16384))
+for table, count, size in ((0x10, 0x14, 32), (0x138, 0x13c, 56)):
+    off, n = struct.unpack_from("<II", h, table)
+    if off and n: struct.pack_into("<Q", h, off + 16, 1 << 40)
+open(sys.argv[2], "wb").write(h)' "$real" badroot/System/Library/dyld/dyld_shared_cache_arm64e
+HAO_GUEST_ROOT=$PWD/badroot timeout -s KILL "$T" "$HAO" ./dsc.arm64e >bad.out 2>bad.err
+if grep -q 'a mapping past the end of the file' bad.err; then echo "bad cache refused"; else echo "bad cache not refused"; tail -3 bad.err; fail=1; fi
 exit $fail
