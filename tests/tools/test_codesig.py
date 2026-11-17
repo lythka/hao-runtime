@@ -93,10 +93,13 @@ def blob_cases(blob):
 
 
 def unsealed_cases(mo):
-    """MO with __TEXT ending 16 bytes into the signature, and with function starts and the symbol table
-    starting at it (src/libval.c unsealed_use)."""
+    """MO with __TEXT ending 16 bytes into the signature; function starts and the symbol table starting at
+    it; __DATA mapped from __LINKEDIT's file range; __LINKEDIT writable; and an initializer offsets section
+    added to __LINKEDIT over the signature (src/libval.c unsealed_use)."""
     sig = signature_command(mo)
-    for cmd, off, size in hao_fat.load_commands(mo, "Mach-O"):
+    cmds = list(hao_fat.load_commands(mo, "Mach-O"))
+    seg = {mo[off + 8:off + 24].rstrip(b"\0"): (off, size) for cmd, off, size in cmds if cmd == 0x19}
+    for cmd, off, size in cmds:
         m = bytearray(mo)
         if cmd == 0x19 and mo[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
             struct.pack_into("<Q", m, off + 48, sig[1] + 16 - struct.unpack_from("<Q", mo, off + 40)[0])
@@ -104,6 +107,29 @@ def unsealed_cases(mo):
             struct.pack_into("<I", m, off + 8, sig[1])
         else:
             continue
+        yield bytes(m)
+    if b"__LINKEDIT" not in seg:
+        return
+    le, lsize = seg[b"__LINKEDIT"]
+    if b"__DATA" in seg:
+        m = bytearray(mo)
+        d = seg[b"__DATA"][0]
+        m[d + 40:d + 56] = mo[le + 40:le + 56]          # fileoff, filesize
+        yield bytes(m)
+    m = bytearray(mo)
+    for at in (56, 60):                                 # maxprot, initprot |= write
+        struct.pack_into("<i", m, le + at, struct.unpack_from("<i", mo, le + at)[0] | 2)
+    yield bytes(m)
+    sizeofcmds = struct.unpack_from("<I", mo, 20)[0]
+    end = 32 + sizeofcmds
+    if end + 80 <= sig[1]:                              # in the 80 bytes after the commands (the code's start)
+        vm, _, fo = struct.unpack_from("<QQQ", mo, le + 24)
+        sect = struct.pack("<16s16sQQIIIIIIII", b"__init_offsets", b"__LINKEDIT", vm + sig[1] - fo, 4, sig[1], 0, 0, 0,
+                           0x16, 0, 0, 0)
+        m = bytearray(mo[:le + lsize] + sect + mo[le + lsize:end] + mo[end + 80:])
+        struct.pack_into("<I", m, le + 4, lsize + 80)
+        struct.pack_into("<I", m, le + 64, struct.unpack_from("<I", mo, le + 64)[0] + 1)
+        struct.pack_into("<I", m, 20, sizeofcmds + 80)
         yield bytes(m)
 
 

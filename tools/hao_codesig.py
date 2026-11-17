@@ -206,16 +206,30 @@ LC_SEGMENT_64, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_SYMTAB, LC_DYSYMTAB = 0x19, 0
 
 def unsealed_use(mo, limit):
     """What the loader would use from outside the hashed range [0, LIMIT) of
-    the thin Mach-O MO (src/libval.c unsealed_use): an executable segment's
-    file range, or a range of linkedit data a load command names, that ends
-    past it, in the signature's own bytes, which its hashes do not all seal.
-    None if nothing does. The load commands are hao_fat.load_commands-valid."""
+    the thin Mach-O MO (src/libval.c unsealed_use), in the signature's own
+    bytes, which its hashes do not all seal: the file range of a segment
+    other than a read-only, non-executable __LINKEDIT, the file bytes of a
+    section of any segment, or a range of linkedit data a load command
+    names. None if nothing does. The load commands are
+    hao_fat.load_commands-valid."""
     for cmd, off, size in hao_fat.load_commands(mo, "Mach-O"):
         ranges, what = [], "linkedit data"
         if cmd == LC_SEGMENT_64 and size >= 72:
-            fileoff, filesize = struct.unpack_from("<QQ", mo, off + 40)
-            if struct.unpack_from("<i", mo, off + 60)[0] & 4:
-                ranges, what = [(fileoff, filesize)], "an executable segment"
+            name = mo[off + 8:off + 24].rstrip(b"\0")
+            vmaddr, _, fileoff, filesize = struct.unpack_from("<QQQQ", mo, off + 24)
+            initprot, nsects = struct.unpack_from("<iI", mo, off + 60)
+            if name != b"__LINKEDIT" or initprot & 6:
+                ranges, what = [(fileoff, filesize)], "an executable segment" if initprot & 4 else "a segment"
+            for j in range(nsects if 72 + nsects * 80 <= size else 0):
+                addr, ssize = struct.unpack_from("<QQ", mo, off + 72 + j * 80 + 32)
+                stype = struct.unpack_from("<I", mo, off + 72 + j * 80 + 64)[0] & 0xFF
+                if not ssize or stype in (0x1, 0xC, 0x12):
+                    continue
+                if addr < vmaddr:
+                    return "a section"
+                rel = addr - vmaddr
+                if rel < filesize and fileoff + rel + min(ssize, filesize - rel) > limit:
+                    return "a section"
         elif cmd in _LINKEDIT_DATA and size >= 16:
             ranges = [struct.unpack_from("<II", mo, off + 8)]
         elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and size >= 48:

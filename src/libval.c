@@ -349,11 +349,15 @@ static int exec_ranges(const uint8_t *cmds, uint32_t ncmds, hao_range *r, int ma
 
 /* What the loader would use from outside the hashed range [0, limit): the
  * bytes there are the signature's own, which its hashes do not all seal, so
- * they may change without changing the cdhash. An executable segment's
- * file range, and every range of linkedit data a load command names (the
- * loader's fixups, exports and function starts, and the symbol tables) must
- * end by limit. tools/hao_codesig.py check() applies the same rule, and the
- * AOT generator refuses such a segment the same way (jit.c). NULL: none;
+ * they may change without changing the cdhash. Every segment's file range
+ * but __LINKEDIT's (which holds the signature, and may be neither writable
+ * nor executable, so no fixup slot lies in it), the file bytes of every
+ * section of any segment (initializer offsets and pointers, ObjC and Swift
+ * metadata, whatever the loader or the program reads by section), and
+ * every range of linkedit data a load command names (the loader's fixups,
+ * exports and function starts, and the symbol tables) must end by limit.
+ * tools/hao_codesig.py check() applies the same rule, and the AOT
+ * generator refuses an executable segment the same way (jit.c). NULL: none;
  * else what reaches past it. cmds are hao_macho_check_cmds-valid. */
 static const char *unsealed_use(const uint8_t *cmds, uint32_t ncmds, uint64_t limit)
 {
@@ -366,9 +370,22 @@ static const char *unsealed_use(const uint8_t *cmds, uint32_t ncmds, uint64_t li
         switch (lc->cmd) {
         case LC_SEGMENT_64: {
             const struct segment_command_64 *sg = (const void *)p;
-            if (!(sg->initprot & VM_PROT_EXECUTE)) break;
-            r[nr][0] = sg->fileoff; r[nr++][1] = sg->filesize;
-            what = "an executable segment";
+            bool le = !strncmp(sg->segname, "__LINKEDIT", 16);
+            if (!le || (sg->initprot & (VM_PROT_WRITE | VM_PROT_EXECUTE))) {
+                r[nr][0] = sg->fileoff; r[nr++][1] = sg->filesize;
+                what = sg->initprot & VM_PROT_EXECUTE ? "an executable segment" : "a segment";
+            }
+            /* a section's bytes are where its address puts them in the segment's file range */
+            const struct section_64 *s = (const void *)(sg + 1);
+            for (uint32_t j = 0; j < sg->nsects; j++) {
+                uint32_t type = s[j].flags & SECTION_TYPE;
+                if (!s[j].size || type == S_ZEROFILL || type == S_GB_ZEROFILL || type == S_THREAD_LOCAL_ZEROFILL) continue;
+                if (s[j].addr < sg->vmaddr) return "a section";
+                uint64_t rel = s[j].addr - sg->vmaddr;
+                if (rel >= sg->filesize) continue;
+                uint64_t len = s[j].size < sg->filesize - rel ? s[j].size : sg->filesize - rel;
+                if (sg->fileoff > limit || rel > limit - sg->fileoff || len > limit - sg->fileoff - rel) return "a section";
+            }
             break;
         }
         case LC_SEGMENT_SPLIT_INFO: case LC_FUNCTION_STARTS: case LC_DATA_IN_CODE: case LC_DYLIB_CODE_SIGN_DRS:

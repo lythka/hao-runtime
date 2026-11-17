@@ -1018,7 +1018,9 @@ int main(int argc, char **argv)
     }
 
     /* Nothing the loader uses may lie in the signature's own bytes past the hashed range, which its hashes do not
-     * all seal (src/libval.c unsealed_use): an executable segment, or linkedit data a load command names. */
+     * all seal (src/libval.c unsealed_use): a segment other than a read-only __LINKEDIT (an executable one, or a
+     * writable one whose fixup slots would be there), a section of any segment (initializer offsets), or linkedit
+     * data a load command names. */
     {
         char path[1100], err[512];
         snprintf(path, sizeof path, "%s/unsealed.bin", scratch);
@@ -1027,12 +1029,36 @@ int main(int argc, char **argv)
             {"executable segment reaching into the signature", LC_SEGMENT_64, "__TEXT", 48, 0, 1},
             {"function starts in the signature", LC_FUNCTION_STARTS, NULL, 8, 0, 0},
             {"symbol table in the signature", LC_SYMTAB, NULL, 8, 0, 0},
+            {"writable __DATA mapped from __LINKEDIT's bytes, the signature among them (fixup slots)", LC_SEGMENT_64, "__DATA", 0, 0, 2},
+            {"writable __LINKEDIT (fixup slots in the signature)", LC_SEGMENT_64, "__LINKEDIT", 0, 0, 3},
+            {"initializer offsets section in __LINKEDIT, over the signature", LC_SEGMENT_64, "__LINKEDIT", 0, 0, 4},
         };
         for (size_t i = 0; i < sizeof c / sizeof *c; i++) {
             uint8_t *t = copy_of(seed, n);
-            size_t o = find_cmd(t, c[i].cmd, c[i].seg);
-            if (c[i].w64) wr64(t, o + c[i].at, so + 0x10 - rd32(t, o + 40));   /* __TEXT filesize: to 16 bytes into the signature */
-            else wr32(t, o + c[i].at, (uint32_t)so);                             /* dataoff / symoff: the signature's start */
+            size_t o = find_cmd(t, c[i].cmd, c[i].seg), le = find_cmd(t, LC_SEGMENT_64, "__LINKEDIT");
+            if (c[i].w64 == 1) wr64(t, o + c[i].at, so + 0x10 - rd32(t, o + 40));   /* __TEXT filesize: to 16 bytes into the signature */
+            else if (c[i].w64 == 2) {                                                /* __DATA's file range: __LINKEDIT's */
+                memcpy(t + o + 40, t + le + 40, 8);
+                memcpy(t + o + 48, t + le + 48, 8);
+            } else if (c[i].w64 == 3) {
+                wr32(t, o + 56, rd32(t, o + 56) | VM_PROT_WRITE);
+                wr32(t, o + 60, rd32(t, o + 60) | VM_PROT_WRITE);
+            } else if (c[i].w64 == 4) {               /* one more section, over the 80 bytes after the commands (code) */
+                uint32_t sizeofcmds = rd32(t, 20), csz = rd32(t, o + 4);
+                size_t end = 32 + sizeofcmds;
+                memmove(t + o + csz + 80, t + o + csz, end - (o + csz));
+                struct section_64 s = {.size = 4, .offset = (uint32_t)so, .flags = 0x16 /* S_INIT_FUNC_OFFSETS */};
+                memcpy(s.sectname, "__init_offsets", 14);
+                memcpy(s.segname, "__LINKEDIT", 10);
+                uint64_t vm, fo;
+                memcpy(&vm, t + o + 24, 8);
+                memcpy(&fo, t + o + 40, 8);
+                s.addr = vm + (so - fo);
+                memcpy(t + o + csz, &s, sizeof s);
+                wr32(t, o + 4, csz + 80);
+                wr32(t, o + 64, rd32(t, o + 64) + 1);
+                wr32(t, 20, sizeofcmds + 80);
+            } else wr32(t, o + c[i].at, (uint32_t)so);                               /* dataoff / symoff: the signature's start */
             put_file(path, t, n, n);
             int fd = open(path, O_RDONLY);
             hao_slice *sl = fd >= 0 ? hao_slice_open(fd, err, sizeof err) : NULL;

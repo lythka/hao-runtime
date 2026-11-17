@@ -31,10 +31,11 @@ development Mac under Rosetta, none on an Intel kernel yet.
   `git --version` (3.8 MB) 7.4 MB to 10.2 MB, 0.06 s.
 - An ACL that could not be read counted as no ACL for AOT caches, their
   directories and the identity lists; only ENOENT does now
-  (`tests/aot/policy.c`). An executable segment or linkedit data reaching
+  (`tests/aot/policy.c`). A segment other than a read-only `__LINKEDIT`, a
+  section of any segment (initializer offsets), or linkedit data reaching
   past the hashed range into the signature is invalid in `src/libval.c` and
   `tools/hao_codesig.py` alike (`test_macho`; `tests/tools/test_codesig.py`,
-  8186 cases agree).
+  8204 cases agree).
 
 Limits: the stub's own link-time native dependencies still load, with
 `disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs
