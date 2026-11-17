@@ -193,6 +193,10 @@ void hao_install_fault_handler(void);
 /* trust.c: how far the environment is trusted (hao/aot.h); the switches
  * themselves are read once into hao_opt (hao/opts.h, hao_opts_init). */
 int hao_env_tier(void);                   /* HAO_ENV_OPEN / GUARDED / SETUGID */
+/* dyld restricts this process (set-ID, a __RESTRICT segment, or AMFI's
+ * restrictions: dyld_process_is_restricted): it expands no @ path and takes
+ * no relative dependency path, which hao's own loader follows too. */
+bool hao_env_restricted(void);
 /* hao_opts_init for the CLI's stage 2: flags is the inherited HAO_FLAGS,
  * argv_flags the letters of hao's own command-line switches, each honoured
  * where the environment switch of the same effect is (trust.c). */

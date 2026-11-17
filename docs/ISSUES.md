@@ -710,6 +710,22 @@ across a page boundary, an unmapped page refused). Limits: guest
 a guest can make its code writable and change it before it is
 translated, as a native process without hardened runtime can.
 
+## @ paths in a restricted process, now that app libraries are guest code
+
+dyld expands no `@executable_path`, no `@loader_path` from the main
+executable's LC_RPATHs and no relative path in a restricted process: set-ID,
+or one with a `__RESTRICT` segment (which an embedded stub carries over).
+hao's own loader applied that rule to set-ID processes only. While an app
+library ran natively, dyld refused such a path for it; since app libraries
+with an ARM slice load as guest code (below), hao's loader resolved
+`@rpath/` through the main executable's `@executable_path` rpath in a
+`__RESTRICT` program, where native arm64 fails. The loader now takes
+`dyld_process_is_restricted` as dyld does (`hao_env_restricted`). Test:
+`tests/tools/identity.sh` case `restrict` (`dlopen @rpath/libidplug.dylib`
+failed natively, succeeded under JIT and `--interp`; now fails in all three).
+Limits: AMFI restrictions that dyld reads besides these are covered only as
+far as `dyld_process_is_restricted` reports them.
+
 ## App libraries share the guest ARM representation domain
 
 `guest/xinhab` linked a universal Swift helper whose x86_64 slice hao opened

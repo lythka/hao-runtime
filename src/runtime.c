@@ -3171,14 +3171,15 @@ static bool expand_prefix(hao_image *im, const char *in, char *out, size_t n)
 typedef bool (*cand_fn)(const char *cand, bool os, void *ctx);
 
 /* Call fn for each path dyld would try for `name` as a dependency of `loader`.
- * In a set-ID process dyld expands no @executable_path, no @loader_path
- * from the main executable's LC_RPATHs and no relative path
- * (hao_dep_path_allowed, hao/aot.h): such a path is not tried, and *refused
- * is dyld's reason for the last one. */
+ * In a restricted process (set-ID, or a __RESTRICT segment: hao_env_restricted)
+ * dyld expands no @executable_path, no @loader_path from the main
+ * executable's LC_RPATHs and no relative path (hao_dep_path_allowed,
+ * hao/aot.h): such a path is not tried, and *refused is dyld's reason for
+ * the last one. */
 static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, void *ctx, const char **refused)
 {
     char buf[2048];
-    int tier = hao_env_tier();
+    int tier = hao_env_restricted() ? HAO_ENV_SETUGID : hao_env_tier();
     const char *why;
     *refused = NULL;
     if (!strncmp(name, "@rpath/", 7)) {
