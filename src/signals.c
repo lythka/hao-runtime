@@ -127,6 +127,8 @@ static uint64_t st_delivered, st_deferred, st_moved;
 uint64_t hao_sig_native_installs;
 static pthread_mutex_t disp_lock = PTHREAD_MUTEX_INITIALIZER;
 
+void hao_signals_fork_child(void) { disp_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+
 #define OWNED(s) ((s) == SIGSEGV || (s) == SIGBUS)
 /* the flags Darwin's sigaction reports back (kern_sig.c): never SA_RESETHAND */
 #define REPORTED_FLAGS (SA_ONSTACK | SA_RESTART | SA_SIGINFO | SA_NODEFER | SA_NOCLDSTOP | SA_NOCLDWAIT)

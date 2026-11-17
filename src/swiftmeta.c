@@ -1630,7 +1630,14 @@ static uint64_t st_kp, st_kp_bad, st_dyn_full, st_kp_slots, st_kp_slots_left;
 static uint64_t kp_done[KP_DONE];
 static uint32_t n_kp_done;
 
-void hao_swiftmeta_fork_child(void) { dyn_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+void hao_swiftmeta_fork_child(void)
+{
+    dyn_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    /* async function records being made at the fork: free the slots (as
+     * hao_vafmt_fork_child); a later lookup makes another record */
+    for (uint32_t h = 0; h < AFP_SLOTS; h++)
+        if (afp_tab[h].key && !afp_tab[h].rec) afp_tab[h].key = 0;
+}
 
 /* an island entry for guest function g of img, made now if need be (dyn_lock held); 0 if none can be */
 static uint64_t dyn_entry(hao_image *img, uint64_t g, uint64_t field)

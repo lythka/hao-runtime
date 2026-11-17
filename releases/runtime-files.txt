@@ -681,6 +681,7 @@ tests/host/commpage.sh
 tests/host/dscselhoist.c
 tests/host/dscselhoist.sh
 tests/host/fork.c
+tests/host/fork_locks.py
 tests/host/gmap.c
 tests/host/jitlock.c
 tests/host/jitlock.sh

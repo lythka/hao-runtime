@@ -18,6 +18,25 @@ or the next pc before the write (the mode counts 300-400 such contexts a
 run; it compares only its first line there). Resumption is not affected: a handler that does not
 move the pc resumes where the thread stood.
 
+## Fork child: disposition and name-index locks, half-made cache slots
+
+A fork while another thread held `disp_lock` (guest `sigaction`, signals.c)
+or `ix_lock` (interposer name indexes, interpose.c) left the child's first
+use waiting forever: neither was re-made in the fork child. Both are now.
+A built name index is linked after it is published, so a child whose parent
+was building one rebuilds it without linking it twice. The lock-free caches
+of constant formats (vafmt.c), BOOL type strings (objc.c) and async function
+records (swiftmeta.c) free, in the child, a slot another thread had claimed
+but not filled; a lookup of it waited forever. Tests: `test_fork` modes
+`sigaction` and `names` (in `all`, so in `make test`); before the fix 23 of
+60 children hung in `sigaction` and 60 of 60 in `names`, after it none.
+`tests/host/fork_locks.py` (in `make test`) fails when a `static
+pthread_mutex_t` in src/ is in no `*_fork_child` function of its file and
+not on its list of exceptions (the recursive `load_lock`, re-made through
+its init function; the oracle-only `scratch_lock`). Limits: the half-made
+slots have no test (the window is a few instructions and the tables fill);
+guest initializers still run with `load_lock` held.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
