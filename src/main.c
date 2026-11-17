@@ -22,6 +22,7 @@
 #include <mach-o/loader.h>
 #include <mach/vm_prot.h>
 #include <sys/param.h>
+#include <sys/mount.h>
 #include <sys/proc_info.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -250,6 +251,73 @@ static FILE *aot_open_list(const char *path, uid_t owner)
     return f;
 }
 
+/* Free space for hao --aot --auto, which runs at every start-up until it
+ * has cached the default set. It starts only with AOT_AUTO_NEED_MB free on
+ * the cache directory's volume beyond AOT_AUTO_KEEP_MB: a full default set
+ * writes about 3.5 GB (965 caches of the payload's list). While it runs,
+ * it starts no further program once less than AOT_AUTO_KEEP_MB is free
+ * (each of the up to four running ones may still finish its cache). Either
+ * way it writes no marker, so the next start-up tries again, skipping the
+ * caches already valid. HAO_AOT_FREE_MB=N[,N...] (tests) replaces each
+ * measurement in turn with the next value, the last one repeated. */
+#define AOT_AUTO_NEED_MB 4096
+#define AOT_AUTO_KEEP_MB 2048
+static bool aot_space_watch;      /* aot_auto: aot_default checks before each program it starts */
+static unsigned aot_space_left;   /* programs not started for lack of space */
+static unsigned aot_free_reads;
+
+/* Free megabytes on the volume of the directory the caches go to (cache, else
+ * this process's default; its nearest existing ancestor while it does not exist). */
+static bool aot_free_mb(const char *cache, uint64_t *mb, char *dir, size_t n)
+{
+    if (cache) snprintf(dir, n, "%s", cache);
+    else if (!hao_aot_write_dir(dir, n)) return false;
+    const char *v = hao_opt.aot_free_mb;
+    if (v[0]) {
+        for (unsigned k = 0; k < aot_free_reads && strchr(v, ','); k++) v = strchr(v, ',') + 1;
+        aot_free_reads++;
+        *mb = strtoull(v, NULL, 10);
+        return true;
+    }
+    char at[PATH_MAX];
+    struct statfs fs;
+    snprintf(at, sizeof at, "%s", dir);
+    while (statfs(at, &fs) != 0) {
+        char *sl = strrchr(at, '/');
+        if (errno != ENOENT || !sl || !strcmp(at, "/")) return false;
+        if (sl == at) at[1] = 0;   /* "/private": "/" next */
+        else *sl = 0;
+    }
+    *mb = (uint64_t)fs.f_bavail * fs.f_bsize >> 20;
+    return true;
+}
+
+/* Before --auto starts: true when there is room for the default set. */
+static bool aot_space_start(void)
+{
+    uint64_t mb;
+    char dir[PATH_MAX];
+    if (!aot_free_mb(NULL, &mb, dir, sizeof dir) || mb >= AOT_AUTO_NEED_MB + AOT_AUTO_KEEP_MB) return aot_space_watch = true;
+    fprintf(stderr, "hao-aot: --auto: %llu MB free on the volume of %s, %u MB needed: not run, tried again at the next start-up\n",
+            (unsigned long long)mb, dir, AOT_AUTO_NEED_MB + AOT_AUTO_KEEP_MB);
+    return false;
+}
+
+/* Before aot_default starts a program under --auto: true when it must not (and from then on). */
+static bool aot_space_stop(const char *cache)
+{
+    uint64_t mb;
+    char dir[PATH_MAX];
+    if (!aot_space_watch) return false;
+    if (!aot_space_left) {
+        if (!aot_free_mb(cache, &mb, dir, sizeof dir) || mb >= AOT_AUTO_KEEP_MB) return false;
+        fprintf(stderr, "hao-aot: --auto: %llu MB free on the volume of %s, under %u MB: no further program is started\n",
+                (unsigned long long)mb, dir, AOT_AUTO_KEEP_MB);
+    }
+    aot_space_left++;
+    return true;
+}
+
 static int aot_default(const char *cache, bool check)
 {
     hao_opts_init(NULL);
@@ -310,6 +378,7 @@ static int aot_default(const char *cache, bool check)
                 continue;
             }
             if (r == 0) { valid++; fprintf(stderr, "hao-aot: [%zu/%zu] %s: valid, skipped\n", i + 1, np, paths[i]); continue; }
+            if (aot_space_stop(cache)) continue;
             fprintf(stderr, "hao-aot: [%zu/%zu] %s\n", i + 1, np, paths[i]);
             char *av[7];
             int n = 0;
@@ -371,8 +440,13 @@ static int aot_auto(void)
         while (stat("/dev/console", &st) != 0 || st.st_uid < 501) sleep(30);
         sleep(120);   /* the first login's own start-up first */
     }
+    if (!aot_space_start()) return 0;
     fprintf(stderr, "hao-aot: --auto: start for %s\n", want);
     int rc = aot_default(NULL, false);
+    if (aot_space_left) {
+        fprintf(stderr, "hao-aot: --auto: %u programs not started for lack of space: tried again at the next start-up\n", aot_space_left);
+        return rc;
+    }
     snprintf(tmp, sizeof tmp, "%s.tmp", marker);
     fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (fd < 0) { fprintf(stderr, "hao-aot: --auto: %s: %s\n", tmp, strerror(errno)); return 1; }

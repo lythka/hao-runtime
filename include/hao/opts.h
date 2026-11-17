@@ -29,11 +29,17 @@ typedef struct {
          no_probe,               /* HAO_NO_PROBE: no fault-tolerant reads; blocks.c reads candidates through Mach (signals.c) */
          code_alias,             /* HAO_CODE_ALIAS: hao reads guest code from an alias, the guest's text pages poisoned (code.c) */
          libval_user,            /* HAO_LIBVAL_USER: library validation's signer checks in user space, as on an x86_64 kernel (tests; libval.c) */
-         swift_value_strict;     /* HAO_SWIFT_VALUE_STRICT: a refused Swift value ends the process instead of passing
+         swift_value_strict,     /* HAO_SWIFT_VALUE_STRICT: a refused Swift value ends the process instead of passing
                                     through unpatched (tests; swiftvalue.c) */
+         swift_value_survey,     /* HAO_SWIFT_VALUE_SURVEY: a Swift value passed through unpatched is reported
+                                    ("Swift value survey:" lines; printing only, swiftvalue.c) */
+         crash;                  /* boot argument hao_crash=1 (every process; HAO_CRASH in tests): diagnostics also to
+                                    /dev/console and /private/var/log/hao (runtime.c hao_diag_init) */
     char cache[1024];           /* HAO_CACHE ("" = unset) */
     char guest_root[1024];      /* HAO_GUEST_ROOT ("" = unset) */
     char aot_list_dir[1024];    /* HAO_AOT_LIST_DIR: where hao --aot with no FILE reads its lists (tests; "" = /usr/lib/hao) */
+    char aot_free_mb[128];      /* HAO_AOT_FREE_MB=N[,N...]: free megabytes hao --aot --auto measures, one value per
+                                   measurement, the last repeated (tests; "" = statfs; main.c aot_space) */
     char if_dir[1024];          /* HAO_IF_DIR: interface units (hao/bridge.h) instead of /usr/lib/hao/if ("" = unset) */
     char async_contract_library[1024]; /* explicitly selected own-code async provider; open tier only */
     char trust_list[1024];      /* HAO_TRUST_LIST: extra cdhash list for CLI guests (guest_sig.c; "" = unset) */
@@ -51,8 +57,9 @@ extern hao_opts_t hao_opt;
  * highest: defaults, boot arguments, flags, environment.
  *
  * Boot arguments are set by root and apply in every tier, so only these are
- * read: in every process hao_nx_stats=1, hao_crash_trace=1,
- * hao_bridge_stats=1, hao_diag_time=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1;
+ * read: in every process hao_crash=1, hao_nx_stats=1, hao_crash_trace=1,
+ * hao_bridge_stats=1, hao_diag_time=1, hao_swift_value_survey=1, hao_no_aot=1, hao_no_chain=1,
+ * hao_jit_helpers_only=1;
  * in PID 1 also hao=FLAGS (v, V, i, s) and hao_verbose=N. No boot argument
  * turns a check off (there is no hao_no_libval and no hao=u). A build with
  * HAO_TEST_SWITCHES defined also reads the bring-up knobs that change
@@ -60,8 +67,9 @@ extern hao_opts_t hao_opt;
  *
  * flags and the environment are filtered by hao_env_switch_allowed(). The
  * test switches (HAO_LIBVAL_USER, HAO_SIGRETURN_USER, HAO_AOT_LIMIT_KB,
- * HAO_BRIDGE_ABORT, HAO_NO_JIT_MEMORY, HAO_CODE_ALIAS) are read only by a
- * HAO_TEST_SWITCHES build, from an open-tier environment. */
+ * HAO_BRIDGE_ABORT, HAO_NO_JIT_MEMORY, HAO_CODE_ALIAS, HAO_AOT_LIST_DIR,
+ * HAO_AOT_FREE_MB, HAO_CRASH) are read only by a HAO_TEST_SWITCHES build,
+ * from an open-tier environment. */
 void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *bootargs, bool pid1, int tier);
 /* Runtime (src/trust.c): once per process, from environ and kern.bootargs. */
 void hao_opts_init(const char *flags);

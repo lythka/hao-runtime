@@ -1,5 +1,66 @@
 # Runtime issues and measured scope
 
+## Diagnostics of `hao_crash=1` in the unified log, and their cost
+
+The boot argument `hao_crash=1` sends hao's diagnostics (crash reports with
+register dumps, guest and host addresses, verbose lines) to `/dev/console`
+and `/private/var/log/hao`. A process that cannot write a log there (an App
+Sandbox one) starts a drain thread at startup and sent each line to the unified log as a public record, which any
+user can read with `log show`. The records are now private: `log show`
+prints `<private>` unless the Mac logs private data (a configuration
+profile). A log directory that a user other than its owner may write, or a
+`console.log` owned by another user, is no longer used. `hao_crash=1` is now
+read with the other switches (`hao/opts.h`); `HAO_CRASH=1` sets it in a test
+build. Test: `tests/aot/run.sh` case M (a 0777 and a 0555 log directory:
+no log in the first, every record private; before the change the first got a
+log and the second a public record).
+
+Measured on the 27.2 host under Rosetta (load about 30 on 16 CPUs), test
+build, 40 interleaved runs per cell, medians, with switch off / with a log
+file / with the unified-log fallback (the drain thread):
+- C `hello`: 26.1 / 26.2 / 26.1 ms wall, 19.9 / 19.8 / 20.0 ms CPU, maximum
+  RSS 5.71 / 5.71 / 5.81 MB;
+- Objective-C (Foundation): 33.1 / 33.3 / 33.4 ms, 26.0 / 26.2 / 26.4 ms CPU,
+  9.12 / 9.11 / 9.26 MB;
+- Swift (Foundation): 39.6 / 39.2 / 39.8 ms, 32.3 / 32.2 / 32.5 ms CPU,
+  9.78 / 9.79 / 9.86 MB.
+Start time is within the noise (under 0.5 ms); the drain thread adds about
+0.1 MB of RSS. A process that reports nothing writes 0 bytes (the first one
+of a boot writes the 62-byte header); a crash report of a small guest is
+about 1.1 KB. The log is capped at 64 MB per boot and directory. Not
+measured: the target Mac, and how many programs report lines there.
+
+## The Swift value survey is opt-in
+
+The `Swift value survey:` lines for a Swift value hao passes to native code
+unpatched (see "Refusal policy" below) were printed in every process, and
+with `hao_crash=1` reached the console, the log and the unified log. They
+are now printed only with `HAO_SWIFT_VALUE_SURVEY=1` (a guarded process
+honours it too) or boot argument `hao_swift_value_survey=1`. The
+pass-through itself is unchanged. Without the switch a declined value costs
+no lock, walk or output. With it, each first (type, reason) pair costs the
+survey walk and the schema dump: for a three-field value with two refusing
+fields (`swiftlayout` section S's), 26 us and 1.43 ms on the host, and
+about 8 KB of output; a process reports up to 1024 pairs. No guest test
+reaches a declined value, so the switch is tested only by `opts_test`.
+
+## `hao --aot --auto` and free space
+
+`hao --aot --auto` (the `hao.aot` LaunchDaemon, at every start-up until done)
+wrote caches with no regard for free space; a full default set is about
+3.5 GB. It now starts only with 6 GB free on the cache directory's volume
+(4 GB for the set and 2 GB kept), and starts no further program once less
+than 2 GB is free; the up to four running ones finish. In both cases it
+writes no marker and logs one line, so the next start-up tries again and
+skips the caches already valid. The space is the volume's available blocks
+(`statfs`; purgeable space is not counted) for the directory the caches go
+to, or its nearest existing ancestor. `HAO_AOT_FREE_MB=N[,N...]` (test
+builds) replaces each measurement in turn. Test: `guest/aotdefault` (short at
+the start: nothing runs; short after one program: the second waits; then the
+rest and the marker). Limits: the 4 GB is the payload's list measured once,
+not an estimate from the programs left to cache; a single cache larger than
+the 2 GB kept is not foreseen.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
@@ -2374,7 +2435,9 @@ Rules as implemented:
 Refusal policy (`swiftvalue.c` `decline`): a value the walk cannot certify,
 and the ownership cases it cannot carry out, pass through unpatched by
 default. The native witness runs on the guest's bytes, and a published result
-stays as the guest wrote it. The first time a (type, reason) pair occurs in a
+stays as the guest wrote it. With `HAO_SWIFT_VALUE_SURVEY=1` (boot argument
+`hao_swift_value_survey=1`; off by default, see "The Swift value survey is
+opt-in"), the first time a (type, reason) pair occurs in a
 process, hao prints three things under the stable prefix `Swift value
 survey:`: the value's innermost refusing types (`refused at offset N depth D:
 ... type=...`, from a second walk in survey mode), the schema of the value,

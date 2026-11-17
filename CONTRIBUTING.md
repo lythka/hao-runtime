@@ -71,14 +71,18 @@ image works; those are tested on the target system.
   process none.
 - The scripts that use a test switch (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`,
   `HAO_AOT_LIMIT_KB`, `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`,
-  `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`) need a build compiled with `-DHAO_TEST_SWITCHES`; a
-  release build ignores them.
+  `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`, `HAO_AOT_FREE_MB`, `HAO_CRASH`) need
+  a build compiled with `-DHAO_TEST_SWITCHES`; a release build ignores them.
 - `HAO_BRIDGE_CHECK=1` reports native-boundary mismatches, such as unbalanced
   native frames and results that differ from the signature. `HAO_NX_STATS=1`
   groups, by native caller and guest target, the native-to-guest calls that
   arrived by faulting on a non-executable guest page, and prints them at exit.
 - On a target system, the boot arguments `hao_crash=1` and `hao_nx_stats=1`
-  send the same diagnostics to the console and `/private/var/log/hao`.
+  send the same diagnostics to the console and `/private/var/log/hao`
+  (`HAO_CRASH=1` does what `hao_crash=1` does, in a test build).
+- `HAO_SWIFT_VALUE_SURVEY=1` (boot argument `hao_swift_value_survey=1`)
+  prints the `Swift value survey:` lines for Swift values hao passes to native
+  code unpatched; without it they pass through silently.
 - `HAO_DIAG_TIME=1` (boot argument `hao_diag_time=1`) starts each diagnostics
   line with `@SECONDS ` on the mach clock, the clock of the kernel's and the
   unified log's timestamps, and prints one `phase NAME at S s (+MS ms)` line per
