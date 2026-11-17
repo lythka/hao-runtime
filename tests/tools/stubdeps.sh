@@ -87,7 +87,10 @@ if diff want.deps stub.deps >deps.diff; then
 else bad "deps: stub's LC_LOAD_DYLIBs differ: $(tr '\n' ' ' <deps.diff)"; fi
 # the same library in protected storage (an image root's usr/bin) is linked; under /Library, or behind an
 # earlier rpath under /Library, it is not (manifest not_linked says why)
-mkdir -p sroot/usr/bin/lib sroot/Library/Tools/lib
+mkdir -p sroot/usr/bin/lib sroot/Library/Tools/lib sroot/System/Library/CoreServices
+# the image's OS version (what a library's minos is held to): this host's
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>ProductVersion</key><string>%s</string></dict></plist>\n' \
+    "$(sw_vers -productVersion)" >sroot/System/Library/CoreServices/SystemVersion.plist
 cp lib/libfat.dylib sroot/usr/bin/lib/; cp lib/libfat.dylib sroot/Library/Tools/lib/
 cp prog sroot/usr/bin/prog; cp prog sroot/Library/Tools/prog
 # rpath P: the program linked against @rpath/libfat.dylib with the rpath list P...
@@ -140,14 +143,35 @@ for a in arm64e x86_64 x86_64h; do
 done
 fat sroot/usr/bin/uni/libU.dylib ctx/libU.arm64e ctx/libU.x86_64 ctx/libU.x86_64h
 clang -arch arm64e -o sroot/usr/bin/prog8 m.c -Lsroot/usr/bin/uni -lU -Wl,-rpath,@executable_path/uni && codesign -s - -f sroot/usr/bin/prog8 2>/dev/null || exit 2
+# a library dyld might not load into the stub ends nothing either: x86_64h only (usr/bin/libh), or built for
+# a newer macOS than the image's (usr/bin/libn); the next path is under /Library
+mkdir -p sroot/usr/bin/libh sroot/usr/bin/libn
+clang -arch x86_64h -dynamiclib -install_name @rpath/libfat.dylib -o sroot/usr/bin/libh/libfat.dylib "$here/stubdeps_lib.c" \
+    && codesign -s - -f sroot/usr/bin/libh/libfat.dylib 2>/dev/null || exit 2
+clang -arch x86_64 -dynamiclib -install_name @rpath/libfat.dylib -o sroot/usr/bin/libn/libfat.dylib "$here/stubdeps_lib.c" || exit 2
+python3 -I - sroot/usr/bin/libn/libfat.dylib <<'PY' && codesign -s - -f sroot/usr/bin/libn/libfat.dylib 2>/dev/null || exit 2
+import struct, sys
+b = bytearray(open(sys.argv[1], "rb").read())
+at = 32
+for _ in range(struct.unpack_from("<I", b, 16)[0]):
+    cmd, size = struct.unpack_from("<II", b, at)
+    if cmd == 0x32:
+        struct.pack_into("<I", b, at + 12, 99 << 16)   # minos 99.0
+    at += size
+open(sys.argv[1], "wb").write(b)
+PY
+rprog sroot/usr/bin/prog9 -Wl,-rpath,@executable_path/libh -Wl,-rpath,/Library/L2
+rprog sroot/usr/bin/prog10 -Wl,-rpath,@executable_path/libn -Wl,-rpath,/Library/L2
 python3 "$EMBED" --stub "$B/hao-stub" --stubs spay2 --root sroot --x86-cache "$X86" sroot/usr/bin/prog6 sroot/usr/bin/prog7 \
-    sroot/usr/bin/prog8 >spay2.log 2>&1 || bad "deps: --stubs (search): $(cat spay2.log)"
-python3 -I - spay2/manifest.json <<'PY' && pass "deps: a path with no x86_64 library does not end dyld's search; a library is judged in every rpath context and for every x86_64 slice" || bad "deps: search and contexts: $(cat spay2.log)"
+    sroot/usr/bin/prog8 sroot/usr/bin/prog9 sroot/usr/bin/prog10 >spay2.log 2>&1 || bad "deps: --stubs (search): $(cat spay2.log)"
+python3 -I - spay2/manifest.json <<'PY' && pass "deps: a path with no x86_64 library, an x86_64h-only one or one for a newer macOS does not end dyld's search; a library is judged in every rpath context and for every x86_64 slice" || bad "deps: search and contexts: $(cat spay2.log)"
 import json, sys
 m = {e["path"]: dict(e["not_linked"]) for e in json.load(open(sys.argv[1]))["files"]}
 assert m["usr/bin/prog6"]["@rpath/libfat.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog6"]
 assert m["usr/bin/prog7"]["@rpath/libL.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog7"]
 assert m["usr/bin/prog8"]["@rpath/libU.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog8"]
+for p in ("usr/bin/prog9", "usr/bin/prog10"):
+    assert m[p]["@rpath/libfat.dylib"].startswith("outside protected storage (/Library)"), (p, m[p])
 PY
 # the identity gate: these stubs pass; usr/bin/prog's stub (it links @rpath/libfat.dylib) checked as the stub of
 # the same program under /Library fails dylibs.protected
