@@ -146,6 +146,15 @@ reads the thunk tables. Measured on the development host (Rosetta, load
 1.21 s, after 0.91 s (13,000 W^X writes for 28,000 blocks, 32,000 links
 and 56,000 thunks); a steady loop 1.68 to 1.71 s both. No Intel run yet.
 
+Not verified on Intel hardware: block chaining rewrites a 4-aligned
+rel32 in code other threads may be running, with one store and no
+serializing instruction on the threads that run it. That keeps the
+store whole (it never crosses 8 bytes or a cache line), and both the
+old and the new target are complete translations, but it is not the
+cross-modifying-code protocol Intel documents (the executing processor
+synchronizes). Rosetta runs on the development host say nothing about
+Intel processors; this needs a stress run on one.
+
 ## Patched guest code pages stayed writable
 
 `hao_code_write` (the one writer of guest instructions: the shared-cache
