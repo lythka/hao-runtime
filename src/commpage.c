@@ -83,7 +83,10 @@ static bool map_page(int k)
     /* VM_FLAGS_FIXED without OVERWRITE: fails if anything is mapped there */
     if (mach_vm_allocate(mach_task_self(), &a, CP_SIZE, VM_FLAGS_FIXED) != KERN_SUCCESS || a != at[k]) return false;
     memcpy((void *)(uintptr_t)a, tmpl, CP_SIZE);
-    mprotect((void *)(uintptr_t)a, CP_SIZE, PROT_READ);
+    if (mprotect((void *)(uintptr_t)a, CP_SIZE, PROT_READ) != 0) {   /* never leave it writable */
+        mach_vm_deallocate(mach_task_self(), a, CP_SIZE);
+        return false;
+    }
     return true;
 }
 

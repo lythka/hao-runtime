@@ -1,5 +1,16 @@
 # Runtime issues and measured scope
 
+## Unchecked protection changes
+
+Five protection and handler changes ignored failure: the guest stack's
+guard page, the final segment protections of a loaded image (a failure
+left `__TEXT` and `__DATA_CONST` writable), the read-only copy of a slice,
+the emulated commpage, and the SIGSEGV/SIGBUS handler every native-to-guest
+call goes through. A failed segment or slice protection now fails the load
+with the reason; a commpage page that cannot be made read-only is released
+and treated as not mapped; a guard page or fault handler that cannot be set
+ends the process with a message. No test makes these calls fail.
+
 ## Long demangled Swift names
 
 The bind-time rules that read a native Swift function's demangled name

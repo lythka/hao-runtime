@@ -175,7 +175,11 @@ static hao_thread *thread_new(void)
         write(2, msg, sizeof msg - 1);
         abort();
     }
-    mprotect(m, GUEST_STACK_GUARD, PROT_NONE);
+    if (mprotect(m, GUEST_STACK_GUARD, PROT_NONE) != 0) {
+        static const char msg[] = "hao: guest stack: cannot protect its guard page\n";
+        write(2, msg, sizeof msg - 1);
+        abort();
+    }
     hao_thread *t = (hao_thread *)(m + GUEST_STACK_GUARD + ss);   /* zero-filled */
     t->stack = m + GUEST_STACK_GUARD;
     t->stack_size = ss;
@@ -2709,8 +2713,11 @@ void hao_install_fault_handler(void)
     sa.sa_sigaction = hao_fault_entry;
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
-    hao_sys_sigaction(SIGSEGV, &sa, NULL);
-    hao_sys_sigaction(SIGBUS, &sa, NULL);
+    if (hao_sys_sigaction(SIGSEGV, &sa, NULL) != 0 || hao_sys_sigaction(SIGBUS, &sa, NULL) != 0) {
+        /* every native-to-guest call and guest fault goes through this handler */
+        fprintf(stderr, "hao: cannot install the fault handler (errno %d)\n", errno);
+        abort();
+    }
     hao_signals_hook();   /* native installs of SIGSEGV/SIGBUS go to the shadow from now on */
 }
 
