@@ -30,7 +30,7 @@ ifdef TEST_SWITCHES
 REPRO     += -DHAO_TEST_SWITCHES
 endif
 WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-CFLAGS    := $(ARCH) -std=gnu11 -O2 -g $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
+CFLAGS    := $(ARCH) -std=gnu11 -O2 -g -ffp-contract=off $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
 # Changing MACOS_MIN in one B rebuilds everything there.
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
