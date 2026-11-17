@@ -896,12 +896,18 @@ void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
         }
         if (restored && hao_opt.bridge_check)
             fprintf(HAO_DIAG,"hao: Swift Optional witness nils returned to native: %u at %#llx\n",restored,(unsigned long long)indirect);
-        if (lost && !__atomic_fetch_add(&witness_made_lost,lost,__ATOMIC_RELAXED))
-            fprintf(HAO_DIAG,"hao: Swift Optional witness nils not tracked (%u past a ring of %u): a callback result at %#llx "
-                    "may keep the guest's encoding\n",lost,ring,(unsigned long long)indirect);
+        /* a callback's return may be a guest signal handler's: a counter, and one fixed line
+         * through the async-signal-safe diagnostic write; --stats reports the count */
+        if (lost && !__atomic_fetch_add(&witness_made_lost,lost,__ATOMIC_RELAXED)) {
+            static const char msg[] = "hao: Swift Optional witness nils past the ring were not tracked: a callback "
+                                      "result may keep the guest's encoding (count: --stats)\n";
+            hao_diag_write(msg,sizeof msg - 1);
+        }
     }
     t->swift_made_n = mark;
 }
+
+uint64_t hao_swift_witness_lost(void) { return __atomic_load_n(&witness_made_lost,__ATOMIC_RELAXED); }
 
 void hao_swift_witness_stats(void)
 {
