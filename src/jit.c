@@ -4761,12 +4761,65 @@ static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
  * memory outside its images (the guest's own generated code) are never
  * translated ahead: the guest may not have written them yet. */
 #define BURST 8
-#define BURST_LINKS 128              /* direct exits of one block: at most one per instruction, and the fall-through */
+#define BURST_LINKS 128
+typedef struct { uint64_t pc; uint8_t *code; } burst_blk;
+
+/* jit_lock held: emit the block at p into the write mapping at w (base_slot: the image's base slot as
+ * seen there, when it has one), recording its direct exits in links. 0 and *len, or 1 when it did not fit
+ * and 2 when it overflowed otherwise. Not inlined: its context and instructions stay out of translate's
+ * frame, which runs deep in native stacks (guest/faultstack). */
+__attribute__((noinline)) static int burst_emit(uint64_t p, hao_image *im, uint8_t *w, uint8_t *base_slot, size_t room,
+                                                struct aot_link *links, int *nlinks, size_t *len)
+{
+    uint32_t insns[MAX_BLOCK_INSNS];
+    int n = fetch_block(p, im, insns);
+    tctx t;
+    memset(&t, 0, sizeof t);
+    if (im) {
+        /* written through the W^X write mapping: the base slot is addressed rip-relative, at the same distance */
+        t.base = im->base;
+        t.base_slot = base_slot;
+    }
+    t.links = links;
+    t.caplinks = BURST_LINKS;
+    xb_init(&t.b, w, room);
+    emit_block(&t, p, insns, n);
+    if (t.b.overflow) return t.b.p >= t.b.end ? 1 : 2;
+    if (t.b.bad) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "x86 encoder rejected an operand or displacement in the block at %#llx\n", (unsigned long long)p);
+        abort();
+    }
+    *nlinks = t.nlinks;
+    *len = xb_len(&t.b);
+    return 0;
+}
+
+/* the code of the burst's block for pc, or NULL (not inlined: vectorized in place, it spilled the table
+ * onto translate's frame) */
+__attribute__((noinline)) static void *burst_find(const burst_blk *b, unsigned n, uint64_t pc)
+{
+    for (unsigned j = 0; j < n; j++)
+        if (b[j].pc == pc) return b[j].code;
+    return NULL;
+}
+
+/* jit_lock held: enter a burst's blocks in the translation table; the first one's code, or NULL. Not
+ * inlined: insert's frame would join translate's, which runs deep in native stacks (guest/faultstack) */
+__attribute__((noinline)) static void *burst_publish(const burst_blk *b, unsigned n)
+{
+    void *first = NULL;
+    for (unsigned j = 0; j < n; j++) {
+        if (!insert(b[j].pc, b[j].code)) { cache_exhausted(); break; }
+        rmap_add(b[j].code, b[j].pc);
+        if (!j) first = b[j].code;
+    }
+    return first;
+}              /* direct exits of one block: at most one per instruction, and the fall-through */
 static void *translate(uint64_t pc)
 {
     if (__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) return NULL;
     if (table_used >= TABLE_MAX) { cache_exhausted(); return NULL; }
-    uint32_t insns[MAX_BLOCK_INSNS];
     hao_image *im = hao_image_for_code(pc);
     if (im && !im->jit_slot) {
         /* fill and claim the slot before publishing it (see jit_lock) */
@@ -4785,60 +4838,41 @@ static void *translate(uint64_t pc)
     static struct aot_link links[BURST_LINKS];               /* jit_lock */
     static struct { uint8_t *site; uint64_t target; } exits[BURST * BURST_LINKS];
     static uint64_t queue[BURST * BURST_LINKS + 1];
-    static struct { uint64_t pc; uint8_t *code; } made_blk[BURST];   /* published after the write is closed */
+    static burst_blk made_blk[BURST];   /* published after the write is closed */
     unsigned nexit = 0, qn = 0, qi = 0, made = 0;
     queue[qn++] = pc;
-    void *first = NULL;
     while (qi < qn && made < BURST) {
         uint64_t p = queue[qi++];
-        bool dup = false;
-        for (unsigned j = 0; j < made; j++) dup |= made_blk[j].pc == p;
-        if (made && (dup || !im || hao_image_for_code(p) != im || im->aot || hao_is_trap(p) || lookup(p) || table_used + made >= TABLE_MAX))
+        if (made && (burst_find(made_blk, made, p) || !im || hao_image_for_code(p) != im || im->aot || hao_is_trap(p) || lookup(p) || table_used + made >= TABLE_MAX))
             continue;
         uint8_t *cur = cache_ptr > start ? (uint8_t *)(((uintptr_t)cache_ptr + 15) & ~(uintptr_t)15) : start;
         size_t left = (size_t)(start + room - cur), broom = left < MAX_BLOCK_BYTES ? left : MAX_BLOCK_BYTES;
         if (made && broom < MAX_BLOCK_BYTES) break;
-        int n = fetch_block(p, im, insns);
-        tctx t;
-        memset(&t, 0, sizeof t);
-        if (im) {
-            /* written through the W^X write mapping: the base slot is addressed rip-relative, at the same distance */
-            t.base = im->base;
-            t.base_slot = w + ((uint8_t *)im->jit_slot - start);
-        }
-        t.links = links;
-        t.caplinks = BURST_LINKS;
-        xb_init(&t.b, w + (cur - start), broom);
-        emit_block(&t, p, insns, n);
-        if (t.b.overflow) {
+        size_t len;
+        int nl, r = burst_emit(p, im, w + (cur - start), w + ((uint8_t *)(im ? im->jit_slot : NULL) - start), broom, links, &nl, &len);
+        if (r) {
             if (made) break;   /* the burst ends before it */
             hao_wx_end(&win, 0);
             /* nothing was claimed. At the end of the cache the block did not
              * fit; otherwise an internal rel8 was out of range or the block
              * outgrew MAX_BLOCK_BYTES (a hao bug) */
-            if (t.b.p >= t.b.end && broom == avail) cache_exhausted();
+            if (r == 1 && broom == avail) cache_exhausted();
             else __atomic_fetch_or(&warn_pending, WARN_OVERFLOW, __ATOMIC_RELAXED);
             return NULL;
         }
-        if (t.b.bad) {
-            hao_diag_prefix(HAO_DIAG);
-            fprintf(HAO_DIAG, "x86 encoder rejected an operand or displacement in the block at %#llx\n", (unsigned long long)p);
-            abort();
-        }
-        block_commit(cur, xb_len(&t.b));
-        st_bytes += xb_len(&t.b);
+        block_commit(cur, len);
+        st_bytes += len;
         made_blk[made].pc = p;
         made_blk[made++].code = cur;
-        for (int k = 0; k < t.nlinks && nexit < BURST * BURST_LINKS; k++) {
-            exits[nexit].site = cur + t.links[k].site;
-            exits[nexit++].target = t.links[k].target;
-            if (qn < BURST * BURST_LINKS + 1) queue[qn++] = t.links[k].target;
+        for (int k = 0; k < nl && nexit < BURST * BURST_LINKS; k++) {
+            exits[nexit].site = cur + links[k].site;
+            exits[nexit++].target = links[k].target;
+            if (qn < BURST * BURST_LINKS + 1) queue[qn++] = links[k].target;
         }
     }
     /* direct exits to translated code: chained now (the dispatcher would, one write each) */
     for (unsigned k = 0; k < nexit && !hao_opt.no_chain; k++) {
-        void *next = NULL;
-        for (unsigned j = 0; j < made && !next; j++) if (made_blk[j].pc == exits[k].target) next = made_blk[j].code;
+        void *next = burst_find(made_blk, made, exits[k].target);
         if (!next) next = lookup(exits[k].target);
         uintptr_t site = (uintptr_t)exits[k].site;
         if (!next || (site & 3) || hao_is_trap(exits[k].target)) continue;
@@ -4848,12 +4882,7 @@ static void *translate(uint64_t pc)
     }
     hao_wx_end(&win, made ? (size_t)(cache_ptr - start) : 0);
     /* published only now: no write view of their code is left */
-    for (unsigned j = 0; j < made; j++) {
-        if (!insert(made_blk[j].pc, made_blk[j].code)) { cache_exhausted(); break; }
-        rmap_add(made_blk[j].code, made_blk[j].pc);
-        if (!j) first = made_blk[j].code;
-    }
-    return first;
+    return burst_publish(made_blk, made);
 }
 
 /* Which guest instruction a host pc inside translated code belongs to.
