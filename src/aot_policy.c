@@ -289,13 +289,16 @@ static bool pw_dir_ok(const char *d)
     return strlen(d) + sizeof "/Library/Caches/hao" < sizeof ((hao_aot_dir *)0)->path;
 }
 
+bool hao_aot_system_only;
+
 int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_cache, hao_aot_dir *out,
                      int *write_idx, char *why, size_t n)
 {
     int k = 0;
     *write_idx = -1;
     if (why && n) why[0] = 0;
-    if (tier == HAO_ENV_OPEN && hao_cache && hao_cache[0]) {
+    bool user = tier == HAO_ENV_OPEN && !hao_aot_system_only;
+    if (user && hao_cache && hao_cache[0]) {
         if (hao_cache[0] != '/') { if (why && n) snprintf(why, n, "HAO_CACHE=%s is not absolute; AOT is off", hao_cache); return 0; }
         if (strlen(hao_cache) >= sizeof out[0].path) { if (why && n) snprintf(why, n, "HAO_CACHE is too long; AOT is off"); return 0; }
         snprintf(out[0].path, sizeof out[0].path, "%s", hao_cache);
@@ -309,7 +312,7 @@ int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_c
     out[k].kind = HAO_AOT_SYS;
     if (euid == 0 && tier != HAO_ENV_SETUGID) *write_idx = k;
     k++;
-    if (tier == HAO_ENV_OPEN && euid >= 501 && euid < 0x80000000u && pw_dir_ok(pw_dir)) {
+    if (user && euid >= 501 && euid < 0x80000000u && pw_dir_ok(pw_dir)) {
         size_t l = strlen(pw_dir);
         while (l > 1 && pw_dir[l - 1] == '/') l--;
         snprintf(out[k].path, sizeof out[k].path, "%.*s/Library/Caches/hao", (int)l, pw_dir);

@@ -180,7 +180,11 @@ typedef struct { char path[1024]; int kind; } hao_aot_dir;
  * unless tier is OPEN, so never read by root; must be absolute, else nothing is used and why says
  * so). pw_dir is the euid's home from the user database (never $HOME);
  * a user directory exists only for an OPEN process with 501 <= euid <
- * 0x80000000. */
+ * 0x80000000. With hao_aot_system_only set (the running program requires
+ * library validation: guest_sig.c hao_guest_switches_for) neither HAO_CACHE
+ * nor the user directory is listed, whatever the tier: a cache is native
+ * code, and the user can write one there. */
+extern bool hao_aot_system_only;
 int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_cache, hao_aot_dir *out,
                      int *write_idx, char *why, size_t n);
 

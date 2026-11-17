@@ -255,6 +255,24 @@ static void test_stat_rules(const char *tmp)
     CHECK(!hao_aot_dir_ok("relative", HAO_AOT_EXPLICIT, me, why, sizeof why), "relative path rejected");
 }
 
+/* A program that requires library validation reads AOT caches from the system directories only: neither
+ * HAO_CACHE nor the user's own directory, which the user can write (guest_sig.c sets the flag). */
+static void test_system_only(void)
+{
+    hao_aot_dir d[HAO_AOT_MAX_DIRS];
+    int w;
+    char why[256];
+    hao_aot_system_only = true;
+    int n = hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/x", NULL, d, &w, why, sizeof why);
+    CHECK(n == 2 && !strcmp(d[0].path, HAO_AOT_SYS_RO_DIR) && !strcmp(d[1].path, HAO_AOT_SYS_DIR) && w == -1,
+          "system only: an ordinary user's process reads the system directories, writes none (%d dirs)", n);
+    n = hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/x", "/Users/x/c", d, &w, why, sizeof why);
+    CHECK(n == 2 && !strcmp(d[1].path, HAO_AOT_SYS_DIR) && w == -1, "system only: HAO_CACHE not used (%d dirs)", n);
+    hao_aot_system_only = false;
+    n = hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/x", NULL, d, &w, why, sizeof why);
+    CHECK(n == 3, "without it: the user's directory is read again (%d dirs)", n);
+}
+
 /* ACLs: only "no extended ACL" (ENOENT from the lookup) grants nothing. A lookup that fails otherwise
  * leaves the entries unknown, and counts as granting write access. */
 static void test_acl(const char *tmp)
@@ -565,6 +583,7 @@ int main(int argc, char **argv)
     test_system_dirs();
     test_tiers();
     test_dirs();
+    test_system_only();
     test_stat_rules(argv[1]);
     test_acl(argv[1]);
     test_format();
