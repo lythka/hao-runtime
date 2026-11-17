@@ -692,6 +692,14 @@ static const char *cpu_profile_missing(void)
     return NULL;
 }
 
+static void guest_native_app_libs_policy(const hao_codesig *cs)
+{
+    if (!hao_opt.native_app_libs || !hao_codesig_library_validated(cs)) return;
+    hao_opt.native_app_libs = false;
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG, "ignoring HAO_NATIVE_APP_LIBS: guest requires library validation\n");
+}
+
 static int run_guest(const char *path, int fd, int argc, char **argv, char **envp)
 {
     const char *missing = cpu_profile_missing();
@@ -732,6 +740,7 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
      * descriptor, not a second resolution of PATH (the loader closes fd) */
     char err[512], real[MAXPATHLEN];
     if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
+    hao_libval_set_main_policy(guest_native_app_libs_policy);
     hao_image *img = hao_load_main_image(path, fd, err, sizeof err);
     if (!img) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "%s\n", err); return 126; }
     hao_phase("load");

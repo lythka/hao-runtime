@@ -455,6 +455,9 @@ static char main_team[32];          /* its Team ID ("" none, or longer than 31 b
 static char route[96];              /* how this image was decided (img->libval_route) */
 
 static void (*report_line)(const char *);
+static void (*main_policy)(const hao_codesig *);
+
+void hao_libval_set_main_policy(void (*fn)(const hao_codesig *)) { main_policy = fn; }
 
 void hao_libval_set_verifier(hao_imgsig_fn fn, bool force, void (*report)(const char *))
 {
@@ -658,6 +661,10 @@ int hao_libval_image(hao_image *img, hao_slice *sl, char *why, size_t n)
         const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
                                             HAO_SLICE_SECTION, &size);
         if (record && hao_libval_bound(record, size, sl, why, n) != 0) return -1;
+        if (main_policy) {
+            if (sl->sig_size && hao_slice_verify(sl, NULL, why, n) != 0) return -1;
+            main_policy(&sl->sig);
+        }
         return mode == HAO_LIBVAL_UNDECIDED ? decide(sl, why, n) : 0;
     }
     if (!integrity) return 0;
