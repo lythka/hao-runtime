@@ -35,6 +35,28 @@ int discover_witness_plan(const void *type, empty_plan *out);
  * is printed (swiftvalue.c, after a refusal; tests/host/swiftlayout). */
 int collect_survey_patches(const void *type, const void *value, empty_patch *out,
                            unsigned capacity, const void **unresolved);
+/* The classes by which a certified walk leaves parts of a value as it found
+ * them (collect_value_patches *PASSES). Every part of a value the walk
+ * certifies is either a patched nil or in one of these:
+ *   IDENTICAL  the same representation and ownership on both architectures
+ *              (no pointer word, a function's code word, a measured leaf
+ *              layout, a metatype, a Builtin scalar);
+ *   INACTIVE   a payload proven inactive by a discriminator both read alike
+ *              (trailing tag byte, tag byte, code word, an enum's empty case);
+ *   OWNED      opaque storage only its owner manipulates: a live object of
+ *              the shared native ObjC/Swift/CF domain (String's storage, an
+ *              ObjC reference, a block, a Swift object), an existential a
+ *              native witness only copies. */
+enum { HAO_SV_PASS_IDENTICAL = 1, HAO_SV_PASS_INACTIVE = 2, HAO_SV_PASS_OWNED = 4 };
+/* collect_empty_patches_detail, or with EXISTENTIALS collect_witness_patches,
+ * also reporting the pass classes of a certified walk. */
+int collect_value_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
+                          const void **unresolved, int existentials, unsigned *passes);
+/* Survey mode without printing: the patches of every part the walk can
+ * certify, nothing inside a refusing type. For the experimental unrestricted
+ * pass-through only (swiftvalue.c decline), which otherwise drops them. */
+int collect_partial_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
+                            int existentials);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
 /* The same, where each struct on an extra-inhabitant path (other than Array and String) must be one
  * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */

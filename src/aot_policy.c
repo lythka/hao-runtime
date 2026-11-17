@@ -204,7 +204,8 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *    the untyped bridge or are refused, bridge.c), HAO_NATIVE_LIBCXX (guest code meets a libc++ with another
  *    std::string layout, runtime.c), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
- *    swiftresult.c);
+ *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH (a Swift value hao cannot certify reaches native code,
+ *    swiftvalue.c);
  *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the
  *    frame, signals.c), HAO_NO_PROBE, HAO_WATCHDOG (takes SIGALRM and exits 124), HAO_JIT_CACHE_MB.
  * A switch nobody listed is OPEN only too. SETUGID honours none: even an engine switch lets the caller slow a

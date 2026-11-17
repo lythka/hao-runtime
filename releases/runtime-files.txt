@@ -559,6 +559,8 @@ tests/guest/overlaynil.sh
 tests/guest/overlaynil.swift
 tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
+tests/guest/svpolicy.sh
+tests/guest/svpolicy.swift
 tests/guest/layoutxi.sh
 tests/guest/layoutxi.swift
 tests/guest/xpcrect.m
