@@ -7,7 +7,7 @@
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
 # tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
 # tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
-# tools/hao-runtime-on-mac (the archive's on-Mac files),
+# tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/test_onmac_pin.py),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
@@ -134,9 +134,11 @@ python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" >"$d/run.log" 2>&1
 python3 -I -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["files"]["replace/dyld"]="1"*64; json.dump(m,open(p,"w"))' \
     "$d/arch/payload/payload-manifest.json"
 python3 -I "$d/arch/tools/hao-runtime-on-mac" "$d/src" "$X86" "$d/arch" >"$d/bad.log" 2>&1; r2=$?
-if [ $r1 = 0 ] && grep -q '3 files match payload-manifest.json, 0 differ' "$d/run.log" && [ $r2 = 1 ] && grep -q 'replace/dyld: sha256 differs' "$d/bad.log"; then
-    pass "hao-runtime-on-mac: stubs and dyld fix from the archive layout match the manifest; a wrong hash fails"
-else bad "hao-runtime-on-mac: rc $r1 $r2: $(tail -3 "$d/run.log" "$d/bad.log")"; fi
+python3 -I "$here/test_onmac_pin.py" "$d"/orig/stubs/* "$d/dyld.want" >"$d/pin.log" 2>&1; r3=$?
+if [ $r1 = 0 ] && grep -q '3 files match payload-manifest.json, 0 differ' "$d/run.log" && [ $r2 = 1 ] && grep -q 'replace/dyld: sha256 differs' "$d/bad.log" \
+    && [ $r3 = 0 ]; then
+    pass "hao-runtime-on-mac: stubs and dyld fix from the archive layout match the manifest; a wrong hash fails; a larger signature reservation (macOS 26 codesign) is trimmed to the pinned bytes"
+else bad "hao-runtime-on-mac: rc $r1 $r2 $r3: $(tail -3 "$d/run.log" "$d/bad.log" "$d/pin.log")"; fi
 
 # --- a hard-linked program (27.0 usr/libexec and usr/sbin/appleh13camerad): --scan lists
 # both paths, and the installer embeds both whether the image keeps the link or not
