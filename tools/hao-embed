@@ -11,8 +11,8 @@ The original slices are copied byte for byte (tools/hao_fat.py).
 
   hao-embed [--stub PATH] [--host-test] [--translate] [--x86-cache DIR] -o OUT PROGRAM...   embedded copies
   hao-embed [--stub PATH] [--host-test] [--translate] [--x86-cache DIR] --in-place PROGRAM...
-  hao-embed [--stub PATH] [--translate] --stubs DIR --root ROOT [--x86-cache DIR] [--list FILE | --scan]
-            [--require REL]... [--require-embedded] [PROGRAM...]
+  hao-embed [--stub PATH] [--translate] --stubs DIR --root ROOT [--cryptex NAME=DIR]... [--x86-cache DIR]
+            [--list FILE | --scan] [--require REL]... [--require-embedded] [PROGRAM...]
   hao-embed --scan ROOT                                       list arm64-only programs
       signed stubs + DIR/manifest.json for installing into an image whose
       files under ROOT match (tools/hao-image-payload, hao-install.py);
@@ -27,6 +27,11 @@ program does: same identity, entitlements and carried sections, all taken
 from the arm slice hao runs (arm64e first). Its manifest entry says
 "mode": "translate"; source_sha256 is the original universal file.
 Without --translate, files that already have an x86_64 slice are skipped.
+
+--cryptex NAME=DIR: ROOT is the IPSW's system image alone and the cryptex NAME (OS, App) is its own image mounted
+at DIR. Everything under ROOT/System/Volumes/Preboot/Cryptexes/NAME, where the installed system mounts it, is read
+from DIR, and every path recorded is the one a ROOT with the cryptex in place gives (tools/hao_root.py), so the
+stubs, manifest and log do not depend on how the images are mounted (hao-image-payload maps the log's DIR paths).
 
 --save-skeletons DIR also writes each relinked stub as ld left it, with its program's carried sections
 and LC_UUID zeroed (DIR/<program sha256>.skel and .json, the sections' offsets): no bytes of the program,
@@ -161,6 +166,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
+import hao_root  # noqa: E402
 import stub_identity_gate as identity_rules  # noqa: E402
 
 DEFAULT_STUB = os.path.join(HERE, "..", "build", "hao-stub")
@@ -277,11 +283,12 @@ def has_lc_main(macho):
 
 
 def scan(root):
-    """Every arm64-only LC_MAIN executable under ROOT, sorted. Each path of a
+    """Every arm64-only LC_MAIN executable under ROOT (a hao_root.Root: its
+    cryptex folders included), sorted as paths in the tree. Each path of a
     hard-linked program is listed: an image builder can break the link (27.0
     usr/libexec and usr/sbin/appleh13camerad), and launchd may name either."""
     verdict, found = {}, []
-    for base, dirs, files in os.walk(root):
+    for base, dirs, files in root.walk():
         dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
         for name in files:
             path = os.path.join(base, name)
@@ -299,7 +306,7 @@ def scan(root):
                     found.append(path)
             except OSError:
                 continue
-    return sorted(found)
+    return sorted(found, key=root.key)
 
 
 ARCHES = (["--arch", "arm64e"], ["--arch", "arm64"], [])
@@ -653,10 +660,11 @@ class X86Libraries:
     ROOT with an x86_64 slice. Everything else (arm64-only files, the arm64e
     cache's own libraries) loads as a guest image and is not linked."""
 
-    def __init__(self, cache_dir, root="/"):
+    def __init__(self, cache_dir, root="/", cryptexes=None):
         import hao_macho       # shared format reader
         self.bc = hao_macho
         self.root = os.path.abspath(root)
+        self.tree = hao_root.Root(root, cryptexes)   # paths under ROOT are paths in the tree; tree.host reads them
         self.cache_dir = cache_dir
         self.cache = hao_macho.Cache(os.path.join(cache_dir, X86_CACHE_FILE))
         self.ids = self.cache.ids()
@@ -712,7 +720,7 @@ class X86Libraries:
             if c == "..":
                 done = done[:-1]
                 continue
-            parent = os.path.join(self.root, *done)
+            parent = self.tree.host(os.path.join(self.root, *done))
             c = self._spelling(parent, c)
             cur = "/" + "/".join(done + [c])
             if not self.protected_os(cur):
@@ -825,7 +833,7 @@ class X86Libraries:
                 return why
             if op in self.ids:
                 return None
-            host = os.path.join(self.root, real.lstrip("/"))
+            host = self.tree.host(os.path.join(self.root, real.lstrip("/")))
             if not os.path.isfile(host):
                 continue
             for sub, mo, _ in self.x86_dylibs(host):
@@ -850,7 +858,8 @@ class X86Libraries:
     def _file(self, path):
         """'x86', 'arm' or None for the file at PATH (a real path under ROOT)."""
         if path not in self._disk:
-            sl = self.bc.file_slices(path) if os.path.isfile(path) else []
+            host = self.tree.host(path)
+            sl = self.bc.file_slices(host) if os.path.isfile(host) else []
             self._disk[path] = ("x86" if any(c == self.bc.CPU_X86_64 for c, _, _ in sl) else
                                 "arm" if any(c == self.bc.CPU_ARM64 for c, _, _ in sl) else None)
         return self._disk[path]
@@ -859,10 +868,14 @@ class X86Libraries:
         return os.path.normpath(os.path.join(self.root, p.lstrip("/"))) if p.startswith("/") else p
 
     def os_path(self, f):
-        """The path on the running system of F (a normalised path under ROOT), or None."""
+        """The path on the running system of F (a normalised path under ROOT, either spelling of it: a resolved
+        path has ROOT's real path), or None."""
         if self.root == "/":
             return f
-        return f[len(self.root):] if f.startswith(self.root + "/") else None
+        for r in (self.root, self.tree.real):
+            if f.startswith(r + "/"):
+                return f[len(r):]
+        return None
 
     def candidates(self, name, exe, rpaths):
         """The files under ROOT dyld tries for NAME as a dependency of the main
@@ -890,7 +903,7 @@ class X86Libraries:
             if op is not None and op in self.ids:
                 return "cache", op
             kind = self._file(f)
-            if kind == "x86" and any(ok for _, _, ok in self.x86_dylibs(f)):
+            if kind == "x86" and any(ok for _, _, ok in self.x86_dylibs(self.tree.host(f))):
                 return "disk", f
             if kind == "arm":
                 return "guest", f
@@ -929,7 +942,7 @@ def native_deps(path, data, x86, stub_deps=()):
     so hao's binder dlopens it with the program's image instead, under
     library validation."""
     mo = arm_slice(data)
-    exe = os.path.realpath(path)
+    exe = x86.tree.resolve(path)
     rpaths = macho_rpaths_mo(mo)
     deps = dylib_commands(mo)
     cxx = cxx_ordinals(path, mo)
@@ -947,7 +960,7 @@ def native_deps(path, data, x86, stub_deps=()):
         if where == "guest":
             skipped.append((name, "guest image"))
             continue
-        if where == "disk" and k + 1 in cxx and x86._file(f) == "x86" and has_arm_slice(f) and name != LIBCXX:
+        if where == "disk" and k + 1 in cxx and x86._file(f) == "x86" and has_arm_slice(x86.tree.host(f)) and name != LIBCXX:
             skipped.append((name, "C++ interface with an arm64 slice (guest_cxx_library)"))
             continue
         if x86.os_path(exe) is not None:
@@ -1338,8 +1351,9 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
 
 def x86_cache_dir(a):
     """--x86-cache, else (--stubs) the x86_64 cache under --root, else this host's."""
+    tree = hao_root.Root(a.root, getattr(a, "cryptexes", None)) if a.stubs else None
     cands = [a.x86_cache] if a.x86_cache else \
-        [os.path.join(a.root, d) for d in ROOT_X86_CACHES] if a.stubs else list(HOST_X86_CACHES)
+        [tree.file(os.path.join(a.root, d)) for d in ROOT_X86_CACHES] if a.stubs else list(HOST_X86_CACHES)
     for d in cands:
         if os.path.isfile(os.path.join(d, X86_CACHE_FILE)):
             return d
@@ -1442,13 +1456,16 @@ def main():
     ap.add_argument("--translate", action="store_true",
                     help="also give universal programs the stub, in place of their own x86_64 slices")
     if len(sys.argv) == 3 and sys.argv[1] == "--scan":
-        print("\n".join(scan(sys.argv[2])))
+        print("\n".join(scan(hao_root.Root(sys.argv[2]))))
         return 0
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--in-place", action="store_true")
     g.add_argument("-o", "--out", help="output file (one PROGRAM) or directory")
     g.add_argument("--stubs", help="write signed stubs and manifest.json here")
     ap.add_argument("--root", help="with --stubs: image root the manifest paths are relative to")
+    ap.add_argument("--cryptex", action="append", default=[], metavar="NAME=DIR",
+                    help="with --root: the cryptex NAME (OS, App) is mounted at DIR, not under ROOT: paths under "
+                         "ROOT/System/Volumes/Preboot/Cryptexes/NAME are read from DIR and recorded as under ROOT")
     ap.add_argument("--list", help="file with one PROGRAM per line")
     ap.add_argument("--scan", action="store_true", help="with --stubs: embed every arm64-only program under --root")
     ap.add_argument("--require", action="append", default=[], metavar="REL",
@@ -1476,6 +1493,13 @@ def main():
         sys.exit(f"hao-embed: no stub at {a.stub} (run make)")
     if a.scan and not a.root:
         sys.exit("hao-embed: --scan needs --root")
+    if a.cryptex and not a.root:
+        sys.exit("hao-embed: --cryptex needs --root")
+    try:
+        a.cryptexes = hao_root.parse(a.cryptex)
+    except ValueError as e:
+        sys.exit(f"hao-embed: {e}")
+    tree = hao_root.Root(a.root or "/", a.cryptexes)
     _, inputs = build_inputs(a.stub)
     try:
         drop_ok = read_dropped(a.allow_dropped_constraints) if a.allow_dropped_constraints else {}
@@ -1485,7 +1509,7 @@ def main():
     if a.list:
         progs += [l.strip() for l in open(a.list) if l.strip()]
     if a.scan:
-        progs += scan(a.root)
+        progs += scan(tree)
     if (a.require or a.require_embedded) and not a.stubs:
         sys.exit("hao-embed: --require and --require-embedded need --stubs")
     if a.stubs:
@@ -1496,7 +1520,7 @@ def main():
             stubs_sub = OutDir("stubs", stubs_out)
         except (OSError, RuntimeError) as e:
             sys.exit(f"hao-embed: --stubs: {e}")
-    x86 = X86Libraries(x86_cache_dir(a), a.root if a.stubs else "/") if progs else None
+    x86 = X86Libraries(x86_cache_dir(a), a.root if a.stubs else "/", a.cryptexes if a.stubs else None) if progs else None
     manifest, bad, seen = [], 0, {}
     for p in progs:
         # A path listed twice, or a symlink to a program already listed, is one program.
@@ -1504,7 +1528,8 @@ def main():
             print(f"fail\t{p}\tis a symlink; embed the file it names")
             bad += 1
             continue
-        real = os.path.realpath(p)
+        real = tree.resolve(p)
+        src = tree.host(real) if tree.mounts else p   # the file read: a cryptex's from its folder
         if real in seen:
             print(f"skip\t{p}\tsame file as {seen[real]}")
             continue
@@ -1525,20 +1550,20 @@ def main():
                         raise RuntimeError("is not a regular file")
                     data = target.read()
                 else:
-                    data = open(p, "rb").read()
+                    data = open(src, "rb").read()
                 why = eligible(data, a.translate)
                 if why:
                     print(f"skip\t{p}\t{why}")
                     continue
                 translate = hao_fat.has_cpu(data, hao_fat.CPU_X86_64)
-                rel = os.path.relpath(os.path.realpath(p), os.path.realpath(a.root)) if a.root else None
-                may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, os.path.realpath(p), rel}))
+                rel = tree.relpath(p) if a.root else None
+                may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, real, rel}))
                 stub, ident, keys, bound, (links, skipped), (carried, dropped) = signed_stub(
-                    p, a.stub, work, a.host_test, data, x86, may_drop, pdir)
+                    src, a.stub, work, a.host_test, data, x86, may_drop, pdir)
                 stub_bytes = open(stub, "rb").read()
                 merged = hao_fat.combine(data, stub_bytes, drop_x86_64=translate)
                 if a.stubs:
-                    rel = os.path.relpath(os.path.realpath(p), os.path.realpath(a.root))
+                    rel = tree.relpath(p)
                     if rel.startswith(".."):
                         raise RuntimeError(f"not under {a.root}")
                     name = hashlib.sha256(rel.encode()).hexdigest()[:24] + ".stub"
@@ -1558,7 +1583,7 @@ def main():
                         if bsrc == ",".join(INFO_SECTION):
                             b["section"] = bsrc
                         else:
-                            b["file"] = os.path.relpath(bsrc, os.path.realpath(a.root))
+                            b["file"] = tree.relpath(bsrc)
                             if b["file"].startswith(".."):
                                 raise RuntimeError(f"{bsrc} is not under {a.root}")
                         entry["bound"].append(b)

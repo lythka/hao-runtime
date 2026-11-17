@@ -20,9 +20,11 @@ A load command type the table does not name is refused by hao-embed and a
 DIFF here: a new type must be decided, not carried or dropped by default.
 
   stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] [--host-test] [--out DIR] FAT...
-  stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] --stubs DIR --root ROOT [--out DIR]
+  stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] --stubs DIR --root ROOT
+                        [--cryptex NAME=DIR]... [--out DIR]
       FAT: an embedded file (its arm slice and its x86_64 stub); --stubs: a
       hao-embed --stubs payload, each manifest entry's stub against ROOT/path.
+      --cryptex: as hao-embed's, the cryptex NAME mounted at DIR, not under ROOT.
       --x86-cache: the x86_64 shared cache the stubs run with (default as
       hao-embed's: with --stubs the one under --root, else this host's; none
       is an error): the linked dylibs are checked against hao-embed's
@@ -52,6 +54,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
+import hao_root  # noqa: E402
 
 # --- the rule table -------------------------------------------------------------------------------------------------
 # cmd: (name, action, reason). Readers: dyld (dyld4 reads the main executable's platform, rpaths, environment,
@@ -403,7 +406,7 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     bad_own = [d[1] for d in stub_deps if is_hao(d[1]) and d[1] not in hao_names]
     bad_own += [n for n in hao_names if [d[1] for d in stub_deps].count(n) != 1]
     if x86 is not None and src_path:
-        eo = x86.os_path(os.path.realpath(src_path))
+        eo = x86.os_path(x86.tree.resolve(src_path))
         rp = [(r, eo) for r in embed.macho_rpaths_mo(arm)]
         restricted = bool(cd_fields(stub)[1] & CS_RUNTIME)   # the stub's hardened runtime: dyld's restricted fallbacks
         bad_deps = [n for _, n, _, _ in sdeps if eo is None or x86.unprotected(n, eo, eo, rp, restricted)]
@@ -463,8 +466,10 @@ def pairs(a):
     if a.stubs:
         m = json.load(open(os.path.join(a.stubs, "manifest.json")))
         embed = load_embed()
+        tree = hao_root.Root(a.root, a.cryptexes)
         for e in m["files"]:
             src = os.path.join(a.root, e["path"])
+            src = tree.file(src) if tree.mounts else src
             arm = embed.arm_slice(open(src, "rb").read())
             out.append((e["path"], src, arm, open(os.path.join(a.stubs, e["stub"]), "rb").read()))
         return out
@@ -483,6 +488,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stubs")
     ap.add_argument("--root")
+    ap.add_argument("--cryptex", action="append", default=[], metavar="NAME=DIR")
     ap.add_argument("--x86-cache")
     ap.add_argument("--host-test", action="store_true")
     ap.add_argument("--dropped-constraints", metavar="FILE",
@@ -501,13 +507,18 @@ def main():
         return 0
     if bool(a.stubs) != bool(a.root) or (not a.stubs and not a.files):
         ap.error("give FAT... or --stubs DIR --root ROOT")
+    try:
+        a.cryptexes = hao_root.parse(a.cryptex if a.root else ())
+    except ValueError as e:
+        print(f"stub_identity_gate: {e}", file=sys.stderr)
+        return 2
     embed = load_embed()
     try:
         progs = pairs(a)
     except (OSError, ValueError, KeyError) as e:
         print(f"stub_identity_gate: {e}", file=sys.stderr)
         return 2
-    x86 = embed.X86Libraries(embed.x86_cache_dir(a), a.root or "/") if progs else None   # none: exit 2
+    x86 = embed.X86Libraries(embed.x86_cache_dir(a), a.root or "/", a.cryptexes) if progs else None   # none: exit 2
     counts = collections.Counter()
     diffs, per = [], []
     try:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""hao-trust-list ROOT [LIST] > trusted-cdhashes
-       hao-trust-list --stubs EMBED_DIR TRUSTED ROOT > stub-identities
+"""hao-trust-list [--cryptex NAME=DIR]... ROOT [LIST] > trusted-cdhashes
+       hao-trust-list [--cryptex NAME=DIR]... --stubs EMBED_DIR TRUSTED ROOT > stub-identities
        hao-trust-list --cdhash FILE...
 
 The cdhash list that lets hao (src/guest_sig.c) recognise a release's
@@ -42,6 +42,10 @@ the running program. hao-image-payload installs the list as
 usr/lib/hao/stub-identities, read under the same ownership rules (the format
 of include/hao/idlist.h, shared with native-identities): it says which x86_64
 stubs run which Apple program (docs/security-model.md, Identity).
+
+--cryptex NAME=DIR: the cryptex NAME (OS, App) is mounted at DIR, not under ROOT
+(tools/hao_root.py): it is read from DIR and listed under
+System/Volumes/Preboot/Cryptexes/NAME, as with the cryptex in place.
 """
 import concurrent.futures
 import hashlib
@@ -59,6 +63,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
+import hao_root  # noqa: E402
 
 _spec = importlib.util.spec_from_loader("hao_embed", importlib.machinery.SourceFileLoader("hao_embed", os.path.join(HERE, "hao-embed")))
 hao_embed = importlib.util.module_from_spec(_spec)
@@ -128,9 +133,10 @@ def guest_library(data):
 def scan(root):
     """Every arm64-only LC_MAIN executable under ROOT, as tools/hao-embed --scan
     finds them but whatever their mode bits (an unpacked tree may have lost
-    them; the installed image has them), and every arm64-only dylib or bundle."""
+    them; the installed image has them), and every arm64-only dylib or bundle.
+    ROOT is a hao_root.Root; sorted as paths in the tree."""
     seen, found = set(), []
-    for base, dirs, files in os.walk(root):
+    for base, dirs, files in root.walk():
         dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
         for name in files:
             path = os.path.join(base, name)
@@ -147,7 +153,7 @@ def scan(root):
                     found.append(path)
             except OSError:
                 continue
-    return sorted(found)
+    return sorted(found, key=root.key)
 
 
 def plain_name(n):
@@ -203,9 +209,11 @@ def staged_copy(path, data, pdir):
 
 
 def verdict(root, path):
-    """(cdhash, relpath, None) if PATH is listed, else (None, relpath, why). The file is read once; the cdhash
-    and codesign's anchor check are both of those bytes (staged_copy), never of a second reading of PATH."""
-    rel = os.path.relpath(os.path.realpath(path), root)
+    """(cdhash, relpath, None) if PATH (a host file) is listed, else (None, relpath, why); ROOT a hao_root.Root.
+    The file is read once; the cdhash and codesign's anchor check are both of those bytes (staged_copy), never
+    of a second reading of PATH."""
+    root = root if isinstance(root, hao_root.Root) else hao_root.Root(root)
+    rel = root.relpath(path)
     try:
         data = open(path, "rb").read()
         mo, arch = slice_and_arch(data)
@@ -252,7 +260,7 @@ def section(macho, segname, sectname):
 
 
 def stub_identities(embed, trusted_path, root):
-    """[(stub cdhash, arm cdhash, arch, path)] for the stubs of EMBED whose named arm slice is trusted."""
+    """[(stub cdhash, arm cdhash, arch, path)] for the stubs of EMBED whose named arm slice is trusted (ROOT a hao_root.Root)."""
     trusted = {l.split()[0].lower() for l in open(trusted_path) if l.strip() and not l.startswith("#")}
     manifest = json.load(open(os.path.join(embed, "manifest.json")))
     out, why = [], []
@@ -265,7 +273,7 @@ def stub_identities(embed, trusted_path, root):
                 why.append((path, "the stub has no __hao_slice record v1"))
                 continue
             named = rec[12:32].hex()
-            mo, arch = slice_and_arch(open(os.path.join(root, path), "rb").read())
+            mo, arch = slice_and_arch(open(root.file(os.path.join(root.real, path)), "rb").read())
             if mo is None or cdhash(mo) != named:
                 why.append((path, "the stub's __hao_slice does not name the program's arm64 slice"))
                 continue
@@ -283,11 +291,18 @@ def stub_identities(embed, trusted_path, root):
 
 
 def main():
-    a = sys.argv[1:]
+    a, specs = sys.argv[1:], []
+    while len(a) >= 2 and a[0] == "--cryptex":
+        specs.append(a[1])
+        a = a[2:]
+    try:
+        cryptexes = hao_root.parse(specs)
+    except ValueError as e:
+        sys.exit("hao-trust-list: %s" % e)
     if a and a[0] == "--stubs":
         if len(a) != 4:
             sys.exit(__doc__.split("\n\n")[0])
-        ok, why = stub_identities(a[1], a[2], os.path.realpath(a[3]))
+        ok, why = stub_identities(a[1], a[2], hao_root.Root(a[3], cryptexes))
         print("# hao stub identities v1: %d stubs (stub cdhash, Apple arm64 slice cdhash, arch, path)" % len(ok))
         for s, h, ar, p in ok:
             print("%s  %s  %s  %s" % (s, h, ar, p))
@@ -301,7 +316,8 @@ def main():
         return 0
     if len(a) not in (1, 2) or a[0].startswith("-"):
         sys.exit(__doc__.split("\n\n")[0])
-    root = os.path.realpath(a[0])
+    tree = hao_root.Root(a[0], cryptexes)
+    root = tree.real
     why = hao_codesig.unshared_dir(os.path.realpath(tempfile.gettempdir()))
     if why:
         sys.exit("hao-trust-list: no private place for codesign's copies: %s (set TMPDIR to a directory only you "
@@ -309,10 +325,11 @@ def main():
     if len(a) == 2:
         progs = [l.strip() for l in open(a[1]) if l.strip() and not l.lstrip().startswith("#")]
         progs = [p if os.path.isabs(p) else os.path.join(root, p) for p in progs]
+        progs = [tree.file(p) if tree.mounts else p for p in progs]
     else:
-        progs = scan(root)
+        progs = scan(tree)
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as ex:
-        res = list(ex.map(lambda p: verdict(root, p), progs))
+        res = list(ex.map(lambda p: verdict(tree, p), progs))
     try:
         v = plistlib.load(open(os.path.join(root, "System/Library/CoreServices/SystemVersion.plist"), "rb"))
         rel = "%s %s" % (v["ProductVersion"], v["ProductBuildVersion"])
