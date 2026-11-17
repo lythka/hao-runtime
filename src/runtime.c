@@ -1762,7 +1762,8 @@ static void diag_emit(const char *b, size_t n, int how)
             return;
         }
         fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);   /* opened meanwhile: kept bytes are closed */
-    }
+    } else if (fd < 0)
+        fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);   /* the wait may have ended since: the log is published first */
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || st.st_dev != diag_log_dev || st.st_ino != diag_log_ino)) {
         __atomic_store_n(&diag_log, -1, __ATOMIC_RELEASE);   /* closed by the program: no file from now on */
