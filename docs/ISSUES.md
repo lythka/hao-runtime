@@ -12,8 +12,11 @@ profile). A log directory that a user other than its owner may write, a
 `console.log` owned by another user, or one whose mode cannot be made 0600 is
 no longer used. The console (`/dev/console`, PID 1's stderr) no longer gets
 the lines themselves, only one line per process and destination naming where
-they went (the log, the unified log, or a log at its cap). Each write to the
-log is made under the log's lock and cut at the 64 MB cap, which now holds
+they went (the system log by path, a user's log or the unified log without
+one, or a log at its cap). Each write to the log is made under the log's
+lock (and, within a process, one thread at a time; a signal handler on the
+writing thread sends its lines to the unified log) and cut at the 64 MB cap,
+which now holds
 for all the processes that share the file, kept lines flushed after the Data
 volume mounts included; one line says the cap was reached. `hao_crash=1` is now
 read with the other switches (`hao/opts.h`); `HAO_CRASH=1` sets it in a test

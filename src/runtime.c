@@ -1217,6 +1217,7 @@ static bool diag_con_notice;      /* hao_crash: the console gets only where the 
 static int diag_noticed;          /* the notices given (con_notice) */
 static int diag_log = -1;         /* the log, -1: none (yet) */
 static int diag_lock = -1;        /* DIR/.lock, held over each write to the log (diag_file_put) */
+static pthread_t diag_put_owner;  /* the thread in diag_file_put: flock does not exclude this process's own threads */
 static dev_t diag_lock_dev;
 static ino_t diag_lock_ino;
 static int diag_retry;            /* 1: open the log at the next write */
@@ -1671,16 +1672,24 @@ static void diag_lock_set(int lfd)
  * processes that share the file: a write is cut at the cap, and the writer
  * that reaches it adds one line saying so. Past the cap bytes are dropped.
  * 1: written; 2: cut or dropped at the cap; 0: not written (the lock not
- * taken, a write failed): the caller sends them to the unified log.
- * Async-signal-safe. */
+ * taken, a write failed, a signal handler on top of this thread's own
+ * write): the caller sends them to the unified log. Async-signal-safe. */
 static int diag_file_put(int fd, const char *b, size_t n)
 {
     int lfd = __atomic_load_n(&diag_lock, __ATOMIC_ACQUIRE);
     struct stat ls, st;
     if (lfd < 0 || fstat(lfd, &ls) != 0 || ls.st_dev != diag_lock_dev || ls.st_ino != diag_lock_ino) return 0;
+    /* this process's threads one at a time (they share the lock's descriptor, so its flock does not exclude them),
+     * then the other processes; 200 ms each at most */
+    pthread_t self = pthread_self(), none = NULL;
+    for (int k = 0; !__atomic_compare_exchange_n(&diag_put_owner, &none, self, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE); k++) {
+        if (pthread_equal(none, self) || k >= 2000) return 0;   /* a handler must not take or release its thread's lock */
+        none = NULL;
+        nanosleep(&(struct timespec){0, 100000}, NULL);
+    }
     bool locked = false;
     for (int k = 0; k < 200 && !(locked = flock(lfd, LOCK_EX | LOCK_NB) == 0); k++) nanosleep(&(struct timespec){0, 1000000}, NULL);
-    if (!locked) return 0;
+    if (!locked) { __atomic_store_n(&diag_put_owner, NULL, __ATOMIC_RELEASE); return 0; }
     uint64_t lim = hao_diag_log_cap > DIAG_CAP_LINE ? hao_diag_log_cap - DIAG_CAP_LINE : 0;
     bool ok = fstat(fd, &st) == 0, full = ok && (uint64_t)st.st_size + n >= lim;
     if (ok && (uint64_t)st.st_size < lim) {
@@ -1694,6 +1703,7 @@ static int diag_file_put(int fd, const char *b, size_t n)
         }
     }
     flock(lfd, LOCK_UN);
+    __atomic_store_n(&diag_put_owner, NULL, __ATOMIC_RELEASE);
     return !ok ? 0 : full ? 2 : 1;
 }
 
@@ -1704,11 +1714,13 @@ enum { NOTE_LOG = 1, NOTE_UNI = 2, NOTE_CAP = 4 };
 static void con_notice(int what)
 {
     if (!diag_con_notice || (__atomic_fetch_or(&diag_noticed, what, __ATOMIC_ACQ_REL) & what)) return;
-    char m[1200];
-    int k = snprintf(m, sizeof m, "hao[%s:%d]: diagnostics %s%s%s\n", getprogname(), (int)getpid(),
-                     what == NOTE_LOG ? "written to " : what == NOTE_UNI ? "written to the unified log (subsystem com.hao)"
-                                                                         : "not kept: the log in ",
-                     what == NOTE_UNI ? "" : diag_dir, what == NOTE_LOG ? "/console.log" : what == NOTE_CAP ? " is at its cap" : "");
+    /* no path but the system log's: another directory may be a user's own */
+    bool sys = !strcmp(diag_dir, "/private/var/log/hao");
+    char m[240];
+    int k = snprintf(m, sizeof m, "hao[%s:%d]: diagnostics %s\n", getprogname(), (int)getpid(),
+                     what == NOTE_UNI ? "written to the unified log (subsystem com.hao)"
+                     : what == NOTE_CAP ? "not kept: hao's log is at its cap"
+                     : sys ? "written to /private/var/log/hao/console.log" : "written to this user's hao log");
     if (k > 0) diag_write_all(diag_con, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
 }
 
@@ -1718,6 +1730,7 @@ static void diag_fork_child(void)
 {
     uni_fork_child();
     diag_noticed = 0;
+    diag_put_owner = NULL;   /* a thread of the parent's that does not exist here */
     int lfd = diag_lock;
     if (lfd < 0) return;
     char p[1100];
@@ -1733,7 +1746,7 @@ static void diag_fork_child(void)
 
 /* The kept lines, once, to the file just opened: writers that still see the
  * retry state finish their copies first (at most 2 s). */
-static void pend_flush(int fd)
+static void pend_flush(int fd, bool may_start)
 {
     int no = 0;
     if (!__atomic_compare_exchange_n(&pend_closed, &no, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return;
@@ -1747,11 +1760,13 @@ static void pend_flush(int fd)
                      getprogname(), (int)getpid(), (unsigned long long)n, lost ? "" : "\n");
     if (lost && k > 0 && (size_t)k < sizeof m)
         k += snprintf(m + k, sizeof m - (size_t)k, " (%llu bytes did not fit and are lost)\n", (unsigned long long)lost);
-    if (k > 0) diag_file_put(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
-    if (n) diag_file_put(fd, diag_pend, (size_t)n);
+    /* what the file does not take goes to the unified log, as any write's would */
+    size_t ml = k > 0 ? ((size_t)k < sizeof m ? (size_t)k : sizeof m - 1) : 0;
+    if (ml && !diag_file_put(fd, m, ml)) uni_put(m, ml, may_start);
+    if (n && !diag_file_put(fd, diag_pend, (size_t)n)) uni_put(diag_pend, (size_t)n, may_start);
 }
 
-static int diag_log_fd(void)
+static int diag_log_fd(bool may_start)
 {
     int fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
     if (fd >= 0 || !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) return fd;
@@ -1771,7 +1786,7 @@ static int diag_log_fd(void)
     } else {
         diag_lock_set(lfd);
         __atomic_store_n(&diag_log, fd, __ATOMIC_RELEASE);
-        pend_flush(fd);
+        pend_flush(fd, may_start);
     }
     __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
     return fd;
@@ -1788,7 +1803,7 @@ static void diag_emit(const char *b, size_t n, bool may_start)
     if (!n) return;
     int e = errno;
     if (!diag_con_notice) diag_write_all(diag_con, b, n);
-    int fd = diag_log_fd();
+    int fd = diag_log_fd(may_start);
     if (fd < 0 && __atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
         pend_put(b, n);
         con_notice(NOTE_LOG);
