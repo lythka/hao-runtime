@@ -1,5 +1,17 @@
 # Runtime issues and measured scope
 
+## Signature parsing on the native-call path
+
+A native function an interface unit types by aggregate signature kept the
+encoding unparsed in its plan; its first call parsed it (`abi.c` `hao_sig`:
+`malloc`, `strdup`), against the rule that the call path does not allocate
+(a guest signal handler may interrupt a thread inside malloc). The plan now
+parses it when it is made, at bind time; plans typed from ObjC methods and
+blocks were already parsed then. Limits: a native IMP called with another
+selector, or an invoke called by another block, is still retyped per call
+(`hao_bridge_objc_recheck`, `class_copyMethodList`; a new encoding parsed),
+also in a guest signal handler.
+
 ## Shared-cache header bounds
 
 `dsc.c` took the arm64e cache header's mapping table on trust: a range
