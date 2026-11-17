@@ -138,7 +138,7 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
 
     if ((op0 & 0xE) == 0xA) {                         /* branches, exceptions, system */
         if ((i & 0x7C000000) == 0x14000000) {         /* B, BL */
-            o->target = pc + (uint64_t)(sx(i & 0x3ffffff, 26) << 2);
+            o->target = pc + ((uint64_t)sx(i & 0x3ffffff, 26) << 2);
             if (i >> 31) { o->flow = F_CALL; o->wr = bit(30); }
             else o->flow = F_JUMP;
             return;
@@ -146,18 +146,18 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
         if ((i & 0x7E000000) == 0x34000000) {         /* CBZ/CBNZ */
             o->rd = bit(rd);
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x7ffff, 19) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x7ffff, 19) << 2);
             return;
         }
         if ((i & 0x7E000000) == 0x36000000) {         /* TBZ/TBNZ */
             o->rd = bit(rd);
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x3fff, 14) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x3fff, 14) << 2);
             return;
         }
         if ((i & 0xFF000000) == 0x54000000) {         /* B.cond, BC.cond */
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x7ffff, 19) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x7ffff, 19) << 2);
             return;
         }
         if ((i & 0xFF000000) == 0xD4000000) {         /* SVC/HVC/SMC; BRK, HLT end the path */
@@ -248,7 +248,7 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
                 if (!v) o->wr = bit(rt);
                 return;
             } else {                                  /* LDRAA/LDRAB */
-                int64_t imm = sx(((i >> 12) & 0x1ff) | ((i >> 13) & 0x200), 10) << 3;
+                int64_t imm = (int64_t)((uint64_t)sx(((i >> 12) & 0x1ff) | ((i >> 13) & 0x200), 10) << 3);
                 o->imm = imm; o->bytes = 8; o->load = 1;
                 if ((i >> 11) & 1) { o->wb_reg = rn; o->wb = imm; o->imm = imm; o->wr |= bit(rn); }
                 o->wr |= bit(rt);
@@ -1481,7 +1481,7 @@ static int sitepack_call(uint64_t call, uint64_t native)
     if (!im) return -1;
     uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, call);
     if ((i & 0xFC000000) == 0x94000000)                           /* BL */
-        return stub_target(call + (uint64_t)(sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
+        return stub_target(call + ((uint64_t)sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
     if ((i & 0xFFFFFC1F) == 0xD63F0000 || (i & 0xFEFFF800) == 0xD63F0800)   /* BLR, BLRAA/BLRAB(Z) */
         return (int)((i >> 5) & 31);
     return -1;
