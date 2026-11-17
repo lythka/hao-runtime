@@ -8,7 +8,7 @@
  * Compared bit-exactly: x0-x30 (except the platform register x18), SP, NZCV,
  * FPCR, FPSR.QC, v0-v31 (NaN payloads included) and the scratch memory
  * (hash of the whole filled region). FPSR's IEEE cumulative flags are
- * counted separately and fail the gate; in fma records, a flag
+ * counted separately and fail the gate; in fma and fmad records, a flag
  * difference is a mismatch. For fma records the checker also reports how many
  * have only normal or zero operands and results at or above 2^-125 (what the
  * round-to-odd path of fp_muladd admits), and for how many of those
@@ -241,7 +241,7 @@ int main(int argc, char **argv)
                     if (!why[0] && fpcr != r.out.fpcr) snprintf(why, sizeof why, "fpcr got %x want %x", fpcr, r.out.fpcr);
                     if (!why[0] && ((fpsr ^ r.out.fpsr) & (1u << 27)))
                         snprintf(why, sizeof why, "fpsr.QC got %x want %x", fpsr, r.out.fpsr);
-                    if (!why[0] && mode == OM_FMA && ((fpsr ^ r.out.fpsr) & 0x9f))
+                    if (!why[0] && (mode == OM_FMA || mode == OM_FMAD) && ((fpsr ^ r.out.fpsr) & 0x9f))
                         snprintf(why, sizeof why, "fpsr got %x want %x (in %x)", fpsr, r.out.fpsr, r.in.fpsr);
                     if (why[0]) C->mismatch++;
                     else {

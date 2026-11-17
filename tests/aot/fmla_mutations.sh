@@ -1,6 +1,6 @@
 #!/bin/sh
 # The vector differential test must reject independently broken FP32/FP16 FMLA
-# translations. Mutate private source copies, never the checkout or runtime.
+# and FP64 fused translations. Mutate private source copies, never the checkout or runtime.
 # OUT=dir [T=120] tests/aot/fmla_mutations.sh
 set -eu
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -25,13 +25,17 @@ mutations = {
     'odd': ('P(0xD4, s, b);', 'P(0xEB, s, s);'),
     'negation': ('P(0xEF, 0, 2);                                  /* negate product exactly */', 'P(0xEB, 0, 0);'),
     'index': ('idx = BIT(i, 11) << 1 | BIT(i, 21);', 'idx = BIT(i, 21) << 1 | BIT(i, 11);'),
+    'double-product': ('P(0x6F, 9, 3); P(0x59, 9, 7); P(0x5C, 10, 9);', '/* wrong: drop ah*bl */'),
+    'double-pe': ('vconst(t, 6, 0x20, false); P(0xEF, 5, 6);', 'P(0xDB, 5, 5);'),
+    'double-window': ('vconst(t, 5, 564 * 0x100000001ull, true);', 'vconst(t, 5, 400 * 0x100000001ull, true);'),
 }
 Path(sys.argv[1], 'jit-control.c').write_text(s)
 for name, (old, new) in mutations.items():
     assert s.count(old) == 1, (name, s.count(old))
     Path(sys.argv[1], 'jit-' + name + '.c').write_text(s.replace(old, new))
 PY
-for mutation in ${MUTATIONS:-control odd negation index half-round half-tiny half-index half-exact half-negation half-odd half-subnormal}; do
+for mutation in ${MUTATIONS:-control odd negation index half-round half-tiny half-index half-exact half-negation half-odd half-subnormal \
+                  double-product double-pe double-window}; do
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \
         -Da64_exec_helper=jit_vector_helper -c "$OUT/jit-$mutation.c" -o "$OUT/jit-$mutation.o"
     clang -arch x86_64 -march=x86-64-v2 -std=gnu11 -O2 -Iinclude -Isrc \

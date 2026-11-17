@@ -17,7 +17,8 @@ endif
 endif
 # The CPU profile hao-x86_64-avx-cx16-v1 (docs/releases.md): Intel Macs with AVX, so also SSSE3, SSE4.1,
 # SSE4.2, POPCNT and CMPXCHG16B. Compiled code and the translator use at most x86-64-v2 (no VEX encodings:
-# Rosetta, where the tests run, has no AVX); src/main.c refuses a CPU without the profile at startup.
+# Rosetta, where the tests run, has no AVX), except vzeroupper where CPUID and XCR0 report AVX state
+# (src/jit.c hao_vzeroupper); src/main.c refuses a CPU without the profile at startup.
 ARCH      := -arch x86_64 -mmacosx-version-min=$(MACOS_MIN) -march=x86-64-v2
 # Debug info names sources and objects relative to the checkout, and the debug
 # map and libhaocore.a carry no file times (ZERO_AR_DATE), so the same commit
@@ -30,7 +31,7 @@ ifdef TEST_SWITCHES
 REPRO     += -DHAO_TEST_SWITCHES
 endif
 WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-CFLAGS    := $(ARCH) -std=gnu11 -O2 -g $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
+CFLAGS    := $(ARCH) -std=gnu11 -O2 -g -ffp-contract=off $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
 # Changing MACOS_MIN in one B rebuilds everything there.
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
@@ -136,7 +137,7 @@ $(B)/oracle-atomic: tests/oracle/atomic16.c $(B)/libhaocore.a $(B)/jit.o $(B)/st
 # simd records (AES, PMULL) are checked again with the JIT translating for no
 # optional CPU feature (hao/cpufeat.h): the helper paths those lowerings skip.
 ORACLE_N ?= 200000
-ORACLE_MODES ?= dp simd mem block fma known reserved
+ORACLE_MODES ?= dp simd mem block fma known reserved fmad
 oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	@fail=0; for m in $(ORACLE_MODES); do \
 	  timeout -s KILL 900 $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \
