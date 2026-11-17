@@ -101,7 +101,12 @@ incomplete"). Test: `host/diagsig` inserts a library that counts formatting
 and allocation calls made inside the handler (none allowed); with the old
 boot header it fails. Limits: the unified-log ring (`uni_put`, sandboxed
 processes) has one writer at a time; a writer whose owner is suspended
-waits up to 2 s, then drops its line (counted).
+waits up to 2 s, then drops its line (counted). A fatal report that
+interrupts the log being opened on the same thread, before the open is
+published, is sent to the unified-log ring; if no drain thread was started
+yet (the log was waiting for its volume and nothing had fallen back before),
+the process ends before the ring is drained and that report is lost. With
+`hao_crash` the console then has only its one-line notice.
 
 ## Signature parsing on the native-call path
 
