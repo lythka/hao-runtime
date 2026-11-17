@@ -901,8 +901,8 @@ static int guest_witnessed(reflection *r, const void *type)
  * destroying or assigning it can release the last reference, and the
  * runtime then destroys the value with the dynamic type's own witnesses. A
  * box is shared storage no conversion may rewrite, so its value must need
- * none: walked as the dynamic type, every nil in it reading alike on both
- * architectures. */
+ * none: walked as the dynamic type, every nil in it already in the encoding
+ * of the code that will read it. */
 static int boxed_payload(reflection *r, const void *payload, const unsigned char *value, unsigned depth)
 {
 #ifdef HAO_SWIFT_VALUE_RUNTIME
@@ -917,8 +917,11 @@ static int boxed_payload(reflection *r, const void *payload, const unsigned char
     int ok = collect(r,payload,(const unsigned char *)(uintptr_t)(box + at),0,local,64,&n,depth + 1);
     r->boxed--;
     if (!ok) return 0;
+    /* Each nil must already be in the encoding its reader takes: the
+     * receiving witnesses' for a value native code gets, arm64's for one
+     * guest code reads inline (r->known_layout). */
     for (unsigned i = 0; i < n; ++i)
-        if (local[i].bits != local[i].receiver_bits || local[i].bits != local[i].arm_bits) {
+        if (local[i].bits != (r->known_layout ? local[i].arm_bits : local[i].receiver_bits)) {
             r->passes |= HAO_SV_UNCONVERTIBLE;
             return 0;
         }
