@@ -56,10 +56,11 @@ not intercepted, silently. The table is now a growable map keyed by pc
 The per-thread ring of nils a witness made for a callback's result held 16
 and was shared by nested callbacks, so an inner one could overwrite an outer
 one's entries unseen. It holds 64, each entry keeps its index, and a lost
-entry is counted and reported once. `--stats` prints both
-(`hao-swift-witness: entries dropped nils_lost`). Limits: an entry lost past
+entry is counted, with one fixed line through the async-signal-safe
+diagnostic write (a callback may return inside a guest signal handler).
+`--stats` prints both (`hao-swift-witness: entries dropped nils_lost`). Limits: an entry lost past
 64 is still lost (its value keeps the guest's nil); no test reaches either
-bound.
+bound in a guest; `test_bridge` (`nilring`) drives the ring directly.
 
 ## Nesting depth in C++ mangled names
 

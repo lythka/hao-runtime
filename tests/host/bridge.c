@@ -26,6 +26,7 @@
 #include "hao/runtime.h"
 #include "hao/bridge.h"
 #include "hao/gen_stamp.h"
+#include "hao/swiftvalue.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -224,6 +225,41 @@ int main(int argc, char **argv)
         char kind = hao_swift_async_result_kind(long_sym);
         printf("demangle   %s  a long demangled name is read whole (kind %d)\n", kind == 'b' ? "PASS" : "FAIL", kind);
         if (kind != 'b') fail = 1;
+    }
+    /* the nil ring of callback results (swiftvalue.c): an outer callback's entries survive a nested one that
+     * stays within the ring and are restored; past the ring they are counted lost, never taken for others */
+    {
+        hao_thread *t = calloc(1, sizeof *t);
+        uint64_t outer[4], inner, V = (uint64_t)(uintptr_t)outer, W = (uint64_t)(uintptr_t)&inner;
+        int rmis = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            unsigned nested = pass ? HAO_SWIFT_MADE_RING + 4 : 8;   /* the nested callback's notes */
+            uint64_t lost0 = hao_swift_witness_lost();
+            t->swift_made_n = 0;
+            for (unsigned i = 0; i < 4; i++) {   /* the outer callback's nils, still in the guest's bits (1) */
+                outer[i] = 1;
+                unsigned k = t->swift_made_n++ % HAO_SWIFT_MADE_RING;
+                t->swift_made[k].value = V; t->swift_made[k].at = (uint64_t)(uintptr_t)&outer[i];
+                t->swift_made[k].native = 2; t->swift_made[k].arm = 1; t->swift_made[k].idx = k;
+            }
+            unsigned mark = t->swift_made_n;
+            for (unsigned i = 0; i < nested; i++) {
+                inner = 1;
+                unsigned idx = t->swift_made_n++, k = idx % HAO_SWIFT_MADE_RING;
+                t->swift_made[k].value = W; t->swift_made[k].at = (uint64_t)(uintptr_t)&inner;
+                t->swift_made[k].native = 2; t->swift_made[k].arm = 1; t->swift_made[k].idx = idx;
+            }
+            hao_swift_witness_result(t, mark, 0);   /* the nested callback returns: no indirect result */
+            hao_swift_witness_result(t, 0, V);
+            uint64_t lost = hao_swift_witness_lost() - lost0;
+            bool ok = pass ? lost == 4 && outer[0] == 1 && outer[3] == 1 : lost == 0 && outer[0] == 2 && outer[3] == 2;
+            if (!ok && !rmis++) printf("nilring    FAIL  nested %u: lost %llu, outer bits %llu\n", nested,
+                                       (unsigned long long)lost, (unsigned long long)outer[0]);
+            if (t->swift_made_n != 0 && !rmis++) printf("nilring    FAIL  not reset to the mark\n");
+        }
+        if (!rmis) printf("nilring    PASS  nested callbacks keep or count the outer's ring entries\n");
+        if (rmis) fail = 1;
+        free(t);
     }
     if (bad) fail = 1;
     return fail;
