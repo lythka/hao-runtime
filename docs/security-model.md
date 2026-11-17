@@ -237,7 +237,9 @@ dependency into its stub only from protected storage: the x86_64 shared
 cache, or a file on the sealed system volume (not behind one of its
 firmlinks to the data volume) or in the OS or App cryptex, when every path
 dyld would try first, every directory and link on the way, and every
-library that file loads at launch are such files too.
+library that file loads at launch are such files too: every path in dyld's
+search order (each rpath expansion and the fallback paths), not only the
+one expected to load.
 Any other native dependency (a bundle's framework, a file under /Library) is
 loaded by hao's binder with the program's image, after library validation is
 on.

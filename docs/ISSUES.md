@@ -76,9 +76,11 @@ rpaths each image owns, its own non-lazy dependencies are in protected
 storage: the sealed system volume less its firmlinks (`usr/share/firmlinks`
 of the root), and the OS and App cryptexes; the x86_64 shared cache counts
 as protected. Names are compared case-insensitively in their on-disk
-spelling; a path that exists but that dyld might not load into the stub
-(no plain x86_64 library slice, another platform, or a minos newer than
-the image's OS) does not end the search (dyld tries the next); each x86_64 slice of a library, in each
+spelling; every path dyld could try for a dependency (each rpath
+expansion and the default fallback paths: /usr/lib and
+/System/Library/Frameworks for a hardened stub, also /usr/local/lib and
+/Library/Frameworks otherwise) must be protected, whether or not an earlier
+one looks loadable, since a build cannot prove what dyld will load; each x86_64 slice of a library, in each
 rpath context it is reached in, is judged on its own; a chain deeper than
 16 libraries is not protected. Any other is not
 linked (manifest `not_linked`: "outside protected storage") and hao's binder
