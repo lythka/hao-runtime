@@ -56,7 +56,15 @@ default with --stubs the one under --root, else this host's) or a file under
 ROOT with an x86_64 slice; an @rpath one resolves through the program's LC_RPATHs (which
 every stub carries). Not linked: arm64-only libraries (guest images), missing ones,
 lazy loads, and a fat file the program calls with C++ names (the runtime may
-run it as guest code, src/runtime.c guest_cxx_library). The stubs link
+run it as guest code, src/runtime.c guest_cxx_library). Nor is a file outside
+protected storage (the sealed system volume less its firmlinks, the
+cryptexes; PROTECTED_TREES), or one that dyld would look for first at such a
+path or that loads such a file: every stub has disable-library-validation,
+and what dyld loads at launch runs its initializers before hao sets
+CS_REQUIRE_LV, so a bundle's or /Library's x86_64 library would run unchecked
+in the program's process. hao's binder loads it with the program's image,
+after library validation is on (manifest "not_linked": "outside protected
+storage"). The stubs link
 against install-name-only text stubs (.tbd, the program's own versions),
 so no x86_64 library is read at link time.
 
@@ -593,6 +601,19 @@ LIBCXX = "/usr/lib/libc++.1.dylib"
 CF_PATH = "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
 
 
+# Protected storage: where a file dyld loads into a stub at launch, before hao sets CS_REQUIRE_LV, must be. The
+# sealed system volume (these trees, less its firmlinks to the data volume, ROOT/usr/share/firmlinks) and the
+# cryptexes mounted under Preboot; the x86_64 shared cache is one of them. Anything else (a bundle in /Applications,
+# /Library, a user's folder) can be replaced by someone other than the program's signer.
+PROTECTED_TREES = ("/System/", "/usr/", "/bin/", "/sbin/")
+UNSEALED_TREES = ("/System/Volumes/",)
+SEALED_MOUNTS = ("/System/Volumes/Preboot/Cryptexes/",)
+FIRMLINKS = ("/AppleInternal", "/Applications", "/Library", "/System/Library/Caches", "/System/Library/Assets",
+             "/System/Library/PreinstalledAssets", "/System/Library/AssetsV2", "/System/Library/PreinstalledAssetsV2",
+             "/System/Library/CoreServices/CoreTypes.bundle/Contents/Library", "/System/Library/Speech", "/Users",
+             "/Volumes", "/cores", "/opt", "/pkg", "/private", "/usr/local", "/usr/libexec/cups", "/usr/share/snmp")
+
+
 class X86Libraries:
     """The libraries a stub can load natively at launch, as src/runtime.c binds a
     dependency (try_candidate: native dlopen first, then a guest image): an
@@ -609,6 +630,76 @@ class X86Libraries:
         self.ids = self.cache.ids()
         self.uuid = self.cache.uuid
         self._disk = {}
+        try:
+            with open(os.path.join(self.root, "usr/share/firmlinks")) as f:
+                self.firmlinks = tuple(l.split("\t")[0] for l in f if l.startswith("/")) or FIRMLINKS
+        except OSError:
+            self.firmlinks = FIRMLINKS
+
+    def canonical(self, f):
+        """The OS path of F (a path under ROOT) with every symbolic link resolved as on the running system (an
+        absolute link target is under ROOT), or None (outside ROOT, a loop)."""
+        op = self.os_path(f)
+        if op is None:
+            return None
+        todo, done, hops = [c for c in op.split("/") if c], [], 0
+        while todo:
+            c = todo.pop(0)
+            if c == ".":
+                continue
+            if c == "..":
+                done = done[:-1]
+                continue
+            host = os.path.join(self.root, *done, c)
+            if os.path.islink(host):
+                hops += 1
+                if hops > 32:
+                    return None
+                t = os.readlink(host)
+                todo = [x for x in t.split("/") if x] + todo
+                if t.startswith("/"):
+                    done = []
+                continue
+            done.append(c)
+        return "/" + "/".join(done)
+
+    def protected(self, f):
+        """True if the file F (a path under ROOT) is in protected storage (PROTECTED_TREES), links resolved."""
+        op = self.canonical(f)
+        if op is None or not op.startswith(PROTECTED_TREES):
+            return False
+        if op.startswith(UNSEALED_TREES) and not op.startswith(SEALED_MOUNTS):
+            return False
+        return not any(op == fl or op.startswith(fl + "/") for fl in self.firmlinks)
+
+    def unprotected(self, name, loader, rpaths, depth=0):
+        """None if dyld, loading NAME for LOADER (a file under ROOT whose rpath list is RPATHS), finds only files in
+        protected storage: every path it tries before the one that exists (a file someone could put at an earlier
+        one would load instead), that file, and the same for that file's own non-lazy dependencies. Otherwise the
+        first path that is not. A shared-cache library is protected, with all it loads."""
+        if name in self.ids:
+            return None
+        for f in self.candidates(name, loader, rpaths):
+            op = self.os_path(f)
+            if op is not None and op in self.ids:
+                return None
+            if not self.protected(f):
+                return op or f
+            if os.path.isfile(f):
+                if depth >= 8:
+                    return None
+                with open(f, "rb") as fh:
+                    mo = next((p for c, _, p in hao_fat.slices(fh.read()) or [] if c == hao_fat.CPU_X86_64), None)
+                if mo is None:
+                    return None
+                own = macho_rpaths_mo(mo) + rpaths
+                for kind, dep, _, _ in dylib_commands(mo):
+                    if kind != "lazy":
+                        why = self.unprotected(dep, f, own, depth + 1)
+                        if why:
+                            return why
+                return None
+        return None
 
     def _file(self, path):
         """'x86', 'arm' or None for the file at PATH (a real path under ROOT)."""
@@ -684,9 +775,13 @@ def native_deps(path, data, x86, stub_deps=()):
     when a linked dependency is an @rpath name (else []). A dependency is linked
     when it resolves natively (X86Libraries.resolve). Not linked: libraries the
     stub links itself (STUB_DEPS), lazy loads (not loaded at launch natively
-    either), libraries that load as guest images or are missing, and a file
+    either), libraries that load as guest images or are missing, a file
     with an arm64 slice the program imports C++ names from (src/runtime.c
-    guest_cxx_library may run it as guest code, but not once it is loaded)."""
+    guest_cxx_library may run it as guest code, but not once it is loaded),
+    and a file outside protected storage (X86Libraries.unprotected): dyld
+    would load it, and run its initializers, before hao sets CS_REQUIRE_LV,
+    so hao's binder dlopens it with the program's image instead, under
+    library validation."""
     mo = arm_slice(data)
     exe = os.path.realpath(path)
     rpaths = macho_rpaths_mo(mo)
@@ -709,6 +804,11 @@ def native_deps(path, data, x86, stub_deps=()):
         if where == "disk" and k + 1 in cxx and x86._file(f) == "x86" and has_arm_slice(f) and name != LIBCXX:
             skipped.append((name, "C++ interface with an arm64 slice (guest_cxx_library)"))
             continue
+        if where == "disk":
+            why = x86.unprotected(name, exe, rpaths)
+            if why:
+                skipped.append((name, "outside protected storage (%s): hao loads it after library validation" % why))
+                continue
         links.append(("weak" if kind == "weak" else "load", name, cur, compat))
         need_rpaths |= name.startswith("@rpath/")
     return links, skipped, rpaths if need_rpaths else []

@@ -11,8 +11,12 @@
 #    Foundation-linked and plain C, native arm64 vs embedded under hao (the
 #    sandbox allows it only when CoreFoundation was loaded at launch);
 #  - the stub's LC_LOAD_DYLIB list is the program's natively loadable one:
-#    weak kept weak, a fat @rpath library linked (with the program's rpaths;
-#    its initializer runs once, as natively), an arm64-only library not linked;
+#    weak kept weak, an arm64-only library not linked, a fat @rpath library
+#    linked only from protected storage (the sealed system volume: dyld runs
+#    its initializer before hao sets CS_REQUIRE_LV), with the program's rpaths;
+#    one in this temporary folder, under /Library or behind an earlier
+#    rpath there is loaded by hao after library validation instead (its
+#    initializer runs once, as natively);
 #  - LC_UUIDs: not hao-stub's, different per program, the same in two runs.
 # Runs sandboxed CLI programs on this host (container com.example.hao.stubdeps).
 # Exit 1 if any case failed.
@@ -77,12 +81,48 @@ clang -arch arm64e -O1 -o prog "$here/stubdeps_main.c" -framework CoreFoundation
 embed -o prog.emb prog >embed-prog.log || bad "deps: hao-embed: $(cat embed-prog.log)"
 deps_of x86_64 prog.emb | grep -v '^@rpath/libhao' >stub.deps
 printf '%s\n' "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation" \
-    "/System/Library/Frameworks/Security.framework/Versions/A/Security, weak" "@rpath/libfat.dylib" "/usr/lib/libSystem.B.dylib" >want.deps
+    "/System/Library/Frameworks/Security.framework/Versions/A/Security, weak" "/usr/lib/libSystem.B.dylib" >want.deps
 if diff want.deps stub.deps >deps.diff; then
-    pass "deps: stub links CoreFoundation, Security (weak), @rpath/libfat.dylib, libSystem; not the arm64-only libguest"
+    pass "deps: stub links CoreFoundation, Security (weak), libSystem; not the arm64-only libguest, not @rpath/libfat.dylib from this temporary folder"
 else bad "deps: stub's LC_LOAD_DYLIBs differ: $(tr '\n' ' ' <deps.diff)"; fi
+# the same library in protected storage (an image root's usr/bin) is linked; under /Library, or behind an
+# earlier rpath under /Library, it is not (manifest not_linked says why)
+mkdir -p sroot/usr/bin/lib sroot/Library/Tools/lib
+cp lib/libfat.dylib sroot/usr/bin/lib/; cp lib/libfat.dylib sroot/Library/Tools/lib/
+cp prog sroot/usr/bin/prog; cp prog sroot/Library/Tools/prog
+clang -arch arm64e -O1 -o sroot/usr/bin/prog3 "$here/stubdeps_main.c" -framework CoreFoundation -weak_framework Security -Llib -lfat \
+    -L. -lguest -Wl,-rpath,/Library/Frameworks -Wl,-rpath,@executable_path/lib && codesign -s - -f sroot/usr/bin/prog3 2>/dev/null || exit 2
+python3 "$EMBED" --stub "$B/hao-stub" --stubs spay --root sroot --x86-cache "$X86" \
+    sroot/usr/bin/prog sroot/Library/Tools/prog sroot/usr/bin/prog3 >spay.log 2>&1 || bad "deps: --stubs: $(cat spay.log)"
+python3 -I - spay/manifest.json <<'PY' && pass "deps: @rpath/libfat.dylib linked from usr/bin/lib; from Library/Tools/lib and behind a /Library rpath it is not (outside protected storage)" || bad "deps: protected storage: $(cat spay.log)"
+import json, sys
+m = {e["path"]: e for e in json.load(open(sys.argv[1]))["files"]}
+why = lambda p: [w for n, w in m[p]["not_linked"] if n == "@rpath/libfat.dylib"]
+assert why("usr/bin/prog") == [], m["usr/bin/prog"]["not_linked"]
+assert why("Library/Tools/prog")[0].startswith("outside protected storage (/Library/Tools/lib/libfat.dylib)"), why("Library/Tools/prog")
+assert why("usr/bin/prog3")[0].startswith("outside protected storage (/Library/Frameworks/libfat.dylib)"), why("usr/bin/prog3")
+assert m["usr/bin/prog"]["links"] == m["Library/Tools/prog"]["links"] + 1
+PY
+# the identity gate: these stubs pass; usr/bin/prog's stub (it links @rpath/libfat.dylib) checked as the stub of
+# the same program under /Library fails dylibs.protected
+python3 -I - "$repo/tools" spay sroot "$X86" <<'PY' && pass "deps: the identity gate passes the stubs and finds a linked library outside protected storage" || bad "deps: identity gate dylibs.protected"
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import stub_identity_gate as g
+embed = g.load_embed()
+x86 = embed.X86Libraries(sys.argv[4], sys.argv[3])
+m = {e["path"]: e for e in json.load(open(os.path.join(sys.argv[2], "manifest.json")))["files"]}
+def rows(path, stubpath):
+    src = os.path.join(sys.argv[3], path)
+    arm = embed.arm_slice(open(src, "rb").read())
+    stub = open(os.path.join(sys.argv[2], m[stubpath]["stub"]), "rb").read()
+    return {f: v for f, v, *_ in g.compare(arm, stub, embed, src, x86)}
+for p in m:
+    assert rows(p, p)["dylibs.protected"] == "SAME", p
+assert rows("Library/Tools/prog", "usr/bin/prog")["dylibs.protected"] == "DIFF"
+PY
 otool -arch x86_64 -l prog.emb | grep -A2 LC_RPATH | grep -q "path @executable_path/lib " &&
-    pass "deps: the program's LC_RPATH is carried for its @rpath library" || bad "deps: no @executable_path/lib rpath in the stub"
+    pass "deps: the program's LC_RPATH is carried (hao's binder and native dlopens expand @rpath with it)" || bad "deps: no @executable_path/lib rpath in the stub"
 # the same program natively (arm64; libguest's arm64 slice)
 clang -arch arm64 -O1 -o prog.arm64 "$here/stubdeps_main.c" -framework CoreFoundation -weak_framework Security -Llib -lfat \
     libguest.arm64.dylib -Wl,-rpath,@executable_path/lib && codesign -s - -f prog.arm64 2>/dev/null || exit 2
