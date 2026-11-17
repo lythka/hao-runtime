@@ -67,10 +67,12 @@ rc = (run([emb, '--stubs', os.path.join(out, 'e-graft'), '--root', graft] + comm
       run([emb, '--stubs', os.path.join(out, 'e-sys'), '--root', sysroot] + cxa + common, 'embed-sys'))
 log = {k: open(os.path.join(out, 'embed-' + k)).read() for k in ('graft', 'sys')}
 log['graft'] = log['graft'].replace(graft + '/', '')
-log['sys'] = log['sys'].replace(cx + '/', hao_root.CRYPTEXES + '/OS/').replace(sysroot + '/', '')
+for d in (os.path.realpath(cx), cx):   # as hao-image-payload maps the log: either spelling of the folder
+    log['sys'] = log['sys'].replace(d + '/', hao_root.CRYPTEXES + '/OS/')
+log['sys'] = log['sys'].replace(sysroot + '/', '')
 d = filecmp.dircmp(os.path.join(out, 'e-graft'), os.path.join(out, 'e-sys'))
 stubs = filecmp.dircmp(os.path.join(out, 'e-graft/stubs'), os.path.join(out, 'e-sys/stubs'))
-check(rc == (0, 0) and log['graft'] == log['sys'] and log['sys'].count('\nok\t') + log['sys'].startswith('ok\t') == 3 and
+check(rc == (0, 0) and log['graft'] == log['sys'] and 'links 0 (not 3)' not in log['sys'] and log['sys'].count('\nok\t') + log['sys'].startswith('ok\t') == 3 and
       not d.diff_files and not d.left_only and not d.right_only and not stubs.diff_files and not stubs.left_only and
       not stubs.right_only and len(stubs.same_files) == 3,
       'hao-embed --stubs --scan: the same manifest, stubs and log (3 programs, 2 in the cryptex)')

@@ -868,10 +868,14 @@ class X86Libraries:
         return os.path.normpath(os.path.join(self.root, p.lstrip("/"))) if p.startswith("/") else p
 
     def os_path(self, f):
-        """The path on the running system of F (a normalised path under ROOT), or None."""
+        """The path on the running system of F (a normalised path under ROOT, either spelling of it: a resolved
+        path has ROOT's real path), or None."""
         if self.root == "/":
             return f
-        return f[len(self.root):] if f.startswith(self.root + "/") else None
+        for r in (self.root, self.tree.real):
+            if f.startswith(r + "/"):
+                return f[len(r):]
+        return None
 
     def candidates(self, name, exe, rpaths):
         """The files under ROOT dyld tries for NAME as a dependency of the main
