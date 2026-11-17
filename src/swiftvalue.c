@@ -894,10 +894,19 @@ void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
             memcpy((void *)(uintptr_t)t->swift_made[k].at,&t->swift_made[k].native,8);
             restored++;
         }
-        if (restored && hao_opt.bridge_check)
-            fprintf(HAO_DIAG,"hao: Swift Optional witness nils returned to native: %u at %#llx\n",restored,(unsigned long long)indirect);
-        /* a callback's return may be a guest signal handler's: a counter, and one fixed line
-         * through the async-signal-safe diagnostic write; --stats reports the count */
+        /* a callback's return may be a guest signal handler's: no stdio here, only lines built
+         * on the stack for the async-signal-safe diagnostic write, and counters */
+        if (restored && hao_opt.bridge_check) {
+            char m[120];
+            size_t k = 0;
+            static const char a[] = "hao: Swift Optional witness nils returned to native: ", b[] = " at 0x";
+            memcpy(m,a,sizeof a - 1); k += sizeof a - 1;
+            k += hao_diag_fmt_u64(m + k,restored,10);
+            memcpy(m + k,b,sizeof b - 1); k += sizeof b - 1;
+            k += hao_diag_fmt_u64(m + k,indirect,16);
+            m[k++] = '\n';
+            hao_diag_write(m,k);
+        }
         if (lost && !__atomic_fetch_add(&witness_made_lost,lost,__ATOMIC_RELAXED)) {
             static const char msg[] = "hao: Swift Optional witness nils past the ring were not tracked: a callback "
                                       "result may keep the guest's encoding (count: --stats)\n";
