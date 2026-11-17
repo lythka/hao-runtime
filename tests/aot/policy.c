@@ -9,7 +9,11 @@
 #include "hao/bridge.h"
 #include "hao/cpufeat.h"
 #include <CommonCrypto/CommonDigest.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <sys/acl.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -250,6 +254,63 @@ static void test_stat_rules(const char *tmp)
     CHECK(!hao_aot_dir_ok("/private/tmp", HAO_AOT_EXPLICIT, me, why, sizeof why), "/private/tmp itself rejected");
     CHECK(!hao_aot_dir_ok("/Library/Caches", HAO_AOT_EXPLICIT, me, why, sizeof why), "/Library/Caches rejected");
     CHECK(!hao_aot_dir_ok("relative", HAO_AOT_EXPLICIT, me, why, sizeof why), "relative path rejected");
+}
+
+/* A program that requires library validation reads AOT caches from the system directories only: neither
+ * HAO_CACHE nor the user's own directory, which the user can write (guest_sig.c sets the flag). */
+static void test_system_only(void)
+{
+    hao_aot_dir d[HAO_AOT_MAX_DIRS];
+    int w;
+    char why[256];
+    hao_aot_system_only = true;
+    int n = hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/x", NULL, d, &w, why, sizeof why);
+    CHECK(n == 2 && !strcmp(d[0].path, HAO_AOT_SYS_RO_DIR) && !strcmp(d[1].path, HAO_AOT_SYS_DIR) && w == -1,
+          "system only: an ordinary user's process reads the system directories, writes none (%d dirs)", n);
+    n = hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/x", "/Users/x/c", d, &w, why, sizeof why);
+    CHECK(n == 2 && !strcmp(d[1].path, HAO_AOT_SYS_DIR) && w == -1, "system only: HAO_CACHE not used (%d dirs)", n);
+    hao_aot_system_only = false;
+    n = hao_aot_dirs_for(HAO_ENV_OPEN, 501, "/Users/x", NULL, d, &w, why, sizeof why);
+    CHECK(n == 3, "without it: the user's directory is read again (%d dirs)", n);
+}
+
+/* ACLs: only "no extended ACL" (ENOENT from the lookup) grants nothing. A lookup that fails otherwise
+ * leaves the entries unknown, and counts as granting write access. */
+static void test_acl(const char *tmp)
+{
+    char d[1024], f[1024], cmd[2200];
+    CHECK(!hao_aot_acl_allows(NULL, ENOENT), "ACL lookup said ENOENT (no ACL): grants nothing");
+    CHECK(hao_aot_acl_allows(NULL, EACCES) && hao_aot_acl_allows(NULL, EIO) && hao_aot_acl_allows(NULL, ENOMEM) &&
+          hao_aot_acl_allows(NULL, 0), "ACL lookup failed otherwise (EACCES, EIO, ENOMEM, no errno): counts as granting");
+    snprintf(d, sizeof d, "%s/acl", tmp);
+    mkdir(d, 0700);
+    chmod(d, 0700);
+    snprintf(f, sizeof f, "%s/file", d);
+    close(open(f, O_WRONLY | O_CREAT, 0644));
+    errno = 0;
+    acl_t a = acl_get_link_np(f, ACL_TYPE_EXTENDED);
+    bool r = hao_aot_acl_allows(a, errno);
+    if (a) acl_free(a);
+    CHECK(!a && !r, "a file without an ACL: grants nothing");
+    /* the lookup itself fails: the directory above denies search */
+    chmod(d, 0);
+    errno = 0;
+    a = acl_get_link_np(f, ACL_TYPE_EXTENDED);
+    int e = errno;
+    r = hao_aot_acl_allows(a, e);
+    if (a) acl_free(a);
+    chmod(d, 0700);
+    CHECK(!a && e != ENOENT && r, "an ACL that cannot be read (errno %d): counts as granting", e);
+    snprintf(cmd, sizeof cmd, "/bin/chmod +a 'everyone allow write' '%s'", f);
+    if (system(cmd) == 0) {
+        errno = 0;
+        a = acl_get_link_np(f, ACL_TYPE_EXTENDED);
+        r = hao_aot_acl_allows(a, errno);
+        if (a) acl_free(a);
+        CHECK(a && r, "an ACL granting everyone write: grants");
+    }
+    unlink(f);
+    rmdir(d);
 }
 
 /* ------------------------------------------------------ format checks */
@@ -614,7 +675,9 @@ int main(int argc, char **argv)
     test_system_dirs();
     test_tiers();
     test_dirs();
+    test_system_only();
     test_stat_rules(argv[1]);
+    test_acl(argv[1]);
     test_format();
     printf("%s policy: %d checks passed, %d failed\n", fails ? "FAIL" : "PASS", passes, fails);
     return fails ? 1 : 0;

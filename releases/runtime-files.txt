@@ -512,6 +512,8 @@ tests/guest/libval.sh
 tests/guest/libvallate.c
 tests/guest/libvalplug.c
 tests/guest/libvalswap.c
+tests/guest/lvswitches.sh
+tests/guest/lvswitchesmark.c
 tests/guest/longstack.swift
 tests/guest/longstackhelper.swift
 tests/guest/msgfnptr.m
@@ -717,6 +719,7 @@ tests/host/swiftvalue.swift
 tests/host/test_x86_emit.c
 tests/host/traps.c
 tests/host/x86args.c
+tests/loader/test_identity.c
 tests/loader/test_ifunit.c
 tests/loader/test_images.c
 tests/loader/test_macho.c
@@ -790,6 +793,7 @@ tests/guest/fmla_bench.sh
 tests/guest/state_bench.c
 tests/guest/state_bench.sh
 tests/aot/round16.c
+tests/aot/swapclose.c
 tests/oracle/fma16_cases.h
 tests/guest/fma16.c
 tests/guest/fma16.sh

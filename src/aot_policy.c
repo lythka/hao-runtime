@@ -6,6 +6,7 @@
 #include "hao/aot.h"
 #include "hao/cpufeat.h"
 #include <CommonCrypto/CommonDigest.h>
+#include <errno.h>
 #include <mach-o/loader.h>
 #include <stdio.h>
 #include <string.h>
@@ -304,13 +305,16 @@ static bool pw_dir_ok(const char *d)
     return strlen(d) + sizeof "/Library/Caches/hao" < sizeof ((hao_aot_dir *)0)->path;
 }
 
+bool hao_aot_system_only;
+
 int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_cache, hao_aot_dir *out,
                      int *write_idx, char *why, size_t n)
 {
     int k = 0;
     *write_idx = -1;
     if (why && n) why[0] = 0;
-    if (tier == HAO_ENV_OPEN && hao_cache && hao_cache[0]) {
+    bool user = tier == HAO_ENV_OPEN && !hao_aot_system_only;
+    if (user && hao_cache && hao_cache[0]) {
         if (hao_cache[0] != '/') { if (why && n) snprintf(why, n, "HAO_CACHE=%s is not absolute; AOT is off", hao_cache); return 0; }
         if (strlen(hao_cache) >= sizeof out[0].path) { if (why && n) snprintf(why, n, "HAO_CACHE is too long; AOT is off"); return 0; }
         snprintf(out[0].path, sizeof out[0].path, "%s", hao_cache);
@@ -324,7 +328,7 @@ int hao_aot_dirs_for(int tier, uid_t euid, const char *pw_dir, const char *hao_c
     out[k].kind = HAO_AOT_SYS;
     if (euid == 0 && tier != HAO_ENV_SETUGID) *write_idx = k;
     k++;
-    if (tier == HAO_ENV_OPEN && euid >= 501 && euid < 0x80000000u && pw_dir_ok(pw_dir)) {
+    if (user && euid >= 501 && euid < 0x80000000u && pw_dir_ok(pw_dir)) {
         size_t l = strlen(pw_dir);
         while (l > 1 && pw_dir[l - 1] == '/') l--;
         snprintf(out[k].path, sizeof out[k].path, "%.*s/Library/Caches/hao", (int)l, pw_dir);
@@ -363,12 +367,16 @@ bool hao_aot_stat_ok(const struct stat *st, int kind, int role, uid_t euid, char
 /* Does any allow entry grant a right that could change what the path holds
  * (write/add, append/add-subdirectory, delete, delete-child, attributes,
  * security, owner)? Read and search grants are harmless. An entry we cannot
- * read counts as granting. */
-bool hao_aot_acl_allows(void *acl)
+ * read counts as granting, and so does an ACL we could not get: the kernel
+ * says ENOENT when there is none, and anything else (no permission to read
+ * it, an I/O error, no memory) leaves its entries unknown. acl_get_entry
+ * ends the walk with -1, the same for the last entry as for a bad handle,
+ * but the handle is the one acl_get_*_np just gave. */
+bool hao_aot_acl_allows(void *acl, int lookup_errno)
 {
     static const acl_perm_t w[] = {ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_DELETE, ACL_DELETE_CHILD, ACL_WRITE_ATTRIBUTES,
                                    ACL_WRITE_EXTATTRIBUTES, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER};
-    if (!acl) return false;
+    if (!acl) return lookup_errno != ENOENT;
     acl_entry_t e;
     for (int id = ACL_FIRST_ENTRY; acl_get_entry((acl_t)acl, id, &e) == 0; id = ACL_NEXT_ENTRY) {
         acl_tag_t tag;
@@ -398,8 +406,9 @@ bool hao_aot_dir_ok(const char *canon, int kind, uid_t euid, char *why, size_t n
         struct stat st;
         if (lstat(p, &st) != 0) FAIL("%s: cannot stat", p);
         if (!hao_aot_stat_ok(&st, kind, last ? HAO_AOT_DIR : HAO_AOT_ANCESTOR, euid, w, sizeof w)) FAIL("%s: %s", p, w);
+        errno = 0;
         acl_t a = acl_get_link_np(p, ACL_TYPE_EXTENDED);
-        bool bad = hao_aot_acl_allows(a);
+        bool bad = hao_aot_acl_allows(a, errno);
         if (a) acl_free(a);
         if (bad) FAIL("%s: its ACL grants write access", p);
         if (last) return true;

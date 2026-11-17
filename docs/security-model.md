@@ -79,8 +79,15 @@ hao validates the embedded signature as xnu does: the superblob structure, the
 CodeDirectory of highest hash rank and its cdhash, every page hash up to the
 code limit, and the special slots of every blob the superblob carries
 (requirements, entitlements, DER entitlements, launch constraints). The code
-limit must reach the signature and nothing may follow it, so every byte the
-loader maps or reads is hashed. This is necessary because hao maps guest
+limit must reach the signature and nothing may follow it. The signature's
+own bytes past the code limit are not all sealed by its hashes, so nothing
+the loader or the program uses may reach into them: no segment but a
+read-only, non-executable `__LINKEDIT` (exactly that 16-byte name; so no
+fixup slot), no section of any segment or type, zero-fill included
+(initializer offsets and pointers among them), and no linkedit
+data a load command names (fixups, exports, function starts, symbol
+tables). A slice where one does is invalid. So every byte the loader maps as code or reads is
+hashed. This is necessary because hao maps guest
 `__TEXT` as data, and the kernel enforces page hashes only for executable
 mappings. The Info.plist, resource-directory and application slots name files
 outside the Mach-O; exec does not check them, and neither does hao.
@@ -139,20 +146,29 @@ counts only for the cdhash hao computed on the bytes it took.
 Natively the kernel validates each page of a signed image as it pages it
 in. Nothing does that for pages hao maps as data, so hao must not read a
 guest file twice: whoever may write the file could change it between the
-check and the load. How the slice is taken depends on who can change the
-file:
+check and the load. How the slice is taken depends on whether the file can
+change at all:
 
 | File | How its slice is taken |
 |---|---|
-| Someone other than root may change it: not owned by root, or writable by its group or by others, or with an ACL, or on a volume that is not local | Read once into memory. The mach header, load commands, signature, hashed pages, linkedit data and segments all come from that copy; rewriting the file during or after the load changes nothing in the process |
-| Only root can change it (the system's own files; every file of a sealed system volume) | Mapped. Its pages are shared with every process that maps the file, as natively |
+| On the volume the system booted from, mounted read-only (the System volume, sealed or booted from an APFS snapshot: `MNT_ROOTFS` and `MNT_RDONLY`), owned by root, not writable by its group or others, without an ACL | Mapped. Its pages are shared with every process that maps the file, as natively |
+| Any other file, root-owned or not: the data volume (`/Applications`, `/Library`, `/usr/local`), a disk image, a removable or network volume | Read once into memory. The mach header, load commands, signature, hashed pages, linkedit data and segments all come from that copy; rewriting the file, or the storage under it, during or after the load changes nothing in the process |
+
+Owner, mode and ACL say who may write a file through its volume, not who
+controls the storage under it: a disk image's owner can change a root-owned
+file in it without any write bit. So only the read-only System volume is
+mapped.
 
 A copied image shares no memory with its file or with other processes. It
 costs its slice's size in anonymous memory, per process, for as long as it
 is loaded: 7.2 MB more peak footprint for an 8.4 MB library and 66 MB for a
 67 MB one, measured. The programs that loaded them ran in 0.04 s and 0.21 s,
-against 0.04 s and 0.20 s with the files mapped. Guest libraries are taken
-the same way as the main executable.
+against 0.04 s and 0.20 s with the files mapped. For root-owned programs on
+the data volume, which were mapped before, measured under Rosetta: the
+Command Line Tools' `clang --version` (124 MB slice) went from 51 MB to
+142 MB peak footprint, in 1.00 s both ways (median of 5); `git --version`
+(3.8 MB) from 7.4 MB to 10.2 MB, 0.06 s both ways. Guest libraries are
+taken the same way as the main executable.
 
 The loader also bounds what a guest file may claim: 4 MiB of load commands,
 256 MiB for an exports trie, chained fixups, a legacy dyld stream or
@@ -179,7 +195,9 @@ hardened-runtime or library-flag binary without its own
 `disable-library-validation`, hao:
 
 - sets `CS_REQUIRE_LV` on the process once `libhao` is mapped, so the kernel
-  refuses non-platform native libraries of another Team ID;
+  refuses non-platform native libraries of another Team ID. If the kernel
+  does not take the flag, the program is not run (status 126): it would
+  otherwise load native libraries that it cannot load natively;
 - checks every guest library with `F_CHECK_LV`, and where the kernel cannot
   hold the 16 KiB-page signature, applies the same rule itself: a platform
   file (trusted list, else `anchor apple`), or a file of the main executable's
@@ -190,6 +208,28 @@ hardened-runtime or library-flag binary without its own
 
 A signed image's pages are hashed once in its process, whichever of these
 routes then decides about it.
+
+Natively neither the hardened runtime nor the kernel lets a program's
+environment load code into it or vouch for code. So for a main executable
+whose verified signature requires library validation, hao ignores every
+open-tier switch that adds code or trust, before anything they name is
+read or loaded, and names each on standard error (`HAO_IF_DIR ignored: the
+program requires library validation`):
+
+| Switch | What it does in an open-tier process | For a program that requires library validation |
+|---|---|---|
+| `HAO_NO_LIBVAL=1` | turns library validation off | ignored; library validation is on |
+| `HAO_CACHE=DIR` | reads AOT caches (native code) from DIR | ignored; the system cache directories only: the user's own is not read either (`-v` says so) |
+| `HAO_GUEST_ROOT=DIR` | takes guest OS libraries and the arm64e shared cache from under DIR | ignored |
+| `HAO_IF_DIR=DIR` | reads interface units and loads the `.thunks` libraries (native code, whose initializers run) from DIR | ignored; `/usr/lib/hao/if` |
+| `HAO_ASYNC_CONTRACT_LIBRARY=FILE` | loads FILE as the native async provider | ignored; the packaged provider |
+| `HAO_TRUST_LIST=FILE` | takes the cdhashes in FILE as Apple's | ignored; `/usr/lib/hao/trusted-cdhashes` only |
+
+The CLI route decides this on the slice its signature check takes, the
+embedded route on the slice the loader then builds the image from, so the
+decision and the image come from the same bytes. The other open-tier
+switches select hao's own engines, diagnostics or bring-up behaviour, not
+code or trust. Guarded and set-ID processes ignore all of these anyway.
 
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
@@ -230,9 +270,9 @@ The guarded list holds only switches that run the same code through another
 of hao's engines or print. Everything that chooses code or a path
 (`HAO_CACHE`, `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_TRUST_LIST`,
 `HAO_ASYNC_CONTRACT_LIBRARY`, `HAO_DIAG_DIR`, the command-line options carried
-in `HAO_FLAGS`), turns a check off (`HAO_NO_LIBVAL`, `--allow-unsigned`) or
-changes how native calls, signals or memory behave is for open processes
-only. Root is guarded whatever started it: `sudo` and login sessions pass
+in `HAO_FLAGS`), turns a check off (`HAO_NO_LIBVAL`, for a program that does
+not require library validation; `--allow-unsigned`) or changes how native
+calls, signals or memory behave is for open processes only. Root is guarded whatever started it: `sudo` and login sessions pass
 variables from users who are not root. With `-v`, hao names each switch it
 ignored.
 
@@ -245,9 +285,10 @@ check off.
 
 A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
 never for a release image. It also reads the test switches
-(`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
-`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`, `HAO_AOT_FREE_MB`,
-`HAO_CRASH`) from an open
+(`HAO_LIBVAL_USER`, which also keeps `HAO_TRUST_LIST` for a program that
+requires library validation, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
+`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`,
+`HAO_AOT_FREE_MB`, `HAO_CRASH`, `HAO_CPU_FEATURES`) from an open
 process's environment, and the bridging and signal bring-up knobs as boot
 arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a
 process to the guarded or set-ID rules.
@@ -270,14 +311,15 @@ uses one only if both of the following hold.
 | Directory | Read by | Must be owned by |
 |---|---|---|
 | `/usr/lib/hao/aot`, `/private/var/db/hao` | every process | root |
-| `~/Library/Caches/hao` (home from the user database, never `$HOME`) | that user's open-tier processes | root or the user |
-| `HAO_CACHE=/abs/dir` | an open-tier process that sets it | root or the user |
+| `~/Library/Caches/hao` (home from the user database, never `$HOME`) | that user's open-tier processes, for a program that does not require library validation | root or the user |
+| `HAO_CACHE=/abs/dir` | an open-tier process that sets it, for a program that does not require library validation | root or the user |
 | `hao --aot --cache DIR` | nothing: `hao --aot` writes there; a process reads it only as one of the rows above | root or the user |
 
 The file, its directory and every directory above must have that owner, no
 group or other write bit (a sticky ancestor is allowed outside the system
-directories), no ACL entry that grants a write-type right, and no symlink the
-user owns on the way. The file is read once into memory, checked there, and
+directories), no ACL entry that grants a write-type right (an ACL that
+cannot be read counts as granting one), and no symlink the user owns on the
+way. The file is read once into memory, checked there, and
 those bytes are installed.
 
 `hao --aot` writes into the last directory of that list its process reads:
@@ -325,7 +367,10 @@ image with that cdhash ever loads the cache.
 `/usr/lib/hao/stub-identities`, each as `hao --aot FILE` above. A list that is
 not a root-owned regular file writable only by root is not used. A program whose cache in a directory this process reads already passes the
 loader's checks is skipped; `hao --aot --check` runs those checks and writes
-nothing.
+nothing. Both first verify the program's signature and, for a program that
+requires library validation, look in the system directories only, as a run
+of it does; without `--cache`, `hao --aot` writes no cache for such a
+program into a directory a run of it does not read.
 
 System directories hold caches for signed code only. `hao --aot` writes none
 for an unsigned guest there (as root without `--cache`, or with `--cache` or
@@ -377,12 +422,17 @@ The stub's signature does not cover the ARM slice, so the stub names the
 slice it was made for. `tools/hao-embed` writes the hash type and cdhash of
 the ARM slice's CodeDirectory into the stub's `__TEXT,__hao_slice`, which the
 stub's own signature does cover, and refuses to embed a program whose ARM
-slice is unsigned or does not verify. Before it loads the slice, hao verifies
-it (structure, CodeDirectory, every page hash) and requires its cdhash to be
+slice is unsigned or does not verify. Before anything else of the guest's
+or anything the environment selects is loaded, hao verifies the slice
+(structure, CodeDirectory, every page hash) and requires its cdhash to be
 the one the stub names; otherwise it exits with status 126. A copy of an
 embedded program with another ARM slice in it, even one with a valid
 signature of its own, does not run under the program's identity and
-entitlements. `tools/stub_identity_gate.py` checks the record of every stub
+entitlements. A stub without the record (made before `tools/hao-embed`
+wrote it) names no slice and runs none: hao exits with status 126, and
+the program must be embedded again. Whether the process's main executable
+is a stub is said by the front end the kernel started (`hao-stub` or
+`hao`), never by the record's absence. `tools/stub_identity_gate.py` checks the record of every stub
 of a payload. The check hashes the program's ARM slice once per launch.
 
 A stub whose program uses ObjC re-executes itself once to turn off libobjc's
@@ -419,8 +469,8 @@ program (`include/hao/idlist.h`):
 
 A list is read only if root owns it and every directory above it, none of
 them can be written by group or others, none is a symbolic link and none has
-an extended ACL. A row whose reference is itself listed is dropped, so a
-reference is never followed further.
+an extended ACL (or one that cannot be read). A row whose reference is
+itself listed is dropped, so a reference is never followed further.
 
 The image's x86_64 Security.framework calls `hao_codeid_decide`
 (`src/code_identity.c`, `build/libhao_codeid.a`, no libhao) after its own
@@ -470,13 +520,12 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 
 ## Known limitations
 
-- A guest file that only root can change is mapped, not copied. If root
-  rewrites such a file in place while hao loads it, hao does not notice;
-  natively the kernel would kill the process at the changed page.
-- Whether only root can change a file is judged from its owner, mode and ACL
-  and from its volume being local. A local volume whose storage someone else
-  can write (a disk image or removable disk mounted with ownership enabled)
-  can hold root-owned files that change all the same; hao maps them.
+- A guest file on the read-only System volume is mapped, not copied. That
+  volume is taken to be unchanging while it is mounted: sealed, or an APFS
+  snapshot (an image whose seal was broken boots from one). A root process
+  that remounts the root file system writable and rewrites such a file
+  while hao loads it is not noticed; natively the kernel would kill the
+  process at the changed page.
 - HaoExec hands hao a path, not the file the kernel examined, and hao opens
   it again. Routing grants nothing, so a path that names another file by then
   only runs that file under the same checks.
@@ -496,14 +545,15 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   the stub. `SecCodeCopySigningInformation` still describes the stub.
 - In the command-line route, native library initializers run before hao's
   check. If one of them asks for the main executable's path or sections, it
-  is answered from the file `HAO_EXEC` names, unchecked. A file that fails
-  the check never runs.
-- A stub made before `tools/hao-embed` wrote the `__hao_slice` record does
-  not name its ARM slice. hao verifies such a program's ARM slice by the
-  slice's own signature only, so a copy with another validly signed slice
-  still runs under the stub's identity and entitlements. Embed such
-  programs again; `hao-install.py` does not replace a stub that is already
-  in a file.
+  is answered from the file `HAO_EXEC` names, unchecked. Its header and
+  load commands are read once into memory (at most 4 MiB of them), and a
+  segment whose carried sections span more than 64 MiB is not answered
+  for. A file that fails the check never runs.
+- An embedded program's stub carries `disable-library-validation`, and dyld
+  loads the native libraries the stub links, and runs their initializers,
+  before hao sets `CS_REQUIRE_LV`. Library validation holds for what the
+  program loads from then on, not for the stub's own link-time
+  dependencies.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests
@@ -522,4 +572,6 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   own check of that image.
 - An AOT cache in a user's own directory is trusted as far as that user: any
   process of the user can write one that the user's other open-tier programs
-  load.
+  load, unless the program requires library validation. Such a program
+  (most notarized applications are hardened) is translated afresh at each
+  launch unless root put a cache for it in a system directory.
