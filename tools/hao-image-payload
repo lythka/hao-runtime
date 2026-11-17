@@ -23,7 +23,7 @@
 #                                                 PID-1 boot-spec fix, if that dyld needs it)
 #     OUT/hao-install.py, OUT/hao_fat.py, OUT/hao_codesig.py (run by the image builder)
 #     OUT/build.json                             (release, mode, inputs and hashes; dated by the commit)
-#     OUT/payload-manifest.json                  (the runtime -> patcher contract, hao-assets "payload" check:
+#     OUT/payload-manifest.json                  (the runtime -> patcher contract, hao_contract.py "payload" check:
 #                                                 version, commit, clean, os_build, cache_uuid, units_version,
 #                                                 units_sha256, layout_version and the sha256 of every other
 #                                                 file under OUT; --units-version names the unit set, default
@@ -580,7 +580,7 @@ json.dump({'unit': 'hao-image-payload', 'revision': 11,
            'aot': aot,
            'files': files, 'hao_source_sha256': hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()},
           open(os.path.join(out, 'build.json'), 'w'), indent=1)
-# The runtime -> patcher contract (hao-assets hao_contract.py "payload"): the patcher refuses a manifest that is
+# The runtime -> patcher contract (hao_contract.py "payload", vendored in tools/hao-contract): the patcher refuses a manifest that is
 # not clean, names another OS build or layout version than it declares, or lists a file that is missing or changed.
 # LAYOUT_VERSION is the install layout hao-install.py reads (root/, replace/, embed/, HaoExec.kext and the helper
 # scripts at OUT's top level); bump it when that layout changes.

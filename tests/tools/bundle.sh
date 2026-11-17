@@ -11,7 +11,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-tools-bundle)}
+OUT=${OUT:-$(mktemp -d -t hao-pkgtest-bundle)}
 B=${B:-$repo/build}
 EMBED=${EMBED:-$repo/tools/hao-embed}
 HAO_FS=${HAO_FS:-}
