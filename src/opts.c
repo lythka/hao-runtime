@@ -14,7 +14,8 @@ hao_opts_t hao_opt;
  * programs and PID 1 included, and stays set across restarts. So each knob
  * says whether it may come from there:
  *   BOOT_YES  what a guarded process may also take from its environment
- *             (hao/aot.h): the engine and printing switches;
+ *             (hao/aot.h): the engine and printing switches, except
+ *             swift_value_survey (open tier only from the environment);
  *   BOOT_DEV  bring-up switches that change how calls are bridged or signals
  *             return: only in a HAO_TEST_SWITCHES build;
  *   BOOT_NO   never: hao_no_libval would turn library validation off for

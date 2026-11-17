@@ -82,7 +82,9 @@ int main(void)
                 }
                 /* what a release build reads from the boot arguments, a guarded process may read from its environment */
                 for (size_t i = 0; (*l)[i]; i++) up[4 + i] = (char)((*l)[i] >= 'a' && (*l)[i] <= 'z' ? (*l)[i] - 32 : (*l)[i]);
-                if (pass == 0) CHECK(hao_env_switch_allowed(up, HAO_ENV_GUARDED), "%s: boot-listed, so guarded-allowed", up);
+                /* except the survey: its lines carry guest data and addresses to the caller's stderr */
+                bool open_only = !strcmp(*l, "swift_value_survey");
+                if (pass == 0) CHECK(hao_env_switch_allowed(up, HAO_ENV_GUARDED) != open_only, "%s: boot-listed, so guarded-allowed", up);
                 if (pass == 1) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) && !hao_env_test_switch(up), "%s: bring-up knob", up);
             }
         }
@@ -150,8 +152,12 @@ int main(void)
     hao_opts_parse(&o, none, NULL, NULL, false, HAO_ENV_OPEN);
     CHECK(!o.swift_value_survey, "Swift value survey off by default");
     char *e13[] = {"HAO_SWIFT_VALUE_SURVEY=1", NULL};
+    hao_opts_parse(&o, e13, NULL, NULL, false, HAO_ENV_OPEN);
+    CHECK(o.swift_value_survey, "HAO_SWIFT_VALUE_SURVEY in an ordinary process");
     hao_opts_parse(&o, e13, NULL, NULL, false, HAO_ENV_GUARDED);
-    CHECK(o.swift_value_survey, "HAO_SWIFT_VALUE_SURVEY in a guarded process");
+    CHECK(!o.swift_value_survey && strstr(o.ignored, "HAO_SWIFT_VALUE_SURVEY"), "HAO_SWIFT_VALUE_SURVEY ignored in a guarded process");
+    hao_opts_parse(&o, none, NULL, "hao_swift_value_survey=1", true, HAO_ENV_GUARDED);
+    CHECK(o.swift_value_survey, "boot argument hao_swift_value_survey=1 in PID 1");
     char *e9[] = {"HAO_NO_CHAINX=1", "XHAO_NO_AOT=1", "HAO_NO_AO=1", NULL};
     hao_opts_parse(&o, e9, NULL, NULL, false, HAO_ENV_OPEN);
     CHECK(!o.no_chain && !o.no_aot, "environment names match exactly");

@@ -508,4 +508,30 @@ case $m in
 *) bad "M other-writable directory / private records: $m" ;;
 esac
 
+# The 64 MB cap holds for every write: a log 30 bytes short of the cap less the room kept for the closing line gets
+# its first line cut there and one "reached its cap" line; a second process adds nothing, and the file stays under
+# the cap. The log is sparse up to there.
+C=$OUT/cap; mkdir -p "$C" && chmod 755 "$C"
+m=$(python3 -I - "$HAO" "$G" "$C" "$T" <<'EOF'
+import os, subprocess, sys
+hao, guest, d, t = sys.argv[1:]
+cap, keep = 64 << 20, 200
+boot = subprocess.run(['/usr/sbin/sysctl', '-n', 'kern.bootsessionuuid'], capture_output=True, text=True).stdout.strip()
+p = d + '/console.log'
+with open(p, 'wb') as f:
+    f.write(('hao: console.log of boot %s\n' % boot).encode())
+    f.truncate(cap - keep - 30)
+os.chmod(p, 0o600)
+for k in range(2):
+    subprocess.run([hao, guest], env={'HAO_DIAG_DIR': d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=int(t))
+    if k == 0: first = os.path.getsize(p)
+size = os.path.getsize(p)
+with open(p, 'rb') as f:
+    f.seek(cap - keep - 30); tail = f.read()
+print('size=%s first=%s caplines=%d' % ('under' if size <= cap else 'over', 'same' if first == size else 'grew', tail.count(b'reached its cap')))
+EOF
+)
+[ "$m" = "size=under first=same caplines=1" ] && pass "M the cap holds across processes: one cap line ($m)" || bad "M cap: $m"
+
 exit $fail

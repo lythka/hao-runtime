@@ -31,8 +31,8 @@ typedef struct {
          libval_user,            /* HAO_LIBVAL_USER: library validation's signer checks in user space, as on an x86_64 kernel (tests; libval.c) */
          swift_value_strict,     /* HAO_SWIFT_VALUE_STRICT: a refused Swift value ends the process instead of passing
                                     through unpatched (tests; swiftvalue.c) */
-         swift_value_survey,     /* HAO_SWIFT_VALUE_SURVEY: a Swift value passed through unpatched is reported
-                                    ("Swift value survey:" lines; printing only, swiftvalue.c) */
+         swift_value_survey,     /* HAO_SWIFT_VALUE_SURVEY (open tier; boot argument in every tier): a Swift value
+                                    passed through unpatched is reported ("Swift value survey:" lines, swiftvalue.c) */
          crash;                  /* boot argument hao_crash=1 (every process; HAO_CRASH in tests): diagnostics also to
                                     /dev/console and /private/var/log/hao (runtime.c hao_diag_init) */
     char cache[1024];           /* HAO_CACHE ("" = unset) */

@@ -174,8 +174,7 @@ int hao_env_tier_for(const hao_proc_facts *f)
 static const char *const engine_switches[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", NULL};
 /* Print to the process's own stderr or the console. They bind nothing and
  * turn nothing off (HAO_NX_STATS adds a thread that only prints). */
-static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME",
-                                           "HAO_SWIFT_VALUE_SURVEY", NULL};
+static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME", NULL};
 /* For hao's own tests: they replace a kernel answer or a resource limit with
  * a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
@@ -207,6 +206,8 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *    std::string layout, runtime.c), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
  *    swiftresult.c);
+ *  - print guest data and addresses to wherever the caller's stderr goes: HAO_SWIFT_VALUE_SURVEY (a root
+ *    process takes it from boot argument hao_swift_value_survey=1);
  *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the
  *    frame, signals.c), HAO_NO_PROBE, HAO_WATCHDOG (takes SIGALRM and exits 124), HAO_JIT_CACHE_MB.
  * A switch nobody listed is OPEN only too. SETUGID honours none: even an engine switch lets the caller slow a
