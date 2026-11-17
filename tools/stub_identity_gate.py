@@ -19,8 +19,8 @@ describe arm64 code. RULES is that table, one row per load command type:
 A load command type the table does not name is refused by hao-embed and a
 DIFF here: a new type must be decided, not carried or dropped by default.
 
-  stub_identity_gate.py [--x86-cache DIR] [--host-test] [--out DIR] FAT...
-  stub_identity_gate.py [--x86-cache DIR] --stubs DIR --root ROOT [--out DIR]
+  stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] [--host-test] [--out DIR] FAT...
+  stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] --stubs DIR --root ROOT [--out DIR]
       FAT: an embedded file (its arm slice and its x86_64 stub); --stubs: a
       hao-embed --stubs payload, each manifest entry's stub against ROOT/path.
       --x86-cache: the x86_64 shared cache the stubs run with (default as
@@ -286,7 +286,8 @@ def load_embed():
 def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own_rpaths=None, dropped=()):
     """[(field, verdict, arm value, stub value, note)] for the arm slice ARM and its stub STUB (bytes).
     EMBED: the hao-embed module; SRC_PATH: the program's path (for dependency resolution with X86); DROPPED: the
-    constraint slots (self, parent, responsible, library) the manifest says were left out."""
+    constraints the release allows to be left out for this program ({(slot name, arm cdhash, blob sha256)},
+    hao-embed read_dropped), never what a manifest says."""
     rows = []
 
     def add(field, ok, a, s, note="", known=None):
@@ -441,8 +442,8 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
         a_, s_ = ac.get(slot), sc.get(slot)
         show = lambda b: hashlib.sha256(b).hexdigest()[:16] if b else "-"
         add("sig.constraint-" + nm, a_ == s_, show(a_), show(s_), "the program's constraint, sealed byte for byte",
-            known="left out (hao-embed --allow-dropped-constraints: codesign cannot express it)"
-            if nm in dropped and s_ is None else None)
+            known="left out: listed in --dropped-constraints (that blob of this build; codesign cannot express it)"
+            if a_ is not None and s_ is None and embed.constraint_pin(arm, slot, a_) in dropped else None)
     for slot, nm in ((1, "sig.slot-1"), (3, "sig.slot-3")):
         a_, s_ = hao_codesig.special_slots(arm, slot), hao_codesig.special_slots(stub, slot)
         common = set(a_) & set(s_)
@@ -453,7 +454,7 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
 
 
 def pairs(a):
-    """[(label, src_path or None, arm bytes, stub bytes, dropped constraint slots)] from the command line."""
+    """[(label, src_path or None, arm bytes, stub bytes)] from the command line."""
     embed = None
     out = []
     if a.stubs:
@@ -462,8 +463,7 @@ def pairs(a):
         for e in m["files"]:
             src = os.path.join(a.root, e["path"])
             arm = embed.arm_slice(open(src, "rb").read())
-            out.append((e["path"], src, arm, open(os.path.join(a.stubs, e["stub"]), "rb").read(),
-                        e.get("constraints", {}).get("dropped", [])))
+            out.append((e["path"], src, arm, open(os.path.join(a.stubs, e["stub"]), "rb").read()))
         return out
     embed = load_embed()
     for f in a.files:
@@ -472,7 +472,7 @@ def pairs(a):
         x = [p for c, _, p in hao_fat.slices(data) or [] if c == hao_fat.CPU_X86_64]
         if arm is None or not x:
             raise SystemExit(f"stub_identity_gate: {f}: not an embedded file (needs an arm64 and an x86_64 slice)")
-        out.append((f, f, arm, x[0], []))
+        out.append((f, f, arm, x[0]))
     return out
 
 
@@ -482,6 +482,9 @@ def main():
     ap.add_argument("--root")
     ap.add_argument("--x86-cache")
     ap.add_argument("--host-test", action="store_true")
+    ap.add_argument("--dropped-constraints", metavar="FILE",
+                    help="the release's list of constraints a stub may lack (hao-embed --allow-dropped-constraints); "
+                         "any other missing constraint is a DIFF")
     ap.add_argument("--out")
     ap.add_argument("--rules", action="store_true", help="print the rule table as TSV and exit")
     ap.add_argument("files", nargs="*")
@@ -496,16 +499,22 @@ def main():
     if bool(a.stubs) != bool(a.root) or (not a.stubs and not a.files):
         ap.error("give FAT... or --stubs DIR --root ROOT")
     embed = load_embed()
-    x86 = embed.X86Libraries(embed.x86_cache_dir(a), a.root or "/")
     try:
         progs = pairs(a)
     except (OSError, ValueError, KeyError) as e:
         print(f"stub_identity_gate: {e}", file=sys.stderr)
         return 2
+    x86 = embed.X86Libraries(embed.x86_cache_dir(a), a.root or "/") if progs else None   # none: exit 2
     counts = collections.Counter()
     diffs, per = [], []
-    for label, src, arm, stub, dropped in progs:
+    try:
+        allowed = embed.read_dropped(a.dropped_constraints) if a.dropped_constraints else {}
+    except (OSError, ValueError) as e:
+        print(f"stub_identity_gate: --dropped-constraints: {e}", file=sys.stderr)
+        return 2
+    for label, src, arm, stub in progs:
         try:
+            dropped = set().union(*(allowed.get(k, set()) for k in {label, os.path.realpath(label)}))
             rows = compare(arm, stub, embed, src, x86, a.host_test, dropped=dropped)
         except (ValueError, struct.error, IndexError) as e:
             rows = [("parse", "DIFF", "-", "-", str(e))]

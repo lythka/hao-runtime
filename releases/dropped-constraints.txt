@@ -1,6 +1,9 @@
-# Programs tools/hao-embed may embed without a launch constraint it cannot carry (--allow-dropped-constraints).
-# codesign seals only a constraint of requirements (category 0) into the stub's signature; these programs have a
-# category constraint (an Apple-defined set) that no ad hoc stub could meet. Every other constraint is carried
-# byte for byte. One path per line, relative to the image root; a listed program keeps the rest of its
-# constraints. Each entry is a release decision.
-usr/libexec/xpcproxy
+# Launch constraints tools/hao-embed may leave out of a stub's signature (--allow-dropped-constraints), one per line:
+#   PATH (relative to the image root) SLOT (self, parent, responsible, library) CDHASH (the arm slice hao runs)
+#   SHA256 (the constraint blob, header included)
+# codesign seals only a constraint of requirements (category 0) into the stub's signature; these are category
+# constraints (an Apple-defined set) that no ad hoc stub could meet. A line covers that one blob of that one build;
+# anything else codesign cannot carry refuses the program, and tools/stub_identity_gate.py fails a stub that lacks
+# any constraint not listed here. Each entry is a release decision.
+# 26B131: the self constraint of category 1 (platform)
+usr/libexec/xpcproxy self 011c3216994f54dbaabc9ceb621be8e9ceb6989d e7fc44ee226741c86d4996102424b1489ef19b75199c3be80e7da5352f2f37c3
