@@ -28,6 +28,8 @@ void hao_swift_witness_probe(struct hao_thread *, uint64_t pc);
  * there since MARK (t->swift_made_n at the callback's entry) get the native
  * encoding back; the ring is then reset to MARK. */
 void hao_swift_witness_result(struct hao_thread *, unsigned mark, uint64_t indirect);
+/* --stats: intercepted witnesses, those a full table dropped, nils not tracked */
+void hao_swift_witness_stats(void);
 /* VALUE of TYPE, which native code made in guest storage (a native generic
  * function's result): its outer nils in the guest's encoding where guest code
  * reads them inline. True if a word changed. */
