@@ -109,12 +109,20 @@ static void *w_bridge(void *a)
     return NULL;
 }
 
-/* sigaction of SIGUSR2 to SIG_IGN, as a guest's raw sigaction(2) (disp_lock) */
+/* A guest's raw sigaction(2) (disp_lock): SIGUSR2 to SIG_IGN (a system
+ * call under the lock), and SIGBUS dispositions with a new mask each time
+ * (SIGBUS is emulated: each takes a new record from the disposition pages) */
+typedef struct { uint64_t handler, tramp; sigset_t mask; int flags; } raw_sa;
 static void *w_sigaction(void *a)
 {
     (void)a;
-    struct { uint64_t handler, tramp; sigset_t mask; int flags; } k = {1, 0, 0, 0};
-    while (!stop) hao_signal_raw_sigaction(SIGUSR2, &k, NULL);
+    raw_sa ign = {1, 0, 0, 0};
+    for (sigset_t m = 1; !stop; m++) {
+        hao_signal_raw_sigaction(SIGUSR2, &ign, NULL);
+        raw_sa bus = {0, 0, m & 0x3ffffff, 0};
+        hao_signal_raw_sigaction(SIGBUS, &bus, NULL);
+        usleep(20);   /* a few thousand records a second */
+    }
     return NULL;
 }
 
@@ -156,8 +164,16 @@ static void child(int f)
     const hao_plan *p = hao_bridge_lookup(0x2000000000ull + 16ull * (unsigned)f);
     if (!p || p->kind != 'B') _exit(4);
     *stage = 6;
-    struct { uint64_t handler, tramp; sigset_t mask; int flags; } o;
+    struct sigaction o;
     if (hao_signal_raw_sigaction(SIGUSR2, NULL, &o) != 0) _exit(5);
+    /* new dispositions, more than one page of records: each reads back (the
+     * masks leave out SIGKILL's and SIGSTOP's bits, which sigaction drops) */
+    for (sigset_t k = 1; k <= 400; k++) {
+        raw_sa bus = {0, 0, 0x80000000u | k << 18 | ((sigset_t)f & 0xff), 0};
+        if (hao_signal_raw_sigaction(SIGBUS, &bus, NULL) != 0 || hao_signal_raw_sigaction(SIGBUS, NULL, &o) != 0 ||
+            o.sa_mask != bus.mask)
+            _exit(7);
+    }
     *stage = 7;
     if (nm_find() != 1) _exit(6);
     _exit(0);

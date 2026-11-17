@@ -9,7 +9,7 @@ got `cpu.pc` instead: the last block exit, possibly many blocks back, and
 NZCV from memory while the live flags were in RFLAGS. The re-emission now
 only measures (`xb_init_count`) at the block's own address and keeps its
 records on the stack, so it shares nothing and its RIP displacements are the
-first emission's. Test: `guest/signals` mode `locate` (8 threads spinning in
+first emission's; it counts no statistics. Test: `guest/signals` mode `locate` (8 threads spinning in
 one loop, a signal to each, 400 rounds): before the fix 140-380 contexts per
 run had a pc outside the loop; after it none, under JIT and AOT. Limits:
 in the interpreter (`--interp`, no JIT memory, the JIT's helper) an
@@ -22,7 +22,9 @@ move the pc resumes where the thread stood.
 
 A fork while another thread held `disp_lock` (guest `sigaction`, signals.c)
 or `ix_lock` (interposer name indexes, interpose.c) left the child's first
-use waiting forever: neither was re-made in the fork child. Both are now.
+use waiting forever: neither was re-made in the fork child. Both are now,
+and the child drops the disposition records' page cursor (a fork between
+its two updates left a count past the page's end) and maps a new page.
 A built name index is linked after it is published, so a child whose parent
 was building one rebuilds it without linking it twice. The lock-free caches
 of constant formats (vafmt.c), BOOL type strings (objc.c) and async function
@@ -33,8 +35,11 @@ but not filled; a lookup of it waited forever. Tests: `test_fork` modes
 `tests/host/fork_locks.py` (in `make test`) fails when a `static
 pthread_mutex_t` in src/ is in no `*_fork_child` function of its file and
 not on its list of exceptions (the recursive `load_lock`, re-made through
-its init function; the oracle-only `scratch_lock`). Limits: the half-made
-slots have no test (the window is a few instructions and the tables fill);
+its init function; the oracle-only `scratch_lock`), or when a hook is called
+from no other hook's body and not registered with `pthread_atfork`; it first
+checks that four mutations of the tree are reported. Limits: the half-made
+slots and the cursor have no failing test (the windows are a few
+instructions; `sigaction` children now take 400 new records each);
 guest initializers still run with `load_lock` held.
 
 ## Swift `dynamic` functions under the image's interface units
