@@ -921,6 +921,14 @@ bool hao_image_seal(hao_image *img)
     return ok;
 }
 
+bool hao_image_sealed_overlap(uint64_t a, uint64_t n)
+{
+    for (hao_image *img = hao_images_first(); img && n; img = __atomic_load_n(&img->next, __ATOMIC_ACQUIRE))
+        for (int k = 0; k < img->nsealed; k++)
+            if (a < img->sealed_hi[k] && a + n > img->sealed_lo[k]) return true;
+    return false;
+}
+
 hao_image *hao_image_sealed_at(uint64_t a, size_t n)
 {
     hao_image *img = hao_image_for_addr(a);

@@ -244,6 +244,8 @@ void hao_unload_image(hao_image *img);
  * does: its SG_READ_ONLY segments become read-only. On-disk images only. False if a protection
  * change failed (the segment stays as it was). */
 bool hao_image_seal(hao_image *img);
+/* Does [a, a+n) overlap a sealed segment of any image */
+bool hao_image_sealed_overlap(uint64_t a, uint64_t n);
 /* The image whose sealed segments hold the n bytes at a, or NULL */
 hao_image *hao_image_sealed_at(uint64_t a, size_t n);
 /* Compare-and-swap of the 8 bytes at a in a sealed segment: writable for the store only (one such
