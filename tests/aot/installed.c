@@ -15,6 +15,7 @@
  * output. Prints PASS/FAIL per check; exit 1 on any FAIL.
  */
 #include "hao/aot.h"
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/acl.h>
@@ -29,8 +30,9 @@ static void one(const char *path, const char *shown, int role)
     struct stat st;
     char why[256] = "";
     if (lstat(path, &st) != 0) { CHECK(0, "%s: cannot stat", shown); return; }
+    errno = 0;
     acl_t a = acl_get_link_np(path, ACL_TYPE_EXTENDED);
-    bool acl_bad = hao_aot_acl_allows(a);
+    bool acl_bad = hao_aot_acl_allows(a, errno);
     if (a) acl_free(a);
     CHECK(!acl_bad, "%s (%s): no ACL entry grants write access", shown, roles[role]);
     uid_t me = geteuid();

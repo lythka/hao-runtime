@@ -8,7 +8,11 @@
 #include "hao/aot.h"
 #include "hao/bridge.h"
 #include <CommonCrypto/CommonDigest.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <sys/acl.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -249,6 +253,45 @@ static void test_stat_rules(const char *tmp)
     CHECK(!hao_aot_dir_ok("/private/tmp", HAO_AOT_EXPLICIT, me, why, sizeof why), "/private/tmp itself rejected");
     CHECK(!hao_aot_dir_ok("/Library/Caches", HAO_AOT_EXPLICIT, me, why, sizeof why), "/Library/Caches rejected");
     CHECK(!hao_aot_dir_ok("relative", HAO_AOT_EXPLICIT, me, why, sizeof why), "relative path rejected");
+}
+
+/* ACLs: only "no extended ACL" (ENOENT from the lookup) grants nothing. A lookup that fails otherwise
+ * leaves the entries unknown, and counts as granting write access. */
+static void test_acl(const char *tmp)
+{
+    char d[1024], f[1024], cmd[2200];
+    CHECK(!hao_aot_acl_allows(NULL, ENOENT), "ACL lookup said ENOENT (no ACL): grants nothing");
+    CHECK(hao_aot_acl_allows(NULL, EACCES) && hao_aot_acl_allows(NULL, EIO) && hao_aot_acl_allows(NULL, ENOMEM) &&
+          hao_aot_acl_allows(NULL, 0), "ACL lookup failed otherwise (EACCES, EIO, ENOMEM, no errno): counts as granting");
+    snprintf(d, sizeof d, "%s/acl", tmp);
+    mkdir(d, 0700);
+    chmod(d, 0700);
+    snprintf(f, sizeof f, "%s/file", d);
+    close(open(f, O_WRONLY | O_CREAT, 0644));
+    errno = 0;
+    acl_t a = acl_get_link_np(f, ACL_TYPE_EXTENDED);
+    bool r = hao_aot_acl_allows(a, errno);
+    if (a) acl_free(a);
+    CHECK(!a && !r, "a file without an ACL: grants nothing");
+    /* the lookup itself fails: the directory above denies search */
+    chmod(d, 0);
+    errno = 0;
+    a = acl_get_link_np(f, ACL_TYPE_EXTENDED);
+    int e = errno;
+    r = hao_aot_acl_allows(a, e);
+    if (a) acl_free(a);
+    chmod(d, 0700);
+    CHECK(!a && e != ENOENT && r, "an ACL that cannot be read (errno %d): counts as granting", e);
+    snprintf(cmd, sizeof cmd, "/bin/chmod +a 'everyone allow write' '%s'", f);
+    if (system(cmd) == 0) {
+        errno = 0;
+        a = acl_get_link_np(f, ACL_TYPE_EXTENDED);
+        r = hao_aot_acl_allows(a, errno);
+        if (a) acl_free(a);
+        CHECK(a && r, "an ACL granting everyone write: grants");
+    }
+    unlink(f);
+    rmdir(d);
 }
 
 /* ------------------------------------------------------ format checks */
@@ -523,6 +566,7 @@ int main(int argc, char **argv)
     test_tiers();
     test_dirs();
     test_stat_rules(argv[1]);
+    test_acl(argv[1]);
     test_format();
     printf("%s policy: %d checks passed, %d failed\n", fails ? "FAIL" : "PASS", passes, fails);
     return fails ? 1 : 0;

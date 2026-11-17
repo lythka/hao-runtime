@@ -281,8 +281,9 @@ uses one only if both of the following hold.
 
 The file, its directory and every directory above must have that owner, no
 group or other write bit (a sticky ancestor is allowed outside the system
-directories), no ACL entry that grants a write-type right, and no symlink the
-user owns on the way. The file is read once into memory, checked there, and
+directories), no ACL entry that grants a write-type right (an ACL that
+cannot be read counts as granting one), and no symlink the user owns on the
+way. The file is read once into memory, checked there, and
 those bytes are installed.
 
 `hao --aot` writes into the last directory of that list its process reads:
@@ -428,8 +429,8 @@ program (`include/hao/idlist.h`):
 
 A list is read only if root owns it and every directory above it, none of
 them can be written by group or others, none is a symbolic link and none has
-an extended ACL. A row whose reference is itself listed is dropped, so a
-reference is never followed further.
+an extended ACL (or one that cannot be read). A row whose reference is
+itself listed is dropped, so a reference is never followed further.
 
 The image's x86_64 Security.framework calls `hao_codeid_decide`
 (`src/code_identity.c`, `build/libhao_codeid.a`, no libhao) after its own
