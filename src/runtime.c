@@ -1813,10 +1813,12 @@ static void diag_emit(const char *b, size_t n, bool may_start)
             return;
         }
         if ((uint64_t)st.st_size + n >= hao_diag_log_cap) {
+            /* no snprintf: this runs in signal handlers too (hao_fatal_safe) */
             char m[200];
-            int k = snprintf(m, sizeof m, "hao[%s:%d]: console.log reached its cap of %zu KB: later lines go to the console only\n",
-                             getprogname(), (int)getpid(), hao_diag_log_cap >> 10);
-            if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
+            size_t k = safe_put(m, 0, sizeof m, "hao[");
+            k = safe_put(m, k, sizeof m, getprogname());
+            k = safe_put(m, k, sizeof m, "]: console.log reached its cap: later lines go to the console only\n");
+            diag_write_all(fd, m, k);
         }
     }
     errno = e;
