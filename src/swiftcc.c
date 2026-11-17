@@ -1753,8 +1753,28 @@ int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t 
         else if (n) n = sitepack_scan(lr - 4, native, o, w, &why);   /* the layout table was full: read the site again */
     } else {
         reg = sitepack_call(lr - 4, native);
+        bool called = reg >= 0;
         n = reg < 0 ? 0 : sitepack_scan(lr - 4, native, o, w, &why);
         if (reg < 0) reg = SITEPACK_DIRECT;
+        if (hao_verbose && !hao_opt.bridge_check) {
+            /* guarded processes (no HAO_BRIDGE_CHECK): the decision once per site, with what the callee shows */
+            hao_x86_stackuse u;
+            bool shown = callee_stackuse(native, &u);
+            uint64_t impl = dispatch_impl(untag(native));
+            char t[8 * HAO_IF_MAX_PACK], cw[4 * HAO_X86_MAX_SLOTS];
+            size_t l = 0, m = 0;
+            for (int j = 0; j < n && l + 9 < sizeof t; j++) l += (size_t)snprintf(t + l, sizeof t - l, "%s%u.%u", j ? "," : "", o[j], w[j]);
+            t[l] = 0;
+            for (int j = 0; shown && j < u.nslots && m + 5 < sizeof cw; j++) m += (size_t)snprintf(cw + m, sizeof cw - m, "%s%u", j ? "," : "", u.width[j]);
+            cw[m] = 0;
+            char ib[48] = "";
+            if (impl) snprintf(ib, sizeof ib, " (implementation %#llx)", (unsigned long long)impl);
+            if (n || why || (shown && u.nslots > 2))
+                fprintf(HAO_DIAG, "hao: call-site layout at %#llx for %#llx%s: %s%s; callee %s, %d slots [%s]\n",
+                        (unsigned long long)(lr - 4), (unsigned long long)native, ib,
+                        !called ? "the site does not call it: word copy" : n ? "taken " : why ? "refused: " : "not packed: word copy",
+                        n ? t : why ? why : "", shown ? "read" : "not readable", u.nslots, cw);
+        }
         bool fresh;
         hao_crit_enter();
         pthread_mutex_lock(&sitepack_lock);
