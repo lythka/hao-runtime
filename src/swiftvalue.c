@@ -415,12 +415,13 @@ static const plan *prepare(const void *type)
     b->count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
     b->offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
     b->field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
-    bool ok = b->kind && b->count && b->offset && b->field && graph(b,type,0) && !b->failed;
+    bool syms = b->kind && b->count && b->offset && b->field;
+    bool affected = syms && graph(b,type,0);
     plan *p = calloc(1,sizeof *p);
     if (!p) { free(b); return NULL; }
     p->type = type;
-    p->uncertifiable = !ok;
-    if (ok && b->nentry) {
+    p->uncertifiable = !syms || b->failed;
+    if (!p->uncertifiable && affected && b->nentry) {
         p->entries = malloc(b->nentry * sizeof(entry));
         if (!p->entries) { free(b); free(p); return NULL; }   /* not cached: a later call tries again */
         p->count = b->nentry;
