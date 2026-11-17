@@ -142,6 +142,7 @@ int main(int argc, char **argv)
         {"__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEEb", "__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEEa"},
         {"__Z1fPFbbE", "__Z1fPFaaE"},
         {"__Z1fiv", "__Z1fiv"},                                                 /* none */
+        {"__Z1fIJibEEvb", "__Z1fIJiaEEva"},                                     /* a template argument pack */
         {"__Z1fbbbbbbb", NULL},                                                 /* more than HAO_CXX_BOOL_MAX */
         {"__ZN3hao1S3setEb.cold.1", NULL}, {"__ZTVN3hao1SE", NULL}, {"__ZN3hao1xE", NULL}, {"__ZZ3foovE1b", NULL},
         {"_bool_fn", NULL},
@@ -156,6 +157,23 @@ int main(int argc, char **argv)
         for (int i = 0; i < n; i++) all[off[i]] = all[off[i]] == 'b' ? 'a' : '?';
         if ((n < 0) != !bools[k].all || (n >= 0 && strcmp(all, bools[k].all)))
             if (!bmis++) snprintf(bfirst, sizeof bfirst, ": %s (%d)", bools[k].sym, n);
+    }
+    /* nested packs and parameter declarations are bounded like other nestings: a long name is refused, not recursed */
+    {
+        size_t deep = 1000000;
+        char *nm = malloc(2 * deep + 32), *q = nm;
+        q += sprintf(q, "__Z1fI");
+        memset(q, 'J', deep); q += deep;
+        *q++ = 'i';
+        memset(q, 'E', deep); q += deep;
+        strcpy(q, "Evb");
+        size_t off[HAO_CXX_BOOL_MAX];
+        if (hao_cxx_bool_types(nm, off) != -1 && !bmis++) snprintf(bfirst, sizeof bfirst, ": %zu nested packs accepted", deep);
+        q = nm + sprintf(nm, "__Z1fI");
+        for (size_t k = 0; k < deep / 2; k++) { *q++ = 'T'; *q++ = 'y'; }
+        strcpy(q, "bEvb");
+        if (hao_cxx_bool_types(nm, off) != 2 && !bmis++) snprintf(bfirst, sizeof bfirst, ": a long Ty chain");
+        free(nm);
     }
     printf("cxxbool    %s  bool types in C++ function names (BOOL's other spelling on x86_64)%s\n", bmis ? "FAIL" : "PASS", bfirst);
     if (bmis) fail = 1;

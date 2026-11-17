@@ -1095,14 +1095,16 @@ static const char *cx_expr_primary(const char *p, int d, cx_rec *r)
 
 static const char *cx_template_arg(const char *p, int d, cx_rec *r)
 {
-    if (p[0] == 'T' && p[1] == 'y') return cx_template_arg(p + 2, d, r);   /* a type parameter's declaration */
-    if (p[0] == 'T' && p[1] == 'n') {                                   /* a non-type parameter's: its type */
-        if (!(p = cx_type(p + 2, d, r))) return NULL;
-        return cx_template_arg(p, d, r);
+    for (;;) {
+        if (p[0] == 'T' && p[1] == 'y') p += 2;                          /* a type parameter's declaration */
+        else if (p[0] == 'T' && p[1] == 'n') {                          /* a non-type parameter's: its type */
+            if (!(p = cx_type(p + 2, d, r))) return NULL;
+        } else break;
     }
     switch (*p) {
     case 'L': return cx_expr_primary(p, d, r);
-    case 'J':
+    case 'J':                                                           /* a pack: bounded like the other nestings */
+        if (++d > 64) return NULL;
         for (p++; *p != 'E';)
             if (!*p || !(p = cx_template_arg(p, d, r))) return NULL;
         return p + 1;
