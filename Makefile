@@ -30,6 +30,11 @@ REPRO     := -ffile-prefix-map=$(CURDIR)=.
 ifdef TEST_SWITCHES
 REPRO     += -DHAO_TEST_SWITCHES
 endif
+# SURVEY=1: a diagnostics build for a survey image, which honours
+# hao_swift_value_audit=1 (src/opts.c BOOT_SURVEY). Never the build that ships.
+ifdef SURVEY
+REPRO     += -DHAO_SURVEY_BUILD
+endif
 WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CFLAGS    := $(ARCH) -std=gnu11 -O2 -g -ffp-contract=off $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
@@ -45,7 +50,7 @@ RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c src/valist_builder.c
 RT += src/ioreg.c src/ids.c
 RT += src/swiftvalue/Recipe.c src/swiftvalue/Enum.c src/swiftvalue/Common.c src/swiftvalue/Aggregate.c
-RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c
+RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c src/swiftvalue/Facts.c
 RT_O := $(patsubst src/%.c,$(B)/%.o,$(RT)) $(B)/bridge_x86_64.o
 
 # libhao.dylib holds the runtime; hao (CLI, kext launcher) and hao-stub (the

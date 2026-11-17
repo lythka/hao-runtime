@@ -246,6 +246,10 @@ survey walk and the schema dump: for a three-field value with two refusing
 fields (`swiftlayout` section S's), 26 us and 1.43 ms on the host, and
 about 8 KB of output; a process reports up to 1024 pairs. No guest test
 reaches a declined value, so the switch is tested only by `opts_test`.
+Superseded by "Swift values hao cannot certify are refused again": the
+pass-through is no longer the default and `HAO_SWIFT_VALUE_SURVEY` is gone.
+A refused value prints its survey lines with the abort report; listing
+without refusing is the audit of a survey build (`hao_swift_value_audit=1`).
 
 ## `hao --aot --auto` and free space
 
@@ -768,6 +772,230 @@ be converted.
 
 This change does not supply type information or load OS Swift frameworks
 as guest images.
+
+## Open (high): guest-written Swift values copied by native code in storage
+
+hao certifies a Swift value where it crosses a boundary it intercepts, and
+the contents of array storage and generic boxes at their final destruction
+(entry below). Before that, native code can still copy, assign or destroy
+an element itself: an array's copy on write and `swift_arrayInitWithCopy`
+or `swift_arrayAssignWith*` called inside libswiftCore, and the element
+witnesses those call. A nil guest code wrote there in the arm64 encoding
+(an `Any` holding a `C??` nil in an `[Any]`, for example) then reaches a
+native witness unconverted, which can retain or release an invalid
+reference. Also not covered: Dictionary and Set storage, boxes whose
+metadata no guest-made box hooked, and storage of an element type guest
+code never made storage of. In storage native code made, a value the walk
+cannot read is destroyed as found; one it finds in the guest's encoding
+but cannot convert (in a shared existential box) is refused. Hooking a
+storage type and registering guest-made storage are conditions of
+admitting it: when either fails, the storage is refused. Coverage of
+native copies and assignments (initialized-storage tracking and the
+runtime's array operations) is the next step.
+
+## Swift value walk: per-type facts, carrier rules, the survey image's audit
+
+The walk (`src/swiftvalue/Recipe.c`) consults a per-type facts table before
+its own rules: `src/swiftwalk_gen.inc` (generated for one OS build, keyed by
+mangled type name with private contexts' addresses removed, applied only in
+a process whose x86_64 shared cache is the table's and only while the live
+value witness table has the row's size, stride, flags and XI count;
+`src/swiftvalue/Facts.h`). A row decides before any rule, the small-POD one
+included: SAME passes the type as found and settles its node at the gate;
+DYNAMIC walks it by the rules (an existential's contained value as its
+dynamic type); REFUSE refuses; CONVERT (Optionals) lists every case with
+each architecture's image and defined-bit mask, and a value whose bits
+under an empty case's mask are its image is patched, only those bits
+rewritten, each patched word inside the value (any size). An empty case
+whose mask is empty, or whose x86_64 image or mask is not what the type's
+own witness writes over zeros and ones, is refused. An Optional the table
+does not list (a guest's instantiation) over a listed type of XI class
+POINTER has its nil translated by the pointer rule at the row's word (q on
+arm64, 2q on x86_64, any depth; the offset checked against the Optional's
+own witness). A type with no row (every guest type, and native types not
+listed) keeps the rules, which refuse what they cannot certify.
+
+Source encoding: from three Optional levels a pointer word's encodings
+overlap (arm64's 2 is x86_64's first inhabitant). The walk is told who wrote
+the bytes (`Recipe.h` `HAO_SV_SOURCE_*`): guest storage (results of guest
+callbacks, guest calls of native witnesses) is read in the guest's encoding,
+a value native code made (`witness_to_guest`: nils native witnesses make,
+native generic results) in the native one, and a word two readings of a
+value of unknown source give different meanings is refused. So native
+`T???.some(.none)` (word 2) becomes guest 1, not guest `.none`. CONVERT
+images take the same reading.
+
+ABI rules added to the walk, needing no table: an existential metatype with
+witness tables (`any P.Type`, metadata word then tables) has a thick
+metatype's inhabitants at its first word (k against 2k; the carrier of
+`Optional<BoundInputsView>`); an Optional whose inhabitants are a one-byte
+carrier's values (Bool, an enum with no payload case) has the same nil on
+both, when arm64's choice of most-inhabited field is the same (the carrier
+of `Optional<ToolbarItemGroup<V>>`, its `isEmpty` Bool).
+
+The survey image's audit: boot argument `hao_swift_value_audit=1` (every
+process, every tier; `HAO_SWIFT_VALUE_AUDIT=1` in an open process), read
+only by a survey build (`make SURVEY=1`) or a test build; a release build
+ignores it, says so once and refuses. It lets a value hao would refuse go
+on, as `HAO_SWIFT_VALUE_PASSTHROUGH=1` does, and writes one
+`hao-swift-audit {JSON}` line per (refused type, reason) with the type's
+table key, kind, size, flags, XI count, offset and depth, the keys from the
+root, the boundary and the guest caller and native witness by image UUID and
+offset: no address, no path; private records in the unified log
+(`swiftvalue.c` `audit_record`; CONTRIBUTING.md, Debugging).
+
+Measured on the host (27.2, whose caches are not the table's):
+`host/swiftlayout` sections M (both carriers on arm64 and x86_64, walked;
+refused before), K (table keys, table order) and F (fixture rows in a test
+build: `FBox???`'s word 2 is `.some(.none)` read as native, `.none` read as
+guest, refused unknown; a 9-byte CONVERT row by its masks; an empty mask and
+a stale x86_64 mask refused; a REFUSE row on `Int8` unsettled);
+`guest/svcarriers` (the carriers through native tuple witnesses, equal to
+native under JIT, `--interp`, AOT; refused before); `guest/svfacts`
+(fixture rows SAME, CONVERT, REFUSE; the audit record; a release build
+ignoring the audit); `guest/overlaynil` with a fixture row for its
+placeholder (POINTER at word 16) equals native by default. Not measured: the
+generated rows themselves (their cache is 26B131's), the native-source path
+through a real native generic result, and a whole image under the audit.
+
+## Swift values hao cannot certify are refused again
+
+A Swift value crossing to native code that the walk could not certify
+passed through unpatched by default. That is not "at worst a low-address
+crash": an arm64 nil can be another valid value of the x86_64 type (a third
+pointer extra inhabitant: arm64's 2 is x86_64's `.some(.none)`), spare-bit
+enum tags select another case, and a wrong case releases what its owner
+releases again. Now (`swiftvalue.c` `decline`) such a value is refused: the
+survey lines and schema, then `Swift value boundary refused: REASON (...)`
+and abort. Refused: an active representation with no rule (including
+metadata kinds the walk has no rule for: extended existentials, fixed-size
+arrays, functions other than the measured closures and blocks), layout,
+spare-bit and extra-inhabitant counts that differ by architecture, an
+ambiguous witness ABI or ownership, an unresolved assignment destination,
+null or overlapping storage, and a failed allocation a needed conversion
+depends on. A value is passed as found only when the walk proves each part
+of it is a patched nil or in one of three classes (`Recipe.h`
+`HAO_SV_PASS_*`; named under `HAO_BRIDGE_CHECK` as `Swift value passed as
+found: CLASS`): identical representation and ownership, an inactive payload
+behind a discriminator both sides read alike, or opaque storage only its
+owner touches (a live object of the shared native domain, an existential a
+native witness only copies, an out-of-line box, and an `Optional` of a
+guest struct or enum whose tag witnesses are guest code, read by the code
+that wrote it).
+
+Which values are examined: every value whose type graph has a node not
+settled from metadata alone (`Recipe.c` `settled_node`: a POD under 8
+bytes with no extra inhabitants, a type of integers and floats only,
+structs and tuples by their fields, an `Optional` whose nil reads alike,
+functions, objects, metatypes, Builtins, and a native struct positively
+resilient with no generic argument: the frozen-struct table covers its
+image's build and does not list it; an uncovered image or an enum is no
+evidence). A type declared differently on arm64 is settled only where hao
+installed and read back its arm64 layout (`Swift.Float16`). So
+an enum or existential, or a kind with no rule, is examined even with no
+nil to convert. A type graph past the walk's bounds (depth 32, 1024 nodes,
+64 fields, 4096 bytes) and a failed allocation of the type walk are
+refused, never cached as unaffected. A live existential is certified by
+walking its inline value as the dynamic type (native copies call that
+type's witnesses on it); an out-of-line value is walked in its box and must
+need no conversion (a box is shared, and its last release destroys the
+value natively); a class-bound object and an Error box pass as owner-opaque, and so does a guest type, inside an
+existential or at a guest call of a native witness, whose witnesses are
+all guest code. Nils native witnesses make for guest code (`witness_to_guest`)
+and native generic results take the same decision on the way back. A child
+task's result is written by guest code and copied by the concurrency
+runtime before any boundary hao sees, so `swift_task_create` and
+`swift_asyncLet_begin` refuse a result type that needs certification
+(converting the result where the guest writes it is not done). Storage
+guest code fills and the runtime destroys with native witnesses wherever
+its last reference goes (array storage from `swift_allocObject` of
+`_ContiguousArrayStorage<E>` or `_allocateUninitializedArray<E>`, a
+generic box from `swift_allocBox`) is refused when it is made if its
+element type has a nil whose encoding differs, or is past the walk's
+bounds. Nils inside a positively resilient native type are written by its
+native witnesses and do not count. An element type that is only not settled
+(an enum, an existential) is not refused there: its storage is certified at
+its final destruction instead. Once guest code makes array storage or a
+generic box of such a type, hao takes over that metadata's destroy function
+(one per instantiated element type, so storage native code made is covered
+too) and, before the runtime destroys the contents, walks each live element
+and rewrites its nils in place to the native encoding (the destruction is
+exclusive and final). A shared existential box is never rewritten; an
+element the walk cannot certify is refused in storage guest code made; in
+other storage one in the guest's encoding that cannot be converted is
+refused and anything else left as found (the open entry above). Registered
+storage is kept in a set whose removed slots are reused and compacted
+(`svpolicy` anymany: 200000 arrays); a rebuild publishes the new table
+before freeing the old one, and a fork child recounts the table it holds.
+A box hao may not rewrite passes when every nil in it is already in its
+reader's encoding (`host/swiftvalue`: an `Any` boxing a native `C??` nil). This hook replaces symbol interposition of
+`swift_arrayDestroy`: the array storage's deinit calls it directly inside
+libswiftCore (measured), where no interposition reaches. Guest calls of an
+opaque existential's own witnesses (`Any`, `any P`) are intercepted like an
+Optional's. A struct or tuple whose reflection reports no fields but
+has bytes (built without reflection metadata) has unknown fields: refused,
+not taken as empty.
+
+Closed gaps: guest calls of native Optional, tuple and array witnesses
+handed an uncertified value over unchanged without any decision; a lent
+view that needed conversion but was not bitwise-takable went unchanged; a
+failed scratch allocation left an assignment destination or array elements
+half converted. All are refused now. `HAO_SWIFT_VALUE_PASSTHROUGH=1` (open
+tier, no boot argument; it replaces `HAO_SWIFT_VALUE_STRICT`) is an
+experimental triage switch that accepts memory corruption: such a value goes
+on, reported once per (type, reason). It no longer drops the patches of the
+parts the walk certified (a refusing field's siblings).
+
+Measured: `guest/svpolicy` copies tuples of a `C??` outer nil through the
+native tuple witnesses. Beside an ObjC object, a closure and a nil `Int?`,
+and as an `Any` holding a `C??` nil, each is converted and the output equals
+native arm64 under JIT, `--interp` and AOT (the `Any` faulted before the
+payload walk). Refused: beside an `InlineArray` (no rule for its kind; with
+the switch it equals native, its sibling nil converted), an `InlineArray`
+beside a class reference only (passed unexamined before), a 65-element tuple
+(faulted before), an AsyncStream's `next()` returning such a value, an `Any`
+whose boxed value holds a `C??` nil destroyed in a tuple (passed before) and
+a task group of `C??` (faulted before). A native frozen enum the guest
+built (`_PlaygroundQuickLook`) is examined (taken as native-made before).
+`guest/asyncnil` runs its `Task<Node??>` case on its own: refused by
+default, equal to native with the switch. Also refused: an array of `C??`
+filled with a nil and released by guest code (faulted before), a generic
+captured `C??` variable (its box), and a struct built without reflection
+metadata holding an `Any.Type??` (passed as scalars before). An `[Any]` holding guest-written `C??` nils
+dropped, its value copied and dropped, or assigned over, and a generic
+captured `Any` holding one, equal native arm64 (all four faulted before);
+`HAO_BRIDGE_CHECK` names the conversion at destruction.
+`guest/optwitness` keeps its values in arrays of nested Optionals and
+`guest/sitepack` in arrays holding an Optional of a native struct no table
+covers: both are refused by default (checked for `optwitness`), and their
+engines run with the switch. `guest/overlaynil` now stops by default at an
+`Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
+engines run with the switch.
+
+Impact, from the survey lines of 26B131 runs (types seen, all of the
+"unresolved active representation" reason, in calls and in published
+results): refused now: a published `SwiftUI.DropDelegate` existential (a
+native protocol, guest conformance), `Optional<SwiftUI.BoundInputsView>`
+(88 bytes, no `Optional` rule), `Optional<SwiftUI.ToolbarItemGroup<G>>`
+(42 bytes, xi 0xfd; refused on the host too), `SwiftUI._Glass.Variant.Role`
+(an 8-byte native enum whose case the walk cannot read) and a published
+guest-protocol existential of 40 bytes that the guest-protocol rule did not
+admit. Each of those programs now stops at that boundary. Certified since
+their survey (no refusal): `Optional<(Swift.Bool) -> ()>` (function rule)
+and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
+measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
+Limits: `InlineArray` of anything but scalars has no rule and is refused;
+task results of any type that needs certification are refused, not
+converted; copies and assignments of stored elements inside native code
+(an array's copy on write, `swift_arrayInitWithCopy` and the witnesses it
+calls) are not intercepted, so a guest-written nil there can still be read
+natively; Dictionary and Set storage and boxes made by native code are not
+covered; storage of an element type guest code never made storage of is not
+hooked; an uncertifiable element in storage native code made is destroyed
+as found; the tag witnesses of an enclosing
+enum with more than one empty case are not intercepted. More
+values are walked at each intercepted call than before. The classes are
+host-tested only; an image run is needed to see which programs stop.
 
 ## Swift `dynamic` functions under the image's interface units
 
@@ -3140,28 +3368,12 @@ Rules as implemented:
   from native metadata) was refused. `swiftlayout` section G: 5 walks
   refused before.
 
-Refusal policy (`swiftvalue.c` `decline`): a value the walk cannot certify,
-and the ownership cases it cannot carry out, pass through unpatched by
-default. The native witness runs on the guest's bytes, and a published result
-stays as the guest wrote it. With `HAO_SWIFT_VALUE_SURVEY=1` (boot argument
-`hao_swift_value_survey=1`; off by default, see "The Swift value survey is
-opt-in"), the first time a (type, reason) pair occurs in a
-process, hao prints three things under the stable prefix `Swift value
-survey:`: the value's innermost refusing types (`refused at offset N depth D:
-... type=...`, from a second walk in survey mode), the schema of the value,
-and one `passed through unpatched: REASON (... type=...) root=... guest lr=...
-pc=...` line. Up to 1024 pairs are reported per process. This is a
-deliberate choice: refusing by default hides what ARM apps send.
-
-The cost is that a nil in the guest's encoding inside such a value can make
-native code misbehave or crash later, away from the boundary. Read a crash
-after a survey line with that in mind. `HAO_SWIFT_VALUE_STRICT=1` (open tier
-only, no boot argument; for tests) restores the refusal: the same lines, then
-the `Swift value boundary refused:` line and abort. An activation lifetime
-mismatch, an internal invariant, still aborts. Not covered by a guest test:
-the publication and witness paths are reached from SwiftUI/AttributeGraph on
-the target. `swiftlayout` section S checks the survey walk itself (a value
-with two refusing fields prints both).
+Refusal policy (`swiftvalue.c` `decline`): see "Swift values hao cannot
+certify are refused again". From 2026-11-12 until that entry a value the walk
+could not certify passed through unpatched by default, with `Swift value
+survey:` lines the first time per (type, reason); `HAO_SWIFT_VALUE_STRICT=1`
+restored the refusal. `swiftlayout` section S checks the survey walk itself
+(a value with two refusing fields prints both).
 
 On Intel hardware (26B131), Weather, which aborted at
 `Swift.Optional<(Swift.Bool) -> ()>` under the refusing default, now passes

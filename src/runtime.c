@@ -1301,7 +1301,8 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * sandbox before hao starts), and its stderr goes nowhere. When a log is
  * configured, every write the file does not take (no file could be opened,
  * the write failed, the program closed the descriptor) goes to the unified
- * log instead, subsystem "com.hao", category "diag": one record per line, a
+ * log instead, subsystem "com.hao", category "diag": one record per line (a
+ * Swift value audit record among them), a
  * line longer than UNI_PIECE bytes cut into pieces, each but the last ending
  * in "\x1f" (log show --predicate 'subsystem == "com.hao"'; the bridge
  * worklist tool, not part of this repository, reads them). The line is a
@@ -1589,6 +1590,7 @@ static void *uni_drain(void *arg)
             }
             if (!end && t < h && uni_ring[t % UNI_RING] == '\n') { end = true; t++; }   /* UNI_PIECE bytes, then the newline */
             l[n] = 0;
+            /* every piece private, a Swift value audit record's (swiftvalue.c audit_record) too */
             if (end || t >= h) {
                 if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s", l);
             } else
