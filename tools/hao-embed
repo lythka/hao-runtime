@@ -653,6 +653,7 @@ class X86Libraries:
         self.uuid = self.cache.uuid
         self._disk = {}
         self._dirs = {}
+        self._closure = {}
         try:
             with open(os.path.join(self.root, "usr/share/firmlinks")) as f:
                 self.firmlinks = tuple(l.split("\t")[0] for l in f if l.startswith("/")) or FIRMLINKS
@@ -734,14 +735,28 @@ class X86Libraries:
         p = expand(name, loader)
         return [p] if p is not None else []
 
-    def unprotected(self, name, loader, exe, rpaths, depth=0, seen=None):
+    def x86_dylibs(self, host):
+        """The x86_64 slices (every subtype: dyld picks x86_64h on some CPUs) of the file HOST that dyld could load
+        as a library into the stub (MH_DYLIB); [] if none, or not readable."""
+        try:
+            with open(host, "rb") as fh:
+                sl = hao_fat.slices(fh.read()) or []
+        except OSError:
+            return []
+        return [(sub, p) for c, sub, p in sl if c == hao_fat.CPU_X86_64 and len(p) >= 16
+                and p[:4] == b"\xcf\xfa\xed\xfe" and int.from_bytes(p[12:16], "little") == 6]
+
+    def unprotected(self, name, loader, exe, rpaths, depth=0, stack=None):
         """None if dyld, loading NAME for LOADER in a process whose main executable is EXE (OS paths; RPATHS as
         search takes them), finds it in the shared cache or through protected storage only: every path it tries
-        before the one that exists (a file someone could put at an earlier one would load instead), every
-        directory and link on the way, that file, and the same for each of that file's non-lazy dependencies
-        (with its own rpaths first). Otherwise why not: the first path that is not protected, or a chain of
-        dependencies deeper than MAX_DEP_DEPTH (not checked, so not protected)."""
-        seen = set() if seen is None else seen
+        before the one it loads (a file someone could put at an earlier one would load instead; one that exists
+        but has no x86_64 library slice does not stop dyld, which tries the next), every directory and link on
+        the way, that file, and for each of its x86_64 slices (dyld may pick any) that slice's non-lazy
+        dependencies, with its own rpaths before the inherited ones. Otherwise why not: the first path that is
+        not protected, or a chain deeper than MAX_DEP_DEPTH (not checked, so not protected). Each (file, slice,
+        rpath context) is validated once (_closure); one already being validated further up is a cycle, judged
+        there."""
+        stack = set() if stack is None else stack
         if name in self.ids:
             return None    # an install name of the shared cache: dyld takes the cache's image
         if depth > MAX_DEP_DEPTH:
@@ -755,18 +770,26 @@ class X86Libraries:
             host = os.path.join(self.root, real.lstrip("/"))
             if not os.path.isfile(host):
                 continue
-            if real in seen:
-                return None
-            seen.add(real)
-            with open(host, "rb") as fh:
-                x86 = [p for c, _, p in hao_fat.slices(fh.read()) or [] if c == hao_fat.CPU_X86_64]
-            for mo in x86:
-                own = [(r, real) for r in macho_rpaths_mo(mo)] + list(rpaths)
-                for kind, dep, _, _ in dylib_commands(mo):
-                    if kind != "lazy":
-                        why = self.unprotected(dep, real, exe, own, depth + 1, seen)
-                        if why:
-                            return why
+            slices = self.x86_dylibs(host)
+            if not slices:
+                continue   # dyld cannot load it into the stub and goes on to the next path
+            for sub, mo in slices:
+                key = (real, sub, hashlib.sha256(mo).digest(), tuple(rpaths))
+                if key in stack:
+                    continue
+                if key not in self._closure:
+                    stack.add(key)
+                    own = [(r, real) for r in macho_rpaths_mo(mo)] + list(rpaths)
+                    res = None
+                    for kind, dep, _, _ in dylib_commands(mo):
+                        if kind != "lazy":
+                            res = self.unprotected(dep, real, exe, own, depth + 1, stack)
+                            if res:
+                                break
+                    stack.discard(key)
+                    self._closure[key] = res
+                if self._closure[key]:
+                    return self._closure[key]
             return None
         return None
 
@@ -813,7 +836,7 @@ class X86Libraries:
             if op is not None and op in self.ids:
                 return "cache", op
             kind = self._file(f)
-            if kind == "x86":
+            if kind == "x86" and self.x86_dylibs(f):
                 return "disk", f
             if kind == "arm":
                 return "guest", f
@@ -1170,7 +1193,7 @@ def constraint_pin(arm, slot, blob):
     return hao_codesig.CONSTRAINT_SLOTS[slot], hao_codesig.check(bytes(arm))["cdhash"].hex(), hashlib.sha256(blob).hexdigest()
 
 
-def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset()):
+def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset(), pdir=None):
     """Sign a copy of the stub as SRC's identity; returns (path, identifier,
     entitlement keys, bound, deps, constraints) with bound from bound_data (the
     slots set), deps (links, skipped) from native_deps and constraints
@@ -1207,6 +1230,9 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
     copy = os.path.join(work, "stub")
     shutil.copyfile(stub, copy)
     os.chmod(copy, 0o755)
+    if pdir is not None:
+        pdir.created(entfile)
+        pdir.created(copy)
     # dyld ignores DYLD_* variables for the program natively (platform or
     # hardened runtime): the stub gets the hardened runtime, which does the
     # same for it. Otherwise an injected library would run with the
@@ -1222,10 +1248,22 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
         raise RuntimeError("its signature has a %s constraint codesign cannot carry into the stub, and "
                            "--allow-dropped-constraints does not name that blob of this build" % ", ".join(
                                d[0] for d in dropped if d not in drop_ok))
+    if pdir is not None:   # what codesign is about to read is still what was written here (PDIR, private)
+        for f in lc[1::2]:
+            pdir.created(f)
+        try:
+            pdir.check(copy, entfile, *lc[1::2])
+        except (OSError, ValueError) as e:
+            raise RuntimeError(str(e))
     r = subprocess.run(["codesign", "-s", "-", "-f", "-i", ident] + (["-o", ",".join(opts)] if opts else []) +
                        lc + ["--entitlements", entfile, copy], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError("codesign: " + r.stderr.strip())
+    if pdir is not None:
+        try:
+            pdir.check()
+        except (OSError, ValueError) as e:
+            raise RuntimeError(str(e))
     got = hao_codesig.constraints(open(copy, "rb").read())
     if got != {k: have[k] for k in carried}:
         raise RuntimeError("codesign did not seal the program's %s constraint byte for byte" % ", ".join(
@@ -1253,7 +1291,7 @@ class OutDir:
     """An output directory used only through a descriptor (opened without following a link at its last
     component; made if missing): files go in through publish, so renaming or replacing the directory's path
     changes nothing written. Refused (RuntimeError) if someone else could rename or replace its entries: owned
-    by neither this user nor root, or writable by group or others without the sticky bit."""
+    by neither this user nor root, writable by group or others, or with an ACL granting write."""
 
     def __init__(self, path, parent=None):
         if parent is None:
@@ -1265,11 +1303,10 @@ class OutDir:
             except FileExistsError:
                 pass
             fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
-        st = os.fstat(fd)
-        if st.st_uid not in (0, os.geteuid()) or (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX):
+        why = hao_codesig.dir_fd_unshared(fd, {0, os.geteuid()})
+        if why:
             os.close(fd)
-            raise RuntimeError(f"{path}: others can replace what is written there (owner {st.st_uid}, "
-                               f"mode {st.st_mode & 0o7777:o})")
+            raise RuntimeError(f"{path}: {why}: others could replace what is written there")
         self.fd, self.path = fd, path
 
     def publish(self, name, data, mode=0o644, owner=None):
@@ -1403,7 +1440,12 @@ def main():
             print(f"skip\t{p}\tsame file as {seen[real]}")
             continue
         seen[real] = p
-        with tempfile.TemporaryDirectory(prefix="hao-embed.") as work:
+        try:
+            pdir = hao_codesig.PrivateDir("hao-embed.")
+        except (OSError, ValueError) as e:
+            sys.exit(f"hao-embed: {e}")
+        with pdir:
+            work = pdir.name
             try:
                 data = open(p, "rb").read()
                 why = eligible(data, a.translate)
@@ -1414,7 +1456,7 @@ def main():
                 rel = os.path.relpath(os.path.realpath(p), os.path.realpath(a.root)) if a.root else None
                 may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, os.path.realpath(p), rel}))
                 stub, ident, keys, bound, (links, skipped), (carried, dropped) = signed_stub(
-                    p, a.stub, work, a.host_test, data, x86, may_drop)
+                    p, a.stub, work, a.host_test, data, x86, may_drop, pdir)
                 stub_bytes = open(stub, "rb").read()
                 merged = hao_fat.combine(data, stub_bytes, drop_x86_64=translate)
                 if a.stubs:
