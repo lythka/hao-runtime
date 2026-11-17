@@ -77,19 +77,19 @@ if [ "$r1:$n1:$r2:$n2:$m2:$r3:$n3" = "0:0:0:1:none:0:2" ] && grep -q '6000 MB fr
     echo "PASS --auto free space: short at the start nothing runs; short midway the rest waits; no marker until done"
 else bad "--auto free space: $r1:$n1:$r2:$n2:$m2:$r3:$n3: $(tail -1 "$OUT/s1.log" "$OUT/s2.log" "$OUT/s3.log")"; fi
 # a run with a failure leaves no marker (the next start-up retries); a list with an ACL granting write is not used
-mkdir -p "$W/c4"; chmod 755 "$W/c4"; printf 'not a Mach-O\n' >"$W/junk"
+mkdir -p "$W/c5"; chmod 755 "$W/c5"; printf 'not a Mach-O\n' >"$W/junk"
 printf '%s\n%s\n' "$W/two" "$W/junk" >"$W/lists/aot-list"; rm -f "$W/lists/auto-aot.done"
-HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u4.log" 2>&1; r4=$?
-[ $r4 = 1 ] && [ ! -e "$W/lists/auto-aot.done" ] && grep -q 'not marked done' "$OUT/u4.log" && [ "$(ls "$W/c4" | grep -c '\.aot$')" = 1 ] \
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c5 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u4.log" 2>&1; r4=$?
+[ $r4 = 1 ] && [ ! -e "$W/lists/auto-aot.done" ] && grep -q 'not marked done' "$OUT/u4.log" && [ "$(ls "$W/c5" | grep -c '\.aot$')" = 1 ] \
     && echo "PASS --auto with a failed program: rc 1, the others cached, no marker" || bad "--auto failure rc $r4: $(tail -2 "$OUT/u4.log"; ls "$W/lists")"
 printf '%s\n%s\n' "$W/two" "$W/absent" >"$W/lists/aot-list"
-HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u5.log" 2>&1; r5=$?
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c5 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u5.log" 2>&1; r5=$?
 [ $r5 = 1 ] && [ ! -e "$W/lists/auto-aot.done" ] && grep -q 'not marked done' "$OUT/u5.log" \
     && echo "PASS --auto with a listed file not present: rc 1, no marker" || bad "--auto missing rc $r5: $(tail -2 "$OUT/u5.log")"
 printf '%s\n' "$W/two" >"$W/lists/aot-list"
-HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u6.log" 2>&1
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c5 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u6.log" 2>&1
 chmod 664 "$W/lists/auto-aot.done"; echo stale >"$W/lists/auto-aot.done.tmp"
-HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u7.log" 2>&1; r7=$?
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c5 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u7.log" 2>&1; r7=$?
 [ $r7 = 0 ] && grep -q 'ignored' "$OUT/u7.log" && grep -q 'done for libhao' "$OUT/u7.log" && [ "$(stat -f %Lp "$W/lists/auto-aot.done")" = 644 ] \
     && [ ! -e "$W/lists/auto-aot.done.tmp" ] \
     && echo "PASS --auto: a marker others can write is ignored and replaced; a stale .tmp is not reused" || bad "--auto marker rc $r7: $(tail -3 "$OUT/u7.log")"
