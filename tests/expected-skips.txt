@@ -7,3 +7,5 @@ tools	^SKIP stamp cases \(KC not set:
 guest/cli	^SKIP Apple-signed guest \(HAO_FS:
 guest/cli	^SKIP trusted cdhash list \(HAO_FS:
 tools	^SKIP MenuBarAgent \(HAO_FS:
+aot/cpu-haswell	^SKIP not under Rosetta: ROSETTA_ADVERTISE_AVX has no effect
+aot/cpu-haswell	^SKIP this Rosetta advertises no AVX2

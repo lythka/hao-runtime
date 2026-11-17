@@ -5,10 +5,11 @@
 # as i. Index 0 agrees, every later one differs: `[Int]??` nil-of-outer, the no-payload cases of an enum over
 # `[Int]`. A ControlCenter crash is this class: guest SwiftUI code
 # writes Optional<TupleContent<...>> nil as 1, native SwiftUI tests for 2.
-# The helper is a universal Swift dylib (arm64 for the native reference, x86_64 for hao, arm64e to link); the program is
+# The helper is a universal Swift dylib (arm64 for the native reference, arm64e for hao, x86_64 for the diagnostic run); the program is
 # arm64 natively and arm64e under hao (JIT, --interp, AOT). Each line must equal native arm64.
-#   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/xinhab.sh     exit 1 on any difference (open class: it fails)
+#   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/xinhab.sh     exit 1 on any unexpected difference
 set -u
+unset HAO_NATIVE_APP_LIBS
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-xinhab)}
@@ -29,7 +30,7 @@ for a in arm64e arm64; do
     codesign -s - -f "$OUT/xinhab.$a" 2>/dev/null
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
-timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/xinhab.arm64e" >"$OUT/aot.gen" 2>&1 || echo "xinhab: aot generation failed"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/xinhab.arm64e" >"$OUT/aot.gen" 2>&1 || { echo "xinhab: aot generation failed"; exit 1; }
 timeout -s KILL "$T" "$OUT/xinhab.arm64" >"$OUT/native.out" 2>/dev/null; nrc=$?
 echo "native    rc=$nrc lines=$(wc -l <"$OUT/native.out" | tr -d ' ')"
 fail=0
@@ -38,12 +39,20 @@ for mode in jit interp aot; do
     case $mode in
     jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
     interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
-    aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
+    aot) set -- env HAO_VERBOSE=1 HAO_CACHE="$OUT/aot" "$HAO" ;;
     esac
     timeout -s KILL "$T" "$@" "$OUT/xinhab.arm64e" >"$OUT/$mode.out" 2>"$OUT/$mode.err"; rc=$?
     if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
+    if [ "$mode" = aot ] && ! grep -q 'AOT cache .* loaded' "$OUT/$mode.err"; then r=DIFF; fail=1; fi
     printf '%-9s rc=%s %s\n' "$mode" "$rc" "$r"
     [ $r = SAME ] || diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16
+    timeout -s KILL "$T" env HAO_NATIVE_APP_LIBS=1 "$@" "$OUT/xinhab.arm64e" >"$OUT/$mode.native-libs.out" 2>"$OUT/$mode.native-libs.err"; rc=$?
+    if [ $rc = 0 ] &&
+        grep -Fxq 'guest wrote [Int]?? case 0, native read 2' "$OUT/$mode.native-libs.out" &&
+        [ "$(wc -l <"$OUT/$mode.native-libs.out")" = "$(wc -l <"$OUT/native.out")" ] &&
+        ! cmp -s "$OUT/native.out" "$OUT/$mode.native-libs.out"; then
+        echo "$mode native app libs: known untyped-pointer mismatch"
+    else echo "$mode native app libs: FAIL (rc=$rc)"; fail=1; fi
 done
 [ $fail = 0 ] && echo "xinhab: PASS" || echo "xinhab: FAIL"
 exit $fail

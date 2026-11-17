@@ -127,6 +127,22 @@ static uint64_t rows_of(const void *type)
     return word;
 }
 
+int native_type_place(const void *type, char uuid[33], uint64_t *offset)
+{
+    if (!type) return 0;
+    uintptr_t kind = *(const uintptr_t *)type;
+    uint64_t desc = (uint64_t)(uintptr_t)((const void *const *)type)[1];
+    Dl_info info;
+    uint8_t id[16];
+    if ((kind != 0x200 && kind != 0x201) || !desc || hao_image_for_addr(desc) ||
+        !dladdr((const void *)(uintptr_t)desc, &info) || !info.dli_fbase ||
+        (uint64_t)(uintptr_t)info.dli_fbase >= desc || !header_uuid((const struct mach_header_64 *)info.dli_fbase, id))
+        return 0;
+    hex(id, uuid);
+    *offset = desc - (uint64_t)(uintptr_t)info.dli_fbase;
+    return 1;
+}
+
 int mpenum_type(const void *type, mpenum_row *out)
 {
     uint64_t m = rows_of(type) >> 8;

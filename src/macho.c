@@ -18,6 +18,7 @@
 #include <mach-o/fixup-chains.h>
 #include <mach-o/loader.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/acl.h>
@@ -369,7 +370,7 @@ bool hao_identity_guest_image(const void *address, hao_identity_info *info)
  * fails the range check at worst. */
 static hao_image *last_code_img;
 
-hao_image *hao_image_for_code(uint64_t a)
+static hao_image *image_for_code(uint64_t a, bool hint)
 {
     hao_image *last = __atomic_load_n(&last_code_img, __ATOMIC_ACQUIRE);
     if (last) {
@@ -383,12 +384,14 @@ hao_image *hao_image_for_code(uint64_t a)
         int n = __atomic_load_n(&im->ncode, __ATOMIC_ACQUIRE);
         for (int k = 0; k < n; k++)
             if (a >= im->code_lo[k] && a < im->code_hi[k]) {
-                __atomic_store_n(&last_code_img, im, __ATOMIC_RELEASE);
+                if (hint) __atomic_store_n(&last_code_img, im, __ATOMIC_RELEASE);
                 return im;
             }
     }
     return NULL;
 }
+hao_image *hao_image_for_code(uint64_t a) { return image_for_code(a, true); }
+hao_image *hao_image_for_code_peek(uint64_t a) { return image_for_code(a, false); }
 
 /* ------------------------------------------------------- chained fixups */
 
@@ -894,6 +897,56 @@ static bool is_pagezero(const struct segment_command_64 *sg)
            !strncmp(sg->segname, "__PAGEZERO", 16);
 }
 
+/* ------------------------------------------------------------- sealing */
+
+bool hao_image_seal(hao_image *img)
+{
+    if (!img || img->dsc || !img->base) return true;
+    const struct mach_header_64 *mh = (const void *)(uintptr_t)img->base;
+    if (mh->magic != MH_MAGIC_64) return true;
+    bool ok = true;
+    const uint8_t *p = (const uint8_t *)(mh + 1), *end = p + mh->sizeofcmds;
+    for (uint32_t k = 0; k < mh->ncmds && p + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *lc = (const void *)p;
+        if (lc->cmdsize < sizeof *lc || lc->cmdsize > (uint64_t)(end - p)) break;
+        p += lc->cmdsize;
+        if (lc->cmd != LC_SEGMENT_64 || lc->cmdsize < sizeof(struct segment_command_64)) continue;
+        const struct segment_command_64 *sg = (const void *)lc;
+        if (!(sg->flags & SG_READ_ONLY) || !(sg->initprot & VM_PROT_WRITE) || !sg->vmsize) continue;
+        uint64_t lo = sg->vmaddr + img->slide, hi = lo + sg->vmsize;
+        bool done = false;   /* sealed by an earlier call */
+        for (int j = 0; j < img->nsealed; j++) done |= img->sealed_lo[j] == lo;
+        if (done) continue;
+        if (img->nsealed == HAO_MAX_RANGES) { ok = false; break; }
+        if (mprotect((void *)(uintptr_t)lo, hi - lo, PROT_READ)) { ok = false; continue; }
+        img->sealed_lo[img->nsealed] = lo;
+        img->sealed_hi[img->nsealed] = hi;
+        img->nsealed++;
+    }
+    return ok;
+}
+
+bool hao_image_sealed_overlap(uint64_t a, uint64_t n)
+{
+    for (hao_image *img = hao_images_first(); img && n; img = __atomic_load_n(&img->next, __ATOMIC_ACQUIRE))
+        for (int k = 0; k < img->nsealed; k++)
+            if (a < img->sealed_hi[k] && a + n > img->sealed_lo[k]) return true;
+    return false;
+}
+
+hao_image *hao_image_sealed_at(uint64_t a, size_t n)
+{
+    hao_image *img = hao_image_for_addr(a);
+    for (int k = 0; img && k < img->nsealed; k++)
+        if (a >= img->sealed_lo[k] && a < img->sealed_hi[k] && n <= img->sealed_hi[k] - a) return img;
+    return NULL;
+}
+
+bool hao_image_sealed_cas(uint64_t a, uint64_t expected, uint64_t desired)
+{
+    return hao_guest_cas_ro(a, expected, desired);   /* code.c: one guest write at a time, fork-safe */
+}
+
 bool hao_island_reserve;
 
 uint64_t hao_island_room(uint64_t n)
@@ -916,7 +969,8 @@ static void map_island_room(hao_image *img, uint64_t room, bool reserved)
 {
     uint64_t at = img->base + img->vmsize;
     if (reserved) munmap((void *)(uintptr_t)at, room);
-    void *p = mmap((void *)(uintptr_t)at, room, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    /* read/write, not executable, until its first entry makes it a W^X region (jit.c hao_wx_region) */
+    void *p = mmap((void *)(uintptr_t)at, room, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (p == MAP_FAILED) return;
     if (!island_reach((uint64_t)(uintptr_t)p, room, img->base, img->base + img->vmsize)) { munmap(p, room); return; }
     img->isl_lo = img->isl_next = (uint64_t)(uintptr_t)p;
@@ -945,26 +999,37 @@ static uint8_t *blob_copy(const uint8_t *p, uint32_t size)
 
 int hao_slice_test_path;
 
-/* Can nobody but root change the file open on fd? Root owns it, neither its
- * group nor others may write it, it has no ACL (any entry counts, and so
- * does an ACL that cannot be read: the kernel says ENOENT when there is
- * none), and it is on a local volume, where those bits are the kernel's to
- * enforce. This is about the open file, so the directories above its name
- * do not matter: they decide which file a path reaches, and fd already is
- * one. A sealed system volume's files all qualify. (The owner and mode
- * rule is aot_policy.c's hao_aot_stat_ok for a system file; the loader's
- * unit tests link this file without it.) */
+/* Can the bytes of the file open on fd not change? It is on the volume the
+ * system booted from, mounted read-only (MNT_ROOTFS, MNT_RDONLY, MNT_LOCAL):
+ * the System volume, sealed or booted from an APFS snapshot, which nothing
+ * writes while it is mounted. Owner, mode and ACL do not establish that on
+ * any other volume: whoever controls a disk image's or a removable disk's
+ * storage changes a root-owned file there without its mode allowing it, and
+ * a writable volume's root-owned files are root's to rewrite in place. On
+ * that volume root also owns it, neither its group nor others may write it,
+ * and it has no ACL (any entry counts, and so does an ACL that cannot be
+ * read: the kernel says ENOENT when there is none). This is about the open
+ * file, so the directories above its name do not matter: they decide which
+ * file a path reaches, and fd already is one. (The owner and mode rule is
+ * aot_policy.c's hao_aot_stat_ok for a system file; the loader's unit tests
+ * link this file without it.) hao_slice_fixed_rule is the decision on what
+ * file_fixed reads. */
+bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none)
+{
+    const uint32_t system = MNT_ROOTFS | MNT_RDONLY | MNT_LOCAL;
+    return uid == 0 && !(mode & (S_IWGRP | S_IWOTH)) && (mnt_flags & system) == system && acl_none;
+}
+
 static bool file_fixed(int fd, const struct stat *st)
 {
     if (hao_slice_test_path) return hao_slice_test_path == 1;
-    if (st->st_uid != 0 || (st->st_mode & (S_IWGRP | S_IWOTH))) return false;
     struct statfs fs;
-    if (fstatfs(fd, &fs) != 0 || !(fs.f_flags & MNT_LOCAL)) return false;
+    if (fstatfs(fd, &fs) != 0 || !hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, true)) return false;
     errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
     int e = errno;
     if (a) acl_free(a);
-    return a == NULL && e == ENOENT;
+    return hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, a == NULL && e == ENOENT);
 }
 
 static hao_slice *slice_pending;       /* hao_slice_hand */
@@ -1018,7 +1083,7 @@ hao_slice *hao_slice_open(int fd, char *why, size_t n)
             if (r <= 0) SERR("short read of the slice at %#llx", (unsigned long long)got);
             got += (uint64_t)r;
         }
-        mprotect(m, len, PROT_READ);
+        if (mprotect(m, len, PROT_READ) != 0) SERR("cannot make the copy of the slice read-only (errno %d)", errno);
     }
     memcpy(&mh, sl->bytes, sizeof mh);
     if (mh.magic != MH_MAGIC_64) SERR("bad mach header");
@@ -1049,13 +1114,13 @@ fail:
 #undef SERR
 }
 
-static bool arm_only_bundle_fd(int fd, bool dylib)
+static bool arm_bundle_fd(int fd, bool dylib, bool only)
 {
     struct stat st;
     uint32_t magic = 0;
     bool ok = false;
     if (fstat(fd, &st) || !S_ISREG(st.st_mode) || pread(fd, &magic, 4, 0) != 4) goto out;
-    if (magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+    if (only && (magic == FAT_CIGAM || magic == FAT_CIGAM_64)) {
         struct fat_header head;
         if (pread(fd, &head, sizeof head, 0) != sizeof head) goto out;
         unsigned count = __builtin_bswap32(head.nfat_arch);
@@ -1081,7 +1146,16 @@ bool hao_is_arm_only_loadable(const char *path, bool dylib)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
-    bool ok = arm_only_bundle_fd(fd, dylib);
+    bool ok = arm_bundle_fd(fd, dylib, true);
+    close(fd);
+    return ok;
+}
+/* Routing probe only: loading still verifies the selected guest slice. */
+bool hao_is_arm_loadable(const char *path, bool dylib)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    bool ok = arm_bundle_fd(fd, dylib, false);
     close(fd);
     return ok;
 }
@@ -1093,10 +1167,10 @@ hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped
 {
     return load_image(path, -1, resolve, mapped, ctx, 1, err, errlen);
 }
-/* the dlopen fallback for a guest caller: an ARM-only bundle or dylib */
-hao_image *hao_load_dlopen_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
+/* A guest dlopen: the ARM slice of a bundle or dylib. */
+hao_image *hao_load_dlopen_cb(const char *path, bool universal, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
 {
-    return load_image(path, -1, resolve, mapped, ctx, 2, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, universal ? 3 : 2, err, errlen);
 }
 
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
@@ -1137,8 +1211,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     snprintf(img->path, sizeof img->path, "%s", path);
     img->fd = fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
     if (img->fd < 0) ERR("open %s: %s", path, strerror(errno));
-    if (bundle_only && !arm_only_bundle_fd(img->fd, bundle_only == 2))
-        ERR(bundle_only == 2 ? "%s: guest dlopen fallback requires an ARM-only MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (bundle_only && !arm_bundle_fd(img->fd, bundle_only >= 2, bundle_only != 3))
+        ERR(bundle_only >= 2 ? "%s: guest dlopen requires an ARM MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     char why[320];
     /* The slice, taken once (hao/macho.h): the one the caller checked on this descriptor and left for
      * this load (hao_slice_hand), else opened here. From here on nothing is read from the file. */
@@ -1156,8 +1230,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     const uint64_t slice = sl->size;
     const uint8_t *const cmds = sl->cmds;
 
-    if (bundle_only && sl->filetype != MH_BUNDLE && !(bundle_only == 2 && sl->filetype == MH_DYLIB))
-        ERR(bundle_only == 2 ? "%s: guest dlopen fallback requires an ARM-only MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (bundle_only && sl->filetype != MH_BUNDLE && !(bundle_only >= 2 && sl->filetype == MH_DYLIB))
+        ERR(bundle_only >= 2 ? "%s: guest dlopen requires an ARM MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     if (sl->filetype != MH_EXECUTE && sl->filetype != MH_DYLIB && sl->filetype != MH_BUNDLE &&
         !(map_only && sl->filetype == MH_DYLINKER))
         ERR("%s: filetype %u not loadable", path, sl->filetype);
@@ -1525,8 +1599,10 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         if (sg->initprot & VM_PROT_READ) prot |= PROT_READ;
         if (sg->initprot & VM_PROT_WRITE) prot |= PROT_WRITE;
         if (sg->initprot & VM_PROT_EXECUTE) prot |= PROT_READ;  /* code is data for the translator */
-        /* __DATA_CONST is made read-only by dyld after binding; keep that behaviour */
-        mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot);
+        /* SG_READ_ONLY segments (__DATA_CONST) stay writable for hao's adaptations of the image and
+         * are made read-only before its initializers run (hao_image_seal), as dyld does after binding */
+        if (mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot) != 0)
+            ERR("%s: cannot set the protection of segment %.16s (errno %d)", path, sg->segname, errno);
     }
     hao_code_poison(img);   /* HAO_CODE_ALIAS */
 #undef FOR_EACH_CMD

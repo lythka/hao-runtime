@@ -138,7 +138,7 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
 
     if ((op0 & 0xE) == 0xA) {                         /* branches, exceptions, system */
         if ((i & 0x7C000000) == 0x14000000) {         /* B, BL */
-            o->target = pc + (uint64_t)(sx(i & 0x3ffffff, 26) << 2);
+            o->target = pc + ((uint64_t)sx(i & 0x3ffffff, 26) << 2);
             if (i >> 31) { o->flow = F_CALL; o->wr = bit(30); }
             else o->flow = F_JUMP;
             return;
@@ -146,18 +146,18 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
         if ((i & 0x7E000000) == 0x34000000) {         /* CBZ/CBNZ */
             o->rd = bit(rd);
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x7ffff, 19) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x7ffff, 19) << 2);
             return;
         }
         if ((i & 0x7E000000) == 0x36000000) {         /* TBZ/TBNZ */
             o->rd = bit(rd);
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x3fff, 14) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x3fff, 14) << 2);
             return;
         }
         if ((i & 0xFF000000) == 0x54000000) {         /* B.cond, BC.cond */
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x7ffff, 19) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x7ffff, 19) << 2);
             return;
         }
         if ((i & 0xFF000000) == 0xD4000000) {         /* SVC/HVC/SMC; BRK, HLT end the path */
@@ -248,7 +248,7 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
                 if (!v) o->wr = bit(rt);
                 return;
             } else {                                  /* LDRAA/LDRAB */
-                int64_t imm = sx(((i >> 12) & 0x1ff) | ((i >> 13) & 0x200), 10) << 3;
+                int64_t imm = (int64_t)((uint64_t)sx(((i >> 12) & 0x1ff) | ((i >> 13) & 0x200), 10) << 3);
                 o->imm = imm; o->bytes = 8; o->load = 1;
                 if ((i >> 11) & 1) { o->wb_reg = rn; o->wb = imm; o->imm = imm; o->wr |= bit(rn); }
                 o->wr |= bit(rt);
@@ -563,6 +563,22 @@ static demangle_fn demangler(void)
     return fn;
 }
 
+/* The demangled text of SYM (its leading '_' dropped, N bytes) in BUF of
+ * SIZE bytes, or, when it does not fit there (swift_demangle copies what
+ * fits and sets the size it needs), demangled again on the heap: the
+ * rules below read the result type at the end of the text. BUF, a string
+ * the caller frees with demangled_free, or NULL. Bind time only: it may
+ * allocate. */
+static char *demangle_full(demangle_fn dm, const char *sym, size_t n, char *buf, size_t size)
+{
+    size_t len = size;
+    if (!dm(sym, n, buf, &len, 0)) return NULL;
+    if (len <= size) { buf[size - 1] = 0; return buf; }
+    len = 0;
+    return dm(sym, n, NULL, &len, 0);
+}
+static void demangled_free(char *d, char *buf) { if (d != buf) free(d); }
+
 /* Kind for a demangled entity "Name(params) async [throws[(E)]] -> T":
  * T a narrow integer type, the arrow the entity's own (its parameter list's
  * '(' follows the name, not a space as in a function-type result). */
@@ -604,11 +620,11 @@ char hao_swift_async_result_kind(const char *sym)
     if (n < 6 || (sym[n - 1] != 'F' && !(sym[n - 1] == 'Z' && sym[n - 2] == 'F'))) return 0;
     demangle_fn dm = demangler();
     if (!dm) return 0;
-    char buf[1024];
-    size_t len = sizeof buf;
-    if (!dm(sym + 1, n - 1, buf, &len, 0)) return 0;
-    buf[len < sizeof buf ? len : sizeof buf - 1] = 0;
-    return hao_swift_async_kind_for_demangled(buf);
+    char buf[1024], *d = demangle_full(dm, sym + 1, n - 1, buf, sizeof buf);
+    if (!d) return 0;
+    char kind = hao_swift_async_kind_for_demangled(d);
+    demangled_free(d, buf);
+    return kind;
 }
 
 /* Does the demangled entity "Name(params) ..." have a parameter whose type
@@ -635,11 +651,11 @@ bool hao_swift_async_param(const char *sym)
     if (strncmp(sym, "_$s", 3) || !strstr(sym, "Ya")) return false;
     demangle_fn dm = demangler();
     if (!dm) return false;
-    char buf[4096];
-    size_t len = sizeof buf;
-    if (!dm(sym + 1, strlen(sym + 1), buf, &len, 0)) return false;
-    buf[sizeof buf - 1] = 0;
-    return hao_swift_async_param_demangled(buf);
+    char buf[4096], *d = demangle_full(dm, sym + 1, strlen(sym + 1), buf, sizeof buf);
+    if (!d) return false;
+    bool yes = hao_swift_async_param_demangled(d);
+    demangled_free(d, buf);
+    return yes;
 }
 
 /* The narrow-result and async-parameter rules above read the demangler's
@@ -861,11 +877,11 @@ uint16_t hao_swift_textalign(const char *sym, bool final)
     if (!sym || strncmp(sym, "_$s", 3) || !strcasestr(sym, "alignment")) return 0;
     demangle_fn dm = demangler();
     if (!dm) return 0;
-    char buf[4096];
-    size_t len = sizeof buf;
-    if (!dm(sym + 1, strlen(sym + 1), buf, &len, 0)) return 0;
-    buf[len < sizeof buf ? len : sizeof buf - 1] = 0;
-    return hao_swift_textalign_demangled(buf, final);
+    char buf[4096], *d = demangle_full(dm, sym + 1, strlen(sym + 1), buf, sizeof buf);
+    if (!d) return 0;
+    uint16_t at = hao_swift_textalign_demangled(d, final);
+    demangled_free(d, buf);
+    return at;
 }
 
 uint64_t hao_swift_textalign_value(uint64_t v)
@@ -1045,13 +1061,13 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
     if (hao_gmap_get1(&genres_fns, native)) return true;
     demangle_fn dm = demangler();
     if (!dm) return false;
-    char buf[2048], context[512];
-    size_t dl = sizeof buf;
-    if (!dm(sym + 1, len - 1, buf, &dl, 0)) return false;
-    buf[dl < sizeof buf ? dl : sizeof buf - 1] = 0;
+    char buf[2048], context[512], *d = demangle_full(dm, sym + 1, len - 1, buf, sizeof buf);
+    if (!d) return false;
     int param;
     bool throwing;
-    if (!hao_swift_genres_demangled(buf, context, sizeof context, &param, &throwing)) return false;
+    bool parsed = hao_swift_genres_demangled(d, context, sizeof context, &param, &throwing);
+    demangled_free(d, buf);
+    if (!parsed) return false;
     genres *g = calloc(1, sizeof *g);
     if (!g || !(g->context = strdup(context))) { free(g); return false; }
     g->native = native;
@@ -1263,12 +1279,12 @@ bool hao_swift_viewself_bind(uint64_t native, const char *sym)
     if (hao_gmap_get1(&viewself_fns, native)) return true;
     demangle_fn dm = demangler();
     if (!dm) return false;
-    char buf[2048];
-    size_t len = strlen(sym), dl = sizeof buf;
-    if (!dm(sym + 1, len - 1, buf, &dl, 0)) return false;
-    buf[dl < sizeof buf ? dl : sizeof buf - 1] = 0;
-    const char *close = strncmp(buf, "(extension in ", 14) ? NULL : strchr(buf, ')');
-    if (!close || strncmp(close, "):SwiftUI.View.", 15)) return false;   /* an instance member: self is a value */
+    char buf[2048], *d = demangle_full(dm, sym + 1, strlen(sym + 1), buf, sizeof buf);
+    if (!d) return false;
+    const char *close = strncmp(d, "(extension in ", 14) ? NULL : strchr(d, ')');
+    bool member = close && !strncmp(close, "):SwiftUI.View.", 15);   /* an instance member: self is a value */
+    demangled_free(d, buf);
+    if (!member) return false;
     if (!view_protocol) {
         uint64_t p = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT, "$s7SwiftUI4ViewMp");
         if (!p) return false;
@@ -1465,7 +1481,7 @@ static int sitepack_call(uint64_t call, uint64_t native)
     if (!im) return -1;
     uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, call);
     if ((i & 0xFC000000) == 0x94000000)                           /* BL */
-        return stub_target(call + (uint64_t)(sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
+        return stub_target(call + ((uint64_t)sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
     if ((i & 0xFFFFFC1F) == 0xD63F0000 || (i & 0xFEFFF800) == 0xD63F0800)   /* BLR, BLRAA/BLRAB(Z) */
         return (int)((i >> 5) & 31);
     return -1;

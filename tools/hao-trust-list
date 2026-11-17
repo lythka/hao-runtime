@@ -17,7 +17,11 @@ slice (the one hao runs: plain arm64e > arm64e.* > arm64) satisfies
 `codesign --verify --strict --ignore-resources -R='anchor apple'` here, at
 image build, where trustd runs (bundle resources are not code: neither the
 kernel nor hao checks them at exec). A program that does not verify is left out (reported on stderr):
-at run time hao then authenticates its CMS by the slower routes.
+at run time hao then authenticates its CMS by the slower routes. Each file is
+read once: the cdhash is computed from those bytes and codesign verifies a
+private copy of the same bytes (with its bundle's Info.plist, when the
+signature binds one), so a file changed in the meantime cannot have one
+version hashed and another verified.
 
 The cdhash is computed as xnu does (cs_validate_csblob: the CodeDirectory of
 highest hash rank, SHA-1 < SHA-256/20 < SHA-256 < SHA-384, hashed with its own
@@ -49,9 +53,11 @@ import plistlib
 import struct
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
 
 _spec = importlib.util.spec_from_loader("hao_embed", importlib.machinery.SourceFileLoader("hao_embed", os.path.join(HERE, "hao-embed")))
@@ -144,8 +150,61 @@ def scan(root):
     return sorted(found)
 
 
+def plain_name(n):
+    """N if it is one ordinary path component, else ValueError: a staged name never leaves its directory."""
+    if not n or n in (".", "..") or "/" in n or "\0" in n:
+        raise ValueError("unusable name %r" % n)
+    return n
+
+
+def staged_copy(path, data, pdir):
+    """A private copy of DATA (PATH's bytes, read once) for codesign to verify, in WORK (a new directory only this
+    user can open, kept until codesign is done), created exclusively. When the signature binds an Info.plist
+    (special slot -1) and the bundle's has that hash, a copy of it goes beside the file as codesign looks for it:
+    WORK/B/Contents/Info.plist for WORK/B/Contents/MacOS/NAME (a bundle's main executable), WORK/B/Versions/V/
+    Resources/Info.plist for WORK/B/Versions/V/NAME (a framework), WORK/B/Info.plist for WORK/B/NAME. Only NAME, B
+    and V come from PATH (resolved once), each one plain component, so nothing is written outside WORK; else
+    codesign fails, as it would on the file. Resources are not copied (--ignore-resources). Whatever PATH holds
+    later, codesign sees only these bytes."""
+    rp = os.path.realpath(path)
+    d, name = os.path.dirname(rp), plain_name(os.path.basename(rp))
+    mo, _ = slice_and_arch(data)
+    want = hao_codesig.special_slots(mo, hao_codesig.CSSLOT_INFOSLOT)
+    up = lambda k: os.path.basename(os.path.dirname(d) if k == 1 else os.path.dirname(os.path.dirname(d)))
+    layouts = []
+    if os.path.basename(d) == "MacOS" and os.path.basename(os.path.dirname(d)) == "Contents":
+        layouts.append((os.path.join(os.path.dirname(d), "Info.plist"), (up(2), "Contents", "MacOS"), (up(2), "Contents")))
+    if os.path.basename(os.path.dirname(d)) == "Versions":
+        v = os.path.basename(d)
+        layouts.append((os.path.join(d, "Resources", "Info.plist"), (up(2), "Versions", v), (up(2), "Versions", v, "Resources")))
+    layouts.append((os.path.join(d, "Info.plist"), (os.path.basename(d),), (os.path.basename(d),)))
+    exe_dir, plist = (), None
+    for src, at, pat in layouts if want else []:
+        try:
+            with open(src, "rb") as fh:
+                blob = fh.read()
+        except OSError:
+            continue
+        if all(hao_codesig.digest(t, blob) == h for t, h in want.items()):
+            exe_dir, plist = tuple(map(plain_name, at)), (tuple(map(plain_name, pat)), blob)
+            break
+    work = pdir.name
+    os.makedirs(os.path.join(work, *exe_dir), exist_ok=True)
+    if plist:
+        os.makedirs(os.path.join(work, *plist[0]), exist_ok=True)
+        with open(os.path.join(work, *plist[0], "Info.plist"), "xb") as f:
+            f.write(plist[1])
+        pdir.created(os.path.join(work, *plist[0], "Info.plist"))
+    dst = os.path.join(work, *exe_dir, name)
+    with open(dst, "xb") as f:
+        f.write(data)
+    pdir.created(dst)
+    return dst
+
+
 def verdict(root, path):
-    """(cdhash, relpath, None) if PATH is listed, else (None, relpath, why)."""
+    """(cdhash, relpath, None) if PATH is listed, else (None, relpath, why). The file is read once; the cdhash
+    and codesign's anchor check are both of those bytes (staged_copy), never of a second reading of PATH."""
     rel = os.path.relpath(os.path.realpath(path), root)
     try:
         data = open(path, "rb").read()
@@ -157,8 +216,18 @@ def verdict(root, path):
             return None, rel, "not signed"
     except (OSError, ValueError, struct.error) as e:
         return None, rel, str(e)
-    r = subprocess.run(["codesign", "--verify", "--strict", "--ignore-resources", "-R=anchor apple", "--arch", arch, path],
-                       capture_output=True, text=True)
+    try:
+        work = hao_codesig.PrivateDir("hao-trust-list.")
+    except (OSError, ValueError) as e:
+        return None, rel, str(e)
+    with work:
+        try:
+            copy = staged_copy(path, data, work)
+            work.check(*work.files)
+        except (OSError, ValueError) as e:
+            return None, rel, "not staged: %s" % e
+        r = subprocess.run(["codesign", "--verify", "--strict", "--ignore-resources", "-R=anchor apple", "--arch", arch,
+                            copy], capture_output=True, text=True)
     if r.returncode != 0:
         return None, rel, (r.stderr.strip().splitlines() or ["codesign exit %d" % r.returncode])[-1]
     return h, rel, None
@@ -233,6 +302,10 @@ def main():
     if len(a) not in (1, 2) or a[0].startswith("-"):
         sys.exit(__doc__.split("\n\n")[0])
     root = os.path.realpath(a[0])
+    why = hao_codesig.unshared_dir(os.path.realpath(tempfile.gettempdir()))
+    if why:
+        sys.exit("hao-trust-list: no private place for codesign's copies: %s (set TMPDIR to a directory only you "
+                 "can change)" % why)
     if len(a) == 2:
         progs = [l.strip() for l in open(a[1]) if l.strip() and not l.lstrip().startswith("#")]
         progs = [p if os.path.isabs(p) else os.path.join(root, p) for p in progs]

@@ -114,6 +114,12 @@ _hao_native_call:
     movq  %r15, CPU_BRIDGE_FN(%rbx)
     callq *%r15
 Lnative_call_ret:               /* return address; see callee_pop in runtime.c */
+    /* Upper ymm halves are dead after a call (SysV) and guest code is
+     * legacy SSE: clear them where AVX state is enabled (jit.c). */
+    cmpb  $0, _hao_vzeroupper(%rip)
+    je    6f
+    vzeroupper
+6:
     /* x86_64 swifttailcc callees pop their argument area (`retq $8`; Swift
      * concurrency). rsp is restored from rbp below, so the pop is absorbed
      * here; record it when this was the guest's tail call (guest lr = the
@@ -246,7 +252,13 @@ _hao_callback_entry:
     movq  %r12, 0xC0(%rsp)
     movq  %r13, 0xC8(%rsp)
     movq  %r14, 0xD0(%rsp)
-    movq  %rsp, %rdi
+    /* A native call into guest code: the upper ymm halves are dead (SysV;
+     * no guest argument is wider than 128 bits). Cleared where AVX state is
+     * enabled, as after hao_native_call's call. */
+    cmpb  $0, _hao_vzeroupper(%rip)
+    je    3f
+    vzeroupper
+3:  movq  %rsp, %rdi
     callq _hao_callback         /* returns the bytes to pop for the caller */
     movq  %rax, %r11
     movq  0xC0(%rsp), %rax

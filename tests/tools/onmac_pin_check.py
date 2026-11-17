@@ -1,6 +1,6 @@
 """tools/hao-runtime-on-mac pin(): a stub or a fat dyld signed with a larger reservation (as macOS 26's codesign does)
 comes back byte for byte as the pinned file; a file no trim can make is left as it is.
-  python3 -I tests/tools/test_onmac_pin.py STUB... FAT_DYLD"""
+  python3 -I tests/tools/onmac_pin_check.py STUB... FAT_DYLD"""
 import hashlib, importlib.machinery, importlib.util, os, struct, sys
 
 here = os.path.dirname(os.path.abspath(__file__))

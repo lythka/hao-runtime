@@ -4,12 +4,17 @@
 DIR is an extracted hao-runtime-VERSION-public archive (default: the folder above this script). ROOT is the release's
 System root (read-only mount of the IPSW's system image), X86 its x86_64 dyld shared cache folder. Writes
 DIR/payload/embed/stubs/ (each program's stub, filled from embed/skeletons) and DIR/payload/replace/dyld, then checks
-every file payload-manifest.json lists (AOT caches may be absent: they are made after the first boot).
-Needs Python 3.12 or later and codesign; no compiler, linker or Xcode. Exit 0 only when every sha256 matches.
+every file payload-manifest.json lists (AOT caches may be absent: they are made after the first boot) and that
+DIR/payload holds nothing else: no file the manifest does not list, no symbolic link or special file.
+Each output is written to a new file in a private directory and renamed into place; no output path is followed
+through a symbolic link. Runs as an ordinary user (it refuses root): nothing it does needs privileges.
+Needs Python 3.12 or later and codesign; no compiler, linker or Xcode. Exit 0 only when every sha256 matches and
+nothing else is there.
 """
-import hashlib, json, os, shutil, struct, subprocess, sys, tempfile
+import hashlib, json, os, shutil, stat, struct, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hao_codesig
 import hao_fat
 
 
@@ -97,12 +102,87 @@ def pin(data, want_sha):
     return data
 
 
+def real_dir(top, rel):
+    """A descriptor of TOP/REL, each component opened through its parent's descriptor without following a link
+    (made 0755 if missing); exits if one is a link or not a directory, or if someone else could rename or replace
+    entries in it (owned by another user, writable by group or others, or an ACL granting write)."""
+    fd = os.open(top, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    for part in rel.split('/'):
+        try:
+            os.mkdir(part, 0o755, dir_fd=fd)
+        except FileExistsError:
+            pass
+        try:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            sys.exit('hao-runtime-on-mac: %s/%s: a symbolic link or not a directory' % (top, rel))
+        os.close(fd)
+        fd = nfd
+        why = hao_codesig.dir_fd_unshared(fd, {os.geteuid()})
+        if why:
+            sys.exit('hao-runtime-on-mac: %s/%s: %s: others could replace what is written there' % (top, rel, why))
+    return fd
+
+
+def publish(data, dfd, name, mode):
+    """DATA as NAME in the directory DFD: a new file created there exclusively (no link followed), renamed over
+    NAME, which is replaced, never written through (a symbolic link there is replaced, not followed)."""
+    while True:
+        tmp = '.on-mac.%s' % os.urandom(6).hex()
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+            break
+        except FileExistsError:
+            continue
+    with os.fdopen(fd, 'wb') as f:
+        f.write(data)
+        os.fchmod(f.fileno(), mode)
+    os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+
+
+def inventory(pay, files):
+    """Why DIR/payload is not exactly what payload-manifest.json lists: a file it does not list, a symbolic link or
+    special file, a listed file missing (not an AOT cache: made after the first boot) or changed; (problems, matching,
+    AOT caches listed)."""
+    bad, ok, later, seen = [], 0, 0, set()
+    for base, dirs, names in os.walk(pay):
+        for n in sorted(dirs + names):
+            p = os.path.join(base, n)
+            rel = os.path.relpath(p, pay)
+            st = os.lstat(p)
+            if stat.S_ISDIR(st.st_mode) or rel == 'payload-manifest.json':
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                bad.append('%s: %s' % (rel, 'a symbolic link' if stat.S_ISLNK(st.st_mode) else 'not a regular file'))
+            elif rel not in files:
+                bad.append('%s: not in payload-manifest.json' % rel)
+            else:
+                seen.add(rel)
+    for rel, want in sorted(files.items()):
+        if rel.startswith('root/usr/lib/hao/aot/'):
+            later += 1
+            if rel not in seen:
+                continue
+        if rel not in seen:
+            bad.append('%s: missing' % rel)
+        elif sha256(os.path.join(pay, rel)) != want:
+            bad.append('%s: sha256 differs' % rel)
+        else:
+            ok += 1
+    return bad, ok, later
+
+
 def main(argv):
     if len(argv) not in (3, 4):
         sys.exit(__doc__.strip().split('\n\n')[0])
+    if os.geteuid() == 0:
+        sys.exit('hao-runtime-on-mac: run it as an ordinary user, not as root (it needs no privileges)')
     root, x86 = (os.path.abspath(a) for a in argv[1:3])
     top = os.path.abspath(argv[3] if len(argv) == 4 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
     pay = os.path.join(top, 'payload')
+    for p in (pay, os.path.join(pay, 'payload-manifest.json')):
+        if os.path.islink(p):
+            sys.exit('hao-runtime-on-mac: %s is a symbolic link' % p)
     manifest = json.load(open(os.path.join(pay, 'payload-manifest.json')))
     embed = json.load(open(os.path.join(pay, 'embed', 'manifest.json')))
     for p, what in ((root, 'ROOT'), (x86, 'X86'), (os.path.join(top, 'build', 'hao-stub'), 'build/hao-stub'),
@@ -115,9 +195,14 @@ def main(argv):
         with open(lst, 'w') as f:
             f.write(''.join(os.path.join(root, e['path']) + '\n' for e in embed['files']))
         out = os.path.join(work, 'embed')
+        drop = os.path.join(work, 'dropped-constraints')   # the payload build's decision, from its manifest
+        with open(drop, 'w') as f:
+            f.write(''.join('%s %s %s %s\n' % (e['path'], d['slot'], d['cdhash'], d['sha256'])
+                            for e in embed['files'] for d in e.get('constraints', {}).get('dropped', [])))
         cmd = [sys.executable, '-I', os.path.join(top, 'tools', 'hao-embed'), '--stub', os.path.join(top, 'build', 'hao-stub'),
                '--stubs', out, '--root', root, '--x86-cache', x86, '--skeletons', os.path.join(pay, 'embed', 'skeletons'),
-               '--require', 'sbin/launchd', '--require', 'usr/libexec/xpcproxy', '--list', lst]
+               '--require', 'sbin/launchd', '--require', 'usr/libexec/xpcproxy', '--allow-dropped-constraints', drop,
+               '--list', lst]
         with open(os.path.join(work, 'embed.log'), 'w') as log:
             rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
         if rc != 0:
@@ -125,48 +210,39 @@ def main(argv):
             fails = [l for l in lines if l.startswith('fail')]
             sys.stderr.write(''.join(fails[:10] or lines[-5:]))
             sys.exit('hao-runtime-on-mac: hao-embed failed (exit %d, %d programs)' % (rc, len(fails)))
-        stubs = os.path.join(pay, 'embed', 'stubs')
-        os.makedirs(stubs, exist_ok=True)
+        stubs = real_dir(pay, 'embed/stubs')
         pinned = 0
-        for n in os.listdir(os.path.join(out, 'stubs')):
-            src, dst = os.path.join(out, 'stubs', n), os.path.join(stubs, n)
+        for n in sorted(os.listdir(os.path.join(out, 'stubs'))):
+            src = os.path.join(out, 'stubs', n)
             want = manifest['files'].get('embed/stubs/' + n)
             data = open(src, 'rb').read()
             fixed = pin(data, want) if want else data
             pinned += fixed is not data
-            with open(dst, 'wb') as f:
-                f.write(fixed)
-            os.chmod(dst, os.stat(src).st_mode & 0o7777)
-        os.makedirs(os.path.join(pay, 'replace'), exist_ok=True)
+            publish(fixed, stubs, n, os.stat(src).st_mode & 0o777)
+        if 'replace/dyld' not in manifest['files']:
+            return finish(pay, manifest, pinned)
+        replace = real_dir(pay, 'replace')
+        made = os.path.join(work, 'dyld')
         rc = subprocess.run([sys.executable, '-I', os.path.join(top, 'tools', 'dyld-ignition-fix.py'),
-                             os.path.join(root, 'usr/lib/dyld'), os.path.join(pay, 'replace', 'dyld')]).returncode
+                             os.path.join(root, 'usr/lib/dyld'), made]).returncode
         if rc != 0:
             sys.exit('hao-runtime-on-mac: dyld-ignition-fix.py failed (exit %d)' % rc)
-        dyld = os.path.join(pay, 'replace', 'dyld')
+        if not os.path.isfile(made):
+            sys.exit('hao-runtime-on-mac: dyld-ignition-fix.py found this dyld not affected, but the manifest lists replace/dyld')
         want = manifest['files'].get('replace/dyld')
-        data = open(dyld, 'rb').read()
+        data = open(made, 'rb').read()
         fixed = pin(data, want) if want else data
-        if fixed is not data:
-            pinned += 1
-            with open(dyld, 'wb') as f:
-                f.write(fixed)
-        if pinned:
-            print('hao-runtime-on-mac: %d files signed with a larger reservation than the pinned one, trimmed to it' % pinned)
+        pinned += fixed is not data
+        publish(fixed, replace, 'dyld', os.stat(made).st_mode & 0o777)
+        return finish(pay, manifest, pinned)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    bad, ok, later = [], 0, 0
-    for rel, want in sorted(manifest['files'].items()):
-        p = os.path.join(pay, rel)
-        if rel.startswith('root/usr/lib/hao/aot/'):
-            later += 1
-            if not os.path.exists(p):
-                continue
-        if not os.path.isfile(p):
-            bad.append('%s: missing' % rel)
-        elif sha256(p) != want:
-            bad.append('%s: sha256 differs' % rel)
-        else:
-            ok += 1
+
+
+def finish(pay, manifest, pinned):
+    if pinned:
+        print('hao-runtime-on-mac: %d files signed with a larger reservation than the pinned one, trimmed to it' % pinned)
+    bad, ok, later = inventory(pay, manifest['files'])
     for b in bad[:20]:
         print('hao-runtime-on-mac: %s' % b, file=sys.stderr)
     print('hao-runtime-on-mac: %d files match payload-manifest.json, %d differ or are missing; %d AOT caches are made '

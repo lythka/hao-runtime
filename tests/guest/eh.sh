@@ -25,6 +25,8 @@
 #   OUT=dir HAO=build/hao [T=30] [SECTIONS="1 2 .."] [MODES="jit interp aot"] [X86REF=""] [EHPERS=1] tests/guest/eh.sh
 # Exit status: number of failing runs.
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-eh)}

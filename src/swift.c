@@ -18,6 +18,14 @@
 
 typedef void (*reg_fn)(const void *begin, const void *end);
 
+/* Swift.Float16's metadata once its 2-byte POD witnesses are installed and
+ * read back (float16_layout); NULL before, or if that failed. */
+static const void *float16_relaid;
+bool hao_swift_relaid_type(const void *type)
+{
+    return type && __atomic_load_n(&float16_relaid, __ATOMIC_ACQUIRE) == type;
+}
+
 /* Swift.Float16 is a frozen 2-byte POD (Builtin.FPIEEE16) in the arm64 ABI
  * guest code is compiled for. x86_64 macOS libswiftCore declares it as a
  * stub with no stored field: its metadata's value witnesses are the empty
@@ -55,6 +63,7 @@ static void float16_layout(void *h)
     }
     md[-1] = (uint64_t)(uintptr_t)pod;
     mprotect((void *)lo, (size_t)pg, prot);   /* as it was */
+    if (*(volatile uint64_t *)&md[-1] == (uint64_t)(uintptr_t)pod) __atomic_store_n(&float16_relaid, (const void *)md, __ATOMIC_RELEASE);
     if (hao_verbose > 1) fprintf(stderr, "hao: Swift.Float16 metadata: 2-byte POD value witnesses\n");
 }
 

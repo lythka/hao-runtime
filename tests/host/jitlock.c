@@ -156,12 +156,12 @@ static int t_aot(int nb, const char *guest)
 
 /* ------------------------------------------------ signature thunks */
 
+/* the thunk's guest function and hsig, as its code loads them (jit.c thunk tables) */
+uint64_t hao_sig_thunk_target(uint64_t a);
+uint64_t hao_sig_thunk_sig(uint64_t a);
 static bool sig_imm(uint64_t e, uint64_t g, uint64_t s)
 {
-    uint64_t gg, ss;
-    memcpy(&gg, (void *)(uintptr_t)(e + 2), 8);
-    memcpy(&ss, (void *)(uintptr_t)(e + 12), 8);
-    return gg == g && ss == s;
+    return hao_sig_thunk_target(e) == g && hao_sig_thunk_sig(e) == s;
 }
 
 static int t_sigs(void)
