@@ -60,6 +60,9 @@ unless a system cache exists. In `tests/`, only `guest/libval`'s `aot` mode
 for its library-validation variants loses its cache (it compares output,
 which is unchanged). The Command Line Tools' `git log` (library flag, 771
 blocks) ran in 0.26 s from its cache and 0.24 s under the JIT.
+`hao --aot --check` and `hao --aot` decide valid or skipped with the same
+directories, after verifying the signature (`tests/aot/run.sh` V: a
+hardened program's cache in `HAO_CACHE` was "valid" and skipped before).
 
 ## Swift `dynamic` functions under the image's interface units
 
