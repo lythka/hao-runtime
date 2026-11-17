@@ -654,6 +654,12 @@ class X86Libraries:
         self._disk = {}
         self._dirs = {}
         self._closure = {}
+        try:   # the image's OS version as LC_BUILD_VERSION encodes it (X.Y.Z: X<<16 | Y<<8 | Z); None if unknown
+            with open(os.path.join(self.root, "System/Library/CoreServices/SystemVersion.plist"), "rb") as f:
+                v = [int(x) for x in plistlib.load(f)["ProductVersion"].split(".")] + [0, 0]
+            self.os_version = v[0] << 16 | v[1] << 8 | v[2]
+        except (OSError, KeyError, ValueError, plistlib.InvalidFileException):
+            self.os_version = None
         try:
             with open(os.path.join(self.root, "usr/share/firmlinks")) as f:
                 self.firmlinks = tuple(l.split("\t")[0] for l in f if l.startswith("/")) or FIRMLINKS
@@ -736,15 +742,33 @@ class X86Libraries:
         return [p] if p is not None else []
 
     def x86_dylibs(self, host):
-        """The x86_64 slices (every subtype: dyld picks x86_64h on some CPUs) of the file HOST that dyld could load
-        as a library into the stub (MH_DYLIB); [] if none, or not readable."""
+        """[(cpu subtype, slice, loadable)] for the x86_64 library slices (MH_DYLIB, every subtype: dyld picks
+        x86_64h on some CPUs) of the file HOST; [] if none, or not readable. loadable: dyld would load the slice
+        into a stub as far as hao-embed can tell: plain x86_64 or x86_64h, built for macOS (a build version or
+        version-min for it) at a minos no newer than the image's OS (ROOT's SystemVersion.plist). Anything else
+        is uncertain, so not loadable."""
         try:
             with open(host, "rb") as fh:
                 sl = hao_fat.slices(fh.read()) or []
         except OSError:
             return []
-        return [(sub, p) for c, sub, p in sl if c == hao_fat.CPU_X86_64 and len(p) >= 16
-                and p[:4] == b"\xcf\xfa\xed\xfe" and int.from_bytes(p[12:16], "little") == 6]
+        out = []
+        for c, sub, p in sl:
+            if c != hao_fat.CPU_X86_64 or len(p) < 16 or p[:4] != b"\xcf\xfa\xed\xfe" or \
+                    int.from_bytes(p[12:16], "little") != 6:
+                continue
+            ok = sub & 0xFFFFFF in (3, 8) and self.os_version is not None
+            if ok:
+                try:
+                    vs = [(pl, minos) for cmd, off, size in load_commands(p) for pl, minos in (
+                        [struct.unpack_from("<II", p, off + 8)] if cmd == LC_BUILD_VERSION and size >= 24 else
+                        [(PLATFORM_MACOS, struct.unpack_from("<I", p, off + 8)[0])] if cmd == LC_VERSION_MIN_MACOSX
+                        and size >= 16 else [])]
+                except (ValueError, struct.error):
+                    vs = []
+                ok = any(pl == PLATFORM_MACOS and minos <= self.os_version for pl, minos in vs)
+            out.append((sub, p, ok))
+        return out
 
     def unprotected(self, name, loader, exe, rpaths, depth=0, stack=None):
         """None if dyld, loading NAME for LOADER in a process whose main executable is EXE (OS paths; RPATHS as
@@ -773,8 +797,8 @@ class X86Libraries:
             slices = self.x86_dylibs(host)
             if not slices:
                 continue   # dyld cannot load it into the stub and goes on to the next path
-            for sub, mo in slices:
-                key = (real, sub, hashlib.sha256(mo).digest(), tuple(rpaths))
+            for sub, mo, _ in slices:
+                key = (exe, real, sub, hashlib.sha256(mo).digest(), tuple(rpaths))
                 if key in stack:
                     continue
                 if key not in self._closure:
@@ -790,7 +814,10 @@ class X86Libraries:
                     self._closure[key] = res
                 if self._closure[key]:
                     return self._closure[key]
-            return None
+            if all(ok for _, _, ok in slices) and any(sub & 0xFFFFFF == 3 for sub, _, _ in slices):
+                return None   # dyld loads this file: the search ends here
+            # dyld may fail to load it (another CPU subtype, platform or a newer OS) and go on: the later paths
+            # must be protected too
         return None
 
     def _file(self, path):
@@ -836,7 +863,7 @@ class X86Libraries:
             if op is not None and op in self.ids:
                 return "cache", op
             kind = self._file(f)
-            if kind == "x86" and self.x86_dylibs(f):
+            if kind == "x86" and any(ok for _, _, ok in self.x86_dylibs(f)):
                 return "disk", f
             if kind == "arm":
                 return "guest", f
@@ -1336,17 +1363,26 @@ class OutDir:
             raise
 
 
-def write_like(dst, data, like, in_place=False):
+def write_like(dst, data, like, in_place=False, target=None):
     """Write DATA to DST with LIKE's owner and mode. In place (DST is LIKE)
     the inode is kept, so other hard links see the embedded file too; a
     symlink is refused rather than replaced by a copy, and the file is
-    opened without following one. Otherwise DATA is published into DST's
+    opened without following one; with TARGET (the file object the program
+    was read through) DATA goes through that same descriptor, so a path
+    changed in between cannot redirect the write. Otherwise DATA is published into DST's
     directory (OutDir: through a descriptor, a new file created exclusively
     and renamed over DST, which is replaced, never written through; a
     directory others could rename entries in is refused)."""
     if in_place and os.path.islink(dst):
         raise RuntimeError("is a symlink; embed the file it names")
     st = os.stat(like)
+    if in_place and target is not None:   # the descriptor the program was read through
+        target.seek(0)
+        target.write(data)
+        target.truncate()
+        target.flush()
+        os.fsync(target.fileno())
+        return
     if in_place:
         fd = os.open(dst, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "r+b") as f:
@@ -1446,8 +1482,17 @@ def main():
             sys.exit(f"hao-embed: {e}")
         with pdir:
             work = pdir.name
+            target = None
             try:
-                data = open(p, "rb").read()
+                if a.in_place:
+                    # the file read is the file written: one descriptor, opened without following a link
+                    fd = os.open(p, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    target = os.fdopen(fd, "r+b")
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise RuntimeError("is not a regular file")
+                    data = target.read()
+                else:
+                    data = open(p, "rb").read()
                 why = eligible(data, a.translate)
                 if why:
                     print(f"skip\t{p}\t{why}")
@@ -1497,7 +1542,7 @@ def main():
                         dst = os.path.join(a.out, os.path.basename(p))
                     else:
                         dst = a.out
-                    write_like(dst, merged, p, in_place=a.in_place)
+                    write_like(dst, merged, p, in_place=a.in_place, target=target)
                 print(f"{'translated' if translate else 'ok'}\t{p}\t{ident}\tlinks {len(links)}" +
                       (f" (not {len(skipped)})" if skipped else "") +
                       "".join(f"\tbound -{slot} {os.path.basename(bsrc)}" for slot, bsrc, _ in bound) +
@@ -1507,6 +1552,9 @@ def main():
             except (OSError, RuntimeError, ValueError) as e:
                 print(f"fail\t{p}\t{e}")
                 bad += 1
+            finally:
+                if target is not None:
+                    target.close()
     if a.stubs:
         required = a.require + ([e["path"] for e in manifest] if a.require_embedded else [])
         required = list(dict.fromkeys(required))
