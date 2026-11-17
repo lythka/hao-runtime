@@ -468,6 +468,9 @@ tests/guest/svcarriers.swift
 tests/guest/svfacts.facts
 tests/guest/svfacts.sh
 tests/guest/svfacts.swift
+tests/guest/svnoncopy.facts
+tests/guest/svnoncopy.sh
+tests/guest/svnoncopy.swift
 tests/guest/layoutxi.sh
 tests/guest/layoutxi.swift
 tests/guest/xpcrect.m

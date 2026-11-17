@@ -833,6 +833,13 @@ POINTER has its nil translated by the pointer rule at the row's word (q on
 arm64, 2q on x86_64, any depth; the offset checked against the Optional's
 own witness). A type with no row (every guest type, and native types not
 listed) keeps the rules, which refuse what they cannot certify.
+A noncopyable type (value witness flag IsNonCopyable) was refused at the
+gate before its row was read; a SAME row now settles it there, and without
+one it is still refused (`guest/svnoncopy`: boxes of `Mutex<Int>` and of
+`Mutex<AsyncStream<@Sendable () -> ()>.Continuation>`, the latter under the
+generated table's key, equal native under JIT, `--interp`, AOT with fixture
+rows; refused without them). Not measured: the generated row itself on its
+OS build.
 
 Source encoding: from three Optional levels a pointer word's encodings
 overlap (arm64's 2 is x86_64's first inhabitant). The walk is told who wrote
