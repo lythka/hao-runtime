@@ -27,9 +27,11 @@ int main(void)
     CHECK(!o.no_chain && !o.no_aot && !o.no_swiftreg && !o.no_msgsend, "boot arguments match exactly (key and =1)");
     hao_opts_parse(&o, none, NULL, "hao_no_chain=1 hao_no_aot=1 hao_nx_stats=1", false, HAO_ENV_SETUGID);
     CHECK(o.no_chain && o.no_aot && o.nx_stats, "listed boot arguments honoured in every tier");
-    char *e6[] = {"HAO_NO_CHAIN=", NULL};
+    char *e6[] = {"HAO_NO_CHAIN=", "HAO_NO_AOT=0", "HAO_INTERP=0", "HAO_BRIDGE_STATS=yes", NULL};
     hao_opts_parse(&o, e6, NULL, NULL, false, HAO_ENV_OPEN);
-    CHECK(o.no_chain, "an empty value counts as present");
+    CHECK(!o.no_chain && !o.no_aot && !o.interp && o.bridge_stats, "an empty value or 0 turns a switch off, any other on");
+    hao_opts_parse(&o, e6, "i", NULL, false, HAO_ENV_OPEN);
+    CHECK(o.interp, "HAO_INTERP=0 counts as absent: the i flag stands");
     char *e7[] = {"HAO_VERBOSE=3", NULL};
     hao_opts_parse(&o, e7, "vs", NULL, false, HAO_ENV_OPEN);
     CHECK(o.verbose == 3 && o.stats, "environment beats HAO_FLAGS");

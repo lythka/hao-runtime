@@ -1020,7 +1020,7 @@ hao_slice *hao_slice_open(int fd, char *why, size_t n)
             if (r <= 0) SERR("short read of the slice at %#llx", (unsigned long long)got);
             got += (uint64_t)r;
         }
-        mprotect(m, len, PROT_READ);
+        if (mprotect(m, len, PROT_READ) != 0) SERR("cannot make the copy of the slice read-only (errno %d)", errno);
     }
     memcpy(&mh, sl->bytes, sizeof mh);
     if (mh.magic != MH_MAGIC_64) SERR("bad mach header");
@@ -1528,7 +1528,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         if (sg->initprot & VM_PROT_WRITE) prot |= PROT_WRITE;
         if (sg->initprot & VM_PROT_EXECUTE) prot |= PROT_READ;  /* code is data for the translator */
         /* __DATA_CONST is made read-only by dyld after binding; keep that behaviour */
-        mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot);
+        if (mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot) != 0)
+            ERR("%s: cannot set the protection of segment %.16s (errno %d)", path, sg->segname, errno);
     }
     hao_code_poison(img);   /* HAO_CODE_ALIAS */
 #undef FOR_EACH_CMD

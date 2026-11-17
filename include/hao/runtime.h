@@ -59,6 +59,7 @@ typedef struct hao_eh_rec {
 #define HAO_JIT_JC_SLOTS 2048   /* a power of two */
 #define HAO_NCACHE_SLOTS 256    /* a power of two */
 #define HAO_STEP_RING 16        /* a power of two */
+#define HAO_SWIFT_MADE_RING 64  /* a power of two */
 typedef struct hao_thread {
     hao_cpu cpu;               /* must be first (16-byte aligned) */
     uint8_t *stack;
@@ -72,8 +73,10 @@ typedef struct hao_thread {
     /* Nils a guest call of an Optional witness made and hao wrote in the
      * guest's encoding (swiftvalue.c witness_to_guest), a ring: a callback
      * returning such a value to native code as its indirect result gets the
-     * native encoding back (hao_swift_witness_result). */
-    struct { uint64_t value, at, native, arm; } swift_made[16];
+     * native encoding back (hao_swift_witness_result). Nested callbacks
+     * share it; each entry keeps its index, so one a later note overwrote
+     * is seen as lost (counted), not taken for another. */
+    struct { uint64_t value, at, native, arm; unsigned idx; } swift_made[HAO_SWIFT_MADE_RING];
     unsigned swift_made_n;
     /* The guest state a native-to-guest call saves and restores (1 KB),
      * from the fifth nesting level on kept here instead of on the native
@@ -205,6 +208,8 @@ extern FILE *hao_diag_file;
 #define HAO_DIAG (hao_diag_file ? hao_diag_file : stderr)
 void hao_diag_init(void);                 /* once, at startup (hao_install_fault_handler) */
 void hao_diag_write(const char *b, size_t n);   /* async-signal-safe: console and log, whole */
+size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base);   /* async-signal-safe: v in base 10 or 16 */
+void hao_diag_write_fatal(const char *b, size_t n);   /* the same for a fatal report: may also open a log still waiting for its volume */
 extern size_t hao_diag_log_cap;           /* the log's size limit (bytes) */
 /* A multi-line report written with one hao_diag_write (hao_diag_block_end):
  * fprintf into hao_diag_block's FILE (HAO_DIAG if no memory). Not in signal handlers. */
