@@ -1,5 +1,19 @@
 # Runtime issues and measured scope
 
+## hao --aot --auto marked failed runs done
+
+`hao --aot --auto` wrote its done marker even when programs failed, so
+they were not tried again until libhao changed, and `hao --aot` with no
+FILE took `aot-list` and `stub-identities` by owner and mode alone: an ACL
+granting write, or a directory above them others can write, was not
+noticed. A failed run now leaves no marker (the next start-up retries;
+valid caches are skipped), the lists need every directory from / to pass
+the cache directories' rules (owner, mode, ACL; `hao_aot_dir_ok`) and no
+write-granting ACL of their own (one that cannot be read refuses the list),
+and the marker's directory is held to the same rules. Test:
+`guest/aotdefault`. Limits: a program that always fails is retried at
+every start-up.
+
 ## hao-trust-list hashed one read and verified another
 
 `hao-trust-list` computed a file's cdhash from one read and then ran
