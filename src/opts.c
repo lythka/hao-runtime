@@ -44,6 +44,7 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"no_ifunits", offsetof(hao_opts_t, no_ifunits), BOOT_DEV},
     {"no_swift_thunks", offsetof(hao_opts_t, no_swift_thunks), BOOT_DEV},
     {"no_swift_values", offsetof(hao_opts_t, no_swift_values), BOOT_DEV},
+    {"native_app_libs", offsetof(hao_opts_t, native_app_libs), BOOT_NO},
     {"native_libcxx", offsetof(hao_opts_t, native_libcxx), BOOT_DEV},
     {"no_thunks", offsetof(hao_opts_t, no_thunks), BOOT_DEV},
     {"sigreturn_kernel", offsetof(hao_opts_t, sigreturn_kernel), BOOT_DEV},

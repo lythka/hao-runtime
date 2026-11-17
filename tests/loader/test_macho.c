@@ -612,6 +612,31 @@ static int codesig_report(const char *list)
     return 0;
 }
 
+/* A routing probe accepts a universal ARM library, but the native fallback
+ * must still reject it. Neither probe accepts an executable as a library. */
+static void routing_tests(const uint8_t *fat, size_t n)
+{
+    uint8_t *d = malloc(n);
+    memcpy(d, fat, n);
+    uint32_t arm = __builtin_bswap32(rd32(d, 8 + 20 + 8));
+    char path[1100];
+    snprintf(path, sizeof path, "%s/routing.bin", scratch);
+    const uint32_t types[] = {MH_EXECUTE, MH_DYLIB, MH_BUNDLE};
+    for (size_t k = 0; k < sizeof types / sizeof types[0]; k++) {
+        wr32(d, arm + 12, types[k]);
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || write(fd, d, n) != (ssize_t)n) { perror(path); exit(2); }
+        close(fd);
+        bool ok = hao_is_arm_loadable(path, true) == (types[k] != MH_EXECUTE) &&
+                  hao_is_arm_loadable(path, false) == (types[k] == MH_BUNDLE) &&
+                  !hao_is_arm_only_loadable(path, true);
+        if (ok) passes++; else fails++;
+        printf("%s universal ARM routing filetype %u\n", ok ? "PASS" : "FAIL", types[k]);
+    }
+    unlink(path);
+    free(d);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--codesig")) return codesig_report(argv[2]);
@@ -623,6 +648,7 @@ int main(int argc, char **argv)
     size_t n, ln, fn;
     uint8_t *seed = slurp("exec-arm64e", &n), *lib = slurp("lib-arm64e", &ln), *fat = slurp("fat-x86_64-arm64e", &fn);
     slice_tests(seed, n, lib, ln, fat, fn);
+    routing_tests(fat, fn);
     uint8_t *d = malloc(n + 0x10000);
 #define FRESH() memcpy(d, seed, n)
 

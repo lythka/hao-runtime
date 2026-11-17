@@ -21,6 +21,8 @@
 # widths when they fill it exactly.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/sitepack.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-sitepack)}

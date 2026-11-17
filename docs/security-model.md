@@ -242,6 +242,13 @@ included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
 `hao_verbose=N`. No boot argument turns library validation or the signature
 check off.
 
+`HAO_NATIVE_APP_LIBS=1` is an OPEN-tier diagnostic switch, read once at
+startup. It restores native-first loading of app libraries, including guest
+`dlopen`, even when they contain an ARM slice. The default keeps such
+libraries in the guest ARM representation domain; OS libraries retain their
+existing native binding policy. Guarded and set-ID processes ignore this
+switch, and no boot argument enables it.
+
 A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
 never for a release image. It also reads the test switches
 (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,

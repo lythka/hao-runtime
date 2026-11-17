@@ -1049,13 +1049,13 @@ fail:
 #undef SERR
 }
 
-static bool arm_only_bundle_fd(int fd, bool dylib)
+static bool arm_bundle_fd(int fd, bool dylib, bool only)
 {
     struct stat st;
     uint32_t magic = 0;
     bool ok = false;
     if (fstat(fd, &st) || !S_ISREG(st.st_mode) || pread(fd, &magic, 4, 0) != 4) goto out;
-    if (magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+    if (only && (magic == FAT_CIGAM || magic == FAT_CIGAM_64)) {
         struct fat_header head;
         if (pread(fd, &head, sizeof head, 0) != sizeof head) goto out;
         unsigned count = __builtin_bswap32(head.nfat_arch);
@@ -1081,7 +1081,16 @@ bool hao_is_arm_only_loadable(const char *path, bool dylib)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
-    bool ok = arm_only_bundle_fd(fd, dylib);
+    bool ok = arm_bundle_fd(fd, dylib, true);
+    close(fd);
+    return ok;
+}
+/* Routing probe only: loading still verifies the selected guest slice. */
+bool hao_is_arm_loadable(const char *path, bool dylib)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    bool ok = arm_bundle_fd(fd, dylib, false);
     close(fd);
     return ok;
 }
@@ -1093,10 +1102,10 @@ hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped
 {
     return load_image(path, -1, resolve, mapped, ctx, 1, err, errlen);
 }
-/* the dlopen fallback for a guest caller: an ARM-only bundle or dylib */
-hao_image *hao_load_dlopen_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
+/* A guest dlopen: the ARM slice of a bundle or dylib. */
+hao_image *hao_load_dlopen_cb(const char *path, bool universal, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
 {
-    return load_image(path, -1, resolve, mapped, ctx, 2, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, universal ? 3 : 2, err, errlen);
 }
 
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
@@ -1137,8 +1146,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     snprintf(img->path, sizeof img->path, "%s", path);
     img->fd = fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
     if (img->fd < 0) ERR("open %s: %s", path, strerror(errno));
-    if (bundle_only && !arm_only_bundle_fd(img->fd, bundle_only == 2))
-        ERR(bundle_only == 2 ? "%s: guest dlopen fallback requires an ARM-only MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (bundle_only && !arm_bundle_fd(img->fd, bundle_only >= 2, bundle_only != 3))
+        ERR(bundle_only >= 2 ? "%s: guest dlopen requires an ARM MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     char why[320];
     /* The slice, taken once (hao/macho.h): the one the caller checked on this descriptor and left for
      * this load (hao_slice_hand), else opened here. From here on nothing is read from the file. */
@@ -1156,8 +1165,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     const uint64_t slice = sl->size;
     const uint8_t *const cmds = sl->cmds;
 
-    if (bundle_only && sl->filetype != MH_BUNDLE && !(bundle_only == 2 && sl->filetype == MH_DYLIB))
-        ERR(bundle_only == 2 ? "%s: guest dlopen fallback requires an ARM-only MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
+    if (bundle_only && sl->filetype != MH_BUNDLE && !(bundle_only >= 2 && sl->filetype == MH_DYLIB))
+        ERR(bundle_only >= 2 ? "%s: guest dlopen requires an ARM MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     if (sl->filetype != MH_EXECUTE && sl->filetype != MH_DYLIB && sl->filetype != MH_BUNDLE &&
         !(map_only && sl->filetype == MH_DYLINKER))
         ERR("%s: filetype %u not loadable", path, sl->filetype);

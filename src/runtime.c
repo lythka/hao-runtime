@@ -2723,9 +2723,9 @@ void hao_install_fault_handler(void)
  *    image that names it, @rpath every LC_RPATH of that image and of the
  *    images that loaded it, down to the main executable; in a set-ID
  *    process, with dyld's restrictions for one (for_each_candidate);
- *  - each candidate path is tried as a native x86_64 library (dlopen), then,
- *    if it has no x86_64 slice, as a guest image (absolute OS paths under
- *    HAO_GUEST_ROOT when set);
+ *  - app libraries with an ARM slice stay in the guest representation domain;
+ *    OS libraries and native-only app libraries try native dlopen first, then
+ *    a guest image (absolute paths under HAO_GUEST_ROOT when set);
  *  - a guest image is recorded before its own imports are bound, so cyclic
  *    dependencies find it instead of recursing;
  *  - two-level namespace: a symbol imported from a guest library comes from
@@ -3006,7 +3006,7 @@ static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
     intptr_t slot = glib_slot(rp, loader);
     char err[512];
     hao_image *im = hao_load_image_cb(rp, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
-    if (!im) {   /* native dlopen already failed: a rejected guest dylib is worth saying */
+    if (!im) {   /* report guest signature, validation and loading failures */
         note_load_err(rp, err);
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG, "guest dylib not loaded: %s\n", err);
@@ -3110,9 +3110,36 @@ static hao_image *guest_cxx_library(hao_image *loader, const char *cand, bool os
     return g;
 }
 
+/* `os` above describes absolute-path provenance for HAO_GUEST_ROOT, not
+ * ownership: an absolute app path is still app code. Classify the resolved
+ * location too, so aliases of OS libraries keep the native policy. */
+static bool os_library_path(const char *path)
+{
+    static const char *roots[] = {"/System", "/usr/lib", "/Library/Apple", "/private/preboot", "/private/var/db/Cryptexes"};
+    for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++) {
+        size_t n = strlen(roots[i]);
+        if (!strncmp(path, roots[i], n) && (!path[n] || path[n] == '/')) return true;
+    }
+    return path[0] == '/' && hao_dsc_has(path);
+}
+static bool guest_app_library(const char *path)
+{
+    char real[PATH_MAX];
+    if (hao_opt.native_app_libs || os_library_path(path)) return false;
+    if (!realpath(path, real) || os_library_path(real)) return false;
+    return hao_is_arm_loadable(real, true);
+}
+
 static bool try_candidate(const char *cand, bool os, void *c)
 {
     struct try_ctx *x = c;
+    bool app = guest_app_library(cand);
+    if (app) {
+        last_load_err[0] = 0;
+        x->guest = load_guest_file(x->loader, cand, false);
+        if (x->guest) return true;
+        goto failed;   /* never bypass guest signature/library validation with a native fallback */
+    }
     hao_image *gl = guest_libcxx(x->loader, cand, os);
     if (!gl && x->cxx) gl = guest_cxx_library(x->loader, cand, os);
     if (gl) { x->guest = gl; return true; }
@@ -3122,6 +3149,7 @@ static bool try_candidate(const char *cand, bool os, void *c)
     last_load_err[0] = 0;
     hao_image *g = load_guest_file(x->loader, cand, os);
     if (g) { x->guest = g; return true; }
+failed:
     if (x->tried) {   /* dyld's "tried:" entry for this path */
         size_t l = strlen(x->tried);
         snprintf(x->tried + l, x->tn - l, "%s'%s' (%s)", l ? ", " : "", cand, last_load_err[0] ? last_load_err : "not loaded");
@@ -3514,19 +3542,20 @@ static int native_bundle_expand(const char *path, const void *ra, char *out, siz
     unlock_loads();
     return ff.found;
 }
-static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n);
-static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, why, n); }
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n);
+static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, why, n); }
 /* An ARM-only dylib dyld cannot open loads as a guest image for any caller: guest code's dlopen, and native code
  * loading the program's own frameworks and plug-ins (NSBundle/CFBundle loading a framework's MH_DYLIB, as Xcode
- * does for its plug-ins). A native caller still gets no untyped guest function address from dlsym. */
+ * does for its plug-ins). Guest callers also keep universal app libraries in the ARM domain.
+ * A native caller still gets no untyped guest function address from dlsym. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
-    (void)ra;
-    return bundle_open(path, flags, true, why, n);
+    bool app = path && guest_caller_image(ra) && guest_app_library(path);
+    return bundle_open(path, flags, true, app, why, n);
 }
-static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n)
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n)
 {
-    if (!path || path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)) return NULL;
+    if (!path || (!app && (path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)))) return NULL;
     const int supported = RTLD_LAZY | RTLD_NOW | RTLD_LOCAL | RTLD_GLOBAL | RTLD_NOLOAD | RTLD_NODELETE | RTLD_FIRST;
     if (flags & ~supported) { snprintf(why, n, "unsupported guest bundle dlopen flags"); return NULL; }
     char real[PATH_MAX];
@@ -3535,12 +3564,12 @@ static void *bundle_open(const char *path, int flags, bool dylib, char *why, siz
     hao_image *im = glib_find(real);
     if (!im && !(flags & RTLD_NOLOAD)) {
         intptr_t slot = glib_slot(real, hao_main_image);
-        im = dylib ? hao_load_dlopen_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
+        im = dylib ? hao_load_dlopen_cb(real, app, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
                    : hao_load_bundle_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
         if (!im) { free(glibs[slot].path); glibs[slot].path = NULL; glibs[slot].img = NULL; }
     }
     if (!im) {
-        if (!(flags & RTLD_NOLOAD)) snprintf(why, n, "%s", last_load_err);
+        snprintf(why, n, "%s", flags & RTLD_NOLOAD ? "guest library not loaded" : last_load_err);
         unlock_loads(); return NULL;
     }
     struct bundle_handle *h;

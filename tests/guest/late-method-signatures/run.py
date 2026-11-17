@@ -45,6 +45,8 @@ for arch in ('arm64','arm64e','x86_64'):
     build(['codesign','-s','-','-f',OUT/('guest.'+arch)])
 env = {k:v for k,v in os.environ.items() if not k.startswith('HAO_')}
 env['HAO_NO_AOT']='1'
+# These helpers exercise native calls into guest methods.
+env['HAO_NATIVE_APP_LIBS']='1'
 cache=OUT/'aot'
 cache.mkdir(exist_ok=True)
 aot_env=dict(env, HAO_CACHE=str(cache), HAO_VERBOSE='1')
