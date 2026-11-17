@@ -21,7 +21,7 @@ typedef struct {
     uint64_t cpu_clear;         /* HAO_CPU_FEATURES=HEX (tests): the optional CPU features (hao/cpufeat.h) the mask
                                    leaves out, which hao then never uses; it can only clear bits (a value that is not
                                    hexadecimal clears all of them) */
-    /* boolean knobs: environment HAO_<NAME>; boot argument hao_<name>=1 for those listed below */
+    /* boolean knobs: environment HAO_<NAME> (empty or 0 = off); boot argument hao_<name>=1 for those listed below */
     bool nx_stats, crash_trace, jit_helpers_only, no_aot, no_chain, no_msgsend, no_closures, no_swiftreg,
          no_block_thunks, no_fixup_thunks, no_struct_thunks, aot_learn, no_jit_memory, bridge_check, bridge_abort,
          no_varsniff, no_libval, bridge_stats, no_ifunits, no_swift_thunks, no_thunks, no_swift_values,

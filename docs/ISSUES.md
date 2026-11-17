@@ -83,6 +83,108 @@ slots and the cursor have no failing test (the windows are a few
 instructions; `sigaction` children now take 400 new records each);
 guest initializers still run with `load_lock` held.
 
+## Diagnostic writes from signal handlers
+
+`hao_diag_write`, which signal handlers use, was said to be
+async-signal-safe but formatted the log's cap line with `snprintf`, and
+while the log waited for its volume (PID 1 before the Data volume) it
+opened it, formatting the boot header and the kept-lines note the same way;
+the fault, abort and sigreturn reports open it too. All three lines are now
+built from fixed strings and hand-converted numbers. A plain
+`hao_diag_write` no longer opens a waiting log (its lines are kept); stdio,
+report blocks and the fatal reports (`hao_diag_write_fatal`) do. A writer
+that found the log waiting and paused before keeping its line lost it once
+the log opened: the reservation and the close are now one atomic word, and
+such a writer writes to the opened log. A writer stopped for over 2 s
+mid-copy is reported in the note ("bytes still being written may be
+incomplete"). Test: `host/diagsig` inserts a library that counts formatting
+and allocation calls made inside the handler (none allowed); with the old
+boot header it fails. Limits: the unified-log ring (`uni_put`, sandboxed
+processes) has one writer at a time; a writer whose owner is suspended
+waits up to 2 s, then drops its line (counted).
+
+## Signature parsing on the native-call path
+
+A native function an interface unit types by aggregate signature kept the
+encoding unparsed in its plan; its first call parsed it (`abi.c` `hao_sig`:
+`malloc`, `strdup`), against the rule that the call path does not allocate
+(a guest signal handler may interrupt a thread inside malloc). The plan now
+parses it when it is made, at bind time; plans typed from ObjC methods and
+blocks were already parsed then. Limits: a native IMP called with another
+selector, or an invoke called by another block, is still retyped per call
+(`hao_bridge_objc_recheck`, `class_copyMethodList`; a new encoding parsed),
+also in a guest signal handler.
+
+## Shared-cache header bounds
+
+`dsc.c` took the arm64e cache header's mapping table on trust: a range
+check that could wrap, file offsets not checked against the file's size (a
+truncated subcache mapped pages that fault with SIGBUS on first read), an
+unbounded subcache count, and mappings past hao's 512 and image segments
+past `HAO_MAX_RANGES` dropped silently. Every mapping is now checked against
+the shared region and its file before anything is reserved or mapped, at
+most 1024 subcaches are read, and a cache or image over a limit is refused
+with the reason. Only `HAO_GUEST_ROOT` (open tier) points hao at a cache
+other than the system's. The main file must also map its own header, which
+hao reads. Test: `guest/dsc` refuses a header whose mapping lies past the
+end of its file and one with no mappings (before: SIGBUS in `dsc_open`).
+
+## Unchecked protection changes
+
+Five protection and handler changes ignored failure: the guest stack's
+guard page, the final segment protections of a loaded image (a failure
+left `__TEXT` and `__DATA_CONST` writable), the read-only copy of a slice,
+the emulated commpage, and the SIGSEGV/SIGBUS handler every native-to-guest
+call goes through. A failed segment or slice protection now fails the load
+with the reason; a commpage page that cannot be made read-only is released
+and treated as not mapped; a guard page or fault handler that cannot be set
+ends the process with a message. No test makes these calls fail.
+
+## Long demangled Swift names
+
+The bind-time rules that read a native Swift function's demangled name
+(narrow async results, async parameters, NSTextAlignment, generic Optional
+results, View self) demangled into stack buffers of 1 to 4 KB, and
+`swift_demangle` cuts a longer name there. The result type is at the end,
+so a narrow async result with a long name was not extended. A name that
+does not fit is now demangled again on the heap. Test: `test_bridge`
+(`demangle`, a 3000-character module).
+
+## Swift value witness table and nil ring capacity
+
+The native value witnesses whose guest calls convert Optional nils were a
+fixed table of 160 (pc, slot) pairs; set-up takes 44 on the host, and each
+native frozen struct a guest lends adds up to six. Past 160 a witness was
+not intercepted, silently. The table is now a growable map keyed by pc
+(lock-free reads), up to about 49 000 functions; past that hao says so once.
+The per-thread ring of nils a witness made for a callback's result held 16
+and was shared by nested callbacks, so an inner one could overwrite an outer
+one's entries unseen. It holds 64, each entry keeps its index, and a lost
+entry is counted, with one fixed line through the async-signal-safe
+diagnostic write (a callback may return inside a guest signal handler; the
+`HAO_BRIDGE_CHECK` line there is built on the stack the same way).
+`--stats` prints both (`hao-swift-witness: entries dropped nils_lost`). Limits: an entry lost past
+64 is still lost (its value keeps the guest's nil); no test reaches either
+bound in a guest; `test_bridge` (`nilring`) drives the ring directly.
+
+## Nesting depth in C++ mangled names
+
+The C++ name reader (`bridge.c`, used for `this`-returning constructors and
+`bool` parameters) bounded every nesting at 64 except template argument
+packs (`J...E`) and parameter declarations (`Ty`, `Tn`), which recursed
+once per character. A name of a million nested packs overflowed the stack.
+Packs now count toward the same bound and declarations are read in a loop;
+a deeper name is refused (no rewrite) as other over-deep names are. Test:
+`test_bridge` (`cxxbool`).
+
+## On/off environment switches set to 0
+
+An on/off `HAO_*` switch was on whenever it was present, so `HAO_INTERP=0`
+or `HAO_NO_AOT=0` turned it on. An empty value and `0` now count as absent;
+any other value turns the switch on. Numeric switches (`HAO_VERBOSE`,
+`HAO_WATCHDOG`, ...) and boot arguments (`hao_<knob>=1` only) are unchanged.
+Test: `tests/aot/opts_test.c`.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

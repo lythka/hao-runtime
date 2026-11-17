@@ -64,6 +64,7 @@
 #include <string.h>
 #include <objc/runtime.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define MAP_TEXT_STUBS 0x8   /* dyld_cache_mapping_and_slide_info flags */
@@ -136,20 +137,46 @@ static uint64_t uleb(const uint8_t **p, const uint8_t *end)
 
 /* ------------------------------------------------------------ mapping */
 
+/* A cache file whose header hao does not use: said, as it is the system's. */
+static bool bad_file(int fd, const char *path, const char *why)
+{
+    fprintf(stderr, "hao: arm64e shared cache %s: %s\n", path, why);
+    close(fd);
+    return false;
+}
+
+#define DSC_MAX_SUBCACHES 1024
 static bool add_file(const char *path, bool main_file)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
     uint8_t h[0x4000];
     ssize_t n = pread(fd, h, sizeof h, 0);
+    struct stat st;
     if (n < 0x200 || memcmp(h, "dyld_v1  arm64e", 15) != 0) { close(fd); return false; }
+    if (fstat(fd, &st) != 0) return bad_file(fd, path, "cannot stat it");
     uint32_t moff = u32(h + 0x10), mcount = u32(h + 0x14), soff = u32(h + 0x138), scount = u32(h + 0x13c);
     bool with_slide = soff && scount;
     uint32_t cnt = with_slide ? scount : mcount, esz = with_slide ? 56 : 32, off = with_slide ? soff : moff;
-    if ((uint64_t)off + (uint64_t)cnt * esz > (uint64_t)n) { close(fd); return false; }
+    if ((uint64_t)off + (uint64_t)cnt * esz > (uint64_t)n) return bad_file(fd, path, "mapping table outside the header");
+    /* every mapping inside the shared region and the file, before anything is reserved or mapped */
+    uint64_t start = main_file ? u64(h + 0xe0) : D.start, size = main_file ? u64(h + 0xe8) : D.size;
+    if (!size || start + size < start) return bad_file(fd, path, "shared region range wraps");
+    if (cnt > sizeof D.maps / sizeof *D.maps - (size_t)D.nmaps) return bad_file(fd, path, "more mappings than hao keeps");
+    bool maps_header = false;   /* hao reads the main header at the region's start (read_objc_opts) */
+    for (uint32_t k = 0; k < cnt; k++) {
+        const uint8_t *e = h + off + (size_t)k * esz;
+        uint64_t addr = u64(e), len = u64(e + 8), fileoff = u64(e + 16);
+        if (addr < start || len > size || addr - start > size - len) return bad_file(fd, path, "a mapping outside the shared region");
+        if (fileoff > (uint64_t)st.st_size || len > (uint64_t)st.st_size - fileoff)
+            return bad_file(fd, path, "a mapping past the end of the file");
+        maps_header |= addr == start && fileoff == 0 && len >= (uint64_t)n;
+    }
+    if (main_file && !maps_header) return bad_file(fd, path, "no mapping holds the header");
+    if (main_file && u32(h + 0x18c) > DSC_MAX_SUBCACHES) return bad_file(fd, path, "too many subcaches");
     if (main_file) {
-        D.start = u64(h + 0xe0);
-        D.size = u64(h + 0xe8);
+        D.start = start;
+        D.size = size;
         void *want = (void *)(uintptr_t)D.start;
         void *r = mmap(want, D.size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (r == MAP_FAILED) { close(fd); return false; }
@@ -160,14 +187,13 @@ static bool add_file(const char *path, bool main_file)
             D.code_delta = (int64_t)((uint64_t)(uintptr_t)a - (uint64_t)(uintptr_t)r);
         }
     }
-    for (uint32_t k = 0; k < cnt && D.nmaps < 512; k++) {
+    for (uint32_t k = 0; k < cnt; k++) {
         const uint8_t *e = h + off + (size_t)k * esz;
         dmap *m = &D.maps[D.nmaps];
         memset(m, 0, sizeof *m);
         m->addr = u64(e);
         m->size = u64(e + 8);
         m->fileoff = u64(e + 16);
-        if (m->addr < D.start || m->addr + m->size > D.start + D.size) continue;
         if (with_slide) {
             uint64_t sio = u64(e + 24), sis = u64(e + 32);
             m->flags = u64(e + 40);
@@ -300,6 +326,7 @@ static void build_ranges(void)
  * selector base instead of selector references. */
 static void read_objc_opts(void)
 {
+    if (!mapped_span(D.start, 0x1e0)) return;   /* add_file requires it; a mapping may still have failed */
     const uint8_t *h = at(D.start);
     if (u32(h + 0x10) < 0x1e0) return;   /* the header ends before objcOptsOffset */
     uint64_t off = u64(h + 0x1d0), size = u64(h + 0x1d8);
@@ -1936,12 +1963,17 @@ hao_image *hao_dsc_load(const char *path, hao_mapped_fn mapped, void *ctx, char 
                 img->identity_ranges[q][1] = sg->vmaddr + sg->vmsize + img->slide;
             }
             if (!strncmp(sg->segname, "__TEXT", 16)) { img->pref_base = sg->vmaddr; img->vmsize = sg->vmsize; }
-            if (sg->vmsize && strncmp(sg->segname, "__LINKEDIT", 16) && img->nseg < HAO_MAX_RANGES) {
+            bool kept = sg->vmsize && strncmp(sg->segname, "__LINKEDIT", 16), code = sg->initprot & VM_PROT_EXECUTE;
+            if ((kept && img->nseg == HAO_MAX_RANGES) || (code && img->ncode == HAO_MAX_RANGES)) {
+                bad = "more segments than hao keeps";
+                break;
+            }
+            if (kept) {
                 img->seg_lo[img->nseg] = sg->vmaddr + img->slide;
                 img->seg_hi[img->nseg] = sg->vmaddr + sg->vmsize + img->slide;
                 img->nseg++;
             }
-            if ((sg->initprot & VM_PROT_EXECUTE) && img->ncode < HAO_MAX_RANGES) {
+            if (code) {
                 img->code_lo[img->ncode] = sg->vmaddr + img->slide;
                 img->code_hi[img->ncode] = sg->vmaddr + sg->vmsize + img->slide;
                 img->ncode++;

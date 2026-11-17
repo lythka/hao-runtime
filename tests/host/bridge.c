@@ -26,6 +26,7 @@
 #include "hao/runtime.h"
 #include "hao/bridge.h"
 #include "hao/gen_stamp.h"
+#include "hao/swiftvalue.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -142,6 +143,7 @@ int main(int argc, char **argv)
         {"__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEEb", "__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEEa"},
         {"__Z1fPFbbE", "__Z1fPFaaE"},
         {"__Z1fiv", "__Z1fiv"},                                                 /* none */
+        {"__Z1fIJibEEvb", "__Z1fIJiaEEva"},                                     /* a template argument pack */
         {"__Z1fbbbbbbb", NULL},                                                 /* more than HAO_CXX_BOOL_MAX */
         {"__ZN3hao1S3setEb.cold.1", NULL}, {"__ZTVN3hao1SE", NULL}, {"__ZN3hao1xE", NULL}, {"__ZZ3foovE1b", NULL},
         {"_bool_fn", NULL},
@@ -156,6 +158,23 @@ int main(int argc, char **argv)
         for (int i = 0; i < n; i++) all[off[i]] = all[off[i]] == 'b' ? 'a' : '?';
         if ((n < 0) != !bools[k].all || (n >= 0 && strcmp(all, bools[k].all)))
             if (!bmis++) snprintf(bfirst, sizeof bfirst, ": %s (%d)", bools[k].sym, n);
+    }
+    /* nested packs and parameter declarations are bounded like other nestings: a long name is refused, not recursed */
+    {
+        size_t deep = 1000000;
+        char *nm = malloc(2 * deep + 32), *q = nm;
+        q += sprintf(q, "__Z1fI");
+        memset(q, 'J', deep); q += deep;
+        *q++ = 'i';
+        memset(q, 'E', deep); q += deep;
+        strcpy(q, "Evb");
+        size_t off[HAO_CXX_BOOL_MAX];
+        if (hao_cxx_bool_types(nm, off) != -1 && !bmis++) snprintf(bfirst, sizeof bfirst, ": %zu nested packs accepted", deep);
+        q = nm + sprintf(nm, "__Z1fI");
+        for (size_t k = 0; k < deep / 2; k++) { *q++ = 'T'; *q++ = 'y'; }
+        strcpy(q, "bEvb");
+        if (hao_cxx_bool_types(nm, off) != 2 && !bmis++) snprintf(bfirst, sizeof bfirst, ": a long Ty chain");
+        free(nm);
     }
     printf("cxxbool    %s  bool types in C++ function names (BOOL's other spelling on x86_64)%s\n", bmis ? "FAIL" : "PASS", bfirst);
     if (bmis) fail = 1;
@@ -196,6 +215,52 @@ int main(int argc, char **argv)
     printf("demangle   %s  Swift %s%s, C++ %s%s\n", s == 0 && x == 0 ? "PASS" : "FAIL", s < 0 ? "no demangler" : s ? "differs: " : "as expected",
            s > 0 ? sw : "", x < 0 ? "no demangler" : x ? "differs: " : "as expected", x > 0 ? cx : "");
     if (s || x) fail = 1;
+    /* a demangled name longer than the rules' stack buffers is read whole: ready() async -> Bool in a
+     * 3000-character module keeps its narrow result */
+    if (s >= 0) {
+        char long_sym[3100];
+        int at = snprintf(long_sym, sizeof long_sym, "_$s3000");
+        memset(long_sym + at, 'm', 3000);
+        strcpy(long_sym + at + 3000, "5readySbyYaF");
+        char kind = hao_swift_async_result_kind(long_sym);
+        printf("demangle   %s  a long demangled name is read whole (kind %d)\n", kind == 'b' ? "PASS" : "FAIL", kind);
+        if (kind != 'b') fail = 1;
+    }
+    /* the nil ring of callback results (swiftvalue.c): an outer callback's entries survive a nested one that
+     * stays within the ring and are restored; past the ring they are counted lost, never taken for others */
+    {
+        hao_thread *t = calloc(1, sizeof *t);
+        uint64_t outer[4], inner, V = (uint64_t)(uintptr_t)outer, W = (uint64_t)(uintptr_t)&inner;
+        int rmis = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            unsigned nested = pass ? HAO_SWIFT_MADE_RING + 4 : 8;   /* the nested callback's notes */
+            uint64_t lost0 = hao_swift_witness_lost();
+            t->swift_made_n = 0;
+            for (unsigned i = 0; i < 4; i++) {   /* the outer callback's nils, still in the guest's bits (1) */
+                outer[i] = 1;
+                unsigned k = t->swift_made_n++ % HAO_SWIFT_MADE_RING;
+                t->swift_made[k].value = V; t->swift_made[k].at = (uint64_t)(uintptr_t)&outer[i];
+                t->swift_made[k].native = 2; t->swift_made[k].arm = 1; t->swift_made[k].idx = k;
+            }
+            unsigned mark = t->swift_made_n;
+            for (unsigned i = 0; i < nested; i++) {
+                inner = 1;
+                unsigned idx = t->swift_made_n++, k = idx % HAO_SWIFT_MADE_RING;
+                t->swift_made[k].value = W; t->swift_made[k].at = (uint64_t)(uintptr_t)&inner;
+                t->swift_made[k].native = 2; t->swift_made[k].arm = 1; t->swift_made[k].idx = idx;
+            }
+            hao_swift_witness_result(t, mark, 0);   /* the nested callback returns: no indirect result */
+            hao_swift_witness_result(t, 0, V);
+            uint64_t lost = hao_swift_witness_lost() - lost0;
+            bool ok = pass ? lost == 4 && outer[0] == 1 && outer[3] == 1 : lost == 0 && outer[0] == 2 && outer[3] == 2;
+            if (!ok && !rmis++) printf("nilring    FAIL  nested %u: lost %llu, outer bits %llu\n", nested,
+                                       (unsigned long long)lost, (unsigned long long)outer[0]);
+            if (t->swift_made_n != 0 && !rmis++) printf("nilring    FAIL  not reset to the mark\n");
+        }
+        if (!rmis) printf("nilring    PASS  nested callbacks keep or count the outer's ring entries\n");
+        if (rmis) fail = 1;
+        free(t);
+    }
     if (bad) fail = 1;
     return fail;
 }

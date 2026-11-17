@@ -1893,6 +1893,7 @@ void hao_swiftmeta_stats(void)
 {
     hao_swift_result_stats();
     hao_swift_objects_stats();
+    hao_swift_witness_stats();
     uint64_t od, oa, oc;
     hao_objc_late_stats(&od, &oa, &oc);
     if (od || oc)

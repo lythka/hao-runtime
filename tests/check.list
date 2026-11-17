@@ -91,6 +91,7 @@ guest/objcvascope	300	par	python3.14 -I tests/guest/objcvascope.py
 host/runtime	300	par	tests/host/runtime.sh
 host/chain	300	par	tests/host/chain.sh
 host/commpage	300	par	tests/host/commpage.sh
+host/diagsig	120	par	tests/host/diagsig.sh
 host/contract	60	par	python3.14 -I -B tests/tools/test_contract.py
 host/catalog-gate	60	par	python3.14 -I -B tests/tools/test_catalog_gate.py
 host/sigpolicy	300	par	tests/host/sigpolicy.sh
