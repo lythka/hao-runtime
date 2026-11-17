@@ -423,6 +423,16 @@ HAO_CACHE="$OUT/v" timeout -s KILL 120 "$HAO" --aot "$VH" >"$OUT/v2.out" 2>&1; r
 [ $r2 != 0 ] && ! grep -q "skipped" "$OUT/v2.out" && grep -q "requires library validation" "$OUT/v2.out" && [ "$(ls "$OUT/v" | wc -l)" = "$n" ] &&
     pass "V hao --aot, hardened program, HAO_CACHE: not skipped as valid, nothing written there" ||
     bad "V hao --aot hardened: rc $r2: $(head -c 300 "$OUT/v2.out")"
+# the path names the ad hoc program while --check verifies it, and the hardened one (whose cache is in
+# HAO_CACHE) once that descriptor is closed (tests/aot/swapclose.c): the file checked must be the one verified
+clang -arch x86_64 -O1 -dynamiclib -o "$OUT/swapclose.dylib" "$here/swapclose.c" && codesign -s - -f "$OUT/swapclose.dylib" 2>/dev/null || exit 1
+cp "$G" "$OUT/vswap" && cp "$VH" "$OUT/vswap.with"
+timeout -s KILL 60 env DYLD_INSERT_LIBRARIES="$OUT/swapclose.dylib" SWAP_FILE="$OUT/vswap" SWAP_WITH="$OUT/vswap.with" \
+    HAO_CACHE="$OUT/v" "$HAO" --aot --check "$OUT/vswap" >"$OUT/v3.out" 2>&1; r3=$?
+if [ -e "$OUT/vswap.with" ]; then bad "V --check, path swapped: the swap did not happen: $(head -c 300 "$OUT/v3.out")"
+elif [ $r3 = 1 ] && grep -q "changed while it was checked" "$OUT/v3.out" && ! grep -q ": valid" "$OUT/v3.out"; then
+    pass "V --check, path swapped from the ad hoc to the hardened program after verification: not checked"
+else bad "V --check, path swapped: rc $r3: $(head -c 300 "$OUT/v3.out")"; fi
 
 # --- F: the policy unit test
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/policy" "$here/policy.c" "$B/libhaocore.a" && codesign -s - -f "$OUT/policy" 2>/dev/null
