@@ -1,5 +1,18 @@
 # Runtime issues and measured scope
 
+## Shared-cache header bounds
+
+`dsc.c` took the arm64e cache header's mapping table on trust: a range
+check that could wrap, file offsets not checked against the file's size (a
+truncated subcache mapped pages that fault with SIGBUS on first read), an
+unbounded subcache count, and mappings past hao's 512 and image segments
+past `HAO_MAX_RANGES` dropped silently. Every mapping is now checked against
+the shared region and its file before anything is reserved or mapped, at
+most 1024 subcaches are read, and a cache or image over a limit is refused
+with the reason. Only `HAO_GUEST_ROOT` (open tier) points hao at a cache
+other than the system's. Test: `guest/dsc` refuses a header whose mapping
+lies past the end of its file (before: SIGBUS in `dsc_open`).
+
 ## Unchecked protection changes
 
 Five protection and handler changes ignored failure: the guest stack's
