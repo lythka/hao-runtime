@@ -241,8 +241,8 @@ hao_image *hao_map_image_only(const char *path, char *err, size_t errlen);
  * another thread may hold it from a lookup that raced the release. */
 void hao_unload_image(hao_image *img);
 /* After every adaptation of a loaded image (its registration, before its initializers), as dyld
- * does: its SG_READ_ONLY segments become read-only. On-disk images only. False if a protection
- * change failed (the segment stays as it was). */
+ * does: its SG_READ_ONLY segments become read-only. On-disk images only. False if a segment could
+ * not be sealed (the others are; a later call seals only what is left). */
 bool hao_image_seal(hao_image *img);
 /* Does [a, a+n) overlap a sealed segment of any image */
 bool hao_image_sealed_overlap(uint64_t a, uint64_t n);

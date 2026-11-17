@@ -886,6 +886,8 @@ void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
 /* Each element's outer nils in the witness's encoding, in place; their
  * original bits recorded by element index and offset (rec, count *nrec). */
 typedef struct { uint64_t at, bits; } witness_bits;
+#define WITNESS_NON_BITWISE_TAKABLE 0x00100000u   /* ValueWitnessFlags IsNonBitwiseTakable (swift/ABI/MetadataValues.h) */
+
 static bool witness_encode_elements(const void *type, char *base, uint64_t count, witness_bits **rec, size_t *nrec)
 {
     uint64_t stride = vwt(type)->stride;
@@ -920,9 +922,11 @@ static bool witness_array(hao_thread *t, uint64_t pc, unsigned slot, const void 
     size_t nin = 0, nold = 0;
     char *scratch = NULL;
     if (slot == ARRAY_DESTROY) {
-        /* static values in an image's read-only constant data: destroyed as a converted copy (destroy only
-         * reads them, and natively nothing writes there) */
-        if (hao_image_sealed_at((uint64_t)(uintptr_t)dest, (size_t)(count * stride))) {
+        /* static values in an image's read-only constant data: destroyed as a converted copy (natively
+         * nothing writes there). Only a bitwise-takable type may move (WITNESS_NON_BITWISE_TAKABLE: weak
+         * references and some imported C++ values are not); such values need run-time registration and
+         * cannot be static constants, so those stay in place */
+        if (!(vwt(type)->flags & WITNESS_NON_BITWISE_TAKABLE) && hao_image_sealed_at((uint64_t)(uintptr_t)dest, (size_t)(count * stride))) {
             if (!(scratch = malloc((size_t)(count * stride)))) return false;
             memcpy(scratch,dest,(size_t)(count * stride));
             dest = scratch;
@@ -1003,7 +1007,8 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
             } else witness_encode(src,&in);                    /* owned by the callee */
         } else if (slot == 1 || slot == 12) {
             witness_walk(type,dest,&in);
-            if (slot == 1 && in.count > 0 && hao_image_sealed_at((uint64_t)(uintptr_t)dest, (size_t)v->size)) {
+            if (slot == 1 && in.count > 0 && !(vwt(type)->flags & WITNESS_NON_BITWISE_TAKABLE) &&
+                hao_image_sealed_at((uint64_t)(uintptr_t)dest, (size_t)v->size)) {
                 /* a static value in read-only constant data: destroyed as a converted copy (ARRAY_DESTROY) */
                 scratch = v->size <= sizeof local ? local : malloc((size_t)v->size);
                 if (!scratch) return false;

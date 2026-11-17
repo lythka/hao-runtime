@@ -696,6 +696,7 @@ static void seal_tests(const uint8_t *seed, size_t n)
          hao_image_sealed_cas(a, old, old ^ 0x5a5a) && *(const uint64_t *)(uintptr_t)a == (old ^ 0x5a5a) &&
          !hao_image_sealed_cas(a, old, 1) && prot_at(a) == VM_PROT_READ;
     note(ok, "seal: one word written through hao_image_sealed_cas, the page read-only again");
+    note(ok && hao_image_seal(img) && img->nsealed == 1, "seal: sealing again seals nothing twice");
     if (img) hao_unload_image(img);
 }
 
