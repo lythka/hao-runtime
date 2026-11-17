@@ -50,19 +50,25 @@ a bundle.
 The payload must hold exactly the files its `payload-manifest.json` lists,
 each with its sha256: a file it does not list (a LaunchDaemon added under
 `root/`, for example), a symbolic link or special file, a missing file other
-than an AOT cache (made after the first boot), or a set-ID or sticky file
-under `root/` fails the install before the first write. The installer then
-copies every payload file it will read into a private directory, checks the
-copy's sha256 against the manifest and reads only the copy, so a payload that
-changes during the install changes nothing that is installed. It installs
-only the listed `root/` files, root:wheel, 0755 or 0644. The manifest's
+than an AOT cache (made after the first boot), a listed file whose sha256
+differs, a set-ID or sticky file under `root/`, or two `root/` names that are
+one file on a case-insensitive volume fails the install before the first
+write. The installer then copies every payload file it will read into a
+private directory used through a descriptor, checks the copy's sha256
+against the manifest and reads only the copy (checked by inode), so a
+payload that changes during the install changes nothing that is installed.
+It installs only the listed `root/` files, root:wheel, 0755 or 0644, each a
+new file renamed into place through directory descriptors, and opens
+programs to embed and files to replace the same way, following no link. The manifest's
 hashes give consistency, not authenticity: whoever can rewrite the payload
 can rewrite its manifest too, so the image builder must take both from an
 authenticated source.
 
-A hao stub (an x86_64 executable that links `libhao.dylib`, other than hao's
-launcher with its `__TEXT,__hao_cli` marker) must name its file's ARM slice
-in `__TEXT,__hao_slice`. The installer embeds no stub that does not, gives a
+A hao stub (an executable x86 slice, of any subtype, that names libhao in a
+library command of any kind or as a string; the payload's own
+`/usr/libexec/hao` with its `__TEXT,__hao_cli` marker is the launcher, the
+marker anywhere else proves nothing) must name its file's ARM slice in
+`__TEXT,__hao_slice`. The installer embeds no stub that does not, gives a
 manifest program that still carries an older hao stub this payload's stub
 when that yields the recorded result, and fails if any other file in the
 System volume carries a stub without that record.
@@ -353,7 +359,8 @@ image with that cdhash ever loads the cache.
 `/usr/lib/hao/stub-identities`, each as `hao --aot FILE` above. A list that is
 not a root-owned regular file writable only by root (mode and ACL), or whose
 directories from / are not, is not used. `hao --aot --auto` marks a run done
-only when every program succeeded. A program whose cache in a directory this process reads already passes the
+only when every listed program is there and succeeded, and believes a marker
+only under the same ownership rules. A program whose cache in a directory this process reads already passes the
 loader's checks is skipped; `hao --aot --check` runs those checks and writes
 nothing.
 
@@ -538,8 +545,9 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - A stub seals its program's launch and library constraints (signature
   slots 8-11) byte for byte; `tools/hao-embed` refuses a program with a
   constraint codesign cannot express (a category constraint) unless
-  `releases/dropped-constraints.txt` lists it, and then the stub has none
-  for that slot. A self constraint that asks for a platform binary cannot be
+  `releases/dropped-constraints.txt` pins that blob of that build (path,
+  slot, ARM cdhash, blob sha256), and then the stub has none for that slot;
+  the identity gate fails a stub missing any constraint not pinned there. A self constraint that asks for a platform binary cannot be
   met by an ad hoc stub, so such a program does not start where the kernel
   enforces launch constraints. Launch constraints that come from a trust
   cache rather than the signature do not apply to a stub.
