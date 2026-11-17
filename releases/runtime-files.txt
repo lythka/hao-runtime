@@ -454,6 +454,8 @@ tests/guest/optwitness.swift
 tests/guest/overlaynil.sh
 tests/guest/overlaynil.swift
 tests/guest/overlaynil.facts
+tests/guest/poddestroy.sh
+tests/guest/poddestroy.swift
 tests/guest/refuse.m
 tests/guest/refuse.sh
 tests/guest/refusehelper.h
