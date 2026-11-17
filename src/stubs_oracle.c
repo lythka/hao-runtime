@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 hao_image *hao_image_for_code(uint64_t a) { (void)a; return 0; }
+hao_image *hao_image_for_code_peek(uint64_t a) { (void)a; return 0; }
 int hao_code_aliased;
 const void *hao_code_ptr_slow(uint64_t a) { return (const void *)(uintptr_t)a; }
 const void *hao_code_view_slow(uint64_t a, size_t n) { (void)n; return (const void *)(uintptr_t)a; }

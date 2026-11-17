@@ -11,8 +11,9 @@
  *             once and many times: every handler sees a pc inside the loop
  *             with registers that agree with it, and every thread resumes
  *             exactly where it was
- *   locatefp  the same in a loop of scalar FADD and FMAX (instructions with
- *             an interpreter fallback path in the block), pc checks only
+ *   locatefp  the same in a loop of scalar FADD, FMAX and FCVTNS
+ *             (instructions with an interpreter fallback path in the
+ *             block), pc checks only
  *   native    a guest handler on native threads that never ran guest code
  *             and are inside malloc
  *   mlocked   the same on native threads that hold every malloc zone lock
@@ -318,8 +319,9 @@ __asm__(".text\n .p2align 2\n .globl _loc_spin\n_loc_spin:\n"
         " ldr w11, [x0]\n cmp w11, #0\n b.eq Lloc_loop\n"
         " sub x0, x9, x10\n ret\n");
 long loc_spin(volatile int *stop, volatile int *inloop);
-#define LOC_FP_PAIR "fadd d0, d0, d1\n fmax d2, d2, d0\n"
-#define LOC_FP4 LOC_FP_PAIR LOC_FP_PAIR LOC_FP_PAIR LOC_FP_PAIR
+#define LOC_FP_PAIR "fadd d0, d0, d1\n fcvtns x3, d0\n"
+#define LOC_FP_PAIR2 "fmax d2, d2, d0\n fcvtns x4, d2\n"
+#define LOC_FP4 LOC_FP_PAIR LOC_FP_PAIR2 LOC_FP_PAIR LOC_FP_PAIR2
 __asm__(".text\n .p2align 2\n .globl _loc_spin_fp\n_loc_spin_fp:\n"
         " fmov d0, #1.0\n fmov d1, #1.0\n mov w11, #1\n str w11, [x1]\n"
         "Lloc_fp_loop:\n" LOC_FP4 LOC_FP4 LOC_FP4 LOC_FP4 LOC_FP4 LOC_FP4
