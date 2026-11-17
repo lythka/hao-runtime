@@ -104,3 +104,5 @@ int collect_witness_patches(const void *type, const void *value, empty_patch *ou
  * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */
 int collect_inline_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
                            int (*known_layout)(const void *));
+/* Reset the walk's locks in a fork child (swiftvalue.c hao_swift_value_fork_child). */
+void recipe_fork_child(void);
