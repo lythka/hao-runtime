@@ -1,5 +1,18 @@
 # Runtime issues and measured scope
 
+## hao-trust-list hashed one read and verified another
+
+`hao-trust-list` computed a file's cdhash from one read and then ran
+`codesign --verify -R='anchor apple'` on the path, which codesign opened
+again. A file replaced between the two (an ad hoc program read, an Apple one
+verified) put the ad hoc program's cdhash in `trusted-cdhashes`. It now
+writes the bytes it hashed to a new file in a private directory (with the
+bundle's Info.plist beside it when the signature binds one: a bundle's
+Contents/Info.plist or a framework version's Resources/Info.plist) and
+verifies that copy. Test: `tests/tools/test_trustlist.py` (the change is
+listed by the old tool, not by the new one). Measured on 26B131: the list
+is byte-identical to the one the old tool made (1,183 of 1,196 files).
+
 ## Launch constraints were left out of stub signatures
 
 A program's launch and library constraints (code-signature slots 8-11:

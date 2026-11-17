@@ -9,7 +9,8 @@
 # tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
 # tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/test_onmac_pin.py),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
-# tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike).
+# tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike) and
+# tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
 # Supply KC explicitly for read-only kernel collection checks; stamp cases
 # are skipped without it. Exit 1 if any case failed.
@@ -271,5 +272,10 @@ OUT=$OUT/codeid B=$B "$here/codeid.sh" || bad "tests/tools/codeid.sh"
 if make -s -C "$repo" B="$B" "$B/test_macho" >"$OUT/codesig.build.log" 2>&1 &&
    r=$(python3 -I "$here/test_codesig.py" "$B/test_macho" "$OUT" 2>&1); then pass "code signature readers: $r"
 else bad "code signature readers: ${r:-$(tail -3 "$OUT/codesig.build.log")}"; fi
+# --- hao-trust-list lists the cdhash of the bytes codesign checked (one read, a private copy)
+BX=$(ls -d /System/Applications/*.app/Contents/MacOS/* 2>/dev/null | grep -v ' ' | head -1)   # an Apple bundle's main executable
+if r=$(timeout 300 python3 -I "$here/test_trustlist.py" "$G" /bin/ls ${BX:+"$BX"} 2>&1); then
+    pass "hao-trust-list: $(echo "$r" | tr '\n' ';')"
+else bad "hao-trust-list: $(echo "$r" | grep FAIL)"; fi
 echo "tools: $fails failed"
 exit $((fails != 0))
