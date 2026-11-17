@@ -953,7 +953,10 @@ libswiftCore (measured), where no interposition reaches. Guest calls of an
 opaque existential's own witnesses (`Any`, `any P`) are intercepted like an
 Optional's. A struct or tuple whose reflection reports no fields but
 has bytes (built without reflection metadata) has unknown fields: refused,
-not taken as empty.
+not taken as empty. An element of a trivially destroyed (POD) type is not
+walked at its storage's final destruction, which reads nothing; before,
+such storage of `UnsafePointer<Int8>?` was refused there
+(`guest/poddestroy`: arrays and a generic box released by native code).
 
 Closed gaps: guest calls of native Optional, tuple and array witnesses
 handed an uncertified value over unchanged without any decision; a lent
