@@ -21,7 +21,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-tools-identity)}
+OUT=${OUT:-$(mktemp -d -t hao-pkgtest-identity)}
 B=${B:-$repo/build}
 EMBED=${EMBED:-$repo/tools/hao-embed}
 GATE=${GATE:-$repo/tools/stub_identity_gate.py}

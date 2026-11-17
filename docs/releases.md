@@ -42,7 +42,7 @@ marked for shipping, and rejects extra objects.
 ## Payload manifest
 
 `tools/hao-image-payload` writes `OUT/payload-manifest.json`. It is the
-contract between hao-runtime and the image builder, checked by the hao-assets
+contract between hao-runtime and the image builder, checked by the hao-contract
 `payload` check (vendored in `tools/hao-contract/`). It records:
 
 - `version`: `OSBUILD-COMMIT12`;
