@@ -32,12 +32,17 @@ bad() { echo "FAIL $*"; fails=$((fails + 1)); }
 printf 'int main(void) { return 7; }\n' >prog.c
 clang -arch arm64e -O1 -o plain prog.c && codesign -s - -f plain 2>/dev/null || exit 2
 cp plain hardened && codesign -s - -f -o runtime hardened 2>/dev/null || exit 2
-# the library-validation flag without the hardened runtime: its stub is not hardened, so the embedded
-# process is open-tier and reads the switches (a hardened stub's process is guarded and reads none)
+# the library-validation flag without the hardened runtime. hao-embed gives its stub the hardened runtime,
+# whose process is guarded and reads no switch; its stub's slice is signed again without it here, so the
+# embedded process is open-tier and the library-validation rule is what refuses the switches
 cp plain library && codesign -s - -f -o library library 2>/dev/null || exit 2
 for p in plain hardened library; do
     python3 "$repo/tools/hao-embed" --stub "$B/hao-stub" --host-test -o "emb/$p" "$p" >/dev/null || exit 2
 done
+lipo emb/library -thin x86_64 -output stub.x86 && codesign -d --entitlements :- stub.x86 >stub.ent 2>/dev/null &&
+    codesign -s - -f --entitlements stub.ent -i "$(codesign -dv stub.x86 2>&1 | sed -n 's/^Identifier=//p')" stub.x86 2>/dev/null &&
+    lipo emb/library -replace x86_64 stub.x86 -output emb/library.open && mv emb/library.open emb/library || exit 2
+codesign -dv --arch x86_64 emb/library 2>&1 | grep -q 'flags=.*runtime' && exit 2
 clang -arch x86_64 -arch arm64 -dynamiclib -o if/mark.thunks "$here/lvswitchesmark.c" && codesign -s - -f if/mark.thunks 2>/dev/null || exit 2
 chmod 644 if/mark.thunks
 : >trust.list
