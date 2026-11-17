@@ -1,6 +1,7 @@
 /* W^X (tests/guest/wx.sh): after translated code, chained branches and native->guest callbacks (qsort's
  * comparator, a block run by dispatch) have run, no memory of the process is writable and executable at
- * once. Prints the count; each such region goes to stderr. The program's constant data (__DATA_CONST,
+ * once, and no writable mapping of executable memory stays. Prints the count; each such region goes to
+ * stderr. The program's constant data (__DATA_CONST,
  * a table of pointers that needed fixups) is read-only by the time main runs, as dyld leaves it. With
  * -DWX_LIB only wx_regions, for wx.swift. */
 #include <dispatch/dispatch.h>
@@ -47,25 +48,36 @@ static int cmp(const void *a, const void *b)
 static int (*const table[])(const void *, const void *) = {cmp};
 #endif
 
+/* Regions that are writable and executable, plus writable regions that map the same memory object as an
+ * executable one (a write view of code), Rosetta's own memory aside */
 int wx_regions(void)
 {
-    int wx = 0;
+    enum { MAXR = 4096 };
+    static struct { uint64_t lo, hi; unsigned obj; int prot, tag; } r[MAXR];
+    int n = 0, wx = 0;
     mach_vm_address_t a = 0;
-    for (;;) {
+    while (n < MAXR) {
         mach_vm_size_t size = 0;
         natural_t depth = 0;
         vm_region_submap_info_data_64_t info;
         mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
         if (mach_vm_region_recurse(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &cnt) != KERN_SUCCESS)
             break;
-        /* Rosetta's own memory (tags 230-239), present in every x86_64 process on an Apple-silicon Mac */
-        bool rosetta = info.user_tag >= 230 && info.user_tag <= 239;
-        if ((info.protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) == (VM_PROT_WRITE | VM_PROT_EXECUTE) && !rosetta) {
-            wx++;
-            fprintf(stderr, "wx: [%#llx, %#llx) prot %d max %d tag %u\n", (unsigned long long)a, (unsigned long long)(a + size),
-                    info.protection, info.max_protection, info.user_tag);
-        }
+        r[n].lo = a; r[n].hi = a + size; r[n].obj = info.object_id; r[n].prot = info.protection; r[n].tag = info.user_tag;
+        n++;
         a += size;
+    }
+    for (int i = 0; i < n; i++) {
+        /* Rosetta's own memory (tags 230-239), present in every x86_64 process on an Apple-silicon Mac */
+        if (r[i].tag >= 230 && r[i].tag <= 239) continue;
+        bool w = r[i].prot & VM_PROT_WRITE, x = r[i].prot & VM_PROT_EXECUTE, alias = false;
+        for (int j = 0; w && !x && r[i].obj && j < n; j++)
+            alias |= j != i && r[j].obj == r[i].obj && (r[j].prot & VM_PROT_EXECUTE) && !(r[j].tag >= 230 && r[j].tag <= 239);
+        if ((w && x) || alias) {
+            wx++;
+            fprintf(stderr, "wx: [%#llx, %#llx) prot %d tag %d%s\n", (unsigned long long)r[i].lo, (unsigned long long)r[i].hi,
+                    r[i].prot, r[i].tag, alias ? " (writable view of executable memory)" : "");
+        }
     }
     return wx;
 }

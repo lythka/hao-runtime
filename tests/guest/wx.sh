@@ -1,7 +1,7 @@
 #!/bin/sh
-# W^X: hao's executable memory (code cache, thunks, Swift islands) is never writable and executable at once
-# while guest code runs (tests/guest/wx.c, wx.swift). Each program counts the regions of its process that are
-# both (Rosetta's own memory aside); natively 0. Built for arm64 (native reference) and arm64e (under hao:
+# W^X: hao's executable memory (code cache, thunks, Swift islands) is never writable and executable at once,
+# nor writable through another mapping, while guest code runs (tests/guest/wx.c, wx.swift). Each program counts
+# the regions of its process that are either (Rosetta's own memory aside); natively 0. Built for arm64 (native reference) and arm64e (under hao:
 # JIT, --interp, AOT); same output.
 #   OUT=dir HAO=build/hao [T=60] tests/guest/wx.sh     exit 1 on any difference
 set -u
