@@ -1667,7 +1667,7 @@ static void fp_store_checked(tctx *t, unsigned rd, int dbl, uint32_t insn, uint6
     x_patch32(&t->b, nan, xb_len(&t->b));
     for (unsigned k = 0; k < ndecline; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
     helper(t, insn, pc, true);
-    st_helper--;
+    st_helper -= !t->dry;
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1713,7 +1713,7 @@ static void fp_maxmin(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, den[1], xb_len(&t->b));
     x_patch32(&t->b, nan, xb_len(&t->b));
     helper(t, i, pc, true);
-    st_helper--;                                               /* counted as native */
+    st_helper -= !t->dry;                                       /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1770,7 +1770,7 @@ static void fp_to_int_z(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, out, xb_len(&t->b));
     x_patch32(&t->b, slow, xb_len(&t->b));
     helper(t, i, pc, true);
-    st_helper--;                                               /* counted as native */
+    st_helper -= !t->dry;                                       /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1829,7 +1829,7 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
         size_t done = x_jmp32(&t->b);
         for (int k = 0; k < nslow; k++) x_patch32(&t->b, slow[k], xb_len(&t->b));
         helper(t, i, pc, true);
-        st_helper--;                                           /* counted as native */
+        st_helper -= !t->dry;                                   /* counted as native */
         x_patch32(&t->b, done, xb_len(&t->b));
     }
     return true;
@@ -1948,7 +1948,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         size_t done = x_jmp32(&t->b);
         for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
         helper(t, i, pc, true);
-        st_helper--;
+        st_helper -= !t->dry;
         x_patch32(&t->b, done, xb_len(&t->b));
         return true;
     }
@@ -1993,7 +1993,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
             size_t done = x_jmp32(&t->b);
             x_patch32(&t->b, big, xb_len(&t->b));
             helper(t, i, pc, true);
-            st_helper--;                                         /* counted as native */
+            st_helper -= !t->dry;                                 /* counted as native */
             x_patch32(&t->b, done, xb_len(&t->b));
         }
         return true;
