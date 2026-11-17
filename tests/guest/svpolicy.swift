@@ -21,7 +21,7 @@
 //   anyarray, anycopy, anyassign, anybox: an [Any] holding a `C??` nil written by guest code, dropped,
 //           copied (the array value) then dropped, or assigned over; a captured generic `Any` holding one
 //           (a box): the runtime destroys the storage natively; hao converts the nils at that final
-//           destruction, so each equals native arm64.
+//           destruction, so each equals native arm64. anymany: 200000 of them, some kept alive.
 //   unreflected: a struct compiled without reflection metadata, holding an `Any.Type??`, beside a `C??`:
 //           its fields are not known, so it is refused (zero reported fields are not an empty struct).
 import Foundation
@@ -122,6 +122,15 @@ typealias Wide = (C??, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, In
             print("anyassign", anyShown(a))
             a = anyArray(0)
             print("anyassign", anyShown(a))
+        case "anymany":   // many guest-made [Any] storages made and destroyed: the registry reuses its slots
+            var kept: [[Any]] = []
+            var nils = 0
+            for i in 0..<200_000 {
+                let a = anyArray(i % 3)
+                if let v = a[0] as? C??, v == nil { nils += 1 }
+                if i % 1000 == 0 { kept.append(a) }
+            }
+            print("anymany", nils, kept.count, kept.map { anyShown($0) }.last ?? "")
         case "anybox":
             print("anybox", shown(captured(C??.none as Any)() as! C??))
         case "unreflected":
