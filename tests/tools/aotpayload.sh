@@ -190,9 +190,11 @@ modes=$(stat -f %Lp "$SA"; for f in "$SA"/*; do stat -f %Lp "$f"; done | sort -u
 [ "$(echo $modes)" = "755 644" ] && pass "B installed cache directory 0755, caches 0644 (payload had 0775/0664)" || bad "B modes: $(echo $modes)"
 python3 -c '
 import json, sys
-r = json.load(open(sys.argv[1]))["aot_caches"]
-assert (r["caches"], r["libhao_uuid"], r["removed_stale"]) == (3, sys.argv[2], ["0123456789abcdef0123456789abcdef.aot", "fedcba9876543210fedcba9876543210.aot"]), r
-' "$S/usr/lib/hao/install.json" "$GEN" && pass "B install.json aot_caches: 3 caches of libhao $GEN, 2 removed (another libhao; unsigned code)" || bad "B install.json aot_caches: $(grep -A6 aot_caches "$S/usr/lib/hao/install.json")"
+a = json.load(open(sys.argv[1]))
+r = a["aot_caches"]
+assert (r["caches"], r["libhao_uuid"], r["removed_stale"]) == (3, sys.argv[2], []), r
+assert "usr/lib/hao/aot (2 earlier files removed)" in a["aot_dirs"], a["aot_dirs"]
+' "$S/usr/lib/hao/install.json" "$GEN" && pass "B install.json: 3 caches of libhao $GEN; the 2 files already there (another libhao; unsigned code) removed, not adopted" || bad "B install.json aot_caches: $(grep -A8 aot_ "$S/usr/lib/hao/install.json")"
 for f in "$SA"/*.aot; do cmp -s "$f" "$A/$(basename "$f")" || bad "B $(basename "$f") differs from the payload's"; done
 
 # --- C: the installed (embedded) program loads its installed cache

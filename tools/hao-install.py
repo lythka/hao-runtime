@@ -482,8 +482,9 @@ def manifest_names(embed, replace):
 AOT_DIRS = ["usr/lib/hao/aot", "private/var/db/hao"]
 
 
-def ensure_aot_dirs(system, errors):
-    """Create or fix the root-owned AOT cache directories; returns a record."""
+def ensure_aot_dirs(system, errors, keep=()):
+    """Create or fix the root-owned AOT cache directories, emptied of everything but KEEP (the names of the
+    payload's caches just installed into usr/lib/hao/aot); returns a record."""
     done = []
     root = os.geteuid() == 0
     for rel in AOT_DIRS:
@@ -507,32 +508,27 @@ def ensure_aot_dirs(system, errors):
         except OSError as x:
             errors.append("%s (%s)" % (rel, x.strerror))
             continue
+        removed = 0
         try:
+            # What is in the directory already is not adopted: hao trusts a cache there because root owns it, so
+            # a file someone else left there must not become root's. Every entry but this payload's own caches
+            # (KEEP) is removed; hao --aot makes the caches again.
+            for name in os.listdir(dfd):
+                if rel == AOT_DIRS[0] and name in keep:
+                    continue
+                st = os.lstat(name, dir_fd=dfd)
+                if stat.S_ISDIR(st.st_mode):
+                    errors.append(os.path.join(rel, name) + " (a directory: not removed)")
+                    continue
+                os.unlink(name, dir_fd=dfd)
+                removed += 1
             os.fchmod(dfd, 0o755)
             if root:
                 os.fchown(dfd, 0, 0)
-            for name in os.listdir(dfd):
-                # through the directory's descriptor, never a link, and never a file with another hard link (its
-                # owner and mode would change elsewhere too)
-                try:
-                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
-                except OSError:
-                    errors.append(os.path.join(rel, name) + " (not a regular file)")
-                    continue
-                try:
-                    st = os.fstat(fd)
-                    if not stat.S_ISREG(st.st_mode):
-                        errors.append(os.path.join(rel, name) + " (not a regular file)")
-                    elif st.st_nlink != 1:
-                        errors.append(os.path.join(rel, name) + " (has another hard link)")
-                    else:
-                        os.fchmod(fd, 0o644)
-                        if root:
-                            os.fchown(fd, 0, 0)
-                finally:
-                    os.close(fd)
         finally:
             os.close(dfd)
+        if removed:
+            done.append("%s (%d earlier files removed)" % (rel, removed))
         st = os.stat(d)
         done.append("%s (uid %d, mode %o)" % (rel, st.st_uid, st.st_mode & 0o7777))
     return done
@@ -824,7 +820,8 @@ def install_staged(system, payload, admitted, staged):
         else:
             rewrite(f, new)
             replaced.append(e["path"])
-    aot_dirs = ensure_aot_dirs(system, errors)
+    aot_dirs = ensure_aot_dirs(system, errors, {posixpath.basename(r) for r in staged
+                                                if posixpath.dirname(r) == "root/" + AOT_DIRS[0]})
     aot_caches = check_aot_caches(system, errors)
     reported = {x.split(" (")[0] for x in errors}
     cli = admitted.get("root/usr/libexec/hao", ("",))[0]

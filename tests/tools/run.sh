@@ -294,7 +294,7 @@ else bad "hao-trust-list: $(echo "$r" | grep FAIL)"; fi
 d=$OUT/private; rm -rf "$d"; mkdir -p "$d"
 TMPDIR=/private/tmp "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$d/x.emb" "$G" >"$d/e.log" 2>&1; re=$?
 TMPDIR=/private/tmp python3 -I "$repo/tools/hao-trust-list" "$d" "$d/none" >/dev/null 2>"$d/t.log"; rt=$?
-python3 -I - "$repo/tools" <<'PY' >"$d/p.log" 2>&1; rp=$?
+python3 -I - "$repo/tools" "$d" <<'PY' >"$d/p.log" 2>&1; rp=$?
 import os, shutil, sys
 sys.path.insert(0, sys.argv[1])
 import hao_codesig
@@ -307,9 +307,17 @@ with hao_codesig.PrivateDir("t.") as w:
     try: w.check(); sys.exit("a replaced directory passed")
     except ValueError: pass
     shutil.rmtree(w.name + ".moved")
+# allow entries with flags (inheritance) grant as much as plain ones; deny entries grant nothing
+d = os.path.join(sys.argv[2], "acl"); os.makedirs(d)
+n = os.path.join(sys.argv[2], "deny"); os.makedirs(n)
+os.system("chmod +a 'everyone allow add_file,directory_inherit' '%s' && mkdir '%s/sub' && "
+          "chmod +a 'everyone deny delete' '%s'" % (d, d, n))
+assert hao_codesig.acl_grants_write(d) and hao_codesig.acl_grants_write(d + "/sub"), "flagged allow entries"
+assert not hao_codesig.acl_grants_write(n), "a deny entry"
+os.system("chmod -RN '%s' '%s'" % (d, n))
 PY
 if [ $re != 0 ] && grep -q "no private place" "$d/e.log" && [ $rt != 0 ] && grep -q "no private place" "$d/t.log" && [ $rp = 0 ]; then
-    pass "codesign work: a shared TMPDIR (/private/tmp) is refused; a replaced file or directory fails the check"
+    pass "codesign work: a shared TMPDIR (/private/tmp) is refused; a replaced file or directory fails the check; ACL allow entries with inheritance flags count"
 else bad "codesign work: re $re rt $rt rp $rp: $(cat "$d/e.log" "$d/t.log" "$d/p.log")"; fi
 echo "tools: $fails failed"
 exit $((fails != 0))
