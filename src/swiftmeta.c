@@ -1538,7 +1538,7 @@ void hao_swiftmeta_async_args(hao_cpu *c)
         if (afp_record(c->x[k])) c->x[k] = task_entry(c->x[k], true);
 }
 
-static void *nat_continuation_init, *nat_task_create, *nat_asynclet_begin;
+static void *nat_continuation_init, *nat_task_create, *nat_asynclet_begin, *nat_alloc_box, *nat_alloc_array;
 static void *nat_get_keypath;
 static void trap_get_keypath(hao_thread *t, uint64_t arg);   /* key paths, below */
 static void *nat_instantiate_ls[2];
@@ -1579,10 +1579,22 @@ static void trap_task_entry(hao_thread *t, uint64_t arg)
     hao_native_call((uint64_t)(uintptr_t)(arg ? nat_asynclet_begin : nat_task_create), &t->cpu, 16);
 }
 
+/* swift_allocBox(T) and _allocateUninitializedArray<T>(count): storage of T
+ * native code destroys (swiftvalue.c hao_swift_storage_element). */
+static void trap_storage(hao_thread *t, uint64_t arg)
+{
+    hao_swift_storage_element((const void *)(uintptr_t)t->cpu.x[arg ? 1 : 0], t->cpu.x[30]);
+    hao_thunk_native_args(t);
+    t->native_calls++;
+    hao_native_call((uint64_t)(uintptr_t)(arg ? nat_alloc_array : nat_alloc_box), &t->cpu, 16);
+}
+
 static const struct { const char *name; void **fn; hao_trap_fn trap; uint64_t arg; } swiftrt_traps[] = {
     {"_swift_continuation_init", &nat_continuation_init, trap_continuation_init, 0},
     {"_swift_task_create", &nat_task_create, trap_task_entry, 0},
     {"_swift_asyncLet_begin", &nat_asynclet_begin, trap_task_entry, 1},
+    {"_swift_allocBox", &nat_alloc_box, trap_storage, 0},
+    {"_$ss27_allocateUninitializedArrayySayxG_BptBwlF", &nat_alloc_array, trap_storage, 1},
     {"_swift_getKeyPath", &nat_get_keypath, trap_get_keypath, 0},
     {"_swift_cvw_instantiateLayoutString", &nat_instantiate_ls[0], trap_instantiate_ls, 0},
     {"_swift_generic_instantiateLayoutString", &nat_instantiate_ls[1], trap_instantiate_ls, 1},

@@ -179,21 +179,24 @@ static bool graph(builder *b, const void *type, unsigned depth)
     const witnesses *v = vwt(type);
     if (v->size > 4096 || v->stride < v->size || (v->flags & 0x00800000)) { b->failed = true; return false; }
     uintptr_t kind = b->kind(type);
+    /* At a guest call of a native witness, a guest type its own (guest)
+     * witnesses handle whole is the walk's owner-opaque class. */
+    if (b->existentials && guest_owned_type(type)) { b->nodes[at].affected = false; return false; }
     empty_plan empty;
     bool converts = (b->existentials ? discover_witness_plan(type,&empty) : discover_empty_plan(type,&empty)) &&
                     empty.consumed == 2;
     converts |= kind == 0x202 && translated_nil_type(type);   /* a spare-bit enum XI that differs (Data?) */
+    converts &= !xi_native_owned(type);                        /* nils only native witnesses write */
     b->converts |= converts;
     int whole = 0;
-    /* At a guest call of a native witness, a guest type its own (guest)
-     * witnesses handle whole is the walk's owner-opaque class. */
-    bool settled = (b->existentials && guest_owned_type(type)) ? (whole = 1) : settled_node(type,&whole);
+    bool settled = settled_node(type,&whole);
     bool affected = converts || !settled;
     if (whole && !converts) {
         /* nothing below needs looking at */
     } else if (kind == 0x200 || kind == 0x301) {
         intptr_t count = b->count(type);
         if (count < 0 || count > 64) { b->failed = true; return false; }
+        if (!count && v->size) affected = true;   /* fields not reflected: only the walk can tell (it refuses) */
         for (intptr_t i = 0; i < count; ++i) {
             field_info info = {0};
             const void *child = b->field(type,i,&info);
@@ -873,6 +876,40 @@ void hao_swift_task_result(const void *future, uint64_t lr)
     if (state == WITNESS_SETTLED) return;
     decline(future,state == WITNESS_UNCERTIFIABLE ? "type graph past the walk's bounds" :
             "child task result is copied by native code before it can be certified",NULL,NULL,future,lr,0);
+}
+
+/* Storage guest code creates and native code destroys: array storage
+ * (swift_allocObject with _ContiguousArrayStorage<E>, _allocateUninitializedArray<E>)
+ * and boxes (swift_allocBox of T). Guest code fills it, and when its last
+ * reference goes, wherever that is released, the runtime destroys the
+ * contents with the element type's native witnesses: no boundary hao sees.
+ * An element type with a nil whose encoding differs, or past the walk's
+ * bounds, is refused when the storage is made. An element type that is only
+ * not settled (an enum, an existential) is not: refusing every [Any] would
+ * stop nearly every program, and its contents are not certified at that
+ * destruction (docs/ISSUES.md). */
+static void storage_element(const void *element, const char *why, uint64_t lr)
+{
+    if (hao_opt.no_swift_values || !element) return;
+    int state = witness_state(element);
+    if (state == WITNESS_CONVERTS || state == WITNESS_UNCERTIFIABLE) decline(element,why,NULL,NULL,element,lr,0);
+}
+void hao_swift_storage_alloc(const void *metadata, uint64_t lr)
+{
+    const uint64_t *m = metadata;
+    if (hao_opt.no_swift_values || !m || m[0] <= 0x7ff || !(m[4] & 3)) return;   /* a Swift class's metadata */
+    const void *storage = HAO_DLSYM("$ss23_ContiguousArrayStorageCMn");
+    const char *desc = (const char *)(uintptr_t)m[8];   /* ClassMetadata Description */
+    if (!storage || desc != storage) return;
+    uint32_t positive, immediate;   /* ClassDescriptor: MetadataPositiveSizeInWords, NumImmediateMembers */
+    memcpy(&positive,desc + 28,4); memcpy(&immediate,desc + 32,4);
+    if (positive <= immediate) return;
+    storage_element((const void *)(uintptr_t)m[positive - immediate],
+                    "array element type has a nil native code would destroy in the guest's encoding",lr);
+}
+void hao_swift_storage_element(const void *element, uint64_t lr)
+{
+    storage_element(element,"storage element type has a nil native code would destroy in the guest's encoding",lr);
 }
 
 /* The value witnesses (slots 0-5) of TYPE, a native struct or enum whose

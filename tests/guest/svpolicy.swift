@@ -15,7 +15,13 @@
 //   boxed:  an `Any` whose (out-of-line, boxed) value holds a `C??` nil, destroyed in a tuple: refused.
 //   task:   a child task whose result is a `C??`: refused when the task is created (the runtime copies
 //           the result natively before any boundary hao sees).
+//   array:  an array of `C??` the guest fills with a nil and releases last: refused when its storage is
+//           made (the runtime destroys its elements natively, with no boundary hao sees).
+//   box:    a `C??` variable an escaping closure captures (a box): refused when the box is made.
+//   unreflected: a struct compiled without reflection metadata, holding an `Any.Type??`, beside a `C??`:
+//           its fields are not known, so it is refused (zero reported fields are not an empty struct).
 import Foundation
+import SvpolicyLib
 
 final class C: @unchecked Sendable { let n: Int; init(_ n: Int) { self.n = n } }
 
@@ -23,14 +29,23 @@ final class C: @unchecked Sendable { let n: Int; init(_ n: Int) { self.n = n } }
 func copied<T>(_ v: T) -> T { let w = v; return w }
 @_semantics("optimize.sil.specialize.generic.never") @inline(never)
 func dropped<T>(_ v: __owned T) -> Int { _ = consume v; return 1 }
+@inline(never) func array(_ n: Int) -> Int {
+    var a: [C??] = []
+    for i in 0..<n { a.append(i % 2 == 0 ? .none : .some(nil)) }
+    return a.count
+}
+// A generic captured variable: its box comes from swift_allocBox and the runtime destroys it.
+@_semantics("optimize.sil.specialize.generic.never") @inline(never)
+func captured<T>(_ v: T) -> () -> T { var x = v; let f = { x }; x = v; return f }
+@inline(never) func box() -> String { shown(captured(C??.none)()) }
 @inline(never) func boxed() -> Any { (C??.none, 1, 2, 3) as (C??, Int, Int, Int) }
 
 func shown(_ v: C??) -> String {
     switch v { case .none: return "nil"; case .some(.none): return "some(nil)"; case .some(.some(let c)): return "some(\(c.n))" }
 }
 
-// A global: native code destroying the array would read its nils itself (out of scope, docs/ISSUES.md).
-let nils: [C??] = [.none, .some(nil), .some(.some(C(3)))]
+// No array of C??: its storage is refused (the "array" part).
+@inline(never) func nilAt(_ i: Int) -> C?? { i == 0 ? .none : i == 1 ? .some(nil) : .some(.some(C(3))) }
 
 typealias Wide = (C??, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int)
 
@@ -58,7 +73,8 @@ typealias Wide = (C??, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, In
         let o = NSObject()
         switch CommandLine.arguments.dropFirst().first ?? "pass" {
         case "refuse":
-            for v in nils {
+            for i in 0..<3 {
+                let v = nilAt(i)
                 let w = copied((InlineArray<2, C>(repeating: C(7)), v))
                 print("inline", w.0[1].n, shown(w.1))
             }
@@ -77,8 +93,16 @@ typealias Wide = (C??, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, In
             print("boxed", dropped((boxed(), C(7))))
         case "task":
             print("task", await task())
+        case "array":
+            print("array", array(3))
+        case "box":
+            print("box", box())
+        case "unreflected":
+            let w = copied((Unreflected(t: .none), C??.none))
+            print("unreflected", w.0.t == nil, shown(w.1))
         default:
-            for v in nils {
+            for i in 0..<3 {
+                let v = nilAt(i)
                 let a = copied((o, v))
                 print("object", a.0 === o, shown(a.1))
                 let f = copied(({ (x: Int) in x + 1 }, v))
