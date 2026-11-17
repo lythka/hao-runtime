@@ -453,6 +453,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
 int hao_aot_check_file(const char *path, const char *cache_dir, bool print);
 bool hao_aot_generation(uint8_t out[16]);
 uint64_t hao_thunk_for(uint64_t guest);
+uint64_t hao_swift_thunk_for(uint64_t guest);   /* passed to a native Swift function: entry marked HAO_CB_SWIFTCC */
 uint64_t hao_thunk_target(uint64_t thunk);
 bool hao_in_code_cache(uint64_t a);
 void hao_jit_alias(uint64_t entry, uint64_t guest);

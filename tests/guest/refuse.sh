@@ -9,6 +9,9 @@
 #   block  a guest block with a 70000-byte parameter called from native code: hao stops with
 #          "bridge: REFUSED callback"; with HAO_NO_CLOSURES=1 (a test-switch build: no signature thunks) it is
 #          refused all the same, at registration (nocl), never run through the plain register bridge
+#   strip  tests/guest/swiftthunks.swift built with its local symbols stripped (a release build): Swift
+#          closures handed to native Swift functions return their results in memory through rax; the
+#          entries hao makes for them say so (the native callee's own Swift symbol): same output as native
 #   OUT=dir HAO=build/hao [T=60] tests/guest/refuse.sh     exit 1 on any difference
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -43,5 +46,13 @@ for c in mid big call block; do
             "$(cat "$OUT/$c.$mode.out" | head -1) $(grep -m1 'REFUSED' "$OUT/$c.$mode.err" | cut -c1-110)"
     done
 done
+for a in arm64 arm64e; do
+    xcrun swiftc -O -parse-as-library -target $a-apple-macos27.0 -o "$OUT/strip.$a" "$here/swiftthunks.swift" 2>/dev/null &&
+        strip -x "$OUT/strip.$a" && codesign -s - -f "$OUT/strip.$a" 2>/dev/null || exit 2
+done
+timeout -s KILL "$T" "$OUT/strip.arm64" >"$OUT/strip.native.out" 2>&1; nrc=$?
+HAO_NO_AOT=1 timeout -s KILL "$T" "$HAO" "$OUT/strip.arm64e" >"$OUT/strip.jit.out" 2>"$OUT/strip.jit.err"; rc=$?
+if [ $nrc = 0 ] && [ $rc = 0 ] && cmp -s "$OUT/strip.native.out" "$OUT/strip.jit.out"; then r=PASS; else r=FAIL; fail=1; fi
+printf '%-6s %-7s native rc=%s hao rc=%s %s\n' strip jit "$nrc" "$rc" "$r"
 [ $fail = 0 ] && echo "refuse: PASS" || echo "refuse: FAIL"
 exit $fail

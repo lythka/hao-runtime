@@ -363,7 +363,7 @@ static void prepare_arg(hao_thread *t, uint64_t a) { prepare_arg_in(t, a, true);
  * (hao/bridge.h argmask) names the slots a typed plan says may carry guest
  * code: bits 0-7 x0-x7, bits 8-15 the stack slots; HAO_BR_SCAN_ALL is the
  * untyped scan. */
-void hao_thunk_native_args_mask(hao_thread *t, unsigned mask)
+void hao_thunk_native_args_mask(hao_thread *t, unsigned mask, bool swiftcc)
 {
     hao_swift_objects_args(t);
     hao_cpu *c = &t->cpu;
@@ -375,7 +375,7 @@ void hao_thunk_native_args_mask(hao_thread *t, unsigned mask)
         /* most values (integers, heap and native pointers) lie in no guest image: one range search
          * answers both image lookups for them */
         bool image = hao_guest_range_maybe(a);
-        if (image && hao_is_guest_function(a)) { c->x[k] = hao_thunk_for(a); continue; }
+        if (image && hao_is_guest_function(a)) { c->x[k] = swiftcc ? hao_swift_thunk_for(a) : hao_thunk_for(a); continue; }
         if (on) prepare_arg_in(t, a, image);
     }
     if (!on || !(mask >> 8) || !on_guest_stack(t, c->x[31], 8 * STACK_ARG_SLOTS)) return;
@@ -386,7 +386,7 @@ void hao_thunk_native_args_mask(hao_thread *t, unsigned mask)
     }
 }
 
-void hao_thunk_native_args(hao_thread *t) { hao_thunk_native_args_mask(t, HAO_BR_SCAN_ALL); }
+void hao_thunk_native_args(hao_thread *t) { hao_thunk_native_args_mask(t, HAO_BR_SCAN_ALL, false); }
 
 /* One argument of a generated thunk pair's native half (hao/bridge.h) that
  * may carry guest code: what the argument scan does for one slot. A guest

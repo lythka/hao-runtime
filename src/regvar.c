@@ -52,7 +52,7 @@ static void trap_regvar(hao_thread *t, uint64_t k)
     memcpy(x, c->x, sizeof x);
     memcpy(v, c->v, sizeof v);
     c->x[0] = obj;
-    hao_thunk_native_args_mask(t, 0x1);       /* the object: a guest block gets its thunks */
+    hao_thunk_native_args_mask(t, 0x1, false);       /* the object: a guest block gets its thunks */
     hao_native_call(fn, c, 0);
     uint64_t r = c->x[0];
     memcpy(&c->x[1], &x[1], 3 * sizeof x[0]);

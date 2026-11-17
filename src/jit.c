@@ -6680,6 +6680,15 @@ uint64_t hao_thunk_for(uint64_t guest)
     return r ? r : guest;
 }
 
+/* The entry of a guest function passed to a native Swift function (its own exported symbol a Swift
+ * mangled name): a signature-thunk slot whose r10 is HAO_CB_SWIFTCC, one per function; the plain thunk
+ * when the area is full (its indirect results then go to hao's own area) */
+uint64_t hao_swift_thunk_for(uint64_t guest)
+{
+    uint64_t e = hao_sig_thunk(guest, (void *)(uintptr_t)HAO_CB_SWIFTCC);
+    return e ? e : hao_thunk_for(guest);
+}
+
 /* thunk address -> guest function (0 if not a thunk) */
 /* Is `a` inside the code cache (translated code, thunks, stubs)? */
 bool hao_in_code_cache(uint64_t a)

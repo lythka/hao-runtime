@@ -11,7 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
-#include <mach-o/getsect.h>
+#include <mach-o/nlist.h>
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
@@ -413,24 +413,63 @@ __attribute__((noinline)) static bool native_call_stackpack(hao_cpu *c, uint64_t
     return true;
 }
 
-/* Is the native code at pc Swift code: in an image with Swift metadata (libswiftCore, Swift frameworks;
- * their Swift functions are mostly not exported, so the symbol cannot tell)? Guest functions it passes or
- * calls are then taken for Swift functions: rax is the indirect result's buffer (callback_plain).
- * Remembered per address (a direct-mapped table; a collision only asks again). */
-static bool native_swift(uint64_t pc)
+/* Is the guest function at pc a Swift function by its own symbol: a defined symbol at exactly pc whose
+ * name is a Swift mangled name (_$s, _$S)? Its convention then passes an indirect result's buffer in rax
+ * (callback_plain). Read from the image's symbol table as mapped (no lock, no allocation, no dladdr:
+ * callbacks run in signal handlers too); remembered per address in a direct-mapped table. A stripped
+ * local symbol (a closure of a release build) is not found: such a function gets hao's own area. */
+static bool guest_swift_symbol(uint64_t pc)
+{
+    enum { N = 2048 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *m = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(m, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    bool sw = false;
+    hao_image *im = hao_image_for_code(pc);
+    const struct mach_header_64 *mh = im && !im->dsc ? (const void *)(uintptr_t)im->base : NULL;
+    const struct symtab_command *st = NULL;
+    const struct segment_command_64 *le = NULL;
+    if (mh && mh->magic == MH_MAGIC_64 && mh->sizeofcmds < (1u << 20)) {
+        const uint8_t *p = (const uint8_t *)(mh + 1), *end = p + mh->sizeofcmds;
+        for (uint32_t k = 0; k < mh->ncmds && p + sizeof(struct load_command) <= end; k++) {
+            const struct load_command *lc = (const void *)p;
+            if (lc->cmdsize < sizeof *lc || lc->cmdsize > (size_t)(end - p)) break;
+            if (lc->cmd == LC_SYMTAB && lc->cmdsize >= sizeof *st) st = (const void *)lc;
+            if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof *le && !strncmp(((const struct segment_command_64 *)lc)->segname, "__LINKEDIT", 16))
+                le = (const void *)lc;
+            p += lc->cmdsize;
+        }
+    }
+    if (st && le && st->symoff >= le->fileoff && st->stroff >= le->fileoff) {
+        uint64_t lo = le->vmaddr + im->slide, n = le->filesize;
+        uint64_t so = st->symoff - le->fileoff, to = st->stroff - le->fileoff;
+        if (so <= n && (uint64_t)st->nsyms * sizeof(struct nlist_64) <= n - so && to <= n && st->strsize <= n - to) {
+            const struct nlist_64 *sym = (const void *)(uintptr_t)(lo + so);
+            const char *str = (const char *)(uintptr_t)(lo + to);
+            for (uint32_t k = 0; k < st->nsyms && !sw; k++) {
+                if ((sym[k].n_type & (N_STAB | N_TYPE)) != N_SECT || sym[k].n_value + im->slide != pc) continue;
+                uint32_t x = sym[k].n_un.n_strx;
+                sw = x + 3 < st->strsize && str[x] == '_' && str[x + 1] == '$' && (str[x + 2] == 's' || str[x + 2] == 'S');
+            }
+        }
+    }
+    __atomic_store_n(m, pc << 1 | sw, __ATOMIC_RELAXED);
+    return sw;
+}
+
+/* Is the native function at pc a Swift function by its own symbol (an exported Swift mangled name at
+ * exactly pc)? Guest functions passed to it are Swift function values: their entries are marked
+ * (hao_swift_thunk_for). Asked when the guest calls it, never on a callback's path; remembered per
+ * address in a direct-mapped table. */
+static bool native_swift_symbol(uint64_t pc)
 {
     enum { N = 4096 };
     static uint64_t memo[N];   /* pc << 1 | answer */
     uint64_t *e = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
     if (v && v >> 1 == pc) return v & 1;
     Dl_info di;
-    bool sw = false;
-    if (dladdr((void *)(uintptr_t)pc, &di) && di.dli_fbase) {
-        const struct mach_header_64 *mh = di.dli_fbase;
-        unsigned long n = 0;
-        sw = mh->magic == MH_MAGIC_64 && (getsectiondata(mh, "__TEXT", "__swift5_typeref", &n) || getsectiondata(mh, "__TEXT", "__swift5_types", &n) ||
-                                          getsectiondata(mh, "__TEXT", "__swift5_proto", &n));
-    }
+    const char *n = dladdr((void *)(uintptr_t)pc, &di) && di.dli_sname && di.dli_saddr == (void *)(uintptr_t)pc ? di.dli_sname : "";
+    bool sw = n[0] == '$' && (n[1] == 's' || n[1] == 'S');
     __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
     return sw;
 }
@@ -624,7 +663,7 @@ static void native_step(void *arg)
     }
     /* guest function pointers and blocks passed to native code get thunks:
      * in the argument slots the plan names, or in all of them */
-    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL);
+    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL, native_swift_symbol(pc));
     t->native_calls++;
     unsigned objc_enum_result = p && p->src == HAO_BRS_OBJCIMP ? hao_objc_enum_args(c, pc, false) : 0;
     unsigned swift_enum = p ? __atomic_load_n(&p->swift_enum, __ATOMIC_RELAXED) : 0;   /* NSTextAlignment in a Swift signature (swiftcc.c) */
@@ -1089,15 +1128,16 @@ uint64_t hao_callback(hao_cb_frame *f)
     }
     /* arrived by an NX fault: a block whose helper this is gets thunks for next time */
     if (in == HAO_CB_FAULT) hao_blocks_heal(f->gpr[0], f->target);
-    /* a Swift function's entry, a call from native Swift code (an NX fault, a plain thunk), or a native
-     * function the guest called that jumped on to guest code (a dispatch thunk's tail call: it returns to
-     * hao_native_call, which passed the guest's own x8 in rax) */
-    bool swiftcc = in == HAO_CB_SWIFTCC || native_swift(f->ret) || f->ret == hao_native_call_ret;
-    if (in == HAO_CB_SWIFTCC) in = 0;
+    bool marked = in == HAO_CB_SWIFTCC;
+    if (marked) in = 0;
     /* a call without a signature thunk (NX fault, plain thunk) may still
      * have a signature noted for its target (abi.c) */
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
     if (sig) { hao_callback_with_sig(f, sig); return 0; }
+    /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry), its
+     * own symbol does, or a native function the guest called jumped on to it (a dispatch thunk's tail
+     * call returns to hao_native_call, which put the guest's own x8 in rax) */
+    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target);
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
@@ -1741,6 +1781,12 @@ static int diag_log_fd(void)
  * kept (pend_put); with HAO_DIAG_TIME a process other than PID 1 also sends
  * them to the unified log, which keeps a boot task's lines (it exits before
  * the volume mounts) with the kernel's timestamps. */
+static size_t safe_put(char *b, size_t at, size_t cap, const char *s)
+{
+    while (*s && at + 1 < cap) b[at++] = *s++;
+    return at;
+}
+
 static void diag_emit(const char *b, size_t n, bool may_start)
 {
     if (!n) return;
@@ -1805,11 +1851,6 @@ static void diag_write(const char *b, size_t n, bool may_start)
 /* Async-signal-safe. */
 void hao_diag_write(const char *b, size_t n) { diag_write(b, n, false); }
 
-static size_t safe_put(char *b, size_t at, size_t cap, const char *s)
-{
-    while (*s && at + 1 < cap) b[at++] = *s++;
-    return at;
-}
 
 void hao_fatal_safe(const char *what, const uint64_t *v, int n)
 {
