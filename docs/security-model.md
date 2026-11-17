@@ -73,6 +73,17 @@ manifest program that still carries an older hao stub this payload's stub
 when that yields the recorded result, and fails if any other file in the
 System volume carries a stub without that record.
 
+The build-time tools (`hao-image-payload`, `hao-embed`, `hao-trust-list`,
+`stub_identity_gate.py`, `hao-runtime-on-mac`, `hao_release.py`) assume a
+build host whose inputs (the System root, the x86_64 cache, the hao build)
+and working directories no other user can write. They refuse what they can
+see breaks that (a shared temporary directory or output directory, an ACL
+granting write, a link where a file is written) but do not defend against
+another local user changing their inputs while they run. `hao-install.py`
+additionally defends against hostile payload contents: what it installs is
+only what the payload's manifest lists and hashes, read from private copies.
+Neither makes the manifest authentic: that is the image builder's input.
+
 The packaging tools read Mach-O files, code signatures and interface units
 from the image being built. Their readers share one bounded load-command walk
 (`hao_fat.load_commands`) and refuse malformed or truncated input with an

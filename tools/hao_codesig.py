@@ -470,8 +470,11 @@ def acl_grants_write(path):
             libc.acl_free(text)
         libc.acl_free(acl)
     for line in lines[1:]:
+        # TAG:UUID:NAME:ID:KIND[,FLAG...]:PERM[,PERM...], e.g. "allow,inherited,directory_inherit:write"
         f = line.split(":")
-        if len(f) >= 6 and f[4] == "allow" and set(f[5].split(",")) & ACL_WRITE_PERMS:
+        if len(f) < 6:
+            return True   # not understood: counts as granting
+        if f[4].split(",")[0] == "allow" and set(f[5].split(",")) & ACL_WRITE_PERMS:
             return True
     return False
 

@@ -76,8 +76,9 @@ rpaths each image owns, its own non-lazy dependencies are in protected
 storage: the sealed system volume less its firmlinks (`usr/share/firmlinks`
 of the root), and the OS and App cryptexes; the x86_64 shared cache counts
 as protected. Names are compared case-insensitively in their on-disk
-spelling; a path that exists but has no x86_64 library slice does not end
-the search (dyld tries the next); each x86_64 slice of a library, in each
+spelling; a path that exists but that dyld might not load into the stub
+(no plain x86_64 library slice, another platform, or a minos newer than
+the image's OS) does not end the search (dyld tries the next); each x86_64 slice of a library, in each
 rpath context it is reached in, is judged on its own; a chain deeper than
 16 libraries is not protected. Any other is not
 linked (manifest `not_linked`: "outside protected storage") and hao's binder
@@ -143,9 +144,10 @@ descriptors (0755 or 0644; another hard link to an old file keeps its
 bytes); programs to embed and files to replace are opened through directory
 descriptors that follow no link, and a file to replace with another hard
 link is refused. Every directory written in must be root's (or the running
-user's), writable by nobody else and without an ACL granting write; AOT
-cache files are fixed through descriptors, and one with another hard link
-is reported, not changed. A hao stub without a `__hao_slice` record (a legacy
+user's), writable by nobody else and without an ACL granting write. Files
+already in the AOT directories (other than the payload's own caches just
+installed) are removed, not made root's: hao trusts a cache there because
+root owns it, and `hao --aot` makes them again. A hao stub without a `__hao_slice` record (a legacy
 stub) is no longer kept: a manifest program gets this payload's stub when
 that gives the recorded result, any other such stub in the System volume
 fails the install (`legacy_stubs` in install.json), and no payload stub

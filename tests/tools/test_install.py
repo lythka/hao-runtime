@@ -279,16 +279,22 @@ class InstallPaths(unittest.TestCase):
         self.addCleanup(subprocess.run, ['chmod', '-N', str(d)])
         self.refused('an ACL grants write')
 
-    def test_aot_cache_hard_link(self):
-        """a file in the AOT directory with another hard link is reported, and its mode left alone"""
-        aot = self.system / 'usr/lib/hao/aot'
-        aot.mkdir()
+    def test_aot_dirs_not_adopted(self):
+        """files already in the AOT directories (one a hard link to a file elsewhere) are removed, never made
+        root's; the payload's own caches stay"""
+        for rel in ('usr/lib/hao/aot', 'private/var/db/hao'):
+            (self.system / rel).mkdir(parents=True)
         other = self.outside / 'cache'
         other.write_bytes(b'x')
         other.chmod(0o600)
-        os.link(other, aot / ('b' * 32 + '.aot'))
-        out = self.refused('usr/lib/hao/aot/%s.aot (has another hard link)' % ('b' * 32))
-        self.assertEqual(other.stat().st_mode & 0o777, 0o600, out)
+        os.link(other, self.system / 'usr/lib/hao/aot' / ('b' * 32 + '.aot'))
+        (self.system / 'private/var/db/hao/c.aot').write_bytes(b'y')
+        (self.system / 'private/var/db/hao/auto-aot.done').write_bytes(b'libhao 0')
+        rc, out = self.run_install()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(list((self.system / 'usr/lib/hao/aot').iterdir()), [])
+        self.assertEqual(list((self.system / 'private/var/db/hao').iterdir()), [])
+        self.assertEqual((other.read_bytes(), other.stat().st_mode & 0o777, other.stat().st_nlink), (b'x', 0o600, 1))
 
     def test_name_collisions(self):
         """names that are one file on a case-insensitive volume, or a file and a directory, are refused
