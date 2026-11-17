@@ -14,6 +14,8 @@
 # -k keeps going quietly; failures print the first lines of the diff and of
 # hao's stderr. Last line: "async: N pass, M fail".
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 HAO=${HAO:-$ROOT/build/hao}

@@ -10,6 +10,8 @@
 # reads from the main executable's header and calls, as ExtensionFoundation does for an .appex.
 #   OUT=dir HAO=build/hao [T=60] [SWIFTFLAGS=-Onone] tests/guest/swiftthunks.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-swiftthunks)}
