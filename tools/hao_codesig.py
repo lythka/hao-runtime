@@ -215,15 +215,14 @@ def unsealed_use(mo, limit):
     for cmd, off, size in hao_fat.load_commands(mo, "Mach-O"):
         ranges, what = [], "linkedit data"
         if cmd == LC_SEGMENT_64 and size >= 72:
-            name = mo[off + 8:off + 24].rstrip(b"\0")
+            name = mo[off + 8:off + 24]                 # all 16 bytes, as src/libval.c compares them
             vmaddr, _, fileoff, filesize = struct.unpack_from("<QQQQ", mo, off + 24)
             initprot, nsects = struct.unpack_from("<iI", mo, off + 60)
-            if name != b"__LINKEDIT" or initprot & 6:
+            if name != b"__LINKEDIT".ljust(16, b"\0") or initprot & 6:
                 ranges, what = [(fileoff, filesize)], "an executable segment" if initprot & 4 else "a segment"
             for j in range(nsects if 72 + nsects * 80 <= size else 0):
                 addr, ssize = struct.unpack_from("<QQ", mo, off + 72 + j * 80 + 32)
-                stype = struct.unpack_from("<I", mo, off + 72 + j * 80 + 64)[0] & 0xFF
-                if not ssize or stype in (0x1, 0xC, 0x12):
+                if not ssize:                           # zero-fill types too: the loader maps file bytes as they are
                     continue
                 if addr < vmaddr:
                     return "a section"

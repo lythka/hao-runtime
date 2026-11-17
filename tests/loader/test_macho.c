@@ -1091,6 +1091,8 @@ int main(int argc, char **argv)
             {"writable __DATA mapped from __LINKEDIT's bytes, the signature among them (fixup slots)", LC_SEGMENT_64, "__DATA", 0, 0, 2},
             {"writable __LINKEDIT (fixup slots in the signature)", LC_SEGMENT_64, "__LINKEDIT", 0, 0, 3},
             {"initializer offsets section in __LINKEDIT, over the signature", LC_SEGMENT_64, "__LINKEDIT", 0, 0, 4},
+            {"zero-fill __objc_classlist section in __LINKEDIT, over the signature", LC_SEGMENT_64, "__LINKEDIT", 0, 0, 5},
+            {"__LINKEDIT named \"__LINKEDIT\\0X\": not __LINKEDIT, so it may not reach the signature", LC_SEGMENT_64, "__LINKEDIT", 0, 0, 6},
         };
         for (size_t i = 0; i < sizeof c / sizeof *c; i++) {
             uint8_t *t = copy_of(seed, n);
@@ -1102,12 +1104,14 @@ int main(int argc, char **argv)
             } else if (c[i].w64 == 3) {
                 wr32(t, o + 56, rd32(t, o + 56) | VM_PROT_WRITE);
                 wr32(t, o + 60, rd32(t, o + 60) | VM_PROT_WRITE);
-            } else if (c[i].w64 == 4) {               /* one more section, over the 80 bytes after the commands (code) */
+            } else if (c[i].w64 == 6) {
+                t[o + 8 + 11] = 'X';
+            } else if (c[i].w64 >= 4) {               /* one more section, over the 80 bytes after the commands (code) */
                 uint32_t sizeofcmds = rd32(t, 20), csz = rd32(t, o + 4);
                 size_t end = 32 + sizeofcmds;
                 memmove(t + o + csz + 80, t + o + csz, end - (o + csz));
-                struct section_64 s = {.size = 4, .offset = (uint32_t)so, .flags = 0x16 /* S_INIT_FUNC_OFFSETS */};
-                memcpy(s.sectname, "__init_offsets", 14);
+                struct section_64 s = {.size = 8, .offset = (uint32_t)so, .flags = c[i].w64 == 4 ? 0x16 /* S_INIT_FUNC_OFFSETS */ : S_ZEROFILL};
+                memcpy(s.sectname, c[i].w64 == 4 ? "__init_offsets" : "__objc_classlist", c[i].w64 == 4 ? 14 : 16);
                 memcpy(s.segname, "__LINKEDIT", 10);
                 uint64_t vm, fo;
                 memcpy(&vm, t + o + 24, 8);

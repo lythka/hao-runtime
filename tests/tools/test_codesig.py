@@ -94,8 +94,9 @@ def blob_cases(blob):
 
 def unsealed_cases(mo):
     """MO with __TEXT ending 16 bytes into the signature; function starts and the symbol table starting at
-    it; __DATA mapped from __LINKEDIT's file range; __LINKEDIT writable; and an initializer offsets section
-    added to __LINKEDIT over the signature (src/libval.c unsealed_use)."""
+    it; __DATA mapped from __LINKEDIT's file range; __LINKEDIT writable; an initializer offsets and a
+    zero-fill __objc_classlist section added to __LINKEDIT over the signature; and __LINKEDIT renamed
+    "__LINKEDIT\\0X" (src/libval.c unsealed_use)."""
     sig = signature_command(mo)
     cmds = list(hao_fat.load_commands(mo, "Mach-O"))
     seg = {mo[off + 8:off + 24].rstrip(b"\0"): (off, size) for cmd, off, size in cmds if cmd == 0x19}
@@ -122,15 +123,19 @@ def unsealed_cases(mo):
     yield bytes(m)
     sizeofcmds = struct.unpack_from("<I", mo, 20)[0]
     end = 32 + sizeofcmds
-    if end + 80 <= sig[1]:                              # in the 80 bytes after the commands (the code's start)
+    for name, flags in ((b"__init_offsets", 0x16), (b"__objc_classlist", 0x1)):   # S_INIT_FUNC_OFFSETS, S_ZEROFILL
+        if end + 80 > sig[1]:                           # in the 80 bytes after the commands (the code's start)
+            break
         vm, _, fo = struct.unpack_from("<QQQ", mo, le + 24)
-        sect = struct.pack("<16s16sQQIIIIIIII", b"__init_offsets", b"__LINKEDIT", vm + sig[1] - fo, 4, sig[1], 0, 0, 0,
-                           0x16, 0, 0, 0)
+        sect = struct.pack("<16s16sQQIIIIIIII", name, b"__LINKEDIT", vm + sig[1] - fo, 8, sig[1], 0, 0, 0, flags, 0, 0, 0)
         m = bytearray(mo[:le + lsize] + sect + mo[le + lsize:end] + mo[end + 80:])
         struct.pack_into("<I", m, le + 4, lsize + 80)
         struct.pack_into("<I", m, le + 64, struct.unpack_from("<I", mo, le + 64)[0] + 1)
         struct.pack_into("<I", m, 20, sizeofcmds + 80)
         yield bytes(m)
+    m = bytearray(mo)                                   # "__LINKEDIT\0X": not __LINKEDIT to either reader
+    m[le + 8 + 11] = ord("X")
+    yield bytes(m)
 
 
 def macho_cases(mo):

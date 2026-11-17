@@ -351,10 +351,10 @@ static int exec_ranges(const uint8_t *cmds, uint32_t ncmds, hao_range *r, int ma
  * bytes there are the signature's own, which its hashes do not all seal, so
  * they may change without changing the cdhash. Every segment's file range
  * but __LINKEDIT's (which holds the signature, and may be neither writable
- * nor executable, so no fixup slot lies in it), the file bytes of every
- * section of any segment (initializer offsets and pointers, ObjC and Swift
- * metadata, whatever the loader or the program reads by section), and
- * every range of linkedit data a load command names (the loader's fixups,
+ * nor executable, so no fixup slot lies in it; the name is all 16 bytes),
+ * the file bytes of every section of any segment and type (initializer
+ * offsets and pointers, ObjC and Swift metadata, whatever the loader or the
+ * program reads by section), and every range of linkedit data a load command names (the loader's fixups,
  * exports and function starts, and the symbol tables) must end by limit.
  * tools/hao_codesig.py check() applies the same rule, and the AOT
  * generator refuses an executable segment the same way (jit.c). NULL: none;
@@ -370,16 +370,18 @@ static const char *unsealed_use(const uint8_t *cmds, uint32_t ncmds, uint64_t li
         switch (lc->cmd) {
         case LC_SEGMENT_64: {
             const struct segment_command_64 *sg = (const void *)p;
-            bool le = !strncmp(sg->segname, "__LINKEDIT", 16);
+            static const char linkedit[16] = "__LINKEDIT";              /* all 16 bytes, NULs included */
+            bool le = !memcmp(sg->segname, linkedit, 16);
             if (!le || (sg->initprot & (VM_PROT_WRITE | VM_PROT_EXECUTE))) {
                 r[nr][0] = sg->fileoff; r[nr++][1] = sg->filesize;
                 what = sg->initprot & VM_PROT_EXECUTE ? "an executable segment" : "a segment";
             }
-            /* a section's bytes are where its address puts them in the segment's file range */
+            /* a section's bytes are where its address puts them in the segment's file range, whatever its
+             * type: the loader maps the segment's file bytes as they are, zero-fill sections included, and
+             * readers find sections by name */
             const struct section_64 *s = (const void *)(sg + 1);
             for (uint32_t j = 0; j < sg->nsects; j++) {
-                uint32_t type = s[j].flags & SECTION_TYPE;
-                if (!s[j].size || type == S_ZEROFILL || type == S_GB_ZEROFILL || type == S_THREAD_LOCAL_ZEROFILL) continue;
+                if (!s[j].size) continue;
                 if (s[j].addr < sg->vmaddr) return "a section";
                 uint64_t rel = s[j].addr - sg->vmaddr;
                 if (rel >= sg->filesize) continue;
