@@ -1277,8 +1277,20 @@ static bool note_guest_sig(uint64_t guest, hsig *s)
  * needs marshalling is then noted for hao_callback. */
 static uint64_t guest_entry_for_sig(uint64_t guest, const char *enc, bool known_void)
 {
-    hsig *s = hao_opt.no_closures ? NULL : hao_sig(enc);
-    if (s && s->unmarshalable) __atomic_fetch_add(&hao_abi_refused, 1, __ATOMIC_RELAXED);
+    hsig *s = enc ? hao_sig(enc) : NULL;
+    if (s && s->unmarshalable) {
+        /* refused when called (hao_callback_with_sig: the thunk carries this signature, whatever else the
+         * function was registered with), or now when no such thunk can be made (closures off, the area
+         * full): never the plain register bridge, nor a signature noted for the address earlier */
+        __atomic_fetch_add(&hao_abi_refused, 1, __ATOMIC_RELAXED);
+        uint64_t code = hao_opt.no_closures ? 0 : hao_sig_thunk(guest, s);
+        if (code) return code;
+        uint64_t v[1] = {guest};
+        hao_fatal_safe("bridge: REFUSED callback registration: the guest function's signature is not marshalled (too many "
+                       "arguments, too large an aggregate or a malformed encoding) and no refusing entry can be made; guest function:",
+                       v, 1);
+    }
+    if (hao_opt.no_closures) s = NULL;
     /* A supported void block retains its declared parameters, including the
      * hidden block argument, and has no result.
      * Do not discard that fact into the generic callback's residual-register
@@ -1288,13 +1300,6 @@ static uint64_t guest_entry_for_sig(uint64_t guest, const char *enc, bool known_
     bool precise_void = s && s->simple && !s->ambiguous && !s->unmarshalable &&
                         s->ret.kind == 'v' &&
                         (known_void || (s->nargs > 0 && s->args[0].block));
-    if (s && s->unmarshalable) {
-        /* refused when called (hao_callback_with_sig), not run through the plain register bridge */
-        uint64_t code = hao_sig_thunk(guest, s);
-        if (code) return code;
-        note_guest_sig(guest, s);
-        return hao_thunk_for(guest);
-    }
     if (known_void && !precise_void) return hao_thunk_for(guest);
     if (!s || (s->simple && !precise_void)) return hao_thunk_for(guest);
     /* one signature thunk per (guest function, signature), shared by

@@ -10,6 +10,13 @@ __attribute__((noinline)) long rf_call_mid(struct rf_mid (*f)(long), long k)
     return s != -1;
 }
 
+__attribute__((noinline)) long rf_call_big(struct rf_big (*f)(long), long k)
+{
+    struct rf_big r = f(k);
+    volatile long s = r.w[0];
+    return s != -1;
+}
+
 /* a guest block whose parameter is too large to marshal */
 __attribute__((noinline)) long rf_call_block(long (^b)(struct rf_huge), long k)
 {

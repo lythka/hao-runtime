@@ -151,6 +151,9 @@ typedef struct {
     uint64_t rbp;         /* the native caller's rbp at entry */
 } hao_cb_frame;
 #define HAO_CB_FAULT 1
+/* r10 of an island entry (swiftmeta.c), whose guest function is a Swift function: swiftcc passes an indirect
+ * result's buffer in rax, which hao_callback hands the guest as x8 (a plain C entry's rax is no buffer) */
+#define HAO_CB_SWIFTCC 4
 
 typedef void (*hao_trap_fn)(hao_thread *t, uint64_t arg);
 

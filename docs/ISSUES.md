@@ -51,19 +51,32 @@ still takes the register bridge, as any call without a signature.
 A callback without a signature whose native caller gave no result buffer
 (a C caller's rax is not one) let the guest write an indirect result 1 KB
 below the guest's live stack; a larger result overwrote the caller's
-frames. x8 now points into the thread's own area (64 KB per nesting
-level, a guard after the last); a result too large for it faults there.
-The value the native caller reads is still not the guest's result: that
-needs the signature.
+frames. x8 is now the caller's rax only for a Swift function, whose
+convention passes the buffer there: an island entry (r10 =
+HAO_CB_SWIFTCC), a native caller in an image with Swift metadata, or a
+native function the guest called that jumped on to guest code (its
+return address is hao_native_call's, which passed the guest's own x8 in
+rax); a value that cannot be a data pointer is never taken. Otherwise x8
+points into the thread's own area: 64 KB for each of the first 16
+nesting levels, each followed by a 64 KB guard, so a larger result
+faults in its level's guard; a deeper level gets a guard itself. The
+area is made without a lock (a signal handler's callback that makes it
+first wins). The value the native caller reads is still not the
+guest's result: that needs the signature.
+
+An unsupported signature that cannot get its refusing signature thunk
+(HAO_NO_CLOSURES, the area full) is refused when it is registered,
+never given a plain thunk or a signature noted for its address before.
 
 Test: `guest/refuse` (JIT and --interp). An 8 KB result: the guest's
-stack canary was overwritten, now intact. A 70000-byte ObjC argument:
-SIGSEGV, now refused. A guest block with a 70000-byte parameter: printed
-0 (native 11), now refused. `guest/indirect-x8` and the bridge, block,
-callback and ObjC entries of tests/check.list pass unchanged. Limits: a
-residual rax that looks like a data pointer is still passed as x8 (native
-swiftcc passes the indirect result there; a C caller's leftover value is
-not told apart).
+stack canary was overwritten, now intact. A 96 KB result: it ran over
+another level's part, now it faults in the guard. A 70000-byte ObjC
+argument: SIGSEGV, now refused. A guest block with a 70000-byte
+parameter: printed 0 (native 11), now refused; with HAO_NO_CLOSURES at
+registration. `guest/indirect-x8` and the 119 guest and host entries of
+tests/check.list pass. Limits: a C function in an image with Swift
+metadata that calls a guest function returning in memory with a
+leftover data pointer in rax still hands it over.
 
 ## Translated code, thunks and Swift island entries were writable and executable
 
