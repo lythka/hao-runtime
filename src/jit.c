@@ -20,7 +20,7 @@
  */
 #include "hao/runtime.h"
 #include <errno.h>
-#include <cpuid.h>
+#include "hao/cpufeat.h"
 #include "hao/x86.h"
 #include "hao/a64_cond.h"
 #include <stdio.h>
@@ -153,15 +153,13 @@ static uint64_t st_fused;             /* instructions folded into the one before
 static uint64_t st_fl_exits, st_fl_unsaved;   /* direct exits reached with NZCV in EFLAGS / of those, left unsaved */
 static int jit_disabled_native;       /* HAO_JIT_HELPERS_ONLY=1: every insn via helper */
 
-/* Optional translation features are immutable for the lifetime of a process,
- * including fault recovery and AOT re-emission. AES is outside x86-64-v2. */
-static bool jit_aes;
+/* The optional CPU features (hao/cpufeat.h) the JIT translates for: this
+ * process's, reduced to what the translator consults, fixed once the switch
+ * snapshot is taken. Emission reads the profile from its tctx, never from
+ * here: an AOT block is re-emitted under its file's profile (aot_cpu_at). */
+static uint64_t jit_cpu;
 static pthread_once_t jit_cpu_once = PTHREAD_ONCE_INIT;
-static void jit_cpu_init(void)
-{
-    unsigned a, b, c, d;
-    jit_aes = __get_cpuid(1, &a, &b, &c, &d) && (c & bit_AES);
-}
+static void jit_cpu_init(void) { jit_cpu = hao_cpu_features() & HAO_CPU_JIT; }
 
 /* ------------------------------------------------------------ tables */
 
@@ -361,6 +359,7 @@ typedef struct {
      * translation (t_vfp32, t_vfp_rint), kept for the next instruction
      * only (vfp_prev while it is emitted) */
     bool vfp_consts, vfp_prev;
+    uint64_t cpu;           /* optional CPU features (hao/cpufeat.h) this code may use */
     bool pic;               /* AOT: every guest address must be base-relative */
     bool not_pic;           /* ... and one was not (the blob is not written) */
     bool live_out[MAX_BLOCK_INSNS + 1];
@@ -1129,7 +1128,16 @@ static bool t_dp2(tctx *t, uint32_t i)
         stx(t, rd, RAX, false);
         return true;
     }
-    if (opc < 8 || opc > 11) return false;                 /* shifts; crc/pacga via helper */
+    if (opc >= 20 && opc <= 23 && (opc == 23) == (sf == 1)) {
+        /* CRC32CB/H/W/X: SSE4.2 crc32 (x86-64-v2, so no profile bit) is the
+         * same reflected Castagnoli update with no inversion. EFLAGS stay. */
+        ldx(t, RAX, rn, 0, false);
+        ldx(t, RCX, rm, sf, false);
+        x_crc32(&t->b, 1 << (opc & 3), RAX, RCX);
+        stx(t, rd, RAX, false);
+        return true;
+    }
+    if (opc < 8 || opc > 11) return false;                 /* shifts; CRC32 (IEEE), pacga via helper */
     static const int ops[4] = {XSHL, XSHR, XSAR, XROR};
     fl_clobber(t);
     ldx(t, RCX, rm, sf, false);
@@ -2032,7 +2040,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
 /* EOR3 / BCAX (FEAT_SHA3; 1100 1110 00 op Rm 0 Ra Rn Rd): obfuscated code
  * runs EOR3 through its hot loops, so the two bitwise forms are native;
  * PXOR/PANDN leave EFLAGS alone. SHA*, RAX1 and XAR retain their helper;
- * the separate AES class uses t_aes when CPUID advertises AES-NI. */
+ * the separate AES class uses t_aes when the profile has AES-NI. */
 static bool t_eor3_bcax(tctx *t, uint32_t i)
 {
     unsigned rm = BITS(i, 20, 16), ra = BITS(i, 14, 10), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
@@ -2095,7 +2103,7 @@ static const uint8_t pcmpeq[3] = {0x74, 0x75, 0x76}, pcmpgt[3] = {0x64, 0x65, 0x
 static bool t_aes(tctx *t, uint32_t i)
 {
     unsigned size = BITS(i, 23, 22), op = BITS(i, 16, 12), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
-    if (!jit_aes || size || op < 4 || op > 7) return false;
+    if (!(t->cpu & HAO_CPU_AES) || size || op < 4 || op > 7) return false;
     if (op < 6) {
         vld(t, 0, rd); vld(t, 1, rn); P(0xEF, 0, 1);          /* ARM AddRoundKey */
         vzero(t, 1); P38(op == 4 ? 0xDD : 0xDF, 0, 1);       /* aesenclast / aesdeclast */
@@ -2175,6 +2183,14 @@ static bool t_simd_three_diff(tctx *t, uint32_t i)
         }
         x_sse_shift_ri(&t->b, 0x71 + size, 2, 0, 8u << size); /* high-half add/sub */
         vnarrow(t, 1 << size); vst_narrow(t, rd, Q);
+        return true;
+    }
+    if (op == 14 && !U && size == 3 && (t->cpu & HAO_CPU_PCLMUL)) {
+        /* PMULL/PMULL2 .1Q: one carry-less 64 x 64 multiply of the low or the
+         * high doublewords. PMULL .8H (8 x 8) stays with the helper. */
+        vld(t, 0, rn); vld(t, 1, rm);
+        x_sse3a_rri(&t->b, 0x44, 0, 1, Q ? 0x11 : 0x00);   /* pclmulqdq */
+        vst(t, rd, 0, 1);
         return true;
     }
     if (size == 3 || (op > 3 && op != 5 && op != 7 && op != 8 && op != 10 && op != 12)) return false;
@@ -4525,6 +4541,7 @@ static void *translate(uint64_t pc)
     int n = fetch_block(pc, im, insns);
     tctx t;
     memset(&t, 0, sizeof t);
+    t.cpu = jit_cpu;
     if (im) {
         if (!im->jit_slot) {
             /* fill and claim the slot before publishing it (see jit_lock) */
@@ -4570,6 +4587,7 @@ static uint8_t loc_buf[MAX_BLOCK_BYTES];
 static int loc_busy;
 
 static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc);
+static uint64_t aot_cpu_at(const hao_image *im, uint64_t code);
 
 bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
 {
@@ -4593,6 +4611,7 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
     tctx t;
     memset(&t, 0, sizeof t);
     t.dry = true;
+    t.cpu = aot_cpu_at(im, code);
     t.rec_off = off;
     t.rec_fl = fl;
     t.base = im->base;
@@ -4668,11 +4687,8 @@ static void block_successors(const uint32_t *insns, int n, uint64_t pc, uint64_t
 
 /* The build identity: LC_UUID of the image holding this code (libhao.dylib
  * for both hao and the embedded stubs). ld64 derives it from the content,
- * so every changed build rejects every older cache. Bit zero of its last
- * byte additionally names the AES translation profile. Only the base UUID
- * and this explicit XOR-derived identity are accepted by packaging tools;
- * the runtime requires its own exact profile, so optional AES instructions
- * can never load on a CPU lacking AES-NI. */
+ * so every changed build rejects every older cache. The CPU features a
+ * cache's code may use are a header field of their own (cpu_profile). */
 static uint8_t gen_uuid[16];
 static bool gen_ok;
 static pthread_once_t gen_once = PTHREAD_ONCE_INIT;
@@ -4690,8 +4706,6 @@ static void gen_init(void)
             memcpy(gen_uuid, ((const struct uuid_command *)lc)->uuid, 16);
             static const uint8_t zero[16];
             gen_ok = memcmp(gen_uuid, zero, 16) != 0;
-            pthread_once(&jit_cpu_once, jit_cpu_init);
-            gen_uuid[15] ^= jit_aes ? 1 : 0;
             return;
         }
         p += lc->cmdsize;
@@ -4932,7 +4946,7 @@ static void aot_expect(hao_image *im, const uint8_t *gen, uint64_t *lo, uint64_t
     uint32_t kind = !aot_image_sig(im, &s) ? 0 : s.size ? HAO_AOT_ID_CDHASH : HAO_AOT_ID_CODE;
     *x = (hao_aot_expect){im->uuid, gen, im->vmsize,
                           hao_aot_guest_id((const void *)(uintptr_t)im->base, aot_hdr_avail(im), im->slice_size),
-                          lo, hi, im->ncode, kind, 0, NULL};
+                          lo, hi, im->ncode, kind, 0, NULL, hao_cpu_features()};
 }
 
 /* A directory every process trusts (hao/aot.h): by kind or canonical path,
@@ -4960,6 +4974,24 @@ static int aot_cmp_code(void *ents, const void *a, const void *b)
     const hao_aot_ent *e = ents;
     uint32_t x = e[*(const uint32_t *)a].code_off, y = e[*(const uint32_t *)b].code_off;
     return x < y ? -1 : x > y;
+}
+
+/* Where an image's cache lies in the code cache and the profile it was
+ * translated under, for hao_jit_locate: set before im->aot is published. */
+static void aot_publish(hao_image *im, uint8_t *code, uint64_t size, uint64_t cpu)
+{
+    im->aot_size = size;
+    im->aot_cpu = cpu;
+    __atomic_store_n(&im->aot, code, __ATOMIC_RELEASE);
+}
+
+/* The profile the block at host address code was emitted under: its
+ * cache's, for a block of im's AOT cache, else the JIT's. Lock-free. */
+static uint64_t aot_cpu_at(const hao_image *im, uint64_t code)
+{
+    const uint8_t *a = im ? __atomic_load_n(&im->aot, __ATOMIC_ACQUIRE) : NULL;
+    if (a && code >= (uint64_t)(uintptr_t)a && code - (uint64_t)(uintptr_t)a < im->aot_size) return im->aot_cpu;
+    return jit_cpu;
 }
 
 /* Publish a checked cache. Other threads may be translating (an earlier
@@ -4991,7 +5023,7 @@ static bool aot_install(hao_image *im, const hao_aot_view *v, char *why, size_t 
         for (; k < nb; k++)
             if (!insert(im->base + v->ents[k].guest_off, code + v->ents[k].code_off)) { cache_exhausted(); break; }
         for (uint32_t j = 0; order && j < nb; j++) rmap_add(code + v->ents[order[j]].code_off, im->base + v->ents[order[j]].guest_off);
-        im->aot = code;
+        aot_publish(im, code, cs, v->hdr->cpu_profile);
         st_aot_blocks += k;
     } else
         avail = cache_ptr < cache_end ? (size_t)(cache_end - cache_ptr) : 0;
@@ -5080,7 +5112,7 @@ static bool aot_lazy_install(hao_image *im, const hao_aot_view *v, const uint8_t
         memcpy(code, &im->base, 8);       /* the base slot */
         z->dst = code;
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
-        im->aot = code;
+        aot_publish(im, code, z->cs, v->hdr->cpu_profile);
         lazy_recs[i] = z;
         __atomic_store_n(&lazy_n, i + 1, __ATOMIC_RELEASE);
         __atomic_store_n(&im->aot_lazy, z, __ATOMIC_RELEASE);
@@ -5281,10 +5313,11 @@ bool hao_aot_load(hao_image *im)
     return false;
 }
 
-/* Whether one of dirs holds a cache this image would load: 0 (valid; where
- * names it), 1 (no file in any) or 2 (a file, none valid; why says the last
- * reason). The same checks as hao_aot_load, without the install. */
-static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where, size_t wn, char *why, size_t n)
+/* Whether one of dirs holds a cache this image would load with at most the
+ * CPU features cpu: 0 (valid; where names it), 1 (no file in any) or 2 (a
+ * file, none valid; why says the last reason). The same checks as
+ * hao_aot_load, without the install. */
+static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, uint64_t cpu, char *where, size_t wn, char *why, size_t n)
 {
     const uint8_t *gen = aot_gen();
     if (!gen) { snprintf(why, n, "this hao build has no LC_UUID"); return 2; }
@@ -5293,6 +5326,7 @@ static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where
     uint64_t lo[HAO_MAX_RANGES], hi[HAO_MAX_RANGES];
     hao_aot_expect x;
     aot_expect(im, gen, lo, hi, &x);
+    x.cpu &= cpu;
     aot_id id;
     bool seen = false;
     why[0] = 0;
@@ -5327,8 +5361,9 @@ static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where
     return seen ? 2 : 1;
 }
 
-/* hao --aot --check: 0 valid, 3 missing, 4 stale, -1 not checkable. Writes nothing. */
-int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
+/* hao --aot --check: 0 valid, 3 missing, 4 stale, -1 not checkable. Writes nothing. Valid: loadable
+ * here, using no CPU feature outside cpu. */
+int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint64_t cpu)
 {
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
     int w, nd;
@@ -5341,7 +5376,7 @@ int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
     hao_image *im = hao_map_image_only(path, err, sizeof err);
     if (!im) { fprintf(stderr, "hao-aot: %s: %s\n", path, err); return -1; }
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); hao_unload_image(im); return -1; }
-    int r = aot_state(im, dirs, nd, where, sizeof where, why, sizeof why);
+    int r = aot_state(im, dirs, nd, cpu, where, sizeof where, why, sizeof why);
     hao_unload_image(im);
     if (r == 0) { if (print) fprintf(stderr, "hao-aot: %s: valid (%s)\n", path, where); return 0; }
     if (r == 1) { if (print) fprintf(stderr, "hao-aot: %s: missing\n", path); return 3; }
@@ -5434,7 +5469,7 @@ static bool write_all(int fd, const uint8_t *p, size_t n)
 /* Translate every reachable block of `im` into one position-independent
  * blob and write it to dfd/<uuid>.aot. */
 static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_aot_dir *d, const char *dir, const aot_id *id,
-                        bool verbose)
+                        uint64_t cpu, bool verbose)
 {
     int rc = -1, ofd = -1;
     bool oom = false;
@@ -5449,6 +5484,7 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     hao_aot_link *links = NULL;
     tctx t;
     memset(&t, 0, sizeof t);
+    t.cpu = cpu & hao_cpu_features() & HAO_CPU_JIT;   /* never a feature this host cannot check by running */
     if (!work || !seen) goto oom;
 #define PUSH(a) do { uint64_t _a = (a); if (hao_image_for_code(_a) == im && !(_a & 3) && !seen[(_a - im->base) / 4]) { \
         if (nwork == cap) { uint64_t *_n = realloc(work, cap * 2 * 8); if (!_n) { oom = true; break; } work = _n; cap *= 2; } \
@@ -5575,6 +5611,7 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     h.id_kind = id->kind;
     h.id_hash = id->hash;
     memcpy(h.code_id, id->id, sizeof h.code_id);
+    h.cpu_profile = t.cpu;
     h.nblocks = (uint32_t)nents;
     h.nlinks = (uint32_t)nl;
     h.code_size = xb_len(&t.b);
@@ -5609,10 +5646,13 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
         char idx[2 * HAO_AOT_ID_LEN + 1];
         int nb = id->kind == HAO_AOT_ID_CDHASH ? HAO_AOT_CDHASH_LEN : HAO_AOT_ID_LEN;
         for (int k = 0; k < nb; k++) snprintf(idx + 2 * k, 3, "%02x", id->id[k]);
+        char cn[160];
         fprintf(stderr, "hao-aot: %s: %zu blocks, %llu insns (%.4f%% translated natively, rest via interpreter helper), %zu/%d links, "
-                "%zu KB code, bound to %s %s -> %s/%s\n",
+                "%zu KB code, CPU profile %#llx (%s), bound to %s %s -> %s/%s\n",
                 im->path, nents, (unsigned long long)ninsns, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0.0,
-                nl, t.nlinks, (size_t)(h.code_size >> 10), id->kind == HAO_AOT_ID_CDHASH ? "cdhash" : "code hash (unsigned)", idx, dir, name);
+                nl, t.nlinks, (size_t)(h.code_size >> 10), (unsigned long long)h.cpu_profile,
+                h.cpu_profile ? hao_cpu_names(h.cpu_profile, cn, sizeof cn) : "none", id->kind == HAO_AOT_ID_CDHASH ? "cdhash" : "code hash (unsigned)",
+                idx, dir, name);
     }
     rc = 0;
     goto out;
@@ -5697,7 +5737,7 @@ fail:
  * is (ownership, modes, ACLs and symlinks of every element; the rule for
  * unsigned guests if it is, or lies in, a system directory).
  */
-int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
+int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir, uint64_t cpu)
 {
     const uint8_t *gen = aot_gen();
     if (!gen) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return -1; }
@@ -5733,12 +5773,13 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
     snprintf(im->path, sizeof im->path, "%s", path);
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); goto out; }
     {
-        /* a cache this image would already load, here or in a directory this process reads: nothing to write */
+        /* a cache this image would already load, here or in a directory this process reads, that uses
+         * no CPU feature outside the profile asked for: nothing to write */
         hao_aot_dir rd[HAO_AOT_MAX_DIRS];
         int rw, rn = cache_dir ? 0 : aot_dirs(rd, &rw, why, sizeof why);
         char where[PATH_MAX + 80];
         if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
-        if (rn > 0 && aot_state(im, rd, rn, where, sizeof where, why, sizeof why) == 0) {
+        if (rn > 0 && aot_state(im, rd, rn, cpu, where, sizeof where, why, sizeof why) == 0) {
             if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
             rc = 0;
             goto out;
@@ -5782,7 +5823,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
         }
         if (!aot_image_id(im, &id, why, sizeof why)) { fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why); goto out; }
     }
-    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, verbose);
+    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, cpu, verbose);
 out:
     if (im) hao_unload_image(im);     /* and with it the last reference to the private copy */
     close(tfd);
@@ -6261,6 +6302,7 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
             n > 2 * MAX_BLOCK_INSNS || memcmp(es->last_code, code, 4u * (unsigned)n)) {
             tctx t;
             memset(&t, 0, sizeof t);
+            t.cpu = jit_cpu;
             t.win = code;
             t.win_base = base;
             t.win_n = n;

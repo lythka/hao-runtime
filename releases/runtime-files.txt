@@ -23,6 +23,7 @@ include/hao/bridge.h
 include/hao/code.h
 include/hao/codeid.h
 include/hao/cpu.h
+include/hao/cpufeat.h
 include/hao/dlsym_once.h
 include/hao/gen_stamp.h
 include/hao/gmap.h
@@ -178,6 +179,7 @@ src/callbacks.c
 src/code.c
 src/code_identity.c
 src/commpage.c
+src/cpufeat.c
 src/cxxstr.c
 src/cxxstr_gen.inc
 src/dsc.c
@@ -819,9 +821,10 @@ tests/aot/wide_fp_mutations.sh
 
 tests/aot/estimate_mutations.sh
 
-tests/aot/aes_mutations.sh
-tests/aot/aes_profile.c
-tests/aot/aes_profile.sh
+tests/aot/cpu_haswell.sh
+tests/aot/cpu_profile.c
+tests/aot/cpu_profile.sh
+tests/aot/crypto_mutations.sh
 tests/guest/reserved_simd.c
 tests/guest/reserved_simd.sh
 tests/guest/valist.sh

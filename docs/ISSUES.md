@@ -1,5 +1,39 @@
 # Runtime issues and measured scope
 
+## CPU profiles for translation and AOT caches
+
+The JIT knew one optional CPU feature, AES-NI, from a global flag, and an AOT
+cache named it by XORing the last byte of the libhao UUID. A second feature
+would have needed 2^n identities, a cache could not say which feature was
+missing, and fault recovery re-emitted an AOT block with the process's
+features rather than the ones it was made with. Now `hao_cpu_host()`
+(`src/cpufeat.c`) computes one feature word from CPUID leaves 1, 7.0 and
+0x80000001, with OSXSAVE and XCR0 for the VEX and EVEX forms. Each
+translation takes its profile from its context: the process's for the JIT,
+the file's for an AOT block. AOT format 8 records `cpu_profile` in the header
+and keeps the plain libhao UUID as `gen`. A cache loads only if the host has
+every recorded feature; the rejection names the missing ones.
+`hao --aot --cpu=baseline|host|HEX` can only drop features the host has.
+Release payloads use `baseline`, the Ivy Bridge set. `HAO_CPU_FEATURES=HEX`
+(test-switch builds only) can only clear features. New lowerings: CRC32C to
+SSE4.2 `crc32` (no gate) and PMULL/PMULL2 .1Q to `pclmulqdq` (gated on
+PCLMULQDQ). The interpreter's CRC32 and CRC32C use a table per byte position
+instead of a bit loop. Measured on the development host (Rosetta), 20 million
+iterations per guest loop, wall time including about 0.05 s of start-up:
+CRC32CX 1.6 s to 0.10 s, CRC32X 1.6 s to 0.28 s, CRC32B 0.32 s to 0.26 s,
+PMULL .1Q 1.47 s to 0.29 s. Tests: the oracle's dp records now include every
+CRC32/CRC32C form. Before this change, a field filter skipped CRC32W
+natively. `make oracle` runs simd again with the JIT under profile 0.
+`aot/cpu-profile`, `aot/crypto-mutations`, the policy test and `aot` P1-P5
+cover the rest. `aot/cpu-haswell` uses `ROSETTA_ADVERTISE_AVX=1` for a
+Haswell-class host. Limits: PMULL .8H and CRC32 (IEEE) still run in the
+helper. SHA, FMA, BMI and AVX lowerings are not written. They need VEX
+encoders and their own oracle modes. Every existing AOT cache (format 7) is
+rejected and must be generated again. Caches keep the `<LC_UUID>.aot` name,
+one per guest, so a user cache made for a newer Mac replaces a shipped
+baseline one in its own directory only. Nothing here ran on AVX-512
+hardware.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
@@ -1334,7 +1368,8 @@ runtime accepts only the current CPU's exact profile. `hao-image-payload`,
 `hao-install.py`, `hao-aot-extend` and `hao_release.py` accept exactly these
 two derived identities, and package dependencies still name the unmodified
 runtime UUID. Version 6 caches are rejected before execution. The installer
-removes them as stale.
+removes them as stale. (Format 8 replaced the XOR with a CPU profile field; see CPU profiles
+for translation and AOT caches.)
 
 **Validation.** About 934,000 complete-state cases pass, covering all
 RMode/FZ/DN settings, aliases and sticky FPSR. The native instruction

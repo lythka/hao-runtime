@@ -7,6 +7,7 @@
  */
 #include "hao/aot.h"
 #include "hao/bridge.h"
+#include "hao/cpufeat.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -328,6 +329,7 @@ static void test_format(void)
     MUT("bad magic", f[0] ^= 1, 0, "not a hao");
     MUT("version 4", h->version = 4, 0, "format version");
     MUT("version 6", h->version = 6, 0, "format version");
+    MUT("version 7 (no CPU profile)", h->version = 7, 0, "format version");
     MUT("header size", h->hdr_size = 64, 0, "header size");
     MUT("other guest uuid", h->uuid[3] ^= 1, 0, "UUID");
     MUT("header from another hao build", h->gen[15] ^= 1, 0, "another hao build");
@@ -398,6 +400,40 @@ static void test_format(void)
     MUT("link rel32 changed", f[n - 64 + 20] ^= 4, 1, "does not reach");
     n = build(f, &x);
     CHECK(hao_aot_check(f + 4, n - 4, &x, &v, why, sizeof why) != 0, "unaligned buffer rejected");
+
+    /* The CPU profile: a cache loads iff every feature it was translated for
+     * is one the host has; the reason names exactly the missing ones. */
+    static const struct { uint64_t profile, host; const char *missing; } cp[] = {
+        {0, 0, NULL},
+        {0, HAO_CPU_ALL, NULL},
+        {HAO_CPU_AES, HAO_CPU_AES | HAO_CPU_PCLMUL, NULL},
+        {HAO_CPU_AES | HAO_CPU_PCLMUL, HAO_CPU_AES | HAO_CPU_PCLMUL, NULL},
+        {HAO_CPU_BASELINE, HAO_CPU_BASELINE | HAO_CPU_AVX2 | HAO_CPU_FMA | HAO_CPU_BMI2, NULL},   /* baseline cache, newer Mac */
+        {HAO_CPU_AES | HAO_CPU_PCLMUL, HAO_CPU_AES, "pclmul"},
+        {HAO_CPU_PCLMUL, 0, "pclmul"},
+        {HAO_CPU_AES | HAO_CPU_PCLMUL, 0, "aes,pclmul"},
+        {HAO_CPU_BASELINE | HAO_CPU_AVX2 | HAO_CPU_FMA, HAO_CPU_BASELINE, "fma,avx2"},           /* newer Mac's cache, 2012 Mac */
+        {HAO_CPU_AVX512F | HAO_CPU_AVX512VL, HAO_CPU_ALL & ~HAO_CPU_AVX512VL, "avx512vl"},
+        {1ull << 40, HAO_CPU_ALL, "bit40"},
+    };
+    for (unsigned k = 0; k < sizeof cp / sizeof *cp; k++) {
+        n = build(f, &x);
+        h->cpu_profile = cp[k].profile;
+        x.cpu = cp[k].host;
+        int r = hao_aot_check(f, n, &x, &v, why, sizeof why);
+        if (!cp[k].missing) CHECK(r == 0, "profile %#llx on host %#llx accepted (%s)", (unsigned long long)cp[k].profile,
+                                  (unsigned long long)cp[k].host, r ? why : "ok");
+        else {
+            const char *m = strstr(why, "lacks: ");
+            CHECK(r == -1 && m && !strcmp(m + 7, cp[k].missing), "profile %#llx on host %#llx rejected naming %s (%s)",
+                  (unsigned long long)cp[k].profile, (unsigned long long)cp[k].host, cp[k].missing, r ? why : "accepted");
+        }
+        x.code_id = NULL;   /* decided before the guest's identity is computed */
+        r = hao_aot_check(f, n, &x, &v, why, sizeof why);
+        CHECK(cp[k].missing ? r == -1 : r == HAO_AOT_NEED_ID, "profile %#llx on host %#llx: no identity asked for a cache this host cannot run",
+              (unsigned long long)cp[k].profile, (unsigned long long)cp[k].host);
+    }
+    n = build(f, &x);
 
     /* random mutations, rehashed, so they reach every check: never accept a
      * view that would leave the file or the image */
@@ -512,12 +548,61 @@ static void test_system_dirs(void)
     CHECK(!hao_aot_dir_explicit(HAO_ENV_OPEN, big, &x, why, sizeof why), "over-long --cache refused");
 }
 
+/* The feature word from CPUID registers: the Macs in scope, Rosetta, and
+ * the operating-system state VEX and EVEX code needs. */
+static void test_cpu_decode(void)
+{
+    char nm[256];
+    /* Ivy Bridge (MacBookPro9,2): leaf 1 ECX with PCLMUL, SSSE3, CX16, SSE4.1/4.2, POPCNT, AES, XSAVE, OSXSAVE, AVX, F16C,
+     * RDRAND; leaf 7 EBX only FSGSBASE/ERMS-class bits that hao does not list; XCR0 x87|SSE|AVX */
+    hao_cpuid_regs ivb = {.max_leaf = 13, .max_ext = 0x80000008u, .l1_ecx = 0x7fbae3ffu, .l7_ebx = 0x00000281u, .e1_ecx = 1, .xcr0 = 7};
+    CHECK(hao_cpu_decode(&ivb) == HAO_CPU_BASELINE, "Ivy Bridge: exactly the baseline (%s)", hao_cpu_names(hao_cpu_decode(&ivb), nm, sizeof nm));
+    hao_cpuid_regs r = ivb;
+    r.l1_ecx &= ~(1u << 27);   /* OSXSAVE clear: AVX state not enabled */
+    CHECK(hao_cpu_decode(&r) == (HAO_CPU_AES | HAO_CPU_PCLMUL | HAO_CPU_RDRAND), "AVX without OSXSAVE: no VEX features (%s)",
+          hao_cpu_names(hao_cpu_decode(&r), nm, sizeof nm));
+    r = ivb; r.xcr0 = 3;       /* the OS saves no YMM state */
+    CHECK(!(hao_cpu_decode(&r) & (HAO_CPU_AVX | HAO_CPU_F16C)), "AVX with XCR0 lacking YMM state: no VEX features");
+    /* Rosetta as measured: leaf 1 ECX 0298220f, leaf 7 zero */
+    hao_cpuid_regs ro = {.max_leaf = 13, .max_ext = 0x80000008u, .l1_ecx = 0x0298220fu};
+    CHECK(hao_cpu_decode(&ro) == (HAO_CPU_AES | HAO_CPU_PCLMUL), "Rosetta: aes,pclmul (%s)", hao_cpu_names(hao_cpu_decode(&ro), nm, sizeof nm));
+    /* Rosetta with ROSETTA_ADVERTISE_AVX=1: leaf 1 ECX 7ed8320f, leaf 7 EBX 128, LZCNT */
+    hao_cpuid_regs rh = {.max_leaf = 13, .max_ext = 0x80000008u, .l1_ecx = 0x7ed8320fu, .l7_ebx = 0x128, .e1_ecx = 0x21, .xcr0 = 7};
+    uint64_t want = HAO_CPU_BASELINE | HAO_CPU_FMA | HAO_CPU_MOVBE | HAO_CPU_AVX2 | HAO_CPU_BMI1 | HAO_CPU_BMI2 | HAO_CPU_LZCNT;
+    CHECK(hao_cpu_decode(&rh) == want, "Rosetta advertising AVX: a Haswell-class word (%s)", hao_cpu_names(hao_cpu_decode(&rh), nm, sizeof nm));
+    r = rh; r.max_leaf = 6;    /* leaf 7 not enumerated: its registers are not read */
+    CHECK(!(hao_cpu_decode(&r) & (HAO_CPU_AVX2 | HAO_CPU_BMI1 | HAO_CPU_BMI2)), "leaf 7 ignored when the maximum leaf is below 7");
+    /* Skylake-SP class: AVX-512 F/DQ/BW/VL, only with opmask and ZMM state in XCR0 */
+    hao_cpuid_regs sx = rh;
+    sx.l7_ebx |= 1u << 16 | 1u << 17 | 1u << 30 | 1u << 31;
+    sx.xcr0 = 0xE7;
+    uint64_t f512 = HAO_CPU_AVX512F | HAO_CPU_AVX512DQ | HAO_CPU_AVX512BW | HAO_CPU_AVX512VL;
+    CHECK((hao_cpu_decode(&sx) & f512) == f512, "AVX-512 with XCR0 E7: avx512f,dq,bw,vl");
+    sx.xcr0 = 7;
+    CHECK(!(hao_cpu_decode(&sx) & f512) && (hao_cpu_decode(&sx) & HAO_CPU_AVX2), "AVX-512 without ZMM state in XCR0: none of it, AVX2 kept");
+    CHECK((HAO_CPU_JIT & ~HAO_CPU_BASELINE) == 0, "every feature the translator consults is in the baseline");
+    /* --cpu: clear-only against the host */
+    uint64_t p = 0;
+    char why[160];
+    CHECK(hao_cpu_profile_parse("baseline", want, &p, why, sizeof why) && p == HAO_CPU_BASELINE, "--cpu=baseline on a Haswell-class host");
+    CHECK(hao_cpu_profile_parse("baseline", HAO_CPU_AES | HAO_CPU_PCLMUL, &p, why, sizeof why) && p == (HAO_CPU_AES | HAO_CPU_PCLMUL),
+          "--cpu=baseline on Rosetta: never a feature the host lacks");
+    CHECK(hao_cpu_profile_parse("host", want, &p, why, sizeof why) && p == want, "--cpu=host");
+    CHECK(hao_cpu_profile_parse("0x1", want, &p, why, sizeof why) && p == HAO_CPU_AES, "--cpu=0x1");
+    CHECK(hao_cpu_profile_parse("ffffffff", HAO_CPU_AES, &p, why, sizeof why) && p == HAO_CPU_AES, "--cpu=ffffffff only clears");
+    CHECK(hao_cpu_profile_parse("0", want, &p, why, sizeof why) && p == 0, "--cpu=0");
+    CHECK(!hao_cpu_profile_parse("avx2", want, &p, why, sizeof why) && strstr(why, "expected"), "--cpu=avx2 refused (%s)", why);
+    CHECK(!hao_cpu_profile_parse("0x", want, &p, why, sizeof why), "--cpu=0x refused");
+    CHECK(!hao_cpu_profile_parse("-1", want, &p, why, sizeof why), "--cpu=-1 refused");
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) { fprintf(stderr, "usage: policy TMPDIR\n"); return 2; }
-    CHECK(sizeof(hao_aot_hdr) == 136 && __builtin_offsetof(hao_aot_hdr, id_kind) == 96 && __builtin_offsetof(hao_aot_hdr, code_id) == 104 &&
-          __builtin_offsetof(hao_aot_hdr, nblocks) == 64 && HAO_AOT_VERSION == 7,
-          "format v7 header: 136 bytes, id_kind at 96, code_id at 104 (the tools read these offsets)");
+    CHECK(sizeof(hao_aot_hdr) == 144 && __builtin_offsetof(hao_aot_hdr, id_kind) == 96 && __builtin_offsetof(hao_aot_hdr, code_id) == 104 &&
+          __builtin_offsetof(hao_aot_hdr, nblocks) == 64 && __builtin_offsetof(hao_aot_hdr, cpu_profile) == 136 && HAO_AOT_VERSION == 8,
+          "format v8 header: 144 bytes, id_kind at 96, code_id at 104, cpu_profile at 136 (the tools read these offsets)");
+    test_cpu_decode();
     test_code_id();
     test_system_dirs();
     test_tiers();

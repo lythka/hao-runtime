@@ -36,7 +36,7 @@ OSO       := -Wl,-oso_prefix,$(CURDIR)/
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
 
 CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c \
-        src/a64_imm.c src/a64_cond.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c
+        src/a64_imm.c src/a64_cond.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
 RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
@@ -132,13 +132,17 @@ $(B)/oracle-check: tests/oracle/check.c tests/oracle/record.h tests/oracle/known
 $(B)/oracle-atomic: tests/oracle/atomic16.c $(B)/libhaocore.a $(B)/jit.o $(B)/stubs_oracle.o
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a -lpthread && codesign -s - -f $@
 
-# Every mode runs; the target fails if any of them reports a failure.
+# Every mode runs; the target fails if any of them reports a failure. The
+# simd records (AES, PMULL) are checked again with the JIT translating for no
+# optional CPU feature (hao/cpufeat.h): the helper paths those lowerings skip.
 ORACLE_N ?= 200000
 ORACLE_MODES ?= dp simd mem block fma known reserved
 oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	@fail=0; for m in $(ORACLE_MODES); do \
 	  timeout -s KILL 900 $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \
 	  echo "== $$m"; timeout -s KILL 900 $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m.txt || fail=1; \
+	  if [ $$m = simd ]; then echo "== $$m (JIT without optional CPU features)"; \
+	    timeout -s KILL 900 $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m-cpu0.txt --cpu 0 || fail=1; fi; \
 	done; \
 	echo "== atomic"; timeout -s KILL 300 $(B)/oracle-atomic || fail=1; \
 	exit $$fail
@@ -230,9 +234,9 @@ $(B)/test_images: tests/loader/test_images.c src/macho.c src/code.c src/libval.c
 
 # Unit test of the interface-unit parser (src/ifunit.c), under ASan/UBSan: one
 # corruption per rule and every single-bit edit of the fuzz seeds.
-$(B)/test_ifunit: tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c include/hao/bridge.h include/hao/aot.h $(MIN_STAMP)
+$(B)/test_ifunit: tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c include/hao/bridge.h include/hao/aot.h $(MIN_STAMP)
 	@mkdir -p $(B)
-	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c && codesign -s - -f $@
+	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c && codesign -s - -f $@
 
 $(B)/test_helper_descriptor: tests/aot/helper_descriptor.c $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
@@ -330,8 +334,8 @@ $(B)/fuzz/fuzz_typeenc: tests/fuzz/fuzz_typeenc.c src/abi.c $(wildcard include/h
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -Wno-unused-function -o $@ tests/fuzz/fuzz_typeenc.c $(B)/fuzz/driver.o && codesign -s - -f $@
 $(B)/fuzz/fuzz_codesig: tests/fuzz/fuzz_codesig.c src/libval.c $(wildcard include/hao/*.h) $(B)/fuzz/driver.o
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -Wno-unused-function -o $@ tests/fuzz/fuzz_codesig.c $(B)/fuzz/driver.o && codesign -s - -f $@
-$(B)/fuzz/fuzz_ifunit: tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c include/hao/bridge.h include/hao/aot.h $(B)/fuzz/driver.o
-	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -o $@ tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c $(B)/fuzz/driver.o && codesign -s - -f $@
+$(B)/fuzz/fuzz_ifunit: tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c include/hao/bridge.h include/hao/aot.h $(B)/fuzz/driver.o
+	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -o $@ tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c $(B)/fuzz/driver.o && codesign -s - -f $@
 fuzz: $(FUZZERS)
 fuzz-smoke: $(FUZZERS)
 	B=$(B) FUZZ_TIME=$(FUZZ_TIME) tests/fuzz/run.sh
