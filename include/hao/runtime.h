@@ -184,7 +184,6 @@ uint64_t hao_call_guest(hao_thread *t, uint64_t fn, const uint64_t *args, int na
 uint64_t hao_trap_address(const char *name, hao_trap_fn fn, uint64_t arg);
 bool hao_is_trap(uint64_t pc);
 void hao_install_fault_handler(void);
-bool hao_bootarg_flag(const char *key);   /* boot argument "key=1" present (kern.bootargs) */
 /* trust.c: how far the environment is trusted (hao/aot.h); the switches
  * themselves are read once into hao_opt (hao/opts.h, hao_opts_init). */
 int hao_env_tier(void);                   /* HAO_ENV_OPEN / GUARDED / SETUGID */
@@ -450,6 +449,7 @@ void hao_jit_stats(void);
  * (hao/cpufeat.h; hao_cpu_profile_parse); 0 or -1 (reported) */
 int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir, uint64_t cpu);
 int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint64_t cpu);
+bool hao_aot_write_dir(char *out, size_t n);   /* the directory `hao --aot` with no --cache writes to; false: none */
 bool hao_aot_generation(uint8_t out[16]);
 uint64_t hao_thunk_for(uint64_t guest);
 uint64_t hao_thunk_target(uint64_t thunk);

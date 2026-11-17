@@ -15,7 +15,8 @@ hao_opts_t hao_opt;
  * programs and PID 1 included, and stays set across restarts. So each knob
  * says whether it may come from there:
  *   BOOT_YES  what a guarded process may also take from its environment
- *             (hao/aot.h): the engine and printing switches;
+ *             (hao/aot.h): the engine and printing switches, except
+ *             swift_value_survey (open tier only from the environment);
  *   BOOT_DEV  bring-up switches that change how calls are bridged or signals
  *             return: only in a HAO_TEST_SWITCHES build;
  *   BOOT_NO   never: hao_no_libval would turn library validation off for
@@ -53,6 +54,7 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"code_alias", offsetof(hao_opts_t, code_alias), BOOT_NO},
     {"libval_user", offsetof(hao_opts_t, libval_user), BOOT_NO},
     {"swift_value_strict", offsetof(hao_opts_t, swift_value_strict), BOOT_NO},
+    {"swift_value_survey", offsetof(hao_opts_t, swift_value_survey), BOOT_YES},
 };
 #define NKNOBS (sizeof knobs / sizeof knobs[0])
 
@@ -121,6 +123,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
             const char *key = tok, *val = eq + 1;
             if (pid1 && !strcmp(key, "hao")) apply_flags(o, val, false);
             else if (pid1 && !strcmp(key, "hao_verbose")) o->verbose = atoi(val);
+            else if (!strcmp(key, "hao_crash") && !strcmp(val, "1")) o->crash = true;
             else if (!strncmp(key, "hao_", 4) && !strcmp(val, "1"))
                 for (size_t k = 0; k < NKNOBS; k++)
                     if (!strcmp(key + 4, knobs[k].name) && boot_knob_allowed(knobs[k].boot))
@@ -144,6 +147,8 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
         if (!hao_cpu_profile_parse(v, HAO_CPU_ALL, &keep, why, sizeof why)) keep = 0;
         o->cpu_clear = HAO_CPU_ALL & ~keep;
     }
+    if ((v = env_get(o, envp, "HAO_AOT_FREE_MB", tier))) snprintf(o->aot_free_mb, sizeof o->aot_free_mb, "%s", v);
+    if (env_on(o, envp, "HAO_CRASH", tier)) o->crash = true;
     for (size_t k = 0; k < NKNOBS; k++) {
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)

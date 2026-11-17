@@ -79,13 +79,15 @@ static void refuse(const void *type, const char *why)
 }
 
 /* What a value the walk cannot certify does. By default it passes through
- * unpatched: the native code gets the guest's bytes as they are (a nil in
- * the guest's encoding can then misbehave later, so a crash after a survey
- * line is read with that in mind), and the first time a (type, reason)
- * pair occurs in the process hao prints the value's innermost refusing
- * types, the schema of the value and one line naming the root type and the
- * guest caller, all under the stable prefix "Swift value survey:". With
- * HAO_SWIFT_VALUE_STRICT (tests) it is refused: printed, then abort. */
+ * unpatched and silently: the native code gets the guest's bytes as they are
+ * (a nil in the guest's encoding can then misbehave later). With
+ * HAO_SWIFT_VALUE_SURVEY (boot argument hao_swift_value_survey=1), the first
+ * time a (type, reason) pair occurs in the process hao prints the value's
+ * innermost refusing types, the schema of the value and one line naming the
+ * root type and the guest caller, all under the stable prefix "Swift value
+ * survey:" (a crash after a survey line is read with the pass-through in
+ * mind). With HAO_SWIFT_VALUE_STRICT (tests) it is refused: printed, then
+ * abort. */
 #define SEEN_LIMIT 1024
 static struct { const void *type; const char *why; } seen[SEEN_LIMIT];
 static unsigned nseen;
@@ -108,7 +110,7 @@ static void decline(const void *type, const char *why, const void *walked, const
                     const void *root, uint64_t lr, uint64_t pc)
 {
     bool strict = hao_opt.swift_value_strict;
-    if (!strict && !first_report(type,why)) return;
+    if (!strict && (!hao_opt.swift_value_survey || !first_report(type,why))) return;
     if (walked && value) {
         empty_patch scratch[64];
         const void *unresolved;

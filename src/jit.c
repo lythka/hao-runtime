@@ -4877,6 +4877,17 @@ static int aot_dirs(hao_aot_dir *d, int *w, char *why, size_t n)
     return hao_aot_dirs_for(tier, eu, pw, hao_opt.cache, d, w, why, n);
 }
 
+bool hao_aot_write_dir(char *out, size_t n)
+{
+    hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
+    int w;
+    char why[700];
+    aot_dirs(dirs, &w, why, sizeof why);
+    if (w < 0) return false;
+    snprintf(out, n, "%s", dirs[w].path);
+    return true;
+}
+
 static void aot_name(hao_image *im, char *out, size_t n, const char *ext)
 {
     char u[33];

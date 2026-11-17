@@ -193,7 +193,7 @@ static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "H
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
                                             "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_CPU_FEATURES",
-                                            NULL};
+                                            "HAO_AOT_FREE_MB", "HAO_CRASH", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {
@@ -219,6 +219,8 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *    std::string layout, runtime.c), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
  *    swiftresult.c);
+ *  - print guest data and addresses to wherever the caller's stderr goes: HAO_SWIFT_VALUE_SURVEY (a root
+ *    process takes it from boot argument hao_swift_value_survey=1);
  *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the
  *    frame, signals.c), HAO_NO_PROBE, HAO_WATCHDOG (takes SIGALRM and exits 124), HAO_JIT_CACHE_MB.
  * A switch nobody listed is OPEN only too. SETUGID honours none: even an engine switch lets the caller slow a
