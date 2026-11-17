@@ -1981,7 +1981,7 @@ static int diag_log_fd(bool may_open, bool may_start)
  * thread (not a signal handler); DIAG_OPEN, it may open a log that waits for
  * the Data volume (stdio, report blocks, and the fatal reports: the process
  * dies next, and their lines would otherwise stay kept). */
-enum { DIAG_START = 1, DIAG_OPEN = 2 };
+enum { DIAG_START = 1, DIAG_OPEN = 2, DIAG_FATAL = 4 };   /* DIAG_FATAL: the process dies next */
 
 /* The console, then the log (one write(2) for the whole buffer), else the
  * unified log; how: DIAG_* above. While the log waits for the Data volume the bytes are
@@ -1996,7 +1996,7 @@ static void diag_emit(const char *b, size_t n, int how)
     if (!diag_con_notice) diag_write_all(diag_con, b, n);
     int fd = diag_log_fd(how & DIAG_OPEN, may_start);
     if (fd < 0 && __atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
-        if (pend_put(b, n)) {
+        if (!(how & DIAG_FATAL) && pend_put(b, n)) {   /* a fatal report is not kept: nothing would flush it */
             con_notice(NOTE_LOG);
             if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
             errno = e;
@@ -2054,7 +2054,7 @@ void hao_diag_write(const char *b, size_t n) { diag_write(b, n, 0); }
 /* A fatal report's lines (fault_diag, hao_on_abort, sigreturn_report): may
  * open the log, still async-signal-safe (its header and the kept-lines note
  * are built without stdio). */
-void hao_diag_write_fatal(const char *b, size_t n) { diag_write(b, n, DIAG_OPEN); }
+void hao_diag_write_fatal(const char *b, size_t n) { diag_write(b, n, DIAG_OPEN | DIAG_FATAL); }
 
 static size_t safe_put(char *b, size_t at, size_t cap, const char *s)
 {
