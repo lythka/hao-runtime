@@ -70,6 +70,12 @@ int settled_node(const void *type, int *whole);
  * too: native code reaches its bytes only through them (walked as
  * owner-opaque at a guest call of a native witness). */
 int guest_owned_type(const void *type);
+/* Whether TYPE's extra inhabitants come, along the path the walk follows for
+ * them (Optional payloads, the first field with the most), from a native
+ * struct positively resilient with no generic argument: guest code cannot
+ * lay that type out, so every nil in those inhabitants was written by its
+ * native witnesses, in the native encoding. */
+int xi_native_owned(const void *type);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
 /* The same, where each struct on an extra-inhabitant path (other than Array and String) must be one
  * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */

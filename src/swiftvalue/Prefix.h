@@ -13,6 +13,7 @@
 #define collect_partial_patches hao_sv_collect_partial_patches
 #define settled_node hao_sv_settled_node
 #define guest_owned_type hao_sv_guest_owned_type
+#define xi_native_owned hao_sv_xi_native_owned
 #define collect_inline_patches hao_sv_collect_inline_patches
 #define discover_enum_case hao_sv_discover_enum_case
 #define discover_fixed_enum_case hao_sv_discover_fixed_enum_case

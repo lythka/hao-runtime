@@ -81,6 +81,17 @@ static const witnesses *vwt(const void *type)
     return ((const witnesses *const *)type)[-1];
 }
 
+/* The number of a struct's or tuple's fields reflection reports, or -1:
+ * more than 64, or none for a value that has bytes (a struct compiled
+ * without reflection metadata reports none: its fields are not known, which
+ * is not the same as having none). */
+static intptr_t known_fields(reflection *r, const void *type)
+{
+    intptr_t count = r->count(type);
+    if (count < 0 || count > 64 || (!count && vwt(type)->size)) return -1;
+    return count;
+}
+
 /* Materialize a fresh empty case using the receiving type's own witness.
  * GenEnum.cpp emitStoreTag and the runtime single-payload injection use tag1
  * for Optional.none. No payload exists for this case: storage is uninitialized
@@ -617,8 +628,8 @@ static int scalar_only(reflection *r, const void *type, unsigned depth)
     case 0x300: return !v->extra || v->size < 8;
     case 0x202: return m[2] && scalar_only(r,m[2],depth + 1);
     case 0x200: case 0x301: {
-        intptr_t count = r->count(type);
-        if (count < 0 || count > 64) return 0;
+        intptr_t count = known_fields(r,type);
+        if (count < 0) return 0;
         for (intptr_t i = 0; i < count; ++i) {
             field_info info = {0};
             const void *child = r->field(type,i,&info);
@@ -636,6 +647,38 @@ static int scalar_only(reflection *r, const void *type, unsigned depth)
     }
     default: return 0;
     }
+}
+
+int xi_native_owned(const void *type)
+{
+    reflection r = {
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
+    };
+    if (!type || !r.kind || !r.count || !r.field || !r.optional) return 0;
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uintptr_t kind = r.kind(type);
+        if (native_owned_opaque(&r,type)) return 1;
+        if (kind == 0x202 && m[1] == r.optional && m[2]) { type = m[2]; continue; }
+        if (kind != 0x200 && kind != 0x301) return 0;
+        intptr_t count = known_fields(&r,type);
+        const void *best = NULL;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r.field(type,i,&info);
+            if (info.free_name) info.free_name(info.name);
+            if (!child) return 0;
+            if (!best || vwt(child)->extra > vwt(best)->extra) best = child;
+        }
+        if (!best || vwt(best)->extra != v->extra) return 0;
+        type = best;
+    }
+    return 0;
 }
 
 int guest_owned_type(const void *type)
@@ -680,7 +723,7 @@ int settled_node(const void *type, int *whole)
      * module did not freeze, with no generic argument, and Optionals of it, made and read by native code only. */
     if (v->size < 8 || native_owned_opaque(&r,type)) { *whole = 1; return 1; }
     switch (kind) {
-    case 0x200: case 0x301: return 1;   /* by its fields */
+    case 0x200: case 0x301: return known_fields(&r,type) >= 0;   /* by its fields, where they are known */
     case 0x202: {                       /* by its payload, once its own nil reads alike */
         const witnesses *payload = vwt(m[2]);
         empty_plan plan;
@@ -732,8 +775,9 @@ static int holds_archdiff(reflection *r, const void *type, unsigned depth)
         int n = enum_inline_payloads(type, payloads);
         for (int i = 0; i < n && !listed; ++i) listed = holds_archdiff(r, payloads[i], depth + 1);
     } else {
-        intptr_t count = r->count(type);
-        for (intptr_t i = 0; count <= 64 && i < count && !listed; ++i) {
+        intptr_t count = known_fields(r, type);
+        if (count < 0) listed = 1;   /* fields not known: nothing shows it holds none */
+        for (intptr_t i = 0; i < count && !listed; ++i) {
             field_info info = {0};
             const void *child = r->field(type, i, &info);
             if (info.free_name) info.free_name(info.name);
@@ -1185,8 +1229,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         return existential_payload(r,type,value,base,out,capacity,used,depth);
     }
     if (kind != 0x200 && kind != 0x301) return other_kind(r,type,kind);
-    intptr_t count = r->count(type);
-    if (count < 0 || count > 64) return 0;
+    intptr_t count = known_fields(r,type);
+    if (count < 0) return 0;
     for (intptr_t i = 0; i < count; ++i) {
         field_info info = {0};
         const void *child = r->field(type, i, &info);

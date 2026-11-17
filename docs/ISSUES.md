@@ -48,7 +48,19 @@ and native generic results take the same decision on the way back. A child
 task's result is written by guest code and copied by the concurrency
 runtime before any boundary hao sees, so `swift_task_create` and
 `swift_asyncLet_begin` refuse a result type that needs certification
-(converting the result where the guest writes it is not done).
+(converting the result where the guest writes it is not done). Storage
+guest code fills and the runtime destroys with native witnesses wherever
+its last reference goes (array storage from `swift_allocObject` of
+`_ContiguousArrayStorage<E>` or `_allocateUninitializedArray<E>`, a
+generic box from `swift_allocBox`) is refused when it is made if its
+element type has a nil whose encoding differs, or is past the walk's
+bounds. Nils inside a positively resilient native type are written by its
+native witnesses and do not count. An element type that is only not settled
+(an enum, an existential) is not refused: refusing every `[Any]` would stop
+nearly every program, and such contents are not certified when the runtime
+destroys them. A struct or tuple whose reflection reports no fields but
+has bytes (built without reflection metadata) has unknown fields: refused,
+not taken as empty.
 
 Closed gaps: guest calls of native Optional, tuple and array witnesses
 handed an uncertified value over unchanged without any decision; a lent
@@ -72,7 +84,14 @@ whose boxed value holds a `C??` nil destroyed in a tuple (passed before) and
 a task group of `C??` (faulted before). A native frozen enum the guest
 built (`_PlaygroundQuickLook`) is examined (taken as native-made before).
 `guest/asyncnil` runs its `Task<Node??>` case on its own: refused by
-default, equal to native with the switch. `guest/overlaynil` now stops by default at an
+default, equal to native with the switch. Also refused: an array of `C??`
+filled with a nil and released by guest code (faulted before), a generic
+captured `C??` variable (its box), and a struct built without reflection
+metadata holding an `Any.Type??` (passed as scalars before).
+`guest/optwitness` keeps its values in arrays of nested Optionals and
+`guest/sitepack` in arrays holding an Optional of a native struct no table
+covers: both are refused by default (checked for `optwitness`), and their
+engines run with the switch. `guest/overlaynil` now stops by default at an
 `Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
 engines run with the switch.
 
@@ -90,9 +109,11 @@ and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
 measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
 Limits: `InlineArray` of anything but scalars has no rule and is refused;
 task results of any type that needs certification are refused, not
-converted; an array's storage that guest code fills and releases last is
-destroyed by native code with no boundary hao sees; the tag witnesses of an
-enclosing enum with more than one empty case are not intercepted. More
+converted; storage is refused only for element types with a differing
+nil, so an enum's or an existential's contents are not certified when the
+runtime destroys them; Dictionary and Set storage, and storage native
+generic code allocates, are not checked; the tag witnesses of an enclosing
+enum with more than one empty case are not intercepted. More
 values are walked at each intercepted call than before. The classes are
 host-tested only; an image run is needed to see which programs stop.
 

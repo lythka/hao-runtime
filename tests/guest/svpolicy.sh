@@ -7,7 +7,9 @@
 # sibling nil converted, equal native), "gate" an InlineArray beside a class reference only (no Optional to
 # convert, still examined), "wide" a 65-element tuple (past the walk's bounds), "result" an AsyncStream's next()
 # returning such a value to guest code, "boxed" an Any whose boxed value holds a C?? nil, destroyed in a tuple,
-# "task" a child task with a C?? result (refused when created). "frozen": a native frozen enum the guest built is
+# "task" a child task with a C?? result (refused when created), "array" an array of C?? and "box" a captured C??
+# variable (refused when their storage is made: native code destroys it), "unreflected" a struct built without
+# reflection metadata (tests/guest/svpolicy_lib.swift) beside a C?? (its fields are not known). "frozen": a native frozen enum the guest built is
 # examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/svpolicy.sh
 set -u
@@ -18,14 +20,18 @@ HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 for a in arm64e arm64; do
-    xcrun swiftc -O -parse-as-library -target $a-apple-macos27.0 -o "$OUT/svpolicy.$a" "$here/svpolicy.swift" \
-        2>"$OUT/build.$a.err" || { cat "$OUT/build.$a.err"; exit 2; }
+    mkdir -p "$OUT/mod-$a"
+    xcrun swiftc -O -parse-as-library -target $a-apple-macos27.0 -disable-reflection-metadata -module-name SvpolicyLib \
+        -emit-module -emit-module-path "$OUT/mod-$a/SvpolicyLib.swiftmodule" -c -o "$OUT/svpolicy_lib.$a.o" \
+        "$here/svpolicy_lib.swift" 2>"$OUT/build.$a.err" || { cat "$OUT/build.$a.err"; exit 2; }
+    xcrun swiftc -O -parse-as-library -target $a-apple-macos27.0 -I "$OUT/mod-$a" -o "$OUT/svpolicy.$a" \
+        "$here/svpolicy.swift" "$OUT/svpolicy_lib.$a.o" 2>"$OUT/build.$a.err" || { cat "$OUT/build.$a.err"; exit 2; }
     codesign -s - -f "$OUT/svpolicy.$a" 2>/dev/null
 done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/svpolicy.arm64e" >"$OUT/aot.gen" 2>&1 || echo "svpolicy: aot generation failed"
 fail=0
-for part in pass refuse gate wide result frozen boxed task; do
+for part in pass refuse gate wide result frozen boxed task array box unreflected; do
     timeout -s KILL "$T" "$OUT/svpolicy.arm64" $part >"$OUT/native.$part.out" 2>/dev/null; nrc=$?
     [ $nrc = 0 ] || { echo "$part native rc=$nrc"; fail=1; }
 done
@@ -58,6 +64,9 @@ refused wide jit "type graph past the walk's bounds" env HAO_NO_AOT=1 "$HAO"
 refused result jit "native result has unresolved active representation" env HAO_NO_AOT=1 "$HAO"
 refused boxed jit "unresolved active representation .*type=Any)" env HAO_NO_AOT=1 "$HAO"
 refused task jit "child task result is copied by native code" env HAO_NO_AOT=1 "$HAO"
+refused array jit "array element type has a nil native code would destroy" env HAO_NO_AOT=1 "$HAO"
+refused box jit "storage element type has a nil native code would destroy" env HAO_NO_AOT=1 "$HAO"
+refused unreflected jit "unresolved active representation .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 "$HAO"
 # The pass classes, named under HAO_BRIDGE_CHECK.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" pass >"$OUT/check.out" 2>"$OUT/check.err"
 for c in "owner-opaque .*NSObject" "identical-representation .*Int) -> Swift.Int" "inactive-payload .*Optional<Swift.Int>"; do

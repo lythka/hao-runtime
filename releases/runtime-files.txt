@@ -561,6 +561,7 @@ tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
 tests/guest/svpolicy.sh
 tests/guest/svpolicy.swift
+tests/guest/svpolicy_lib.swift
 tests/guest/layoutxi.sh
 tests/guest/layoutxi.swift
 tests/guest/xpcrect.m
