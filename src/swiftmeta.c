@@ -1032,6 +1032,19 @@ uint64_t hao_swiftmeta_island_target(uint64_t a)
     return 0;
 }
 
+/* Island memory is read/execute only (W^X, jit.c): entries are written through the address island_open gives */
+static uint8_t *island_open(void *p, size_t n)
+{
+    hao_crit_enter();
+    return hao_wx_begin(p, n);
+}
+
+static void island_close(void *p, size_t n)
+{
+    hao_wx_end(p, n);
+    hao_crit_leave();
+}
+
 static void emit_entry(uint8_t *e, uint64_t guest, uint64_t bridge)
 {
     static const uint8_t pre[2] = {0x49, 0xbb};                /* movabs r11, imm64 */
@@ -1274,16 +1287,21 @@ size_t hao_swiftmeta_slots(hao_image *img, hao_swift_slot_fn fn, void *ctx)
 static uint64_t st_isl_room, st_isl_gap, st_isl_search, st_isl_failed;
 static uint8_t *island_place(hao_image *img, uint64_t lo, uint64_t hi, uint64_t size)
 {
+    /* each piece of memory a W^X region (jit.c) before an entry is written: the room once, as a whole */
     uint64_t at = __atomic_load_n(&img->isl_next, __ATOMIC_ACQUIRE);
     while (img->isl_lo && at + size <= img->isl_hi && hao_near_range(at, lo, hi, size))
         if (__atomic_compare_exchange_n(&img->isl_next, &at, at + size, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            if (!hao_wx_region((void *)(uintptr_t)img->isl_lo, img->isl_hi - img->isl_lo)) return NULL;
             st_isl_room++;
             return (uint8_t *)(uintptr_t)at;
         }
     uint8_t *p = img->dsc ? hao_dsc_island(lo, hi, size) : NULL;
-    if (p) { st_isl_gap++; return p; }
-    if ((p = hao_map_near(lo, hi, size))) st_isl_search++;
-    return p;
+    if (p && hao_wx_region(p, size)) { st_isl_gap++; return p; }
+    if ((p = hao_map_near(lo, hi, size))) {
+        if (hao_wx_region(p, size)) { st_isl_search++; return p; }
+        munmap(p, size);
+    }
+    return NULL;
 }
 
 void hao_swiftmeta_image(hao_image *img)
@@ -1364,16 +1382,18 @@ void hao_swiftmeta_image(hao_image *img)
     }
     size_t t = 0;
     uint64_t prev = 0, prev_bridge = 0;
+    uint8_t *iw = island_open(isl, size);
     for (size_t k = 0; k < w.n; k++) {
         uint64_t g = w.e[k].target;
         bool different = !k || g != prev || w.e[k].bridge != prev_bridge;
         if (k && different) t++;
-        if (different) emit_entry(isl + t * ISLAND_SLOT, g, w.e[k].bridge);
+        if (different) emit_entry(iw + t * ISLAND_SLOT, g, w.e[k].bridge);
         prev = g;
         prev_bridge = w.e[k].bridge;
         w.e[k].target = (uint64_t)(uintptr_t)(isl + t * ISLAND_SLOT);   /* now: the entry */
     }
-    memset(isl + nt * ISLAND_SLOT, 0xcc, size - nt * ISLAND_SLOT);
+    memset(iw + nt * ISLAND_SLOT, 0xcc, size - nt * ISLAND_SLOT);
+    island_close(isl, size);
     /* publish the island before any field points at it */
     islands[slot].lo = (uint64_t)(uintptr_t)isl;
     islands[slot].hi = (uint64_t)(uintptr_t)isl + nt * ISLAND_SLOT;
@@ -1643,7 +1663,8 @@ static uint64_t dyn_entry(hao_image *img, uint64_t g, uint64_t field)
         /* a cache image's [base, base+vmsize) is its __TEXT, where patterns and layout strings lie */
         uint8_t *isl = island_place(img, img->base, img->base + img->vmsize, size);
         if (!isl) { st_isl_failed++; return 0; }
-        memset(isl, 0xcc, size);
+        memset(island_open(isl, size), 0xcc, size);
+        island_close(isl, size);
         islands[n].lo = islands[n].hi = (uint64_t)(uintptr_t)isl;
         islands[n].cap = (uint64_t)(uintptr_t)isl + size;
         islands[n].img = img;
@@ -1659,7 +1680,8 @@ static uint64_t dyn_entry(hao_image *img, uint64_t g, uint64_t field)
     uint64_t e = islands[k].hi;
     if (e + ISLAND_SLOT > islands[k].cap) { st_dyn_full++; return 0; }
     if (!hao_near_range(e, field, field + 4, ISLAND_SLOT)) return 0;
-    emit_entry((uint8_t *)(uintptr_t)e, g, 0);
+    emit_entry(island_open((void *)(uintptr_t)e, ISLAND_SLOT), g, 0);
+    island_close((void *)(uintptr_t)e, ISLAND_SLOT);
     __atomic_store_n(&islands[k].hi, e + ISLAND_SLOT, __ATOMIC_RELEASE);
     st_entries++;
     return e;
