@@ -289,5 +289,27 @@ BX=$(ls -d /System/Applications/*.app/Contents/MacOS/* 2>/dev/null | grep -v ' '
 if r=$(timeout 300 python3 -I "$here/test_trustlist.py" "$G" /bin/ls ${BX:+"$BX"} 2>&1); then
     pass "hao-trust-list: $(echo "$r" | tr '\n' ';')"
 else bad "hao-trust-list: $(echo "$r" | grep FAIL)"; fi
+# --- codesign's working copies only under a parent nobody else can change; the directory and files checked by
+# inode before codesign reads them
+d=$OUT/private; rm -rf "$d"; mkdir -p "$d"
+TMPDIR=/private/tmp "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$d/x.emb" "$G" >"$d/e.log" 2>&1; re=$?
+TMPDIR=/private/tmp python3 -I "$repo/tools/hao-trust-list" "$d" "$d/none" >/dev/null 2>"$d/t.log"; rt=$?
+python3 -I - "$repo/tools" <<'PY' >"$d/p.log" 2>&1; rp=$?
+import os, shutil, sys
+sys.path.insert(0, sys.argv[1])
+import hao_codesig
+with hao_codesig.PrivateDir("t.") as w:
+    f = os.path.join(w.name, "f"); open(f, "w").write("a"); w.created(f); w.check(f)
+    os.rename(f, f + ".old"); open(f, "w").write("b")
+    try: w.check(f); sys.exit("a replaced file passed")
+    except ValueError: pass
+    os.rename(w.name, w.name + ".moved"); os.mkdir(w.name, 0o700)
+    try: w.check(); sys.exit("a replaced directory passed")
+    except ValueError: pass
+    shutil.rmtree(w.name + ".moved")
+PY
+if [ $re != 0 ] && grep -q "no private place" "$d/e.log" && [ $rt != 0 ] && grep -q "no private place" "$d/t.log" && [ $rp = 0 ]; then
+    pass "codesign work: a shared TMPDIR (/private/tmp) is refused; a replaced file or directory fails the check"
+else bad "codesign work: re $re rt $rt rp $rp: $(cat "$d/e.log" "$d/t.log" "$d/p.log")"; fi
 echo "tools: $fails failed"
 exit $((fails != 0))

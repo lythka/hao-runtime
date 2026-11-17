@@ -26,7 +26,10 @@ verified) put the ad hoc program's cdhash in `trusted-cdhashes`. It now
 writes the bytes it hashed to a new file in a private directory (with the
 bundle's Info.plist beside it when the signature binds one: a bundle's
 Contents/Info.plist or a framework version's Resources/Info.plist) and
-verifies that copy. The copy's layout is built from plain names (the file's,
+verifies that copy, in a directory made only under a parent nobody else
+can change (TMPDIR; a shared one such as /tmp is refused) and checked by
+inode before codesign runs; `hao-embed` signs stubs the same way. The
+copy's layout is built from plain names (the file's,
 its bundle's and version's, each one path component, the path resolved
 once), so nothing is written outside that directory. Test: `tests/tools/test_trustlist.py` (the change is
 listed by the old tool, not by the new one). Measured on 26B131: the list
@@ -73,7 +76,10 @@ rpaths each image owns, its own non-lazy dependencies are in protected
 storage: the sealed system volume less its firmlinks (`usr/share/firmlinks`
 of the root), and the OS and App cryptexes; the x86_64 shared cache counts
 as protected. Names are compared case-insensitively in their on-disk
-spelling; a chain deeper than 16 libraries is not protected. Any other is not
+spelling; a path that exists but has no x86_64 library slice does not end
+the search (dyld tries the next); each x86_64 slice of a library, in each
+rpath context it is reached in, is judged on its own; a chain deeper than
+16 libraries is not protected. Any other is not
 linked (manifest `not_linked`: "outside protected storage") and hao's binder
 loads it with the program's image, after library validation is set.
 Measured on 26B131: 963 embedded programs, 5 link a library from disk, all
@@ -97,7 +103,8 @@ over OUT. Run with privileges in a directory others can write, that let
 them choose which file was overwritten. It now writes through a descriptor
 of OUT's directory: a new file created exclusively there, renamed over OUT,
 which replaces a link instead of writing through it; a directory owned by
-someone else, or writable by others without the sticky bit, is refused.
+someone else, writable by group or others, or with an ACL granting write is
+refused (also for hao-runtime-on-mac's outputs).
 `--stubs` and `--save-skeletons` write the same way; `--in-place` opens the
 file without following a link. Test:
 `tests/tools/run.sh` ("-o: a symlink at the output is replaced").
@@ -135,7 +142,10 @@ files are written to new files and renamed into place through directory
 descriptors (0755 or 0644; another hard link to an old file keeps its
 bytes); programs to embed and files to replace are opened through directory
 descriptors that follow no link, and a file to replace with another hard
-link is refused. A hao stub without a `__hao_slice` record (a legacy
+link is refused. Every directory written in must be root's (or the running
+user's), writable by nobody else and without an ACL granting write; AOT
+cache files are fixed through descriptors, and one with another hard link
+is reported, not changed. A hao stub without a `__hao_slice` record (a legacy
 stub) is no longer kept: a manifest program gets this payload's stub when
 that gives the recorded result, any other such stub in the System volume
 fails the install (`legacy_stubs` in install.json), and no payload stub

@@ -266,7 +266,8 @@ def stage(payload, admitted, rels, out):
 
 def dir_at(top_fd, parts, create=False):
     """A descriptor of the directory TOP_FD/PARTS..., each component opened through its parent's descriptor
-    without following a link (made 0755, root:wheel as root, where CREATE and missing); Unsafe otherwise."""
+    without following a link (made 0755, root:wheel as root, where CREATE and missing) and owned by root or this
+    user, writable by nobody else, with no ACL granting write (hao_codesig.dir_fd_unshared); Unsafe otherwise."""
     fd = os.dup(top_fd)
     for part in parts:
         try:
@@ -284,6 +285,10 @@ def dir_at(top_fd, parts, create=False):
             raise Unsafe("%s: %s is a symbolic link or not a directory (%s)" % ("/".join(parts), part, x.strerror))
         os.close(fd)
         fd = nfd
+        why = hao_codesig.dir_fd_unshared(fd, {0, os.geteuid()})
+        if why:
+            os.close(fd)
+            raise Unsafe("%s: %s: %s, so others could replace what is written there" % ("/".join(parts), part, why))
     return fd
 
 
@@ -497,17 +502,37 @@ def ensure_aot_dirs(system, errors):
             continue
         if not os.path.isdir(d):
             os.mkdir(d, 0o755)
-        os.chmod(d, 0o755, follow_symlinks=False)
-        if root:
-            os.chown(d, 0, 0, follow_symlinks=False)
-        for name in os.listdir(d):
-            f = os.path.join(d, name)
-            if os.path.islink(f) or not os.path.isfile(f):
-                errors.append(os.path.join(rel, name) + " (not a regular file)")
-                continue
-            os.chmod(f, 0o644, follow_symlinks=False)
+        try:
+            dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as x:
+            errors.append("%s (%s)" % (rel, x.strerror))
+            continue
+        try:
+            os.fchmod(dfd, 0o755)
             if root:
-                os.chown(f, 0, 0, follow_symlinks=False)
+                os.fchown(dfd, 0, 0)
+            for name in os.listdir(dfd):
+                # through the directory's descriptor, never a link, and never a file with another hard link (its
+                # owner and mode would change elsewhere too)
+                try:
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+                except OSError:
+                    errors.append(os.path.join(rel, name) + " (not a regular file)")
+                    continue
+                try:
+                    st = os.fstat(fd)
+                    if not stat.S_ISREG(st.st_mode):
+                        errors.append(os.path.join(rel, name) + " (not a regular file)")
+                    elif st.st_nlink != 1:
+                        errors.append(os.path.join(rel, name) + " (has another hard link)")
+                    else:
+                        os.fchmod(fd, 0o644)
+                        if root:
+                            os.fchown(fd, 0, 0)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(dfd)
         st = os.stat(d)
         done.append("%s (uid %d, mode %o)" % (rel, st.st_uid, st.st_mode & 0o7777))
     return done
