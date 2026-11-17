@@ -25,18 +25,18 @@
  *    non-platform library of another Team ID in this process, whatever its
  *    entitlements (measured: an ad hoc dylib is refused with "mapping
  *    process and mapped file (non-platform) have different Team IDs" in a
- *    process signed with disable-library-validation);
+ *    process signed with disable-library-validation). A process that cannot
+ *    set it does not run the program;
  *  - guest images (arm64 dylibs hao maps as data, which the kernel never
  *    validates as code), on the bytes the loader then builds the image
  *    from (check_image below; the slice is taken once, hao/macho.h
  *    hao_slice): every page hash, checked by hao, whatever the policy; then
  *    the loader attaches the slice's signature to the vnode
  *    (F_ADDFILESIGS_INFO, the cdhash must be hao's) and asks the kernel
- *    whether this process may map it (F_CHECK_LV). If the kernel refused
- *    CS_REQUIRE_LV, a guest image must at least be platform code
- *    (F_GETSIGSINFO). Where the kernel cannot hold the signature (an x86_64
- *    kernel accepts only 4 KiB-page CodeDirectories; Apple's arm64 code is
- *    signed with 16 KiB pages, so on Intel this is every Apple library) hao
+ *    whether this process may map it (F_CHECK_LV). Where the kernel cannot
+ *    hold the signature (an x86_64 kernel accepts only 4 KiB-page
+ *    CodeDirectories; Apple's arm64 code is signed with 16 KiB pages, so on
+ *    Intel this is every Apple library) hao
  *    applies AMFI's rule itself with the signer it establishes
  *    (guest_sig.c): a trusted cdhash list or Security's `anchor apple`
  *    (platform), else the main executable's Team ID with a certificate for
@@ -61,7 +61,10 @@
  * __TEXT,__hao_slice, which the stub's signature does cover, and the gate
  * below loads a main executable in such a process only if its verified
  * CodeDirectory is that one (hao_libval_bound). Without it, a copy of the
- * file with another ARM slice would run that code under the stub's identity.
+ * file with another ARM slice would run that code under the stub's identity,
+ * so a stub without the record runs nothing. Which front end started the
+ * process (hao_libval_expect_main's entry) says whether the main executable
+ * is a stub; the record's absence never does.
  *
  * This file depends only on libc (CommonCrypto is libSystem's): the loader
  * unit tests and fuzzers link it with macho.c.
@@ -77,6 +80,7 @@
 #include <crt_externs.h>
 #include <mach-o/getsect.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 
 int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define CS_OPS_STATUS 0
@@ -343,6 +347,90 @@ static int exec_ranges(const uint8_t *cmds, uint32_t ncmds, hao_range *r, int ma
     return n;
 }
 
+/* What the loader would use from outside the hashed range [0, limit): the
+ * bytes there are the signature's own, which its hashes do not all seal, so
+ * they may change without changing the cdhash. Every segment's file range
+ * but __LINKEDIT's (which holds the signature, and may be neither writable
+ * nor executable, so no fixup slot lies in it; the name is all 16 bytes),
+ * the file bytes of every section of any segment and type (initializer
+ * offsets and pointers, ObjC and Swift metadata, whatever the loader or the
+ * program reads by section), and every range of linkedit data a load command names (the loader's fixups,
+ * exports and function starts, and the symbol tables) must end by limit.
+ * tools/hao_codesig.py check() applies the same rule, and the AOT
+ * generator refuses an executable segment the same way (jit.c). NULL: none;
+ * else what reaches past it. cmds are hao_macho_check_cmds-valid. */
+static const char *unsealed_use(const uint8_t *cmds, uint32_t ncmds, uint64_t limit)
+{
+    const uint8_t *p = cmds;
+    for (uint32_t k = 0; k < ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct load_command *lc = (const void *)p;
+        uint64_t r[5][2] = {{0}};
+        int nr = 0;
+        const char *what = "linkedit data";
+        switch (lc->cmd) {
+        case LC_SEGMENT_64: {
+            const struct segment_command_64 *sg = (const void *)p;
+            static const char linkedit[16] = "__LINKEDIT";              /* all 16 bytes, NULs included */
+            bool le = !memcmp(sg->segname, linkedit, 16);
+            if (!le || (sg->initprot & (VM_PROT_WRITE | VM_PROT_EXECUTE))) {
+                r[nr][0] = sg->fileoff; r[nr++][1] = sg->filesize;
+                what = sg->initprot & VM_PROT_EXECUTE ? "an executable segment" : "a segment";
+            }
+            /* a section's bytes are where its address puts them in the segment's file range, whatever its
+             * type: the loader maps the segment's file bytes as they are, zero-fill sections included, and
+             * readers find sections by name */
+            const struct section_64 *s = (const void *)(sg + 1);
+            for (uint32_t j = 0; j < sg->nsects; j++) {
+                if (!s[j].size) continue;
+                if (s[j].addr < sg->vmaddr) return "a section";
+                uint64_t rel = s[j].addr - sg->vmaddr;
+                if (rel >= sg->filesize) continue;
+                uint64_t len = s[j].size < sg->filesize - rel ? s[j].size : sg->filesize - rel;
+                if (sg->fileoff > limit || rel > limit - sg->fileoff || len > limit - sg->fileoff - rel) return "a section";
+            }
+            break;
+        }
+        case LC_SEGMENT_SPLIT_INFO: case LC_FUNCTION_STARTS: case LC_DATA_IN_CODE: case LC_DYLIB_CODE_SIGN_DRS:
+        case LC_LINKER_OPTIMIZATION_HINT: case LC_DYLD_EXPORTS_TRIE: case LC_DYLD_CHAINED_FIXUPS: case LC_ATOM_INFO:
+        case LC_FUNCTION_VARIANTS: case LC_FUNCTION_VARIANT_FIXUPS: case LC_LAZY_LOAD_DYLIB_INFO: {
+            if (lc->cmdsize < sizeof(struct linkedit_data_command)) break;
+            const struct linkedit_data_command *ld = (const void *)p;
+            r[nr][0] = ld->dataoff; r[nr++][1] = ld->datasize;
+            break;
+        }
+        case LC_DYLD_INFO: case LC_DYLD_INFO_ONLY: {
+            if (lc->cmdsize < sizeof(struct dyld_info_command)) break;
+            const struct dyld_info_command *d = (const void *)p;
+            uint32_t v[5][2] = {{d->rebase_off, d->rebase_size}, {d->bind_off, d->bind_size}, {d->weak_bind_off, d->weak_bind_size},
+                                {d->lazy_bind_off, d->lazy_bind_size}, {d->export_off, d->export_size}};
+            for (int i = 0; i < 5; i++) { r[nr][0] = v[i][0]; r[nr++][1] = v[i][1]; }
+            break;
+        }
+        case LC_SYMTAB: {
+            if (lc->cmdsize < sizeof(struct symtab_command)) break;
+            const struct symtab_command *s = (const void *)p;
+            r[nr][0] = s->symoff; r[nr++][1] = (uint64_t)s->nsyms * sizeof(struct nlist_64);
+            r[nr][0] = s->stroff; r[nr++][1] = s->strsize;
+            break;
+        }
+        case LC_DYSYMTAB: {
+            if (lc->cmdsize < sizeof(struct dysymtab_command)) break;
+            const struct dysymtab_command *s = (const void *)p;
+            r[nr][0] = s->indirectsymoff; r[nr++][1] = (uint64_t)s->nindirectsyms * 4;
+            r[nr][0] = s->extreloff; r[nr++][1] = (uint64_t)s->nextrel * 8;
+            r[nr][0] = s->locreloff; r[nr++][1] = (uint64_t)s->nlocrel * 8;
+            r[nr][0] = s->tocoff; r[nr++][1] = (uint64_t)s->ntoc * 8;
+            r[nr][0] = s->modtaboff; r[nr++][1] = (uint64_t)s->nmodtab * sizeof(struct dylib_module_64);
+            break;
+        }
+        default: break;
+        }
+        for (int i = 0; i < nr; i++)
+            if (r[i][1] && (r[i][0] > limit || r[i][1] > limit - r[i][0])) return what;
+    }
+    return NULL;
+}
+
 /* Every page hash of [0, code_limit) of the slice at bytes, which the
  * caller has checked to hold code_limit bytes: the memory the image is
  * built from, so the pages hashed here are the pages that run. *bad_exec
@@ -408,6 +496,11 @@ int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n)
                  (unsigned long long)s.code_limit, (unsigned long long)sl->size, sl->sig_off);
         return -1;
     }
+    const char *past = unsealed_use(sl->cmds, sl->ncmds, s.code_limit);
+    if (past) {
+        snprintf(why, n, "%s reaches past the hashed range [0, %#llx), into the signature", past, (unsigned long long)s.code_limit);
+        return -1;
+    }
     hao_range ex[16];
     int nex = exec_ranges(sl->cmds, sl->ncmds, ex, 16);
     hao_slice_verify_passes++;
@@ -442,10 +535,25 @@ int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, 
     return 0;
 }
 
+int hao_libval_stub_bound(hao_slice *sl, char *why, size_t n)
+{
+    unsigned long size = 0;
+    const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
+                                        HAO_SLICE_SECTION, &size);
+    if (!record) {
+        snprintf(why, n, "its x86_64 slice does not name its ARM code (no __TEXT,%s record: a stub made before "
+                 "hao-embed wrote one); embed the program again", HAO_SLICE_SECTION);
+        return -1;
+    }
+    return hao_libval_bound(record, size, sl, why, n);
+}
+
 /* ------------------------------------------------- library validation */
 
 static int mode = HAO_LIBVAL_UNDECIDED;
 static bool expect_main;
+static int entry_mode;              /* HAO_ENTRY_CLI, else the main executable is an embedded program's */
+static bool off_asked;              /* HAO_NO_LIBVAL: off, for a program that does not require it */
 static char reason[160];
 static hao_imgsig_fn verifier;      /* guest_sig.c's signer check (NULL: the loader's unit tests) */
 static bool force_user;             /* HAO_LIBVAL_USER: signers in user space even where the kernel answers */
@@ -463,13 +571,13 @@ void hao_libval_set_verifier(hao_imgsig_fn fn, bool force, void (*report)(const 
     report_line = report;
 }
 
-void hao_libval_expect_main(bool enabled)
+int hao_libval_test_setlv;
+
+void hao_libval_expect_main(bool enabled, int entry)
 {
     expect_main = true;
-    if (!enabled && mode == HAO_LIBVAL_UNDECIDED) {
-        mode = HAO_LIBVAL_OFF;
-        snprintf(reason, sizeof reason, "turned off (hao_no_libval)");
-    }
+    entry_mode = entry;
+    off_asked = !enabled;
 }
 int hao_libval_mode(void) { return mode; }
 const char *hao_libval_reason(void) { return reason; }
@@ -478,7 +586,10 @@ const char *hao_libval_reason(void) { return reason; }
  * is verified on the bytes it is built from (by hao_guest_sig_enforce
  * already, on this slice, for the CLI; here for an embedded program), and
  * the policy is read from that CodeDirectory: an invalid signature is a
- * refusal, not a program without a policy. */
+ * refusal, not a program without a policy. A program that requires library
+ * validation runs only in a process the kernel holds to it (CS_REQUIRE_LV):
+ * without that, native libraries of any signer could load into it, which
+ * natively they cannot, so it is refused. */
 static int decide(hao_slice *sl, char *why, size_t n)
 {
     static const hao_codesig unsigned_code;
@@ -497,24 +608,36 @@ static int decide(hao_slice *sl, char *why, size_t n)
     if (cs->team && strlen(cs->team) < sizeof main_team) snprintf(main_team, sizeof main_team, "%s", cs->team);
     if (!hao_codesig_library_validated(cs)) {
         mode = HAO_LIBVAL_OFF;
-        snprintf(reason, sizeof reason, "%s", !cs->cd ? "unsigned" : cs->dlv ? "disable-library-validation" :
-                 "neither platform nor hardened");
+        snprintf(reason, sizeof reason, "%s", off_asked ? "turned off (hao_no_libval)" : !cs->cd ? "unsigned" :
+                 cs->dlv ? "disable-library-validation" : "neither platform nor hardened");
         return 0;
     }
     snprintf(reason, sizeof reason, "%s%s%s", cs->platform ? "platform" : "",
              cs->platform && (cs->flags & (CS_RUNTIME | CS_REQUIRE_LV)) ? ", " : "",
              cs->flags & CS_RUNTIME ? "runtime" : cs->flags & CS_REQUIRE_LV ? "library flag" : "");
-    uint32_t f = CS_REQUIRE_LV, now = 0;
-    int r = csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
-    int e = errno;
-    if (r == 0 && csops(getpid(), CS_OPS_STATUS, &now, sizeof now) == 0 && (now & CS_REQUIRE_LV)) {
-        mode = HAO_LIBVAL_KERNEL;
-    } else {
-        mode = HAO_LIBVAL_PLATFORM;
+    if (off_asked) {
+        /* natively the hardened runtime and the kernel ignore whatever the environment says about it */
+        char msg[300];
+        snprintf(msg, sizeof msg, "HAO_NO_LIBVAL ignored: the program requires library validation (%s)", reason);
+        if (report_line) report_line(msg);
+        else fprintf(stderr, "hao: %s\n", msg);
         size_t l = strlen(reason);
-        snprintf(reason + l, sizeof reason - l, "; CS_REQUIRE_LV not set (%s): guest images platform only",
-                 r ? strerror(e) : "flags unchanged");
+        snprintf(reason + l, sizeof reason - l, "; HAO_NO_LIBVAL ignored");
     }
+    /* hao_libval_test_setlv (tests): 1 setting the flag fails, 2 reading it back fails, 3 it does not stick */
+    uint32_t f = CS_REQUIRE_LV, now = 0;
+    int t = hao_libval_test_setlv;
+    int r = t == 1 ? (errno = EPERM, -1) : t == 3 ? 0 : csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
+    int e = errno;
+    int q = t == 2 ? -1 : csops(getpid(), CS_OPS_STATUS, &now, sizeof now);
+    if (t == 3) now &= ~CS_REQUIRE_LV;
+    if (r != 0 || q != 0 || !(now & CS_REQUIRE_LV)) {
+        snprintf(why, n, "it requires library validation (%s), and this process cannot be made to require it "
+                 "(CS_REQUIRE_LV: %s)", reason, r ? strerror(e) : q ? "status not readable" : "flags unchanged");
+        reason[0] = 0;
+        return -1;
+    }
+    mode = HAO_LIBVAL_KERNEL;
     return 0;
 }
 
@@ -545,7 +668,6 @@ int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_c
 static const char *lv_rule(const char *team, const hao_imgsig *g)
 {
     if (g->apple) return NULL;
-    if (mode == HAO_LIBVAL_PLATFORM) return "mapped file is not a platform binary";
     if (main_platform) return "mapping process is a platform binary, but mapped file is not";
     if (!team && main_team[0]) return "mapped file has no Team ID and is not a platform binary (signed with custom identity or adhoc?)";
     if (!team || !main_team[0] || strcmp(team, main_team))
@@ -564,9 +686,8 @@ static const char *lv_rule(const char *team, const hao_imgsig *g)
  *     CODESIGNING "Invalid Page"); any other invalid signature is a load
  *     failure;
  *  2. with library validation on, who may be mapped: the kernel, where it
- *     holds the signature (F_ADDFILESIGS_INFO, then F_CHECK_LV or
- *     F_GETSIGSINFO); else the same rule in user space with the signer
- *     hao establishes (guest_sig.c). An x86_64 kernel holds only 4 KiB-page
+ *     holds the signature (F_ADDFILESIGS_INFO, then F_CHECK_LV); else the
+ *     same rule in user space with the signer hao establishes (guest_sig.c). An x86_64 kernel holds only 4 KiB-page
  *     CodeDirectories, so on Intel every 16 KiB-page arm64 signature
  *     (all of Apple's) takes the user-space route. So does a same-team
  *     library the kernel refuses because the process's Team ID is hao's.
@@ -575,7 +696,7 @@ static const char *lv_rule(const char *team, const hao_imgsig *g)
  */
 static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
 {
-    bool lv = mode == HAO_LIBVAL_KERNEL || mode == HAO_LIBVAL_PLATFORM;
+    bool lv = mode == HAO_LIBVAL_KERNEL;
     if (!sl->sig_size) {
         if (!lv) return 0;
         snprintf(k, kn, "mapped file is not code signed");
@@ -613,7 +734,7 @@ static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
         } else if (memcmp(fs.fs_cdhash, cs->cdhash, sizeof cs->cdhash) || fs.fs_hash_type != cs->hash_type) {
             snprintf(k, kn, "the kernel holds a different code signature for this file (rewritten in place?)");
             return -1;
-        } else if (mode == HAO_LIBVAL_KERNEL) {
+        } else {
             char msg[256] = "";
             fchecklv_t cl = {.lv_file_start = (off_t)img->slice_off, .lv_error_message_size = sizeof msg,
                              .lv_error_message = msg};
@@ -624,11 +745,6 @@ static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
                 return -1;
             }
             user = true;
-        } else {
-            fgetsigsinfo_t gi = {.fg_file_start = (off_t)img->slice_off, .fg_info_request = GETSIGSINFO_PLATFORM_BINARY};
-            if (fcntl(img->fd, F_GETSIGSINFO, &gi) == 0 && gi.fg_sig_is_platform) return 0;
-            snprintf(k, kn, "mapped file is not a platform binary");
-            return -1;
         }
     }
     snprintf(route, sizeof route, "user space%s, %u KiB pages", force_user ? " (HAO_LIBVAL_USER)" : "", 1u << (cs->page_shift - 10));
@@ -651,13 +767,16 @@ int hao_libval_image(hao_image *img, hao_slice *sl, char *why, size_t n)
         expect_main = false;
         /* An embedded program: this process's main executable is its stub, and the stub's record is in pages
          * the kernel validated. Whatever the policy, and whether or not library validation is on, the ARM
-         * code that runs under the stub's identity is the code the stub was made for. No record: hao's own
-         * launcher, which has checked the file it was given (hao_guest_sig_enforce), or a stub made before
-         * hao-embed wrote one, whose ARM slice is verified below but is not tied to it. */
+         * code that runs under the stub's identity is the code the stub was made for. A stub without a
+         * record (made before hao-embed wrote one) names no code, so it runs none. hao's own launcher
+         * (entry HAO_ENTRY_CLI, said by its front end, not by a missing record) has checked the file it was
+         * given (hao_guest_sig_enforce) and runs under hao's identity. */
         unsigned long size = 0;
         const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
                                             HAO_SLICE_SECTION, &size);
-        if (record && hao_libval_bound(record, size, sl, why, n) != 0) return -1;
+        if (entry_mode != HAO_ENTRY_CLI ? hao_libval_stub_bound(sl, why, n) != 0
+                                        : record && hao_libval_bound(record, size, sl, why, n) != 0)
+            return -1;
         return mode == HAO_LIBVAL_UNDECIDED ? decide(sl, why, n) : 0;
     }
     if (!integrity) return 0;

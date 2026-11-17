@@ -25,6 +25,7 @@ void hao_unload_image(hao_image *img) { (void)img; }
 hao_slice *hao_slice_open(int fd, char *why, size_t n) { (void)fd; (void)why; (void)n; return 0; }
 void hao_slice_close(hao_slice *sl) { (void)sl; }
 int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n) { (void)sl; (void)bad_exec; (void)why; (void)n; return -1; }
+bool hao_codesig_library_validated(const hao_codesig *cs) { (void)cs; return false; }
 bool hao_guest_sig_cdhash(const uint8_t *blob, size_t len, uint8_t cdhash[20], uint8_t *hash_type, char *why, size_t n)
 {
     (void)blob; (void)len; (void)cdhash; (void)hash_type; (void)why; (void)n;

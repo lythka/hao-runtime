@@ -46,6 +46,7 @@ guest/identity	300	par	tests/guest/identity.sh
 guest/indirect-x8	300	par	tests/guest/indirect-x8.sh
 guest/keypath	300	par	tests/guest/keypath.sh
 guest/libval	300	par	tests/guest/libval.sh
+guest/lvswitches	300	par	tests/guest/lvswitches.sh
 guest/msgfnptr	300	par	tests/guest/msgfnptr.sh
 guest/narrowret	300	par	tests/guest/narrowret.sh
 guest/nativesig	300	par	tests/guest/nativesig.sh

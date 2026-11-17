@@ -4888,6 +4888,20 @@ bool hao_aot_write_dir(char *out, size_t n)
     return true;
 }
 
+/* The directories a run of a program reads caches from: for one whose
+ * verified signature requires library validation (lv), the system ones
+ * only, as at run time (guest_sig.c hao_guest_switches_for sets
+ * hao_aot_system_only there). hao --aot and --check answer with these. */
+static int aot_read_dirs(bool lv, hao_aot_dir *d, char *why, size_t n)
+{
+    bool was = hao_aot_system_only;
+    int w;
+    hao_aot_system_only = was || lv;
+    int r = aot_dirs(d, &w, why, n);
+    hao_aot_system_only = was;
+    return r;
+}
+
 static void aot_name(hao_image *im, char *out, size_t n, const char *ext)
 {
     char u[33];
@@ -4897,8 +4911,9 @@ static void aot_name(hao_image *im, char *out, size_t n, const char *ext)
 
 static bool fd_acl_allows(int fd)
 {
+    errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
-    bool r = hao_aot_acl_allows(a);
+    bool r = hao_aot_acl_allows(a, errno);
     if (a) acl_free(a);
     return r;
 }
@@ -5501,15 +5516,52 @@ int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint
 {
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
     int w, nd;
+    bool verified = false;                  /* the file whose signature chose the directories */
+    uint64_t vdev = 0, vino = 0;
+    aot_id checked = {0};
     char why[700], where[PATH_MAX + 80], err[512];
     if (cache_dir) {
         if (!hao_aot_dir_explicit(hao_env_tier(), cache_dir, &dirs[0], why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return -1; }
         nd = 1;
-    } else nd = aot_dirs(dirs, &w, why, sizeof why);
+    } else {
+        /* the directories a run of this program reads: its signature, verified, says whether it requires
+         * library validation (a signature that does not verify runs nowhere) */
+        bool lv = false;
+        int f = open(path, O_RDONLY | O_CLOEXEC);
+        struct stat fst;
+        hao_slice *sl = f >= 0 && fstat(f, &fst) == 0 ? hao_slice_open(f, err, sizeof err) : NULL;
+        bool bad = sl && sl->sig_size && hao_slice_verify(sl, NULL, err, sizeof err) != 0;
+        if (sl && sl->sig.cd) {
+            lv = hao_codesig_library_validated(&sl->sig);
+            checked.kind = HAO_AOT_ID_CDHASH;
+            checked.hash = sl->sig.hash_type;
+            memcpy(checked.id, sl->sig.cdhash, sizeof sl->sig.cdhash);
+        }
+        if (sl) { verified = true; vdev = (uint64_t)fst.st_dev; vino = (uint64_t)fst.st_ino; }
+        hao_slice_close(sl);
+        if (f >= 0) close(f);
+        if (bad) { fprintf(stderr, "hao-aot: %s: code signature invalid (%s)\n", path, err); return -1; }
+        nd = aot_read_dirs(lv, dirs, why, sizeof why);
+        (void)w;
+    }
     if (nd <= 0) { fprintf(stderr, "hao-aot: no trusted AOT cache directory%s%s\n", why[0] ? ": " : "", why); return -1; }
     hao_image *im = hao_map_image_only(path, err, sizeof err);
     if (!im) { fprintf(stderr, "hao-aot: %s: %s\n", path, err); return -1; }
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); hao_unload_image(im); return -1; }
+    if (verified) {
+        /* the image checked is the file whose signature chose the directories: the same file, and the
+         * same CodeDirectory (or, unsigned then, unsigned now) */
+        aot_id now;
+        bool same = im->dev == vdev && im->ino == vino && aot_image_id(im, &now, why, sizeof why) &&
+                    (checked.kind == HAO_AOT_ID_CDHASH ? now.kind == HAO_AOT_ID_CDHASH && now.hash == checked.hash &&
+                                                         !memcmp(now.id, checked.id, 20)
+                                                       : now.kind != HAO_AOT_ID_CDHASH);
+        if (!same) {
+            fprintf(stderr, "hao-aot: %s: the file changed while it was checked: not checked\n", path);
+            hao_unload_image(im);
+            return -1;
+        }
+    }
     int r = aot_state(im, dirs, nd, cpu, where, sizeof where, why, sizeof why);
     hao_unload_image(im);
     if (r == 0) { if (print) fprintf(stderr, "hao-aot: %s: valid (%s)\n", path, where); return 0; }
@@ -5907,19 +5959,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir,
     if (!same) { fprintf(stderr, "hao-aot: %s: its private copy was replaced before it was mapped: no cache written\n", path); goto out; }
     snprintf(im->path, sizeof im->path, "%s", path);
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); goto out; }
-    {
-        /* a cache this image would already load, here or in a directory this process reads, that uses
-         * no CPU feature outside the profile asked for: nothing to write */
-        hao_aot_dir rd[HAO_AOT_MAX_DIRS];
-        int rw, rn = cache_dir ? 0 : aot_dirs(rd, &rw, why, sizeof why);
-        char where[PATH_MAX + 80];
-        if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
-        if (rn > 0 && aot_state(im, rd, rn, cpu, where, sizeof where, why, sizeof why) == 0) {
-            if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
-            rc = 0;
-            goto out;
-        }
-    }
+    bool lv = false;                  /* the verified signature requires library validation */
     aot_sig s;
     aot_id id;
     if (!aot_image_sig(im, &s)) {
@@ -5932,7 +5972,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir,
         why[0] = 0;
         hao_slice *sl = hao_slice_open(tfd, why, sizeof why);
         bool good = sl && hao_slice_verify(sl, NULL, why, sizeof why) == 0 && sl->sig.cd;
-        if (good) { g.hash_type = sl->sig.hash_type; memcpy(g.cdhash, sl->sig.cdhash, sizeof g.cdhash); }
+        if (good) { g.hash_type = sl->sig.hash_type; memcpy(g.cdhash, sl->sig.cdhash, sizeof g.cdhash); lv = hao_codesig_library_validated(&sl->sig); }
         else if (sl && !why[0]) snprintf(why, sizeof why, "its code signature could not be verified");
         hao_slice_close(sl);
         if (!good) {
@@ -5957,6 +5997,25 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir,
             goto out;
         }
         if (!aot_image_id(im, &id, why, sizeof why)) { fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why); goto out; }
+    }
+    {
+        /* a cache this image would already load, here or in a directory a run of it reads, that uses
+         * no CPU feature outside the profile asked for: nothing to write */
+        hao_aot_dir rd[HAO_AOT_MAX_DIRS];
+        int rn = cache_dir ? 0 : aot_read_dirs(lv, rd, why, sizeof why);
+        char where[PATH_MAX + 80];
+        if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
+        if (rn > 0 && aot_state(im, rd, rn, cpu, where, sizeof where, why, sizeof why) == 0) {
+            if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
+            rc = 0;
+            goto out;
+        }
+        /* without --cache, the directory written must be one a run of it reads */
+        if (!cache_dir && lv && !aot_dir_system(&dirs[w], canon, dfd)) {
+            fprintf(stderr, "hao-aot: %s requires library validation, so only the system cache directories serve it; "
+                    "%s is not one: no cache written (--cache DIR writes there anyway)\n", path, canon);
+            goto out;
+        }
     }
     rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, cpu, verbose);
 out:

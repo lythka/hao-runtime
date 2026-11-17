@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #define HAO_MAX_DEPS 256
 #define HAO_MAX_RANGES 16
@@ -132,19 +133,20 @@ uint64_t hao_island_room(uint64_t nfstarts_bound);
  * nothing does that for pages hao maps as data. So the slice is taken once,
  * and the mach header, the load commands, the signature, every hashed page,
  * the linkedit blobs and the segments all come from bytes:
- *  - copied: a file that somebody other than root may change. The slice was
+ *  - copied: every file not on the read-only System volume. The slice was
  *    read once into anonymous memory, and the image's segments are made of
  *    that memory (whole pages are handed over, not copied again). The image
  *    then shares no page with the file or with another process: it costs
  *    the slice's size for as long as it is loaded, in memory that can be
  *    compressed but not dropped (measured: 7.2 MB more peak footprint for an
  *    8.4 MB library, 66 MB for a 67 MB one; load time unchanged);
- *  - not copied: a file only root can change (root owns it, no group or
- *    other write bit, no ACL, on a local volume: the system's own files).
- *    bytes is the file, mapped, and the segments are mapped from the file
- *    as before, shared with every process that maps it.
+ *  - not copied: a file on the volume the system booted from, mounted
+ *    read-only (the System volume, sealed or a snapshot), that root owns
+ *    with no group or other write bit and no ACL. bytes is the file,
+ *    mapped, and the segments are mapped from the file as before, shared
+ *    with every process that maps it.
  * fd stays the file for what the kernel is asked about it (F_ADDFILESIGS_INFO,
- * F_CHECK_LV, F_GETSIGSINFO); the slice does not own it.
+ * F_CHECK_LV); the slice does not own it.
  */
 /* An embedded code signature as hao_codesig_parse (libval.c) read it: the
  * one reader, for the CLI's policy, integrity and library validation alike.
@@ -192,9 +194,13 @@ void hao_slice_close(hao_slice *sl);
  * caller that has checked these bytes and must load what it checked
  * (hao_guest_sig_enforce). */
 void hao_slice_hand(hao_slice *sl);
-/* The loader's unit tests: 1 maps every file, 2 copies every file (0: by
- * what the file's owner, mode, ACL and volume say). */
+/* The loader's unit tests: 1 maps every file, 2 copies every file (0: maps
+ * only a root-owned file without write bits or ACL on the read-only volume
+ * the system booted from). */
 extern int hao_slice_test_path;
+/* The rule hao_slice_open maps a file by: owner uid, mode, its volume's
+ * statfs flags, and whether the file has no ACL (the lookup said ENOENT). */
+bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none);
 
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply
  * fixups. The file is untrusted: every offset, size and count is validated
@@ -300,14 +306,32 @@ typedef struct {
 /* Is sl the slice the record names? The slice's signature is verified
  * (hao_slice_verify: structure, page hashes) and its CodeDirectory must be
  * the recorded one. 0: yes; -1: no, or the record is not one hao reads
- * (why). The loader's gate asks this for the main executable when the
- * process's own main executable has the section. */
+ * (why). The loader's gate asks this for the main executable of every
+ * embedded program (a stub without the section is refused), and of the CLI
+ * if its own main executable has the section. */
 int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n);
-enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
-/* The next image loaded is the main executable: its signature sets the
- * policy (enabled = false: off, HAO_NO_LIBVAL=1 in an ordinary process;
- * no boot argument turns it off). */
-void hao_libval_expect_main(bool enabled);
+/* hao_libval_bound with this process's own main executable's record: an
+ * embedded program's stub. A stub without one names no code: -1 (why). */
+int hao_libval_stub_bound(hao_slice *sl, char *why, size_t n);
+enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL };
+/* How the process started, said by the front end that started it (main.c):
+ * HAO_ENTRY_CLI, hao's own launcher (`hao PROGRAM`, every routed exec),
+ * which has checked the file it was given (hao_guest_sig_enforce); or
+ * HAO_ENTRY_EMBEDDED, an embedded program's stub, whose __hao_slice record
+ * must name the main executable's slice. */
+enum { HAO_ENTRY_CLI = 1, HAO_ENTRY_EMBEDDED = 2 };
+/* The next image loaded is the main executable, started through ENTRY
+ * (anything but HAO_ENTRY_CLI is taken as HAO_ENTRY_EMBEDDED): its
+ * signature sets the policy. enabled = false (HAO_NO_LIBVAL=1 in an
+ * ordinary process; no boot argument turns it off) turns library
+ * validation off for a program that does not require it, and is ignored,
+ * with a diagnostic, for one that does. A main executable that requires
+ * library validation is refused when the process cannot be made to
+ * require it (CS_REQUIRE_LV). */
+void hao_libval_expect_main(bool enabled, int entry);
+/* The loader's unit tests: 1 makes setting CS_REQUIRE_LV fail, 2 reading
+ * the status back fail, 3 the flag not stick. */
+extern int hao_libval_test_setlv;
 /* The loader's gate, after an image's load commands validate and before it
  * is mapped: sl is the slice the image is then built from. img->fd and the
  * slice fields are set. 0 = may load, else -1 with why filled. */

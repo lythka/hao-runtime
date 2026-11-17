@@ -264,6 +264,72 @@ rest and the marker). Limits: the 4 GB is the payload's list measured once,
 not an estimate from the programs left to cache; a single cache larger than
 the 2 GB kept is not foreseen.
 
+## Guest files read before or around the signature check
+
+Five checks of guest files and their metadata were weaker than their
+documented rule. Each now refuses or copies; tests run on the 27.2
+development Mac under Rosetta, none on an Intel kernel yet.
+
+- libhao_identity reads the main executable's carried sections (CLI route)
+  before hao checks the file. Carried `__TEXT` sections more than 64 MiB
+  apart got a one-byte buffer, and the first section was copied into it
+  (ASan: heap-buffer-overflow, a 4096-byte write). The header and load
+  commands are now read once into memory, a span over 64 MiB or an address
+  that wraps is not carried, and each section is read only into its
+  allocation. Test: `tests/loader/test_identity.c` (12 crafted files, ASan).
+- An embedded stub without a `__hao_slice` record ran its ARM slice
+  checked by that slice's own signature only, and an unsigned slice with
+  library validation off. The front end now says how the process started
+  (`hao-stub` or `hao`), and a stub without a record exits with status 126.
+  Test: `tests/guest/stubself.sh`, such a stub with A's signed and with an
+  unsigned slice: status 7 (the program ran) before, 126 after; and
+  `test_macho` gate_entry.
+- A program that requires library validation, in a process where
+  `CS_REQUIRE_LV` could not be set, ran with library validation for guest
+  images only; it is now refused. The kernel took the flag in every run on
+  this host; the refusal is tested with a test hook (`test_macho` gate_setlv).
+- A root-owned file without write bits or ACL on any local volume was
+  mapped, not copied. Only the read-only volume the system booted from is
+  mapped now. Measured: the Command Line Tools' `clang --version` (124 MB
+  slice, data volume) 51 MB to 142 MB peak footprint, 1.00 s either way;
+  `git --version` (3.8 MB) 7.4 MB to 10.2 MB, 0.06 s.
+- An ACL that could not be read counted as no ACL for AOT caches, their
+  directories and the identity lists; only ENOENT does now
+  (`tests/aot/policy.c`). A segment other than a read-only `__LINKEDIT`, a
+  section of any segment (initializer offsets), or linkedit data reaching
+  past the hashed range into the signature is invalid in `src/libval.c` and
+  `tools/hao_codesig.py` alike (`test_macho`; `tests/tools/test_codesig.py`,
+  8204 cases agree).
+- `HAO_NO_LIBVAL` in an open-tier process turned library validation off
+  for any program; it is now ignored, with a diagnostic, for a program that
+  requires it (`test_macho` gate_nolv_hardened). So are `HAO_CACHE`,
+  `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_ASYNC_CONTRACT_LIBRARY` and
+  `HAO_TRUST_LIST`, before anything they name loads: a `.thunks` library in
+  `HAO_IF_DIR` ran its initializer in a hardened program
+  (`guest/lvswitches`, the marker before, none after).
+
+Limits: the stub's own link-time native dependencies still load, with
+`disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs
+`tools/hao-embed` to keep them to libraries only root can replace. A root
+process that remounts the root file system writable can still change a
+mapped file. Entitlement checks still search the XML and DER text.
+
+A program that requires library validation no longer reads the user's own
+AOT cache directory either, only the system ones, and an embedded program's
+ARM slice is verified against its stub's record before anything the
+environment selects loads (`guest/lvswitches`: a replaced or corrupted
+slice with `HAO_IF_DIR` ran the thunk library's initializer before its
+status 126; now nothing loads). Cost: such programs run translated afresh
+unless a system cache exists. In `tests/`, only `guest/libval`'s `aot` mode
+for its library-validation variants loses its cache (it compares output,
+which is unchanged). The Command Line Tools' `git log` (library flag, 771
+blocks) ran in 0.26 s from its cache and 0.24 s under the JIT.
+`hao --aot --check` and `hao --aot` decide valid or skipped with the same
+directories, after verifying the signature (`tests/aot/run.sh` V: a
+hardened program's cache in `HAO_CACHE` was "valid" and skipped before).
+`--check` checks the cache against the file it verified: a path repointed
+in between is refused (V, with `tests/aot/swapclose.c`).
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

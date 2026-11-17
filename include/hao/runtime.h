@@ -195,6 +195,12 @@ void hao_opts_init_cli(const char *flags, const char *argv_flags);
  * descriptor the loader then maps (hao_load_main_image); path names the file
  * in diagnostics. 0 = run it; -1 = refused, diagnostic printed. */
 int hao_guest_sig_enforce(int fd, const char *path);
+/* A main executable whose verified signature s requires library validation:
+ * the switches that add code or trust (HAO_CACHE, HAO_GUEST_ROOT,
+ * HAO_IF_DIR, HAO_ASYNC_CONTRACT_LIBRARY, HAO_TRUST_LIST) are cleared, each
+ * named on the diagnostics channel. Both front ends call it before the
+ * runtime starts (guest_sig.c). */
+void hao_guest_switches_for(const hao_codesig *s);
 const char *hao_env_tier_name(int tier);
 /* Fatal diagnostics: stderr, or the console with boot argument hao_crash=1
  * (daemons' stderr usually goes nowhere and AMFI denies their core dumps),
@@ -237,9 +243,10 @@ void hao_diag_guest_addr(FILE *f, uint64_t a);   /* " (image+off, file vmaddr V)
 const char *hao_diag_guest_where(uint64_t a, char *buf, size_t n);   /* the same text in buf ("" otherwise) */
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 /* Load the main executable from fd, the open descriptor its launcher has
- * checked (main.c); path only names it. The loader owns fd from here on.
- * hao_main_image is set before its imports bind. */
-hao_image *hao_load_main_image(const char *path, int fd, char *err, size_t errlen);
+ * checked (main.c); path only names it, entry is the launcher
+ * (HAO_ENTRY_CLI or HAO_ENTRY_EMBEDDED, hao/macho.h). The loader owns fd
+ * from here on. hao_main_image is set before its imports bind. */
+hao_image *hao_load_main_image(const char *path, int fd, int entry, char *err, size_t errlen);
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */

@@ -947,26 +947,37 @@ static uint8_t *blob_copy(const uint8_t *p, uint32_t size)
 
 int hao_slice_test_path;
 
-/* Can nobody but root change the file open on fd? Root owns it, neither its
- * group nor others may write it, it has no ACL (any entry counts, and so
- * does an ACL that cannot be read: the kernel says ENOENT when there is
- * none), and it is on a local volume, where those bits are the kernel's to
- * enforce. This is about the open file, so the directories above its name
- * do not matter: they decide which file a path reaches, and fd already is
- * one. A sealed system volume's files all qualify. (The owner and mode
- * rule is aot_policy.c's hao_aot_stat_ok for a system file; the loader's
- * unit tests link this file without it.) */
+/* Can the bytes of the file open on fd not change? It is on the volume the
+ * system booted from, mounted read-only (MNT_ROOTFS, MNT_RDONLY, MNT_LOCAL):
+ * the System volume, sealed or booted from an APFS snapshot, which nothing
+ * writes while it is mounted. Owner, mode and ACL do not establish that on
+ * any other volume: whoever controls a disk image's or a removable disk's
+ * storage changes a root-owned file there without its mode allowing it, and
+ * a writable volume's root-owned files are root's to rewrite in place. On
+ * that volume root also owns it, neither its group nor others may write it,
+ * and it has no ACL (any entry counts, and so does an ACL that cannot be
+ * read: the kernel says ENOENT when there is none). This is about the open
+ * file, so the directories above its name do not matter: they decide which
+ * file a path reaches, and fd already is one. (The owner and mode rule is
+ * aot_policy.c's hao_aot_stat_ok for a system file; the loader's unit tests
+ * link this file without it.) hao_slice_fixed_rule is the decision on what
+ * file_fixed reads. */
+bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none)
+{
+    const uint32_t system = MNT_ROOTFS | MNT_RDONLY | MNT_LOCAL;
+    return uid == 0 && !(mode & (S_IWGRP | S_IWOTH)) && (mnt_flags & system) == system && acl_none;
+}
+
 static bool file_fixed(int fd, const struct stat *st)
 {
     if (hao_slice_test_path) return hao_slice_test_path == 1;
-    if (st->st_uid != 0 || (st->st_mode & (S_IWGRP | S_IWOTH))) return false;
     struct statfs fs;
-    if (fstatfs(fd, &fs) != 0 || !(fs.f_flags & MNT_LOCAL)) return false;
+    if (fstatfs(fd, &fs) != 0 || !hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, true)) return false;
     errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
     int e = errno;
     if (a) acl_free(a);
-    return a == NULL && e == ENOENT;
+    return hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, a == NULL && e == ENOENT);
 }
 
 static hao_slice *slice_pending;       /* hao_slice_hand */
