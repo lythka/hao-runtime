@@ -453,14 +453,16 @@ void hao_jit_alias(uint64_t entry, uint64_t guest);
 uint64_t hao_sig_thunk(uint64_t guest, void *sig);   /* sig: an hsig* (abi.c); 0 if none can be made */
 uint64_t hao_sig_thunk_target(uint64_t thunk);
 void hao_jit_fork_child(void);         /* fork child: re-initialise the module's mutexes */
-/* W^X (jit.c): hao's executable memory (code cache, Swift islands) is read/execute only and written
- * through a second mapping: hao_wx_begin gives the address to write executable bytes [x, x+n) at,
- * hao_wx_end ends the write (in a hao critical section; no write inside another). hao_wx_region makes
- * MAP_JIT memory such a region before anything runs there. */
+/* W^X (jit.c): hao's executable memory (code cache, Swift islands) is read/execute only. hao_wx_region
+ * makes MAP_JIT memory mapped read/write (not executable) such a region; a write maps the bytes it
+ * changes read/write elsewhere for its duration: hao_wx_begin (NULL: frozen, a fork child on an Intel
+ * Mac) .. hao_wx_end, in a hao critical section, no write inside another. */
+typedef struct { uintptr_t x, map, len; } hao_wx_win;
 bool hao_wx_region(void *x, size_t size);
-void *hao_wx_begin(void *x, size_t n);
-void hao_wx_end(void *x, size_t n);
-void hao_wx_write(void *x, const void *src, size_t n);
+bool hao_wx_covers(uint64_t a, uint64_t n);
+void *hao_wx_begin(void *x, size_t n, hao_wx_win *win);
+void hao_wx_end(hao_wx_win *win, size_t written);
+bool hao_wx_write(void *x, const void *src, size_t n);
 /* blocks.c */
 void hao_thunk_native_args(hao_thread *t);
 void hao_thunk_native_blocks(hao_thread *t);

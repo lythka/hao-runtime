@@ -62,45 +62,56 @@ not told apart).
 The code cache (translated blocks, the dispatcher stubs, plain and
 signature thunks) and the Swift island rooms were mapped
 read/write/execute for the life of the process: any write primitive in
-a guest process could place x86 code there. Each such region is now a
-W^X region (`hao_wx_region`, src/jit.c): its MAP_JIT mapping is
-read/execute only, and hao writes through a second, read/write mapping
-of the same memory at a random address that only hao's table holds.
-Block chaining stays one aligned 4-byte store, made through the second
-mapping. A fork child maps the second mapping again (it is not
-inherited).
+a guest process could place x86 code there. Each such region is now
+MAP_JIT memory mapped read/write, never executable, until
+`hao_wx_region` (src/jit.c) takes a memory entry of it and makes it
+read/execute only (on an Intel Mac its maximum protection too). hao
+writes it through a read/write mapping of just the pages a write
+changes, made from the memory entry at a random page of a 256 MB window
+and unmapped when the write ends: a burst of up to 8 translated blocks
+(the block asked for and the blocks its direct branches reach in the
+same image, chained to each other before they are published), one
+chain patch, a page of thunk code, one island fill. Thunk code no longer
+holds its guest function: a slot loads it (and a signature thunk its
+hsig) from a table of its own read/write mapping, so a thunk only fills
+its table entries, and the code is made a page at a time. A region whose
+memory entry cannot be had is refused: the code cache runs interpreted,
+an island leaves its entries on the NX-fault path; nothing is written
+through the executable mapping.
 
-Other ways were measured on the development host and not taken:
-`mach_vm_remap` of MAP_JIT memory is refused (KERN_PROTECTION_FAILURE);
-`pthread_jit_write_protect_np` does nothing on x86_64
-(`pthread_jit_write_protect_supported_np` is 0); toggling the MAP_JIT
-pages between read/execute and read/write/execute around each write
-faults under Rosetta (SIGBUS on the store, 3 of 3 runs, whenever another
-thread runs code on the page). Under Rosetta a write through the second
+Measured on the development host: `mach_vm_remap` of MAP_JIT memory is
+refused (KERN_PROTECTION_FAILURE); `pthread_jit_write_protect_np` does
+nothing on x86_64; toggling MAP_JIT pages between read/execute and
+read/write/execute around each write faults under Rosetta (SIGBUS on
+the store whenever another thread runs the page); a memory entry of an
+executable mapping (read/execute) is refused, so the region is made from
+read/write memory; a mapping of a named memory entry cannot be MAP_JIT
+(KERN_INVALID_ARGUMENT), and executing a plain one kills a hardened
+process with only allow-jit. Under Rosetta a write through another
 mapping is not seen by code Rosetta already translated (999 of 1000
-rewrites ran the old code) until the page is made writable once: after
-each write hao makes the written pages of the first mapping
-read/write/execute and read/execute again, writing nothing through them
-(0 of 100,000 stale with four threads running the page). An Intel Mac
-needs no such step.
+rewrites ran the old code) until the page is made writable: after each
+write hao makes the written pages read/write/execute and read/execute
+again, writing nothing through them, and the maximum protection stays
+read/write/execute there. That is a weakening of the development host
+only. A new random address for every write mapping left 19 MB of page
+tables (`guest/footprint` spread); the 256 MB window keeps them bounded.
+
+A fork child has no memory entries (they are not inherited). Under
+Rosetta it takes them again (the region briefly read/write, not
+executable, while the child's only thread is in hao). On an Intel Mac
+the maximum protection does not allow that: the child's executable
+memory is frozen; new guest code there is interpreted and new callbacks
+take the NX-fault path.
 
 Test: `guest/wx` (C and Swift, native/JIT/--interp/AOT): no region of
-the process is writable and executable after translated code, chained
-branches, thunks and island entries have run (before: 3 to 6 regions).
-Measured on the development host (Rosetta, load 11 to 17), medians:
-clang compiling one file (21,000 blocks, 19,000 links, 56,000 thunks)
-1.20 s before, 0.93 s after; a steady loop 1.68 s both.
-
-Remaining writable and executable memory: under Rosetta, the pages of a
-write for the two protection changes after it; the region itself while
-`hao_wx_region` makes its second mapping (before anything runs there, and
-in a fork child before the child runs); a region whose memory the kernel
-gives no second mapping for is written in place, writable and executable
-for the write (not seen on the development host); guest memory the
-guest maps executable itself (its own MAP_JIT regions) keeps the
-protection the guest asked for. The first mapping's maximum protection
-stays read/write/execute (the Rosetta step and the fork child need it).
-No Intel run yet.
+the process is writable and executable, and no writable mapping of
+executable memory stays, after translated code, chained branches,
+thunks and island entries have run (before: 3 to 6 regions; with the
+persistent write view of the previous version, 1). `test_jitlock sigs`
+reads the thunk tables. Measured on the development host (Rosetta, load
+14 to 29), clang compiling one file, interleaved, fastest of 7: before
+1.21 s, after 0.91 s (13,000 W^X writes for 28,000 blocks, 32,000 links
+and 56,000 thunks); a steady loop 1.68 to 1.71 s both. No Intel run yet.
 
 ## Patched guest code pages stayed writable
 

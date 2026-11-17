@@ -62,11 +62,10 @@ static void *hao_map_near_prot(uint64_t lo, uint64_t hi, uint64_t size, int prot
     }
     return NULL;
 }
-/* executable room for island entries: MAP_JIT, read/execute only until written (W^X, jit.c) */
+/* room for island entries: MAP_JIT, read/write and not executable until the caller makes it a W^X
+ * region (jit.c hao_wx_region) */
 static inline void *hao_map_near(uint64_t lo, uint64_t hi, uint64_t size)
 {
-    void *p = hao_map_near_prot(lo, hi, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_JIT);
-    if (p && mprotect(p, size, PROT_READ | PROT_EXEC)) { munmap(p, size); p = NULL; }
-    return p;
+    return hao_map_near_prot(lo, hi, size, PROT_READ | PROT_WRITE, MAP_JIT);
 }
 #endif
