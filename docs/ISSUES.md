@@ -25,6 +25,22 @@ native witness only copies, an out-of-line box, and an `Optional` of a
 guest struct or enum whose tag witnesses are guest code, read by the code
 that wrote it).
 
+Which values are examined: every value whose type graph has a node not
+settled from metadata alone (`Recipe.c` `settled_node`: a POD under 8
+bytes with no extra inhabitants, structs and tuples by their fields, an
+`Optional` whose nil reads alike, functions, objects, metatypes, Builtins,
+and a native type its module did not freeze with no generic argument). So
+an enum or existential, or a kind with no rule, is examined even with no
+nil to convert. A type graph past the walk's bounds (depth 32, 1024 nodes,
+64 fields, 4096 bytes) and a failed allocation of the type walk are
+refused, never cached as unaffected. A live existential is certified by
+walking its inline value as the dynamic type (native copies call that
+type's witnesses on it); a class-bound object, an out-of-line box and an
+Error box pass as owner-opaque, and so does a guest type, inside an
+existential or at a guest call of a native witness, whose witnesses are
+all guest code. Nils native witnesses make for guest code (`witness_to_guest`)
+and native generic results take the same decision on the way back.
+
 Closed gaps: guest calls of native Optional, tuple and array witnesses
 handed an uncertified value over unchanged without any decision; a lent
 view that needed conversion but was not bitwise-takable went unchanged; a
@@ -37,10 +53,12 @@ parts the walk certified (a refusing field's siblings).
 
 Measured: `guest/svpolicy` copies tuples of a `C??` outer nil through the
 native tuple witnesses. Beside an ObjC object, a closure and a nil `Int?`,
-each pass class is named and the output equals native arm64 under JIT,
-`--interp` and AOT. Beside live weak ObjC storage the value is refused. With
-the switch it equals native; before, the same run faulted at 0x8, since the
-sibling nil was dropped. `guest/overlaynil` now stops by default at an
+and as an `Any` holding a `C??` nil, each is converted and the output equals
+native arm64 under JIT, `--interp` and AOT (the `Any` faulted before the
+payload walk). Refused: beside an `InlineArray` (no rule for its kind; with
+the switch it equals native, its sibling nil converted), an `InlineArray`
+beside a class reference only (passed unexamined before), a 65-element tuple
+(faulted before) and a task group's `next()` returning such a value. `guest/overlaynil` now stops by default at an
 `Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
 engines run with the switch.
 
@@ -56,11 +74,11 @@ admit. Each of those programs now stops at that boundary. Certified since
 their survey (no refusal): `Optional<(Swift.Bool) -> ()>` (function rule)
 and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
 measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
-Limits: a type whose graph exceeds the walk's bounds (depth, 1024 nodes,
-4096 bytes) is never intercepted and so still passes unexamined; values
-native code hands to the guest (a nil a witness made, native generic
-results) keep their old fallback; the tag witnesses of an enclosing enum
-with more than one empty case are not intercepted. The classes are
+Limits: `InlineArray` has no rule and is always refused; native code
+copying a guest-made value itself (a child task's result, an array's
+storage freed natively) is no boundary hao sees; the tag witnesses of an
+enclosing enum with more than one empty case are not intercepted. More
+values are walked at each intercepted call than before. The classes are
 host-tested only; an image run is needed to see which programs stop.
 
 ## Swift `dynamic` functions under the image's interface units

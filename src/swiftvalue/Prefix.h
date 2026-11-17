@@ -11,6 +11,7 @@
 #define collect_witness_patches hao_sv_collect_witness_patches
 #define collect_value_patches hao_sv_collect_value_patches
 #define collect_partial_patches hao_sv_collect_partial_patches
+#define settled_node hao_sv_settled_node
 #define collect_inline_patches hao_sv_collect_inline_patches
 #define discover_enum_case hao_sv_discover_enum_case
 #define discover_fixed_enum_case hao_sv_discover_fixed_enum_case
