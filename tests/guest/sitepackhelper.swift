@@ -130,4 +130,10 @@ open class Offers {
         let s = { (v: Bool?) in v.map { "\($0)" } ?? "nil" }
         return "\(x0 + x7) a=\(s(a)) b=\(s(b)) c=\(s(c)) d=\(s(d)) t=\(t ?? "nil") e=\(s(e)) f=\(s(f)) n=\(n)"
     }
+    open func nils(_ x0: Int, _ x1: Int, _ x2: Int, _ x3: Int, _ x4: Int, _ x5: Int, _ x6: Int, _ x7: Int,
+                   _ a: Bool?, _ p: String?, _ q: String?, _ b: Bool?, _ r: [String]?, _ c: Bool?, _ u: String?,
+                   _ d: Bool?, _ e: Bool?, _ n: Int) -> String {
+        let s = { (v: Bool?) in v.map { "\($0)" } ?? "nil" }
+        return "\(x0 + x7) a=\(s(a)) p=\(p ?? "nil") q=\(q ?? "nil") b=\(s(b)) r=\(r?.joined() ?? "nil") c=\(s(c)) u=\(u ?? "nil") d=\(s(d)) e=\(s(e)) n=\(n)"
+    }
 }

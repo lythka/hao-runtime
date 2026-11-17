@@ -1656,7 +1656,10 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
         if (o.mem && !o.load && o.base == 31) {
             bool pair = (i & 0x38000000) == 0x28000000, fp = (i >> 26) & 1;
             int w = pair ? o.bytes / 2 : o.bytes;
-            for (int p = 0; p <= (int)pair; p++) {
+            /* a 16-byte SIMD store is two 8-byte words of data (taken below only where the callee reads them so) */
+            int pieces = (pair ? 2 : 1) * (fp && w == 16 ? 2 : 1);
+            if (fp && w == 16) w = 8;
+            for (int p = 0; p < pieces; p++) {
                 int64_t at = o.imm - (alloc ? o.wb : 0) + p * w;   /* from the sp at the call */
                 if (at < 0 || at >= 8 * HAO_IF_MAX_PACK) continue;     /* below sp, or no argument we place */
                 bool seen = false;
@@ -1666,7 +1669,7 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
                 }
                 if (!seen) {
                     st[ns].off = (int16_t)at, st[ns].w = (uint8_t)w, st[ns].fp = fp, st[ns].k = (uint8_t)k;
-                    st[ns].src = (uint8_t)(p ? (i >> 10) & 31 : i & 31);
+                    st[ns].src = (uint8_t)(pair && 2 * p >= pieces ? (i >> 10) & 31 : i & 31);
                     ns++;
                 }
             }
@@ -1694,9 +1697,10 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
     for (int s = 0; j < n; s++) {
         if (s == ns) REFUSE("fewer stores than the callee's stack arguments (a merged store?)");
         unsigned at = (unsigned)st[s].off, w = st[s].w;
-        if (st[s].fp) REFUSE("an FP/SIMD store among the arguments");
         if ((w != 1 && w != 2 && w != 4 && w != 8) || at % w) REFUSE("a store not naturally aligned");
         uint8_t r = shown ? u.width[j + 2] : 0;
+        /* FP/SIMD data: an 8-byte word the callee reads as one 8-byte slot is placed like any other */
+        if (st[s].fp && (w != 8 || r != 8)) REFUSE("an FP/SIMD store among the arguments");
         if (shown && !r) REFUSE("the callee does not read an argument's slot");
         if (shown && r != HAO_X86_WIDTH_UNKNOWN && r < w) {
             /* one store of several arguments: the callee's read widths at natural alignment fill it */

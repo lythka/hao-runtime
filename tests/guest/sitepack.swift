@@ -98,6 +98,10 @@ struct Board: Codable {
             for n in 0..<3 {
                 print("method: \(o.changing(1, 2, 3, 4, 5, 6, 7, 8, true, nil, nil, false, flag(n) ? "t\(n)" : nil, nil, true, num(n)))")
             }
+            for n in 0..<3 {
+                print("nils: \(o.nils(1, 2, 3, 4, 5, 6, 7, 8, nil, nil, nil, true, nil, false, nil, nil, true, num(n)))")
+                print("nils: \(o.nils(1, 2, 3, 4, 5, 6, 7, 8, flag(n), nil, flag(n) ? "q" : nil, nil, nil, true, nil, false, nil, num(n)))")
+            }
         default: print("usage: sitepack list|friend|pair0|pair16|quad|spill|encode|method")
         }
     }

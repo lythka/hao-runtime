@@ -6,8 +6,9 @@
 # default copy of 8-byte guest stack words gives the callee CGFloat? values built from a tag and
 # a Bool, and the trailing CGFloat from beyond the arguments. The record lists, per SysV slot,
 # the arm64 offset and width; the CGFloat is a plain 8-byte slot. With the unit every hao run
-# (JIT, --interp, helpers-only, AOT) must print what native arm64 prints; without it the values
-# must arrive wrong (the control).
+# (JIT, --interp, helpers-only, AOT) must print what native arm64 prints. Without it the call
+# site's stores give the same layout (the CGFloat's `str d` is an 8-byte word the callee reads as
+# 8 bytes), so that run must print it too.
 #   OUT=dir HAO=build/hao [T=60] tests/guest/stackpackfp.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -61,9 +62,9 @@ for mode in jit interp helpers aot; do
     echo "$mode $(printf '%-6s' '') rc=$rc $r"
     [ $r = SAME ] || diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /'
 done
-# Without the unit the first case's nil cornerRadius must arrive as a value (the control).
+# Without the unit: the call-site layout (swiftcc.c sitepack), the same values.
 HAO_NO_IFUNITS=1 HAO_NO_AOT=1 timeout -s KILL "$T" "$HAO" "$OUT/stackpackfp.arm64e" >"$OUT/nounit.out" 2>"$OUT/nounit.err"
-if head -1 "$OUT/nounit.out" | grep -q ' corner=nil '; then echo "control: the packed arguments arrived intact without the unit"; fail=1
-else echo "control: without the unit $(head -1 "$OUT/nounit.out" | grep -oE 'corner=[^ ]*') (native corner=nil)"; fi
+if cmp -s "$OUT/native.out" "$OUT/nounit.out"; then echo "no unit: SAME (the call site's stores)"
+else echo "no unit: DIFF"; diff "$OUT/native.out" "$OUT/nounit.out" | sed 's/^/    /'; fail=1; fi
 [ $fail = 0 ] && echo "stackpackfp: PASS" || echo "stackpackfp: FAIL"
 exit $fail
