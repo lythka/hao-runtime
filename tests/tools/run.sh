@@ -49,6 +49,14 @@ grep -q "^fail.*c.*symlink" "$d/log" && pass "in-place: symlink refused" || bad 
 if lipo -archs "$d/b" | grep -q x86_64 && [ "$(stat -f %i "$d/a")" = "$(stat -f %i "$d/b")" ]; then
     pass "in-place: the other hard link is embedded too (same inode)"
 else bad "in-place hard link: b is $(lipo -archs "$d/b"), inodes $(stat -f %i "$d/a") $(stat -f %i "$d/b")"; fi
+# -o writes a new file and renames it over the output: a symlink there (or at the old fixed temporary
+# name OUT.hao-embed) is replaced or left alone, never written through
+echo victim >"$d/victim"; cp "$d/victim" "$d/victim2"; ln -sf victim "$d/out"; ln -sf victim2 "$d/out.hao-embed"
+"$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$d/out" "$G" >"$d/out.log" 2>&1
+if [ "$(cat "$d/victim" "$d/victim2")" = "$(printf 'victim\nvictim')" ] && [ ! -L "$d/out" ] && lipo -archs "$d/out" | grep -q x86_64 \
+    && [ "$(ls -a "$d" | grep -c '^\.hao-embed')" = 0 ]; then
+    pass "-o: a symlink at the output is replaced, not written through; no fixed temporary name is used"
+else bad "-o through a symlink: $(cat "$d/out.log"; cat "$d/victim" "$d/victim2"; ls -la "$d")"; fi
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/x" --scan >/dev/null 2>"$d/scan.err"
 grep -q "needs --root" "$d/scan.err" && pass "--scan without --root: usage error" || bad "--scan without --root: $(cat "$d/scan.err")"
 

@@ -1,5 +1,16 @@
 # Runtime issues and measured scope
 
+## hao-embed -o wrote through a fixed temporary name
+
+`hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
+link there, truncating its target), set its owner and mode and renamed it
+over OUT. Run with privileges in a directory others can write, that let
+them choose which file was overwritten. It now creates the output in a new
+private directory beside OUT (an unpredictable name, mode 0700, exclusive
+creation) and renames it over OUT, which replaces a link instead of writing
+through it; `--in-place` opens the file without following a link. Test:
+`tests/tools/run.sh` ("-o: a symlink at the output is replaced").
+
 ## hao-runtime-on-mac checked only the files the manifest lists
 
 `tools/hao-runtime-on-mac` compared each file of `payload-manifest.json`
