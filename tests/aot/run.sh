@@ -9,7 +9,7 @@
 # program's mach header, load commands and LC_UUID but other code, whose
 # cache the program must not run. Also the other rules of the environment
 # tiers that need a running guest: dependency paths in a set-ID process (L)
-# and the diagnostics log's lock and mode (M). Prints PASS/FAIL per case;
+# and the diagnostics log's lock, mode, directory and unified-log fallback (M). Prints PASS/FAIL per case;
 # exit 1 on FAIL.
 # Writes nothing outside OUT except case H, which runs `hao --aot` with no
 # HOME, no --cache and no HAO_CACHE and removes the one cache file it creates in
@@ -477,5 +477,35 @@ set -- $m
 # the old lock waited 200 ms for the directory's flock and then opened no log (so no mode repair)
 [ "$1" = ok ] && [ "$2" = 600 ] && [ "$3" -lt 150 ] && pass "M directory flock held elsewhere: log opened (0644 -> 0600), start ${3} ms" \
     || bad "M directory flock held: $m"
+
+# A log directory another user may write is not used (they could put a file of their own in the log's place), and
+# what the log does not take goes to the unified log as private records: they hold register values and addresses,
+# which any user may read from a public one. The verbose run writes at least one diagnostics line.
+for d in w777 r555; do mkdir -p "$OUT/$d"; done; chmod 777 "$OUT/w777"; chmod 555 "$OUT/r555"
+m=$(python3 -I - "$HAO" "$G" "$OUT" "$T" <<'EOF'
+import os, subprocess, sys, time
+hao, guest, out, t = sys.argv[1:]
+res = []
+for d in ('w777', 'r555'):
+    p = subprocess.Popen([hao, guest], env={'HAO_DIAG_DIR': out + '/' + d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rc = p.wait(timeout=int(t))
+    recs = []
+    for k in range(10):
+        time.sleep(1)
+        r = subprocess.run(['/usr/bin/log', 'show', '--last', '2m', '--style', 'compact', '--predicate',
+                            'subsystem == "com.hao" AND processID == %d' % p.pid], capture_output=True, text=True)
+        recs = [l.split('[com.hao:diag] ', 1)[1] for l in r.stdout.splitlines() if '[com.hao:diag] ' in l]
+        if recs: break
+    res.append('%s rc=%d log=%s records=%d public=%d' % (d, rc, 'yes' if os.path.exists(out + '/' + d + '/console.log') else 'no',
+                                                     len(recs), sum(1 for l in recs if l.strip() != '<private>')))
+print('; '.join(res))
+EOF
+)
+case $m in
+"w777 rc=7 log=no records="[1-9]*" public=0; r555 rc=7 log=no records="[1-9]*" public=0")
+    pass "M other-writable directory not used; unified-log records private ($m)" ;;
+*) bad "M other-writable directory / private records: $m" ;;
+esac
 
 exit $fail

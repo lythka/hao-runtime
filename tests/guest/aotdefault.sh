@@ -3,7 +3,7 @@
 # here from HAO_AOT_LIST_DIR (a TEST_SWITCHES build). A path with spaces and a universal file with an x86_64 slice
 # are cached, a listed missing file is counted, not failed; a list others can write is not used. A second run skips
 # the valid caches; --check reports valid, missing and stale and changes nothing. --auto (the LaunchDaemon) runs
-# once per libhao: a marker names its generation.
+# once per libhao: a marker names its generation, and only with free space for the set (HAO_AOT_FREE_MB).
 #   OUT=dir HAO=/abs/build-ts/hao [T=120] tests/guest/aotdefault.sh
 set -u
 OUT=${OUT:-$(mktemp -d -t hao-aotdefault)}
@@ -58,6 +58,23 @@ if [ $r1 = 0 ] && [ $r2 = 0 ] && [ $r3 = 0 ] && [ "$(ls "$W/c3" | grep -c '\.aot
     && grep -q "^libhao [0-9a-f]\{32\}\$" "$W/lists/auto-aot.done" && ! grep -q '^libhao 0\{32\}' "$W/lists/auto-aot.done"; then
     echo "PASS --auto: caches, then a marker; a second run does nothing; another libhao's marker runs it again (valid caches skipped)"
 else bad "--auto rc $r1 $r2 $r3: $(tail -1 "$OUT/u1.log" "$OUT/u2.log" "$OUT/u3.log")"; fi
+# --auto and free space (HAO_AOT_FREE_MB replaces each measurement in turn): short at the start, nothing runs and no
+# marker is written; short after the first program, the second is not started and no marker is written; with room,
+# the next run caches the rest and writes the marker.
+mkdir -p "$W/l2" "$W/c4"; chmod 755 "$W/l2" "$W/c4"
+printf '%s\n' "$W/bin dir/one" "$W/two" > "$W/l2/aot-list"; chmod 644 "$W/l2/aot-list"
+HAO_AOT_LIST_DIR=$W/l2 HAO_CACHE=$W/c4 HAO_AOT_FREE_MB=6000 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/s1.log" 2>&1; r1=$?
+n1=$(ls "$W/c4" | grep -c '\.aot$')
+HAO_AOT_LIST_DIR=$W/l2 HAO_CACHE=$W/c4 HAO_AOT_FREE_MB=7000,7000,1000 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/s2.log" 2>&1; r2=$?
+n2=$(ls "$W/c4" | grep -c '\.aot$'); m2=$([ -e "$W/l2/auto-aot.done" ] && echo marker || echo none)
+HAO_AOT_LIST_DIR=$W/l2 HAO_CACHE=$W/c4 HAO_AOT_FREE_MB=7000 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/s3.log" 2>&1; r3=$?
+n3=$(ls "$W/c4" | grep -c '\.aot$')
+if [ "$r1:$n1:$r2:$n2:$m2:$r3:$n3" = "0:0:0:1:none:0:2" ] && grep -q '6000 MB free on the volume of .*6144 MB needed: not run' "$OUT/s1.log" \
+    && ! grep -q 'start for' "$OUT/s1.log" && grep -q '1000 MB free .*under 2048 MB: no further program' "$OUT/s2.log" \
+    && grep -q '1 programs not started for lack of space' "$OUT/s2.log" && grep -q '1 programs cached, 1 already valid' "$OUT/s3.log" \
+    && grep -q '^libhao [0-9a-f]\{32\}$' "$W/l2/auto-aot.done"; then
+    echo "PASS --auto free space: short at the start nothing runs; short midway the rest waits; no marker until done"
+else bad "--auto free space: $r1:$n1:$r2:$n2:$m2:$r3:$n3: $(tail -1 "$OUT/s1.log" "$OUT/s2.log" "$OUT/s3.log")"; fi
 chmod 666 "$W/lists/aot-list" "$W/lists/stub-identities"
 HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/c.log" 2>&1; rc=$?
 [ $rc = 1 ] && grep -q 'neither' "$OUT/c.log" && echo "PASS lists others can write are not used (rc 1)" || bad "writable lists rc $rc: $(tail -2 "$OUT/c.log")"

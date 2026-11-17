@@ -55,14 +55,15 @@ int main(void)
     CHECK(!o.allow_unsigned && o.verbose == 1, "boot argument hao=u does not allow unsigned guests");
     /* the boot-argument list (hao/opts.h): every knob by name, in PID 1, a daemon and a set-ID process */
     {
-        static const char *yes[] = {"nx_stats", "crash_trace", "bridge_stats", "no_aot", "no_chain", "jit_helpers_only", NULL};
+        static const char *yes[] = {"nx_stats", "crash_trace", "bridge_stats", "no_aot", "no_chain", "jit_helpers_only",
+                                    "swift_value_survey", NULL};
         static const char *dev[] = {"no_msgsend", "no_closures", "no_swiftreg", "no_block_thunks", "no_fixup_thunks",
                                     "no_struct_thunks", "bridge_check", "no_varsniff", "no_ifunits", "no_swift_thunks",
                                     "no_swift_values", "native_libcxx", "no_thunks", "sigreturn_kernel", "no_probe", NULL};
         static const char *never[] = {"no_libval", "aot_learn", "no_jit_memory", "bridge_abort", "sigreturn_user", "code_alias",
                                       "libval_user", "swift_value_strict", "interp", "stats", "allow_unsigned", "watchdog", "cache", "guest_root",
                                       "if_dir", "trust_list", "diag_dir", "async_contract_library", "aot_limit_kb",
-                                      "jit_cache_mb", "swift_pop", NULL};
+                                      "jit_cache_mb", "swift_pop", "aot_free_mb", NULL};
         static const int tiers[] = {HAO_ENV_OPEN, HAO_ENV_GUARDED, HAO_ENV_SETUGID};
         hao_opts_t zero;
         hao_opts_parse(&zero, none, NULL, NULL, false, HAO_ENV_OPEN);
@@ -85,20 +86,23 @@ int main(void)
                 if (pass == 1) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) && !hao_env_test_switch(up), "%s: bring-up knob", up);
             }
         }
-        CHECK(nknobs == 21, "boot-argument lists name 21 knobs (%d)", nknobs);
+        CHECK(nknobs == 22, "boot-argument lists name 22 knobs (%d)", nknobs);
     }
     /* the test switches: read from an ordinary environment by a HAO_TEST_SWITCHES build only */
     {
         char *et[] = {"HAO_LIBVAL_USER=1", "HAO_SIGRETURN_USER=1", "HAO_AOT_LIMIT_KB=64", "HAO_BRIDGE_ABORT=1",
-                      "HAO_NO_JIT_MEMORY=1", "HAO_CODE_ALIAS=1", NULL};
+                      "HAO_NO_JIT_MEMORY=1", "HAO_CODE_ALIAS=1", "HAO_AOT_FREE_MB=5,6", "HAO_CRASH=1", NULL};
         hao_opts_parse(&o, et, NULL, NULL, false, HAO_ENV_OPEN);
-        bool all = o.libval_user && o.sigreturn_user && o.aot_limit_kb == 64 && o.bridge_abort && o.no_jit_memory && o.code_alias;
-        bool any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias;
+        bool all = o.libval_user && o.sigreturn_user && o.aot_limit_kb == 64 && o.bridge_abort && o.no_jit_memory && o.code_alias &&
+                   !strcmp(o.aot_free_mb, "5,6") && o.crash;
+        bool any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias ||
+                   o.aot_free_mb[0] || o.crash;
         if (hao_test_switches) CHECK(all, "test switches read in a test build (open)");
         else CHECK(!any && strstr(o.ignored, "HAO_CODE_ALIAS") && strstr(o.ignored, "HAO_LIBVAL_USER"),
                    "test switches not read by a build without HAO_TEST_SWITCHES (ignored: %s)", o.ignored);
         hao_opts_parse(&o, et, NULL, NULL, false, HAO_ENV_GUARDED);
-        any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias;
+        any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias ||
+              o.aot_free_mb[0] || o.crash;
         CHECK(!any, "test switches never read in a guarded process");
     }
     /* switches that make a correct program incorrect or take a signal are not "off switches": open tier only */
@@ -135,6 +139,19 @@ int main(void)
     CHECK(o.bridge_stats && o.jit_helpers_only, "boot arguments hao_bridge_stats=1 hao_jit_helpers_only=1 in every tier");
     hao_opts_parse(&o, none, NULL, "hao_diag_time=1", true, HAO_ENV_GUARDED);
     CHECK(o.diag_time, "boot argument hao_diag_time=1 in PID 1");
+    /* hao_crash=1: the diagnostics channel of every process of the boot (runtime.c hao_diag_init) */
+    for (int t = HAO_ENV_OPEN; t <= HAO_ENV_SETUGID; t++) {
+        hao_opts_parse(&o, none, NULL, "hao_crash=1", t == HAO_ENV_GUARDED, t);
+        CHECK(o.crash, "boot argument hao_crash=1 at tier %d", t);
+    }
+    hao_opts_parse(&o, none, NULL, "hao_crash=0 xhao_crash=1 hao_crashx=1 hao_crash=11", false, HAO_ENV_OPEN);
+    CHECK(!o.crash, "hao_crash matches exactly (key and =1)");
+    /* the Swift value survey prints only: off by default, read by a guarded process too */
+    hao_opts_parse(&o, none, NULL, NULL, false, HAO_ENV_OPEN);
+    CHECK(!o.swift_value_survey, "Swift value survey off by default");
+    char *e13[] = {"HAO_SWIFT_VALUE_SURVEY=1", NULL};
+    hao_opts_parse(&o, e13, NULL, NULL, false, HAO_ENV_GUARDED);
+    CHECK(o.swift_value_survey, "HAO_SWIFT_VALUE_SURVEY in a guarded process");
     char *e9[] = {"HAO_NO_CHAINX=1", "XHAO_NO_AOT=1", "HAO_NO_AO=1", NULL};
     hao_opts_parse(&o, e9, NULL, NULL, false, HAO_ENV_OPEN);
     CHECK(!o.no_chain && !o.no_aot, "environment names match exactly");

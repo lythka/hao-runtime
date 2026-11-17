@@ -52,6 +52,7 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"code_alias", offsetof(hao_opts_t, code_alias), BOOT_NO},
     {"libval_user", offsetof(hao_opts_t, libval_user), BOOT_NO},
     {"swift_value_strict", offsetof(hao_opts_t, swift_value_strict), BOOT_NO},
+    {"swift_value_survey", offsetof(hao_opts_t, swift_value_survey), BOOT_YES},
 };
 #define NKNOBS (sizeof knobs / sizeof knobs[0])
 
@@ -112,6 +113,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
             const char *key = tok, *val = eq + 1;
             if (pid1 && !strcmp(key, "hao")) apply_flags(o, val, false);
             else if (pid1 && !strcmp(key, "hao_verbose")) o->verbose = atoi(val);
+            else if (!strcmp(key, "hao_crash") && !strcmp(val, "1")) o->crash = true;
             else if (!strncmp(key, "hao_", 4) && !strcmp(val, "1"))
                 for (size_t k = 0; k < NKNOBS; k++)
                     if (!strcmp(key + 4, knobs[k].name) && boot_knob_allowed(knobs[k].boot))
@@ -129,6 +131,8 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     if ((v = env_get(o, envp, "HAO_JIT_CACHE_MB", tier)) && atoi(v) > 0) o->jit_cache_mb = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_AOT_LIMIT_KB", tier)) && atoi(v) > 0) o->aot_limit_kb = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_AOT_LIST_DIR", tier))) snprintf(o->aot_list_dir, sizeof o->aot_list_dir, "%s", v);
+    if ((v = env_get(o, envp, "HAO_AOT_FREE_MB", tier))) snprintf(o->aot_free_mb, sizeof o->aot_free_mb, "%s", v);
+    if (env_get(o, envp, "HAO_CRASH", tier)) o->crash = true;
     for (size_t k = 0; k < NKNOBS; k++) {
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)

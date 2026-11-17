@@ -1185,10 +1185,13 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * sandbox before hao starts), and its stderr goes nowhere. When a log is
  * configured, every write the file does not take (no file could be opened,
  * the write failed, the program closed the descriptor) goes to the unified
- * log instead, subsystem "com.hao", category "diag": one public record per
- * line, a line longer than UNI_PIECE bytes cut into pieces, each but the last
- * ending in "\x1f" (log show --predicate 'subsystem == "com.hao"';
- * the bridge worklist tool, not part of this repository, reads them). Lines the file took are not repeated
+ * log instead, subsystem "com.hao", category "diag": one record per line, a
+ * line longer than UNI_PIECE bytes cut into pieces, each but the last ending
+ * in "\x1f" (log show --predicate 'subsystem == "com.hao"'; the bridge
+ * worklist tool, not part of this repository, reads them). The line is a
+ * private argument: it holds register values, addresses and guest data, which
+ * any user may read from a public record, so log show prints <private> unless
+ * the Mac logs private data (a configuration profile). Lines the file took are not repeated
  * there. Not while PID 1 waits for the Data volume (diag_retry), and not past
  * the file's cap. os_log is not async-signal-safe (its first use allocates; a
  * full buffer or a preference refresh takes libtrace's locks), so no writer
@@ -1426,9 +1429,9 @@ static void *uni_drain(void *arg)
             if (!end && t < h && uni_ring[t % UNI_RING] == '\n') { end = true; t++; }   /* UNI_PIECE bytes, then the newline */
             l[n] = 0;
             if (end || t >= h) {
-                if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{public}s", l);
+                if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s", l);
             } else
-                os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{public}s\x1f", l);
+                os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s\x1f", l);
             __atomic_store_n(&uni_tail, t, __ATOMIC_RELEASE);
             __atomic_store_n(&uni_wedged, 0, __ATOMIC_RELAXED);
             if (t >= h) h = __atomic_load_n(&uni_head, __ATOMIC_ACQUIRE);
@@ -1592,6 +1595,13 @@ static int diag_log_open(const char *dir, bool mk)
     if (mk && stat(dir, &ds) != 0 && errno == ENOENT) mkdir(dir, 0755);   /* no write check (a sandbox report) when present */
     int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dfd < 0) return -1;
+    /* another user who may write DIR could replace the log with a file of their own: DIR is this process's or root's,
+     * and only its owner writes it */
+    if (fstat(dfd, &ds) != 0 || (ds.st_uid != geteuid() && ds.st_uid != 0) || (ds.st_mode & (S_IWGRP | S_IWOTH))) {
+        close(dfd);
+        errno = EACCES;
+        return -1;
+    }
     if (diag_before_data_volume(dfd)) { close(dfd); errno = ENOENT; return -1; }
     char hdr[160], got[160];
     int hl = diag_boot_header(hdr, sizeof hdr);
@@ -1605,6 +1615,7 @@ static int diag_log_open(const char *dir, bool mk)
     int fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_NOFOLLOW | O_CLOEXEC), e = errno;
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))) { close(fd); fd = -1; e = EINVAL; }
+    if (fd >= 0 && st.st_uid != geteuid()) { close(fd); fd = -1; e = EACCES; }   /* another user's file */
     /* register dumps and image bases: the owner's alone (a file an earlier hao made 0644 too, before it rotates) */
     if (fd >= 0 && st.st_uid == geteuid() && (st.st_mode & 077)) fchmod(fd, 0600);
     if (fd >= 0 && (pread(fd, got, (size_t)hl, 0) != hl || memcmp(got, hdr, (size_t)hl))) {
@@ -1802,7 +1813,7 @@ void hao_diag_init(void)
 {
     static int done;
     if (done++) return;
-    bool crash = hao_bootarg_flag("hao_crash"), mk = false;
+    bool crash = hao_opt.crash, mk = false;
     diag_stamp = hao_opt.diag_time;
     if (diag_stamp) diag_now_ns();   /* the timebase, read outside any signal handler */
     if (crash && getpid() != 1) {
@@ -1831,20 +1842,6 @@ void hao_diag_init(void)
     if (!f) return;
     setvbuf(f, diag_buf, _IOLBF, sizeof diag_buf);
     hao_diag_file = f;
-}
-
-/* Exact, space-delimited "key=1" in the kernel's boot arguments. Lets a
- * whole boot (PID 1 has no environment) switch hao features without an
- * image rebuild. kern.bootargs is readable without privileges. */
-bool hao_bootarg_flag(const char *key)
-{
-    char ba[1024];
-    size_t n = sizeof ba - 1, k = strlen(key);
-    if (sysctlbyname("kern.bootargs", ba, &n, NULL, 0) != 0) return false;
-    ba[n] = 0;
-    for (char *p = ba; (p = strstr(p, key)); p += k)
-        if ((p == ba || p[-1] == ' ') && p[k] == '=' && p[k + 1] == '1') return true;
-    return false;
 }
 
 /* Native -> guest calls that arrived by faulting on a non-executable guest

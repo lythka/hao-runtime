@@ -174,12 +174,14 @@ int hao_env_tier_for(const hao_proc_facts *f)
 static const char *const engine_switches[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", NULL};
 /* Print to the process's own stderr or the console. They bind nothing and
  * turn nothing off (HAO_NX_STATS adds a thread that only prints). */
-static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME", NULL};
+static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME",
+                                           "HAO_SWIFT_VALUE_SURVEY", NULL};
 /* For hao's own tests: they replace a kernel answer or a resource limit with
  * a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
-                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", NULL};
+                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_AOT_FREE_MB",
+                                            "HAO_CRASH", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {
