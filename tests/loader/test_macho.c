@@ -299,9 +299,31 @@ static void slice_tests(const uint8_t *seed, size_t n, const uint8_t *lib, size_
             char what[300];
             snprintf(what, sizeof what, pass ? "root-owned file without write bits on another local volume (%s): copied"
                                              : "root-owned file on the read-only System volume (%s): mapped", used ? used : "");
-            if (!used) printf("note no %s file with an arm64 slice found here: not tested\n", pass ? "root-owned non-System" : "System");
-            else note(copied == (pass == 1), what);
+            if (used) note(copied == (pass == 1), what);
+            else if (!pass) note(false, "a root-owned System-volume file with an arm64 slice (/usr/bin/true, ...) to test with");
+            else printf("SKIP no root-owned arm64 file outside the System volume here; the rule below covers that case\n");
         }
+        /* the rule itself, on every combination of the four facts it reads */
+        const uint32_t ro = MNT_ROOTFS | MNT_RDONLY | MNT_LOCAL;
+        struct { uid_t uid; mode_t mode; uint32_t mnt; bool acl_none; bool mapped; const char *what; } r[] = {
+            {0, 0755, ro, true, true, "root, 0755, read-only boot volume, no ACL: mapped"},
+            {0, 0755, ro | MNT_JOURNALED | MNT_NOSUID, true, true, "other volume flags do not matter"},
+            {0, 0755, MNT_LOCAL, true, false, "a local writable volume (the data volume): copied"},
+            {0, 0755, MNT_LOCAL | MNT_RDONLY, true, false, "a local read-only volume that is not the boot volume (a disk image): copied"},
+            {0, 0755, MNT_ROOTFS | MNT_LOCAL, true, false, "the boot volume mounted writable: copied"},
+            {0, 0755, MNT_ROOTFS | MNT_RDONLY, true, false, "the boot volume, not local: copied"},
+            {501, 0755, ro, true, false, "not root's: copied"},
+            {0, 0775, ro, true, false, "group-writable: copied"},
+            {0, 0757, ro, true, false, "writable by others: copied"},
+            {0, 0755, ro, false, false, "an ACL, or one that cannot be read: copied"},
+        };
+        bool all = true;
+        for (size_t k = 0; k < sizeof r / sizeof *r; k++)
+            if (hao_slice_fixed_rule(r[k].uid, r[k].mode, r[k].mnt, r[k].acl_none) != r[k].mapped) {
+                printf("FAIL mapping rule: %s\n", r[k].what);
+                all = false;
+            }
+        note(all, "mapping rule: only a root-owned, unwritable, ACL-free file on the read-only boot volume is mapped (10 cases)");
     }
 
     /* a caller checks the slice, the file changes, the loader builds the image: from the slice the caller left */
@@ -623,7 +645,8 @@ static void gate_entry(const uint8_t *seed, size_t n, const uint8_t *lib, size_t
 }
 
 /* A hardened main executable in a process that cannot be made to require library validation: refused,
- * not run with library validation for guest images only. */
+ * not run with library validation for guest images only. Setting the flag fails, reading the status back
+ * fails, or the flag does not stick. */
 static void gate_setlv(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
 {
     (void)lib; (void)ln;
@@ -631,17 +654,53 @@ static void gate_setlv(const uint8_t *seed, size_t n, const uint8_t *lib, size_t
     uint8_t *d = copy_of(seed, n);
     size_t so = sig_at(d), cd = so + be32at(d + so + 16);
     d[cd + 13] |= 0x01;                                          /* runtime */
-    hao_libval_test_setlv = 1;
     hao_libval_set_verifier(fake_signer, true, NULL);
-    hao_libval_expect_main(true, HAO_ENTRY_CLI);
-    hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
-    note(!img && strstr(err, "cannot be made to require it") && hao_libval_mode() == HAO_LIBVAL_UNDECIDED,
-         "hardened main executable, CS_REQUIRE_LV cannot be set: refused");
+    hao_image *img = NULL;
+    static const char *const how[] = {"", "setting it fails", "its status cannot be read", "it does not stick"};
+    static const char *const said[] = {"", "Operation not permitted", "status not readable", "flags unchanged"};
+    for (int t = 1; t <= 3; t++) {
+        char what[200];
+        hao_libval_test_setlv = t;
+        hao_libval_expect_main(true, HAO_ENTRY_CLI);
+        img = load_bytes("main.bin", d, n, err, sizeof err);
+        snprintf(what, sizeof what, "hardened main executable, CS_REQUIRE_LV: %s: refused", how[t]);
+        note(!img && strstr(err, "cannot be made to require it") && strstr(err, said[t]) && hao_libval_mode() == HAO_LIBVAL_UNDECIDED,
+             what);
+    }
     hao_libval_expect_main(true, HAO_ENTRY_CLI);
     img = load_bytes("main.bin", seed, n, err, sizeof err);
     note(img && hao_libval_mode() == HAO_LIBVAL_OFF, "a program that does not require library validation: loads");
     hao_libval_test_setlv = 0;
     free(d);
+}
+
+/* HAO_NO_LIBVAL (enabled = false) turns library validation off only for a program that does not require
+ * it: natively the hardened runtime and the kernel do not take that from the environment. */
+static void gate_nolv_hardened(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    char err[512];
+    uint8_t *d = copy_of(seed, n);
+    size_t so = sig_at(d), cd = so + be32at(d + so + 16);
+    d[cd + 13] |= 0x01;                                          /* runtime */
+    hao_libval_set_verifier(fake_signer, true, NULL);
+    hao_libval_expect_main(false, HAO_ENTRY_CLI);
+    hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
+    note(img && hao_libval_mode() == HAO_LIBVAL_KERNEL && strstr(hao_libval_reason(), "HAO_NO_LIBVAL ignored"),
+         "HAO_NO_LIBVAL, hardened main executable: ignored, library validation on");
+    signer_calls = 0; signer_apple = 0;
+    hao_image *l = load_bytes("lib.bin", lib, ln, err, sizeof err);
+    note(!l && signer_calls == 1, "... and a library its signer does not vouch for is not loaded");
+    free(d);
+}
+
+static void gate_nolv_plain(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    (void)lib; (void)ln;
+    char err[512];
+    hao_libval_expect_main(false, HAO_ENTRY_CLI);
+    hao_image *img = load_bytes("main.bin", seed, n, err, sizeof err);
+    note(img && hao_libval_mode() == HAO_LIBVAL_OFF && !strcmp(hao_libval_reason(), "turned off (hao_no_libval)"),
+         "HAO_NO_LIBVAL, a program that does not require library validation: off");
 }
 
 /* Reads a list of "b FILE" (a signature blob) and "m FILE" (a thin Mach-O)
@@ -1077,6 +1136,8 @@ int main(int argc, char **argv)
     fails += in_child(gate_hardened, seed, n, lib, ln, &passes);
     fails += in_child(gate_entry, seed, n, lib, ln, &passes);
     fails += in_child(gate_setlv, seed, n, lib, ln, &passes);
+    fails += in_child(gate_nolv_hardened, seed, n, lib, ln, &passes);
+    fails += in_child(gate_nolv_plain, seed, n, lib, ln, &passes);
 
     printf("test_macho: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
