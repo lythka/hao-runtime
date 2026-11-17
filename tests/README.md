@@ -123,7 +123,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/indirect-x8 | PASS | 1 | |
 | guest/keypath | PASS | 2 | |
 | guest/libval | PASS | 16 | |
-| guest/lvswitches | PASS | 5 | the switches that add code or trust (`HAO_CACHE`, `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_ASYNC_CONTRACT_LIBRARY`, `HAO_TRUST_LIST`) and `HAO_NO_LIBVAL`, set in an open-tier process: a program that requires library validation (hardened runtime in the CLI route, the library flag embedded) names each as ignored and does not load `HAO_IF_DIR`'s thunk library, whose initializer leaves a marker; an ad hoc program loads it (the control). Before, the hardened program loaded it |
+| guest/lvswitches | PASS | 7 | the switches that add code or trust (`HAO_CACHE`, `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_ASYNC_CONTRACT_LIBRARY`, `HAO_TRUST_LIST`) and `HAO_NO_LIBVAL`, set in an open-tier process: a program that requires library validation (hardened runtime in the CLI route, the library flag embedded) names each as ignored and does not load `HAO_IF_DIR`'s thunk library, whose initializer leaves a marker; an ad hoc program loads it (the control). Before, the hardened program loaded it. The library program's stub with its ARM slice replaced or corrupted ends with status 126 before the thunk library loads (before, its initializer ran first) |
 | guest/msgfnptr | PASS | 4 | |
 | guest/narrowret | PASS | 4 | |
 | guest/nativesig | PASS | 25 | |

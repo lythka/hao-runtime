@@ -666,14 +666,19 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
         fprintf(HAO_DIAG, "%s no longer names the file this process runs; refusing to load its ARM code from another file\n", exe);
         return 126;
     }
-    /* The slice is taken once, here, and left for the loader. Its policy decides which switches stand
-     * before anything they select is loaded; a signature that does not verify is refused by the loader. */
-    char w[400];
+    /* The slice is taken once, here, and left for the loader. It is authenticated first, before anything
+     * the environment selects can load: its signature verified and its cdhash the one the stub names (the
+     * loader's gate asks again and gets the same answer). Its policy then decides which switches stand. */
+    char w[600];
     hao_slice *sl = hao_slice_open(fd, w, sizeof w);
-    if (sl) {
-        if (sl->sig_size && hao_slice_verify(sl, NULL, w, sizeof w) == 0) hao_guest_switches_for(&sl->sig);
-        hao_slice_hand(sl);
+    if (!sl || hao_libval_stub_bound(sl, w, sizeof w) != 0) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "%s: %s\n", exe, w);
+        hao_slice_close(sl);
+        return 126;
     }
+    hao_guest_switches_for(&sl->sig);
+    hao_slice_hand(sl);
     return run_guest(exe, fd, HAO_ENTRY_EMBEDDED, argc, argv, envp);
 }
 

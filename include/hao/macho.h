@@ -309,6 +309,9 @@ typedef struct {
  * embedded program (a stub without the section is refused), and of the CLI
  * if its own main executable has the section. */
 int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n);
+/* hao_libval_bound with this process's own main executable's record: an
+ * embedded program's stub. A stub without one names no code: -1 (why). */
+int hao_libval_stub_bound(hao_slice *sl, char *why, size_t n);
 enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL };
 /* How the process started, said by the front end that started it (main.c):
  * HAO_ENTRY_CLI, hao's own launcher (`hao PROGRAM`, every routed exec),

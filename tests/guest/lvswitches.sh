@@ -9,7 +9,10 @@
 # hardened one (the hardened runtime, or the library-validation flag) must not,
 # in the CLI route and embedded, and each switch the
 # hardened program ignores is named on stderr (HAO_ASYNC_CONTRACT_LIBRARY, a
-# file that does not exist, is set for the hardened program only).
+# file that does not exist, is set for the hardened program only). An
+# embedded program whose ARM slice is not the one its stub names (another
+# program's, or its own with a changed byte) ends with status 126 before
+# anything the environment selects loads.
 #   OUT=dir [B=build] [T=60] tests/guest/lvswitches.sh
 # Prints PASS/FAIL per case; exit 1 if any failed.
 set -u
@@ -64,6 +67,26 @@ for route in cli emb; do
     [ $rc = 7 ] && [ $marked = no ] && [ -z "$missing" ] &&
         pass "$route: $hn program: no thunk library loaded, every switch named as ignored" ||
         bad "$route: $hn program: rc $rc, marker $marked, not named:$missing: $(head -c 300 "$route-hardened.out")"
+done
+# The stub of the library-flag program with its ARM slice replaced: by the ad hoc program's (valid, no
+# library validation), and by its own with a byte changed. The stub names neither, so the process must
+# end with status 126 before anything the environment selects loads.
+python3 -I - "$repo/tools" emb/library plain emb/replaced emb/corrupt <<'PY' || exit 2
+import sys
+sys.path.insert(0, sys.argv[1])
+import hao_fat
+a, p = open(sys.argv[2], "rb").read(), open(sys.argv[3], "rb").read()
+arm = [bytes(s) for c, _, s in hao_fat.slices(a) if c == hao_fat.CPU_ARM64][0]
+open(sys.argv[4], "wb").write(hao_fat.replace_slice(a, hao_fat.CPU_ARM64, p))
+bad = bytearray(arm)
+bad[0x40] ^= 1
+open(sys.argv[5], "wb").write(hao_fat.replace_slice(a, hao_fat.CPU_ARM64, bytes(bad)))
+PY
+chmod +x emb/replaced emb/corrupt
+for c in replaced corrupt; do
+    ASYNC= run "emb-$c" arch -x86_64 "emb/$c"
+    [ $rc = 126 ] && [ $marked = no ] && pass "emb: the library program's stub, ARM slice $c: refused (126), no thunk library loaded" ||
+        bad "emb: ARM slice $c: rc $rc, marker $marked: $(head -c 300 "emb-$c.out")"
 done
 run emb-hardened arch -x86_64 emb/hardened
 [ $rc = 7 ] && [ $marked = no ] && has emb-hardened "HAO_IF_DIR ignored (guarded process)" &&
