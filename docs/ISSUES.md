@@ -51,17 +51,20 @@ still takes the register bridge, as any call without a signature.
 A callback without a signature whose native caller gave no result buffer
 (a C caller's rax is not one) let the guest write an indirect result 1 KB
 below the guest's live stack; a larger result overwrote the caller's
-frames. x8 is now the caller's rax only for a Swift function, whose
-convention passes the buffer there: an island entry (r10 =
-HAO_CB_SWIFTCC), a native caller in an image with Swift metadata, or a
-native function the guest called that jumped on to guest code (its
-return address is hao_native_call's, which passed the guest's own x8 in
-rax); a value that cannot be a data pointer is never taken. Otherwise x8
-points into the thread's own area: 64 KB for each of the first 16
-nesting levels, each followed by a 64 KB guard, so a larger result
-faults in its level's guard; a deeper level gets a guard itself. The
-area is made without a lock (a signal handler's callback that makes it
-first wins). The value the native caller reads is still not the
+frames. x8 is now the caller's rax only for a Swift callee by its own
+symbol or entry: an island entry (r10 = HAO_CB_SWIFTCC), a guest function
+whose defined symbol is a Swift mangled name (read from the image's
+symbol table, no dladdr), one handed to a native function whose own
+exported symbol is a Swift mangled name (its entry is marked the same
+way: `hao_swift_thunk_for`), or a native function the guest called that
+jumped on to guest code (its return address is hao_native_call's, which
+put the guest's own x8 in rax); a value that cannot be a data pointer is
+never taken. A caller's image with Swift metadata no longer counts.
+Otherwise x8 points into the thread's own area: 64 KB for each of the
+first 16 nesting levels, each followed by a 64 KB guard, so a larger
+result faults in its level's guard; a deeper level gets a guard itself.
+The area is made without a lock (a signal handler's callback that makes
+it first wins). The value the native caller reads is still not the
 guest's result: that needs the signature.
 
 An unsupported signature that cannot get its refusing signature thunk
@@ -73,10 +76,13 @@ stack canary was overwritten, now intact. A 96 KB result: it ran over
 another level's part, now it faults in the guard. A 70000-byte ObjC
 argument: SIGSEGV, now refused. A guest block with a 70000-byte
 parameter: printed 0 (native 11), now refused; with HAO_NO_CLOSURES at
-registration. `guest/indirect-x8` and the 119 guest and host entries of
-tests/check.list pass. Limits: a C function in an image with Swift
-metadata that calls a guest function returning in memory with a
-leftover data pointer in rax still hands it over.
+registration. A release-style build (local symbols stripped) of
+`guest/swiftthunks`, whose closures native Swift generics call: same
+output as native (it relies on the native callee's symbol).
+`guest/indirect-x8` and the guest and host entries of tests/check.list
+pass. Limits: a stripped guest Swift function reached by a path none of
+these covers (a native C caller, an NX fault from code that is not a
+Swift export) gets hao's area: a result it returns in memory is lost.
 
 ## Translated code, thunks and Swift island entries were writable and executable
 
