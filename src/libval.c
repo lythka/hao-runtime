@@ -80,6 +80,7 @@
 #include <crt_externs.h>
 #include <mach-o/getsect.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 
 int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define CS_OPS_STATUS 0
@@ -346,6 +347,71 @@ static int exec_ranges(const uint8_t *cmds, uint32_t ncmds, hao_range *r, int ma
     return n;
 }
 
+/* What the loader would use from outside the hashed range [0, limit): the
+ * bytes there are the signature's own, which its hashes do not all seal, so
+ * they may change without changing the cdhash. An executable segment's
+ * file range, and every range of linkedit data a load command names (the
+ * loader's fixups, exports and function starts, and the symbol tables) must
+ * end by limit. tools/hao_codesig.py check() applies the same rule, and the
+ * AOT generator refuses such a segment the same way (jit.c). NULL: none;
+ * else what reaches past it. cmds are hao_macho_check_cmds-valid. */
+static const char *unsealed_use(const uint8_t *cmds, uint32_t ncmds, uint64_t limit)
+{
+    const uint8_t *p = cmds;
+    for (uint32_t k = 0; k < ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct load_command *lc = (const void *)p;
+        uint64_t r[5][2] = {{0}};
+        int nr = 0;
+        const char *what = "linkedit data";
+        switch (lc->cmd) {
+        case LC_SEGMENT_64: {
+            const struct segment_command_64 *sg = (const void *)p;
+            if (!(sg->initprot & VM_PROT_EXECUTE)) break;
+            r[nr][0] = sg->fileoff; r[nr++][1] = sg->filesize;
+            what = "an executable segment";
+            break;
+        }
+        case LC_SEGMENT_SPLIT_INFO: case LC_FUNCTION_STARTS: case LC_DATA_IN_CODE: case LC_DYLIB_CODE_SIGN_DRS:
+        case LC_LINKER_OPTIMIZATION_HINT: case LC_DYLD_EXPORTS_TRIE: case LC_DYLD_CHAINED_FIXUPS: case LC_ATOM_INFO:
+        case LC_FUNCTION_VARIANTS: case LC_FUNCTION_VARIANT_FIXUPS: case LC_LAZY_LOAD_DYLIB_INFO: {
+            if (lc->cmdsize < sizeof(struct linkedit_data_command)) break;
+            const struct linkedit_data_command *ld = (const void *)p;
+            r[nr][0] = ld->dataoff; r[nr++][1] = ld->datasize;
+            break;
+        }
+        case LC_DYLD_INFO: case LC_DYLD_INFO_ONLY: {
+            if (lc->cmdsize < sizeof(struct dyld_info_command)) break;
+            const struct dyld_info_command *d = (const void *)p;
+            uint32_t v[5][2] = {{d->rebase_off, d->rebase_size}, {d->bind_off, d->bind_size}, {d->weak_bind_off, d->weak_bind_size},
+                                {d->lazy_bind_off, d->lazy_bind_size}, {d->export_off, d->export_size}};
+            for (int i = 0; i < 5; i++) { r[nr][0] = v[i][0]; r[nr++][1] = v[i][1]; }
+            break;
+        }
+        case LC_SYMTAB: {
+            if (lc->cmdsize < sizeof(struct symtab_command)) break;
+            const struct symtab_command *s = (const void *)p;
+            r[nr][0] = s->symoff; r[nr++][1] = (uint64_t)s->nsyms * sizeof(struct nlist_64);
+            r[nr][0] = s->stroff; r[nr++][1] = s->strsize;
+            break;
+        }
+        case LC_DYSYMTAB: {
+            if (lc->cmdsize < sizeof(struct dysymtab_command)) break;
+            const struct dysymtab_command *s = (const void *)p;
+            r[nr][0] = s->indirectsymoff; r[nr++][1] = (uint64_t)s->nindirectsyms * 4;
+            r[nr][0] = s->extreloff; r[nr++][1] = (uint64_t)s->nextrel * 8;
+            r[nr][0] = s->locreloff; r[nr++][1] = (uint64_t)s->nlocrel * 8;
+            r[nr][0] = s->tocoff; r[nr++][1] = (uint64_t)s->ntoc * 8;
+            r[nr][0] = s->modtaboff; r[nr++][1] = (uint64_t)s->nmodtab * sizeof(struct dylib_module_64);
+            break;
+        }
+        default: break;
+        }
+        for (int i = 0; i < nr; i++)
+            if (r[i][1] && (r[i][0] > limit || r[i][1] > limit - r[i][0])) return what;
+    }
+    return NULL;
+}
+
 /* Every page hash of [0, code_limit) of the slice at bytes, which the
  * caller has checked to hold code_limit bytes: the memory the image is
  * built from, so the pages hashed here are the pages that run. *bad_exec
@@ -409,6 +475,11 @@ int hao_slice_verify(hao_slice *sl, bool *bad_exec, char *why, size_t n)
     if (s.code_limit < sl->sig_off || s.code_limit > sl->size || sl->size > (s.code_limit > sig_end ? s.code_limit : sig_end)) {
         snprintf(why, n, "it covers [0, %#llx) of a %#llx-byte slice whose signature is at %#x",
                  (unsigned long long)s.code_limit, (unsigned long long)sl->size, sl->sig_off);
+        return -1;
+    }
+    const char *past = unsealed_use(sl->cmds, sl->ncmds, s.code_limit);
+    if (past) {
+        snprintf(why, n, "%s reaches past the hashed range [0, %#llx), into the signature", past, (unsigned long long)s.code_limit);
         return -1;
     }
     hao_range ex[16];

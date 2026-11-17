@@ -11,8 +11,10 @@ ID, disable-library-validation and library-validation answer:
   - every byte of the first 400 of a signature blob, changed four ways;
   - in a Mach-O: every byte of the first 256 of its signature changed two
     ways, a changed byte in its first, a middle and its last hashed page, a
-    byte appended, the last byte removed, the signature's range moved, and a
-    second LC_CODE_SIGNATURE.
+    byte appended, the last byte removed, the signature's range moved, a
+    second LC_CODE_SIGNATURE, and __TEXT, function starts or the symbol
+    table reaching into the signature (which tools/hao_codesig.py's
+    unsealed_use must also name by itself).
 The C side is build/test_macho --codesig LIST (an ASan build, so a read
 outside a signature fails the run).
 
@@ -90,6 +92,21 @@ def blob_cases(blob):
     yield blob[:len(blob) // 2]
 
 
+def unsealed_cases(mo):
+    """MO with __TEXT ending 16 bytes into the signature, and with function starts and the symbol table
+    starting at it (src/libval.c unsealed_use)."""
+    sig = signature_command(mo)
+    for cmd, off, size in hao_fat.load_commands(mo, "Mach-O"):
+        m = bytearray(mo)
+        if cmd == 0x19 and mo[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
+            struct.pack_into("<Q", m, off + 48, sig[1] + 16 - struct.unpack_from("<Q", mo, off + 40)[0])
+        elif cmd in (0x26, 0x2):                        # LC_FUNCTION_STARTS dataoff, LC_SYMTAB symoff
+            struct.pack_into("<I", m, off + 8, sig[1])
+        else:
+            continue
+        yield bytes(m)
+
+
 def macho_cases(mo):
     yield mo
     sig = signature_command(mo)
@@ -111,6 +128,7 @@ def macho_cases(mo):
         m = bytearray(mo)
         struct.pack_into("<I", m, cmd + field, struct.unpack_from("<I", m, cmd + field)[0] + delta)
         yield bytes(m)
+    yield from unsealed_cases(mo)
     ncmds, sizeofcmds = struct.unpack_from("<II", mo, 16)
     m = bytearray(mo)                                   # a second LC_CODE_SIGNATURE in the header padding
     m[32 + sizeofcmds:32 + sizeofcmds + 16] = mo[cmd:cmd + 16]
@@ -149,6 +167,13 @@ def main():
     if len(got) != len(cases):
         sys.exit("FAIL %d cases, %d answers from %s" % (len(cases), len(got), tool))
     bad, verdicts = 0, {}
+    for name in sorted(os.listdir(os.path.join(corpus, "macho"))):
+        mo = arm_slice(open(os.path.join(corpus, "macho", name), "rb").read())
+        sig = mo is not None and signature_command(bytes(mo))
+        for m in unsealed_cases(bytes(mo)) if sig else ():
+            if not hao_codesig.unsealed_use(m, sig[1]):
+                bad += 1
+                print("FAIL %s: tools/hao_codesig.py does not see a range reaching into the signature" % name)
     for (kind, name, data), c_line in zip(cases, got):
         py_line = blob_line(data) if kind == "b" else macho_line(data)
         verdicts[c_line.split()[0]] = verdicts.get(c_line.split()[0], 0) + 1
