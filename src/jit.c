@@ -485,8 +485,8 @@ static void exit_direct(tctx *t, uint64_t target)
      * the alignment of the final address. */
     x_nopn(&t->b, (int)((3 - xb_len(&t->b)) & 3));
     size_t j = x_jmp32(&t->b);
-    st_sites++;
-    if (j & 3) st_sites_unaligned++;
+    ST(st_sites);
+    if (j & 3) ST(st_sites_unaligned);
     size_t stub = xb_len(&t->b);
     x_patch32(&t->b, j, stub);
     if (t->links) {
