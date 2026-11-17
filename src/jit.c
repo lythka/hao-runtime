@@ -4753,8 +4753,9 @@ static void aot_name(hao_image *im, char *out, size_t n, const char *ext)
 
 static bool fd_acl_allows(int fd)
 {
+    errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
-    bool r = hao_aot_acl_allows(a);
+    bool r = hao_aot_acl_allows(a, errno);
     if (a) acl_free(a);
     return r;
 }

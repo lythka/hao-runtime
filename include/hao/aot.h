@@ -205,8 +205,10 @@ bool hao_aot_dir_ok(const char *canon, int kind, uid_t euid, char *why, size_t n
 /* Symlinks in the configured path must be root-owned (/tmp, /var). */
 bool hao_aot_literal_ok(const char *path, char *why, size_t n);
 /* Does the extended ACL (from acl_get_*_np) grant anyone write, delete,
- * attribute, security or owner rights? */
-bool hao_aot_acl_allows(void *acl);
+ * attribute, security or owner rights? acl NULL: lookup_errno is the
+ * lookup's errno, and only ENOENT (the file has no extended ACL) means no
+ * ACL; any other failure counts as granting. */
+bool hao_aot_acl_allows(void *acl, int lookup_errno);
 /* Open d->path/name for reading if the file, d->path and every directory
  * above them pass the rules above for d->kind (src/jit.c). -1 with why
  * empty: no such file; with why set: the file exists but is rejected. */
