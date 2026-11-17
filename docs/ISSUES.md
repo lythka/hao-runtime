@@ -43,7 +43,9 @@ was made through the register bridge all the same, which put the
 arguments in the wrong places. A native call of a guest function or
 block with such a signature got a plain thunk. Both now stop the process
 with `bridge: REFUSED call to NAME ...` or `bridge: REFUSED callback into
-guest ...`, as a REFUSED binding does. An encoding hao cannot read at all
+guest ...`, as a REFUSED binding does. The refusal and the W^X
+failures write their line with `hao_fatal_safe` (no stdio, no dladdr),
+as they may happen in a callback a signal interrupted. An encoding hao cannot read at all
 still takes the register bridge, as any call without a signature.
 
 A callback without a signature whose native caller gave no result buffer

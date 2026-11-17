@@ -2,6 +2,8 @@
 #include "hao/runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 hao_image *hao_image_for_code(uint64_t a) { (void)a; return 0; }
 int hao_code_aliased;
 const void *hao_code_ptr_slow(uint64_t a) { return (const void *)(uintptr_t)a; }
@@ -17,6 +19,13 @@ FILE *hao_diag_file;
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[oracle]: "); }
 void hao_oom(const char *what) { fprintf(stderr, "hao[oracle]: %s: out of memory\n", what); abort(); }
 void hao_crit_enter(void) {}
+void hao_fatal_safe(const char *what, const uint64_t *v, int n)
+{
+    (void)v; (void)n;
+    write(2, what, strlen(what));
+    write(2, "\n", 1);
+    abort();
+}
 void hao_crit_leave(void) {}
 int hao_crit_depth(void) { return 1; }
 /* jit.o's AOT writer and loader (never reached from the oracle) */

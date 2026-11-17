@@ -29,7 +29,7 @@ for c in mid call block; do
         HAO_NO_AOT=1 timeout -s KILL "$T" "$HAO" $flag "$OUT/refuse.arm64e" $c >"$OUT/$c.$mode.out" 2>"$OUT/$c.$mode.err"; rc=$?
         case $c in
         mid) ok=0; [ $nrc = 0 ] && [ $rc = 0 ] && grep -q 'canary intact' "$OUT/$c.$mode.out" && ok=1 ;;
-        call) ok=0; [ $nrc = 0 ] && [ $rc != 0 ] && grep -q 'bridge: REFUSED call to .*not marshalled' "$OUT/$c.$mode.err" && ok=1 ;;
+        call) ok=0; [ $nrc = 0 ] && [ $rc != 0 ] && grep -q 'bridge: REFUSED call: signature .*not marshalled' "$OUT/$c.$mode.err" && ok=1 ;;
         block) ok=0; [ $nrc = 0 ] && [ $rc != 0 ] && grep -q 'bridge: REFUSED callback into guest' "$OUT/$c.$mode.err" && ok=1 ;;
         esac
         [ $ok = 1 ] && r=PASS || { r=FAIL; fail=1; }
