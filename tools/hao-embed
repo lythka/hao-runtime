@@ -129,6 +129,7 @@ import json
 import os
 import plistlib
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -1012,24 +1013,37 @@ def x86_cache_dir(a):
 def write_like(dst, data, like, in_place=False):
     """Write DATA to DST with LIKE's owner and mode. In place (DST is LIKE)
     the inode is kept, so other hard links see the embedded file too; a
-    symlink is refused rather than replaced by a copy."""
+    symlink is refused rather than replaced by a copy, and the file is
+    opened without following one. Otherwise DATA goes to a new file created
+    exclusively in a new private directory beside DST (mkdtemp: an
+    unpredictable name, mode 0700), gets LIKE's owner and mode there, and is
+    renamed over DST: DST is replaced, never written through, and no fixed
+    name in DST's directory is ever opened."""
     if in_place and os.path.islink(dst):
         raise RuntimeError("is a symlink; embed the file it names")
     st = os.stat(like)
     if in_place:
-        with open(dst, "r+b") as f:
+        fd = os.open(dst, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r+b") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise RuntimeError("is not a regular file")
             f.write(data)
             f.truncate()
             f.flush()
             os.fsync(f.fileno())
         return
-    tmp = dst + ".hao-embed"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    if os.geteuid() == 0:
-        os.chown(tmp, st.st_uid, st.st_gid)
-    os.chmod(tmp, st.st_mode & 0o7777)
-    os.rename(tmp, dst)
+    work = tempfile.mkdtemp(prefix=".hao-embed.", dir=os.path.dirname(os.path.abspath(dst)))
+    try:
+        tmp = os.path.join(work, "out")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            if os.geteuid() == 0:
+                os.fchown(f.fileno(), st.st_uid, st.st_gid)
+            os.fchmod(f.fileno(), st.st_mode & 0o7777)
+        os.rename(tmp, dst)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
