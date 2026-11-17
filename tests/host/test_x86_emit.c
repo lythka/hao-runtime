@@ -150,6 +150,10 @@ int main(int argc, char **argv)
             begin(); x_movsx_rr(&B, 2, 0, a, c); end("movsx %s, %s", r32[a], r16[c]);
             begin(); x_movsx_rr(&B, 4, 1, a, c); end("movsxd %s, %s", r64[a], r32[c]);
             begin(); x_xchg_rr(&B, 1, a, c); end("xchg %s, %s", r64[a], r64[c]);
+            begin(); x_crc32(&B, 1, a, c); end("crc32 %s, %s", r32[a], r8n[c]);
+            begin(); x_crc32(&B, 2, a, c); end("crc32 %s, %s", r32[a], r16[c]);
+            begin(); x_crc32(&B, 4, a, c); end("crc32 %s, %s", r32[a], r32[c]);
+            begin(); x_crc32(&B, 8, a, c); end("crc32 %s, %s", r64[a], r64[c]);
             for (int cc = 0; cc < 16; cc += 3) {
                 begin(); x_cmov_rr(&B, cc, 1, a, c); end("cmov%s %s, %s", ccn[cc], r64[a], r64[c]);
             }
@@ -246,6 +250,7 @@ int main(int argc, char **argv)
                 {0x0F, 0, "palignr"}, {0x0F, 5, "palignr"}, {0x0F, 15, "palignr"}, {0x08, 0x04, "roundps"}, {0x08, 0x0B, "roundps"},
                 {0x09, 0x08, "roundpd"}, {0x09, 0x0C, "roundpd"}, {0x0A, 0x09, "roundss"}, {0x0B, 0x0A, "roundsd"},
                 {0x0B, 0, "roundsd"}, {0x0B, 1, "roundsd"}, {0x0B, 2, "roundsd"}, {0x0B, 3, "roundsd"},
+                {0x44, 0x00, "pclmulqdq"}, {0x44, 0x11, "pclmulqdq"}, {0x44, 0x01, "pclmulqdq"}, {0x44, 0x10, "pclmulqdq"},
             };
             for (unsigned k = 0; k < sizeof s3a / sizeof *s3a; k++) {
                 begin(); x_sse3a_rri(&B, s3a[k].op, a, c, s3a[k].imm); end("%s %s, %s, %u", s3a[k].mn, xmmn(a), xmmn(c), s3a[k].imm);
@@ -381,6 +386,7 @@ int main(int argc, char **argv)
         MUSTFAIL(x_sse_rm(&b, 0xF0, 0x10, 0, 0, xm(RCX, 0)));
         MUSTFAIL(x_sse38_rr(&b, 0x00, 16, 0));
         MUSTFAIL(x_sse3a_rri(&b, 0x0F, 0, -1, 3));
+        MUSTFAIL(x_crc32(&b, 3, RAX, RCX));
         MUSTFAIL(x_mov_rr(&b, 1, 16, RAX));
         MUSTFAIL(x_mov_ri(&b, -3, 1));
         MUSTFAIL(x_mov_ld(&b, 8, RAX, xmi(RCX, RSP, 1, 0)));

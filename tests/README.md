@@ -498,22 +498,34 @@ complete-state cases include all table buckets, both fraction edges, aliases,
 late-lane rollback and exceptional boundaries. `guest/jitinsns` compares all
 S/D scalar/vector reciprocal estimates with native ARM over every table
 index, exponent parity, sign and FPCR control; ten benchmark loops measure
-the ordinary paths. AOT format 7 has unchanged header layout and rejects
+the ordinary paths. AOT format 7 had an unchanged header layout and rejected
 version 6 caches because emitted code can use the new runtime table pointer.
 
-`aot/aes-profile` masks AES out of a private CPUID wrapper and checks that
-all four AES instructions (including aliases) use the helper with complete
-architectural state preserved. It validates a matching synthetic cache,
-rejects its AES-profile identity on the CPU without AES, and compares
-translation bytes across normal, AOT and fault-recovery emission modes.
-It never executes AES after forcing its feature bit. `aot/aes-mutations`
-requires a passing control and detects an omitted ARM AddRoundKey. The
-vector differential test covers all four AES forms and reserved size/opcode
-neighbours; `jitinsns` adds native comparisons for separate/aliased sources
-in each engine. The existing crypto guest also checks AES known answers.
-The installer test permits only base/AES generator identities and removes
-arbitrary altered identities; `tools/aotpayload` checks profile-aware payload
-creation, installation and cache loading.
+`aot/cpu-profile` translates under the profile without optional CPU
+features (include/hao/cpufeat.h) and checks that all four AES instructions
+(aliases included) and PMULL/PMULL2 .1Q use the helper with complete
+architectural state, and that CRC32C never does. It compares translation
+bytes and instruction boundaries across normal, AOT and fault-recovery
+emission under profiles 0 and AES+PCLMULQDQ, checks that a block of an AOT
+cache is re-emitted under the cache's profile, and that the generator
+identity is the plain libhao UUID. It never executes an instruction of a
+feature it only pretends to have. `aot/crypto-mutations` requires a passing
+control and detects an omitted ARM AddRoundKey, PMULL2 reading the low
+halves and CRC32CW consuming a halfword. The vector differential test covers
+all four AES forms, PMULL in every size, Q and U, and CRC32/CRC32C with every
+sf/size pair; `jitinsns` adds native comparisons for separate/aliased AES
+sources in each engine, and the oracle's dp records include CRC32/CRC32C
+(one in sixteen) and its simd records PMULL; `make oracle` checks simd again
+with the JIT under profile 0. The policy test (`aot` F) covers the feature
+decoding (Ivy Bridge, Rosetta, Rosetta advertising AVX, AVX-512 state) and
+the subset rule with the missing features named; `aot` P1-P5 generate with
+`--cpu=0` and `--cpu=baseline` and, on a TEST_SWITCHES build, reject a cache
+under `HAO_CPU_FEATURES=0`. `aot/cpu-haswell` uses Rosetta's
+`ROSETTA_ADVERTISE_AVX=1` for a Haswell-class profile: oracle simd/dp under
+it, identical `--cpu=baseline` caches with and without it, and a cache
+needing AVX2 that loads only with it. The installer test keeps only caches
+of the installed libhao within the baseline profile; `tools/aotpayload`
+checks baseline-profile payload creation, installation and cache loading.
 
 The oracle's `known` mode sweeps 1,024 candidate encodings per remaining
 `known_unimpl` and `known_lenient` entry, with native outcomes and seeded input

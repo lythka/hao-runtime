@@ -125,6 +125,8 @@ patched C10-truncated-half "header says" truncate=$(( $(stat -f %z "$AOT") / 2 )
 patched C10b-truncated-header "truncated" truncate=40
 patched C11-other-build-gen-byte "another hao build" flip.gen
 patched C11b-version-4 "format version" hdr.version=4
+patched C11d-version-7 "format version" hdr.version=7
+patched C15-cpu-profile-beyond-host "translated for CPU features this machine lacks: bit40" hdr.cpu_profile=0x10000000000
 patched C12-guest-uuid "guest UUID differs" flip.uuid
 patched C12b-guest-id "guest load commands differ" hdr.guest_id=+1
 patched C12c-vmsize "vmsize" hdr.vmsize=+0x4000
@@ -404,6 +406,38 @@ k=$(timeout -s KILL "$T" "$HAO" "$OUT/openfds.arm64e" 2>&1 | tail -1)
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/loadtime" "$here/loadtime.c" -L"$B" -lhao -Wl,-rpath,"$B" && codesign -s - -f "$OUT/loadtime" 2>/dev/null
 l=$(HAO_CACHE=$C timeout -s KILL "$T" "$OUT/loadtime" "$G" 5 2>/dev/null | tail -1)
 case $l in *": 5/5 loaded, min "*) pass "L loadtime: ${l#*: }" ;; *) bad "L loadtime: $l" ;; esac
+
+# --- P: CPU profiles (include/hao/cpufeat.h). hao --aot --cpu= can only drop features this host has;
+# the header records what the code may use; the loader takes a cache only where the host has all of it.
+# HAO_CPU_FEATURES (a TEST_SWITCHES build) clears features: a cache needing a cleared one is rejected by name.
+profile_of() { python3 -I -c 'import sys; print(hex(int.from_bytes(open(sys.argv[1], "rb").read()[136:144], "little")))' "$1"; }
+HP=$(profile_of "$AOT")
+fresh "$OUT/p0"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/p0" --cpu=0 "$G" >"$OUT/p0.gen" 2>&1; grc=$?
+p0=$(profile_of "$OUT/p0/$NAME" 2>/dev/null)
+run p0 HAO_CACHE="$OUT/p0"
+[ $grc = 0 ] && [ $rc = 7 ] && [ "$p0" = 0x0 ] && grep -q "CPU profile 0 (none)" "$OUT/p0.gen" && grep -q "loaded:" "$OUT/p0.err" && [ "$out" = "$WANT" ] \
+    && pass "P1 --cpu=0: profile 0 recorded, loads here (host's cache profile $HP)" || bad "P1 --cpu=0: rc=$grc/$rc profile=$p0 $(tail -1 "$OUT/p0.gen")"
+fresh "$OUT/pb"
+timeout -s KILL "$T" "$HAO" --aot --cpu=baseline --cache "$OUT/pb" "$G" >"$OUT/pb.gen" 2>&1; rc=$?
+pb=$(profile_of "$OUT/pb/$NAME" 2>/dev/null)
+[ $rc = 0 ] && [ -n "$pb" ] && [ $(( pb & ~0x1f )) = 0 ] && [ $(( pb & ~HP )) = 0 ] \
+    && pass "P2 --cpu=baseline: profile $pb, within the baseline and this host" || bad "P2 --cpu=baseline: rc=$rc profile=$pb"
+timeout -s KILL "$T" "$HAO" --aot --cpu=avx2 --cache "$OUT/pb" "$G" >"$OUT/pbad.gen" 2>&1; rc=$?
+[ $rc = 64 ] && grep -q "expected baseline, host or a hexadecimal" "$OUT/pbad.gen" && pass "P3 --cpu=avx2 refused (rc 64)" || bad "P3 --cpu=avx2: rc=$rc"
+# the host-profile cache with every optional feature cleared by the test switch
+run p4 HAO_CACHE="$C" HAO_CPU_FEATURES=0
+if grep -q "HAO_CPU_FEATURES ignored" "$OUT/p4.err"; then
+    grep -q "loaded:" "$OUT/p4.err" && pass "P4 HAO_CPU_FEATURES ignored by a build without test switches; the cache loads" || bad "P4 ignored, but: $(head -2 "$OUT/p4.err")"
+elif [ "$HP" = 0x0 ]; then
+    grep -q "loaded:" "$OUT/p4.err" && pass "P4 HAO_CPU_FEATURES=0: this host's cache has profile 0 and loads" || bad "P4 profile 0: $(head -2 "$OUT/p4.err")"
+else
+    names=$(grep -o 'translated for CPU features this machine lacks: .*' "$OUT/p4.err" | head -1)
+    [ $rc = 7 ] && [ "$out" = "$WANT" ] && [ -n "$names" ] && ! grep -q "loaded:" "$OUT/p4.err" \
+        && pass "P4 HAO_CPU_FEATURES=0: profile $HP rejected ($names), runs translated" || bad "P4: rc=$rc $(grep -E 'AOT|rejected' "$OUT/p4.err" | head -2)"
+    run p5 HAO_CACHE="$OUT/p0" HAO_CPU_FEATURES=0
+    grep -q "loaded:" "$OUT/p5.err" && [ "$out" = "$WANT" ] && pass "P5 HAO_CPU_FEATURES=0: the profile-0 cache loads" || bad "P5: $(head -2 "$OUT/p5.err")"
+fi
 
 # --- F: the policy unit test
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/policy" "$here/policy.c" "$B/libhaocore.a" && codesign -s - -f "$OUT/policy" 2>/dev/null

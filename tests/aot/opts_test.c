@@ -3,6 +3,7 @@
  * switch snapshot's precedence, boot-argument matching and environment tiers.
  */
 #include "hao/opts.h"
+#include "hao/cpufeat.h"
 #include "hao/aot.h"
 #include <stdio.h>
 #include <string.h>
@@ -62,7 +63,7 @@ int main(void)
         static const char *never[] = {"no_libval", "aot_learn", "no_jit_memory", "bridge_abort", "sigreturn_user", "code_alias",
                                       "libval_user", "swift_value_strict", "interp", "stats", "allow_unsigned", "watchdog", "cache", "guest_root",
                                       "if_dir", "trust_list", "diag_dir", "async_contract_library", "aot_limit_kb",
-                                      "jit_cache_mb", "swift_pop", NULL};
+                                      "jit_cache_mb", "swift_pop", "cpu_features", NULL};
         static const int tiers[] = {HAO_ENV_OPEN, HAO_ENV_GUARDED, HAO_ENV_SETUGID};
         hao_opts_t zero;
         hao_opts_parse(&zero, none, NULL, NULL, false, HAO_ENV_OPEN);
@@ -90,16 +91,28 @@ int main(void)
     /* the test switches: read from an ordinary environment by a HAO_TEST_SWITCHES build only */
     {
         char *et[] = {"HAO_LIBVAL_USER=1", "HAO_SIGRETURN_USER=1", "HAO_AOT_LIMIT_KB=64", "HAO_BRIDGE_ABORT=1",
-                      "HAO_NO_JIT_MEMORY=1", "HAO_CODE_ALIAS=1", NULL};
+                      "HAO_NO_JIT_MEMORY=1", "HAO_CODE_ALIAS=1", "HAO_CPU_FEATURES=1", NULL};
         hao_opts_parse(&o, et, NULL, NULL, false, HAO_ENV_OPEN);
-        bool all = o.libval_user && o.sigreturn_user && o.aot_limit_kb == 64 && o.bridge_abort && o.no_jit_memory && o.code_alias;
-        bool any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias;
+        bool all = o.libval_user && o.sigreturn_user && o.aot_limit_kb == 64 && o.bridge_abort && o.no_jit_memory && o.code_alias &&
+                   o.cpu_clear == (HAO_CPU_ALL & ~HAO_CPU_AES);
+        bool any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias || o.cpu_clear;
         if (hao_test_switches) CHECK(all, "test switches read in a test build (open)");
         else CHECK(!any && strstr(o.ignored, "HAO_CODE_ALIAS") && strstr(o.ignored, "HAO_LIBVAL_USER"),
                    "test switches not read by a build without HAO_TEST_SWITCHES (ignored: %s)", o.ignored);
         hao_opts_parse(&o, et, NULL, NULL, false, HAO_ENV_GUARDED);
-        any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias;
+        any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias || o.cpu_clear;
         CHECK(!any, "test switches never read in a guarded process");
+        /* HAO_CPU_FEATURES only clears: a mask, baseline, host; anything else clears every optional feature */
+        static const struct { const char *v; uint64_t clear; } cf[] = {
+            {"HAO_CPU_FEATURES=0", HAO_CPU_ALL}, {"HAO_CPU_FEATURES=0x3", HAO_CPU_ALL & ~3ull},
+            {"HAO_CPU_FEATURES=baseline", HAO_CPU_ALL & ~HAO_CPU_BASELINE}, {"HAO_CPU_FEATURES=host", 0},
+            {"HAO_CPU_FEATURES=ffffffffffffffff", 0}, {"HAO_CPU_FEATURES=avx2", HAO_CPU_ALL}, {"HAO_CPU_FEATURES=", HAO_CPU_ALL},
+        };
+        for (size_t k = 0; k < sizeof cf / sizeof *cf; k++) {
+            char *ec[] = {(char *)cf[k].v, NULL};
+            hao_opts_parse(&o, ec, NULL, NULL, false, HAO_ENV_OPEN);
+            CHECK(o.cpu_clear == (hao_test_switches ? cf[k].clear : 0), "%s clears %#llx", cf[k].v, (unsigned long long)o.cpu_clear);
+        }
     }
     /* switches that make a correct program incorrect or take a signal are not "off switches": open tier only */
     {

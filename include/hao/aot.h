@@ -26,6 +26,13 @@
  * The other format checks below catch corruption and caches from another
  * hao build; they cannot make an untrusted file safe.
  *
+ * A cache also records the CPU profile it was translated under
+ * (cpu_profile, hao/cpufeat.h bits): the optional instructions its code may
+ * contain. It loads only where the host has every one of them, so a cache
+ * made for the baseline loads on every supported Mac and one made on a newer
+ * Mac never loads on an older one. hao_jit_locate re-emits a cached block
+ * under this profile, not the process's.
+ *
  * The pure parts (format validation, the directory list, the owner/mode
  * rules, the environment tiers) live in aot_policy.c, which is in
  * libhaocore.a so tests/aot/policy.c can link them without the runtime.
@@ -39,13 +46,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-/* ------------------------------------------------------------ format v7
+/* ------------------------------------------------------------ format v8
  * file = hdr | ents[nblocks] | links[nlinks] | code[code_size]
  * code[0..15] is the base slot (the image base, patched at load).
  * payload_hash = hao_aot_hash64(ents..end of code). It is an integrity
  * check only; trust comes from ownership and from the code identity. */
 #define HAO_AOT_MAGIC "HAOAOT2"
-#define HAO_AOT_VERSION 7
+#define HAO_AOT_VERSION 8
 #define HAO_AOT_MAX_FILE (1024ull << 20)
 
 /* What code_id holds. */
@@ -61,21 +68,25 @@ typedef struct {
     char magic[8];                               /*   0 */
     uint32_t version, hdr_size;                  /*   8, 12 */
     uint8_t uuid[16];                            /*  16: guest LC_UUID */
-    uint8_t gen[16];                             /*  32: libhao LC_UUID, last byte XOR 1 for the AES-NI profile */
+    uint8_t gen[16];                             /*  32: LC_UUID of the libhao that generated it */
     uint64_t vmsize;                             /*  48: guest image vmsize */
     uint64_t guest_id;                           /*  56: hao_aot_guest_id() of the guest slice */
     uint32_t nblocks, nlinks;                    /*  64, 68 */
     uint64_t code_size, file_size, payload_hash; /*  72, 80, 88 */
     uint32_t id_kind, id_hash;                   /*  96, 100: HAO_AOT_ID_* and its hash type */
     uint8_t code_id[HAO_AOT_ID_LEN];             /* 104: the guest code's identity */
-} hao_aot_hdr;                                   /* 136 bytes */
+    uint64_t cpu_profile;                        /* 136: hao/cpufeat.h bits the code may use (within HAO_CPU_JIT) */
+} hao_aot_hdr;                                   /* 144 bytes */
 
 typedef struct { uint32_t guest_off, code_off; } hao_aot_ent;      /* strictly increasing code_off */
 typedef struct { uint32_t site, target; } hao_aot_link;           /* rel32 at code+site jumps to ents[target] */
 
 /* What the loading image expects. Code ranges are image-relative [lo, hi).
  * id_kind says whether the image is signed; code_id (with id_hash) is its
- * code identity, or NULL while it has not been computed (see hao_aot_check). */
+ * code identity, or NULL while it has not been computed (see hao_aot_check).
+ * cpu is what this process may execute (hao_cpu_features()): a cache whose
+ * cpu_profile has a bit outside it is rejected, the reason naming the
+ * missing features. */
 typedef struct {
     const uint8_t *uuid, *gen;
     uint64_t vmsize, guest_id;
@@ -83,6 +94,7 @@ typedef struct {
     int nranges;
     uint32_t id_kind, id_hash;
     const uint8_t *code_id;
+    uint64_t cpu;
 } hao_aot_expect;
 
 typedef struct {
