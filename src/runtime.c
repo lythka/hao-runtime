@@ -1964,13 +1964,11 @@ static int diag_log_fd(bool may_open, bool may_start)
     lfd = diag_high_fd(lfd);
     int none = -1;
     if (!__atomic_compare_exchange_n(&diag_lock, &none, lfd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        /* another opener claimed it; retry ends only when that opener publishes. If it has not
-         * published yet (it may be this thread, interrupted by a fatal report), write through this
-         * descriptor rather than lose the lines; it stays open, once per such race. */
+        /* another opener claimed it; retry ends only when that opener publishes (it may be this
+         * thread, interrupted by a fatal report): the caller then falls back to the unified log */
+        close(fd);
         close(lfd);
-        int pub = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
-        if (pub >= 0) { close(fd); return pub; }
-        return fd;
+        return __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
     }
     diag_lock_set(lfd);
     __atomic_store_n(&diag_log, fd, __ATOMIC_RELEASE);
@@ -2014,8 +2012,10 @@ static void diag_emit(const char *b, size_t n, int how)
     }
     int put = fd >= 0 ? diag_file_put(fd, b, n) : 0;   /* past the cap: dropped on purpose */
     if (put) con_notice(put == 1 ? NOTE_LOG : NOTE_CAP);
-    else if (diag_dir[0] && !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
-        uni_put(b, n, may_start);   /* no file; a sandbox's write check, a full volume, an I/O error */
+    else if (diag_dir[0]) {
+        /* not written and not kept: no file, a sandbox's write check, a full volume, an I/O error, or
+         * an open still being published by an interrupted writer */
+        uni_put(b, n, may_start);
         con_notice(NOTE_UNI);
     }
     errno = e;
