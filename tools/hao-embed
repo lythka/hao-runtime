@@ -152,6 +152,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -611,17 +612,26 @@ LIBCXX = "/usr/lib/libc++.1.dylib"
 CF_PATH = "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
 
 
-# Protected storage: where a file dyld loads into a stub at launch, before hao sets CS_REQUIRE_LV, must be. The
-# sealed system volume (these trees, less its firmlinks to the data volume, ROOT/usr/share/firmlinks) and the
-# cryptexes mounted under Preboot; the x86_64 shared cache is one of them. Anything else (a bundle in /Applications,
-# /Library, a user's folder) can be replaced by someone other than the program's signer.
+# Protected storage: where every file and directory dyld goes through to load a library into a stub at launch,
+# before hao sets CS_REQUIRE_LV, must be. The sealed system volume (these trees, less its firmlinks to the data
+# volume, ROOT/usr/share/firmlinks) and the OS and App cryptexes (sealed disk images mounted at SEALED_MOUNTS; the
+# directories above them are the Preboot volume's, which only root can change); the x86_64 shared cache is one of
+# them. Anything else (a bundle in /Applications, /Library, a user's folder) can be changed by someone other than
+# the program's signer. Paths are compared case-insensitively (APFS as macOS formats it), on their on-disk spelling.
 PROTECTED_TREES = ("/System/", "/usr/", "/bin/", "/sbin/")
+PROTECTED_TOPS = ("/System", "/usr", "/bin", "/sbin")
 UNSEALED_TREES = ("/System/Volumes/",)
-SEALED_MOUNTS = ("/System/Volumes/Preboot/Cryptexes/",)
+SEALED_MOUNTS = ("/System/Volumes/Preboot/Cryptexes/OS/", "/System/Volumes/Preboot/Cryptexes/App/")
 FIRMLINKS = ("/AppleInternal", "/Applications", "/Library", "/System/Library/Caches", "/System/Library/Assets",
              "/System/Library/PreinstalledAssets", "/System/Library/AssetsV2", "/System/Library/PreinstalledAssetsV2",
              "/System/Library/CoreServices/CoreTypes.bundle/Contents/Library", "/System/Library/Speech", "/Users",
              "/Volumes", "/cores", "/opt", "/pkg", "/private", "/usr/local", "/usr/libexec/cups", "/usr/share/snmp")
+MAX_DEP_DEPTH = 16
+
+
+def fold(p):
+    """P as a case-insensitive APFS volume compares names."""
+    return unicodedata.normalize("NFD", p).casefold()
 
 
 class X86Libraries:
@@ -640,18 +650,41 @@ class X86Libraries:
         self.ids = self.cache.ids()
         self.uuid = self.cache.uuid
         self._disk = {}
+        self._dirs = {}
         try:
             with open(os.path.join(self.root, "usr/share/firmlinks")) as f:
                 self.firmlinks = tuple(l.split("\t")[0] for l in f if l.startswith("/")) or FIRMLINKS
         except OSError:
             self.firmlinks = FIRMLINKS
 
-    def canonical(self, f):
-        """The OS path of F (a path under ROOT) with every symbolic link resolved as on the running system (an
-        absolute link target is under ROOT), or None (outside ROOT, a loop)."""
-        op = self.os_path(f)
-        if op is None:
-            return None
+    def _spelling(self, parent, name):
+        """NAME as the directory PARENT (a host path) spells it on disk (a case-insensitive volume finds "LOCAL" as
+        "local"), or NAME if PARENT has no such entry."""
+        if parent not in self._dirs:
+            try:
+                self._dirs[parent] = {fold(n): n for n in os.listdir(parent)}
+            except OSError:
+                self._dirs[parent] = {}
+        names = self._dirs[parent]
+        return name if name in names.values() else names.get(fold(name), name)
+
+    def protected_os(self, op):
+        """True if OP (an OS path as spelled on disk, links resolved up to it) is in protected storage, or is a
+        directory dyld passes on the way to a sealed mount."""
+        f = fold(op)
+        if f in (fold(t) for t in PROTECTED_TOPS) or any(fold(m).startswith(f + "/") for m in SEALED_MOUNTS):
+            return True
+        if any(f.startswith(fold(m)) or f == fold(m[:-1]) for m in SEALED_MOUNTS):
+            return True
+        if not f.startswith(tuple(fold(t) for t in PROTECTED_TREES)) or f.startswith(tuple(fold(t) for t in UNSEALED_TREES)):
+            return False
+        return not any(f == fold(fl) or f.startswith(fold(fl) + "/") for fl in self.firmlinks)
+
+    def walk(self, op):
+        """(OP resolved as the running system resolves it: every symbolic link followed, an absolute target under
+        ROOT, each name in its on-disk spelling; None) when every path dyld goes through on the way (each
+        directory, each link and its target, the file) is in protected storage; (None, the first one that is not)
+        otherwise. A file that does not exist is judged by its path."""
         todo, done, hops = [c for c in op.split("/") if c], [], 0
         while todo:
             c = todo.pop(0)
@@ -660,55 +693,79 @@ class X86Libraries:
             if c == "..":
                 done = done[:-1]
                 continue
-            host = os.path.join(self.root, *done, c)
+            parent = os.path.join(self.root, *done)
+            c = self._spelling(parent, c)
+            cur = "/" + "/".join(done + [c])
+            if not self.protected_os(cur):
+                return None, cur
+            host = os.path.join(parent, c)
             if os.path.islink(host):
                 hops += 1
                 if hops > 32:
-                    return None
+                    return None, cur + " (too many links)"
                 t = os.readlink(host)
                 todo = [x for x in t.split("/") if x] + todo
                 if t.startswith("/"):
                     done = []
                 continue
             done.append(c)
-        return "/" + "/".join(done)
+        return "/" + "/".join(done), None
 
     def protected(self, f):
-        """True if the file F (a path under ROOT) is in protected storage (PROTECTED_TREES), links resolved."""
-        op = self.canonical(f)
-        if op is None or not op.startswith(PROTECTED_TREES):
-            return False
-        if op.startswith(UNSEALED_TREES) and not op.startswith(SEALED_MOUNTS):
-            return False
-        return not any(op == fl or op.startswith(fl + "/") for fl in self.firmlinks)
+        """True if the file F (a path under ROOT) and every path on the way to it are in protected storage."""
+        op = self.os_path(f)
+        return op is not None and self.walk(op)[1] is None
 
-    def unprotected(self, name, loader, rpaths, depth=0):
-        """None if dyld, loading NAME for LOADER (a file under ROOT whose rpath list is RPATHS), finds only files in
-        protected storage: every path it tries before the one that exists (a file someone could put at an earlier
-        one would load instead), that file, and the same for that file's own non-lazy dependencies. Otherwise the
-        first path that is not. A shared-cache library is protected, with all it loads."""
+    def search(self, name, loader, exe, rpaths):
+        """The OS paths dyld tries, in order, for NAME loaded by LOADER (an OS path) in a process whose main
+        executable is EXE, with the rpath stack RPATHS [(LC_RPATH, OS path of the image that has it)]: the
+        loader's own rpaths, then those of the images that loaded it. @executable_path is always EXE's directory,
+        @loader_path the directory of the image the name or rpath belongs to."""
+        def expand(p, owner):
+            if p == "@executable_path" or p.startswith("@executable_path/"):
+                return os.path.dirname(exe) + p[len("@executable_path"):]
+            if p == "@loader_path" or p.startswith("@loader_path/"):
+                return os.path.dirname(owner) + p[len("@loader_path"):]
+            return p if p.startswith("/") else None
+        if name.startswith("@rpath/"):
+            return [b + "/" + name[len("@rpath/"):] for b in (expand(rp, o) for rp, o in rpaths) if b is not None]
+        p = expand(name, loader)
+        return [p] if p is not None else []
+
+    def unprotected(self, name, loader, exe, rpaths, depth=0, seen=None):
+        """None if dyld, loading NAME for LOADER in a process whose main executable is EXE (OS paths; RPATHS as
+        search takes them), finds it in the shared cache or through protected storage only: every path it tries
+        before the one that exists (a file someone could put at an earlier one would load instead), every
+        directory and link on the way, that file, and the same for each of that file's non-lazy dependencies
+        (with its own rpaths first). Otherwise why not: the first path that is not protected, or a chain of
+        dependencies deeper than MAX_DEP_DEPTH (not checked, so not protected)."""
+        seen = set() if seen is None else seen
         if name in self.ids:
-            return None
-        for f in self.candidates(name, loader, rpaths):
-            op = self.os_path(f)
-            if op is not None and op in self.ids:
+            return None    # an install name of the shared cache: dyld takes the cache's image
+        if depth > MAX_DEP_DEPTH:
+            return "%s: a chain of more than %d dependencies" % (name, MAX_DEP_DEPTH)
+        for op in self.search(name, loader, exe, rpaths):
+            if os.path.normpath(op) in self.ids:
                 return None
-            if not self.protected(f):
-                return op or f
-            if os.path.isfile(f):
-                if depth >= 8:
-                    return None
-                with open(f, "rb") as fh:
-                    mo = next((p for c, _, p in hao_fat.slices(fh.read()) or [] if c == hao_fat.CPU_X86_64), None)
-                if mo is None:
-                    return None
-                own = macho_rpaths_mo(mo) + rpaths
+            real, why = self.walk(op)
+            if why:
+                return why
+            host = os.path.join(self.root, real.lstrip("/"))
+            if not os.path.isfile(host):
+                continue
+            if real in seen:
+                return None
+            seen.add(real)
+            with open(host, "rb") as fh:
+                x86 = [p for c, _, p in hao_fat.slices(fh.read()) or [] if c == hao_fat.CPU_X86_64]
+            for mo in x86:
+                own = [(r, real) for r in macho_rpaths_mo(mo)] + list(rpaths)
                 for kind, dep, _, _ in dylib_commands(mo):
                     if kind != "lazy":
-                        why = self.unprotected(dep, f, own, depth + 1)
+                        why = self.unprotected(dep, real, exe, own, depth + 1, seen)
                         if why:
                             return why
-                return None
+            return None
         return None
 
     def _file(self, path):
@@ -814,11 +871,14 @@ def native_deps(path, data, x86, stub_deps=()):
         if where == "disk" and k + 1 in cxx and x86._file(f) == "x86" and has_arm_slice(f) and name != LIBCXX:
             skipped.append((name, "C++ interface with an arm64 slice (guest_cxx_library)"))
             continue
-        if where == "disk":
-            why = x86.unprotected(name, exe, rpaths)
-            if why:
-                skipped.append((name, "outside protected storage (%s): hao loads it after library validation" % why))
-                continue
+        if x86.os_path(exe) is not None:
+            eo = x86.os_path(exe)
+            why = x86.unprotected(name, eo, eo, [(r, eo) for r in rpaths])
+        else:
+            why = exe + " (not under the root)"
+        if why:
+            skipped.append((name, "outside protected storage (%s): hao loads it after library validation" % why))
+            continue
         links.append(("weak" if kind == "weak" else "load", name, cur, compat))
         need_rpaths |= name.startswith("@rpath/")
     return links, skipped, rpaths if need_rpaths else []

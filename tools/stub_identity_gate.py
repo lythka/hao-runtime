@@ -23,9 +23,11 @@ DIFF here: a new type must be decided, not carried or dropped by default.
   stub_identity_gate.py [--x86-cache DIR] --stubs DIR --root ROOT [--out DIR]
       FAT: an embedded file (its arm slice and its x86_64 stub); --stubs: a
       hao-embed --stubs payload, each manifest entry's stub against ROOT/path.
-      --x86-cache: also check the linked dylibs against hao-embed's
+      --x86-cache: the x86_64 shared cache the stubs run with (default as
+      hao-embed's: with --stubs the one under --root, else this host's; none
+      is an error): the linked dylibs are checked against hao-embed's
       native_deps (the dependencies that load natively, as src/runtime.c
-      binds them); without it they are checked for order, kind and version.
+      binds them) and must all be in protected storage (dylibs.protected).
       --host-test: stubs made with hao-embed --host-test (public
       entitlements only, the build directory's rpath).
 
@@ -402,11 +404,11 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     else:
         bad_own = []
     if x86 is not None and src_path:
-        exe = os.path.realpath(src_path)
-        bad_deps = [n for _, n, _, _ in sdeps if x86.unprotected(n, exe, embed.macho_rpaths_mo(arm))]
+        eo = x86.os_path(os.path.realpath(src_path))
+        rp = [(r, eo) for r in embed.macho_rpaths_mo(arm)]
+        bad_deps = [n for _, n, _, _ in sdeps if eo is None or x86.unprotected(n, eo, eo, rp)]
     else:
-        bad_deps = [n for _, n, _, _ in sdeps
-                    if not (n.startswith(embed.PROTECTED_TREES) and not n.startswith("/usr/local/"))]
+        bad_deps = ["(not checked: no x86_64 shared cache)"]
     add("dylibs.protected", not bad_own and not bad_deps, f"{len(sdeps)} native",
         ";".join(bad_own + bad_deps) or "all protected",
         "load-time libraries: libhao from /usr/lib/hao, the rest from the sealed system volume or a cryptex")
@@ -494,7 +496,7 @@ def main():
     if bool(a.stubs) != bool(a.root) or (not a.stubs and not a.files):
         ap.error("give FAT... or --stubs DIR --root ROOT")
     embed = load_embed()
-    x86 = embed.X86Libraries(a.x86_cache, a.root or "/") if a.x86_cache else None
+    x86 = embed.X86Libraries(embed.x86_cache_dir(a), a.root or "/")
     try:
         progs = pairs(a)
     except (OSError, ValueError, KeyError) as e:

@@ -90,17 +90,25 @@ else bad "deps: stub's LC_LOAD_DYLIBs differ: $(tr '\n' ' ' <deps.diff)"; fi
 mkdir -p sroot/usr/bin/lib sroot/Library/Tools/lib
 cp lib/libfat.dylib sroot/usr/bin/lib/; cp lib/libfat.dylib sroot/Library/Tools/lib/
 cp prog sroot/usr/bin/prog; cp prog sroot/Library/Tools/prog
-clang -arch arm64e -O1 -o sroot/usr/bin/prog3 "$here/stubdeps_main.c" -framework CoreFoundation -weak_framework Security -Llib -lfat \
-    -L. -lguest -Wl,-rpath,/Library/Frameworks -Wl,-rpath,@executable_path/lib && codesign -s - -f sroot/usr/bin/prog3 2>/dev/null || exit 2
-python3 "$EMBED" --stub "$B/hao-stub" --stubs spay --root sroot --x86-cache "$X86" \
-    sroot/usr/bin/prog sroot/Library/Tools/prog sroot/usr/bin/prog3 >spay.log 2>&1 || bad "deps: --stubs: $(cat spay.log)"
-python3 -I - spay/manifest.json <<'PY' && pass "deps: @rpath/libfat.dylib linked from usr/bin/lib; from Library/Tools/lib and behind a /Library rpath it is not (outside protected storage)" || bad "deps: protected storage: $(cat spay.log)"
+# rpath P: the program linked against @rpath/libfat.dylib with the rpath list P...
+rprog() { local out=$1; shift
+    clang -arch arm64e -O1 -o "$out" "$here/stubdeps_main.c" -framework CoreFoundation -weak_framework Security -Llib -lfat \
+        -L. -lguest "$@" && codesign -s - -f "$out" 2>/dev/null || exit 2; }
+rprog sroot/usr/bin/prog3 -Wl,-rpath,/Library/Frameworks -Wl,-rpath,@executable_path/lib   # an earlier rpath under /Library
+mkdir -p sroot/usr/local/lib; cp lib/libfat.dylib sroot/usr/local/lib/
+rprog sroot/usr/bin/prog4 -Wl,-rpath,/usr/LOCAL/lib                                      # a firmlink in other case
+ln -s ../usr/bin/lib sroot/Library/L
+rprog sroot/usr/bin/prog5 -Wl,-rpath,/Library/L                                          # a link under /Library to usr/bin
+python3 "$EMBED" --stub "$B/hao-stub" --stubs spay --root sroot --x86-cache "$X86" sroot/usr/bin/prog sroot/Library/Tools/prog \
+    sroot/usr/bin/prog3 sroot/usr/bin/prog4 sroot/usr/bin/prog5 >spay.log 2>&1 || bad "deps: --stubs: $(cat spay.log)"
+python3 -I - spay/manifest.json <<'PY' && pass "deps: @rpath/libfat.dylib linked from usr/bin/lib; not from Library/Tools/lib, behind a /Library rpath, through /usr/LOCAL or through a link under /Library to usr/bin (outside protected storage)" || bad "deps: protected storage: $(cat spay.log)"
 import json, sys
 m = {e["path"]: e for e in json.load(open(sys.argv[1]))["files"]}
 why = lambda p: [w for n, w in m[p]["not_linked"] if n == "@rpath/libfat.dylib"]
 assert why("usr/bin/prog") == [], m["usr/bin/prog"]["not_linked"]
-assert why("Library/Tools/prog")[0].startswith("outside protected storage (/Library/Tools/lib/libfat.dylib)"), why("Library/Tools/prog")
-assert why("usr/bin/prog3")[0].startswith("outside protected storage (/Library/Frameworks/libfat.dylib)"), why("usr/bin/prog3")
+for p, w in (("Library/Tools/prog", "/Library"), ("usr/bin/prog3", "/Library"), ("usr/bin/prog4", "/usr/local"),
+             ("usr/bin/prog5", "/Library")):
+    assert why(p) and why(p)[0].startswith("outside protected storage (%s)" % w), (p, why(p))
 assert m["usr/bin/prog"]["links"] == m["Library/Tools/prog"]["links"] + 1
 PY
 # the identity gate: these stubs pass; usr/bin/prog's stub (it links @rpath/libfat.dylib) checked as the stub of
