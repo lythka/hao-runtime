@@ -9,7 +9,7 @@
 # program's mach header, load commands and LC_UUID but other code, whose
 # cache the program must not run. Also the other rules of the environment
 # tiers that need a running guest: dependency paths in a set-ID process (L)
-# and the diagnostics log's lock and mode (M). Prints PASS/FAIL per case;
+# and the diagnostics log's lock, mode, directory and unified-log fallback (M). Prints PASS/FAIL per case;
 # exit 1 on FAIL.
 # Writes nothing outside OUT except case H, which runs `hao --aot` with no
 # HOME, no --cache and no HAO_CACHE and removes the one cache file it creates in
@@ -512,5 +512,61 @@ set -- $m
 # the old lock waited 200 ms for the directory's flock and then opened no log (so no mode repair)
 [ "$1" = ok ] && [ "$2" = 600 ] && [ "$3" -lt 150 ] && pass "M directory flock held elsewhere: log opened (0644 -> 0600), start ${3} ms" \
     || bad "M directory flock held: $m"
+
+# A log directory another user may write is not used (they could put a file of their own in the log's place), and
+# what the log does not take goes to the unified log as private records: they hold register values and addresses,
+# which any user may read from a public one. The verbose run writes at least one diagnostics line.
+for d in w777 r555; do mkdir -p "$OUT/$d"; done; chmod 777 "$OUT/w777"; chmod 555 "$OUT/r555"
+m=$(python3 -I - "$HAO" "$G" "$OUT" "$T" <<'EOF'
+import os, subprocess, sys, time
+hao, guest, out, t = sys.argv[1:]
+res = []
+for d in ('w777', 'r555'):
+    p = subprocess.Popen([hao, guest], env={'HAO_DIAG_DIR': out + '/' + d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rc = p.wait(timeout=int(t))
+    recs = []
+    for k in range(10):
+        time.sleep(1)
+        r = subprocess.run(['/usr/bin/log', 'show', '--last', '2m', '--style', 'compact', '--predicate',
+                            'subsystem == "com.hao" AND processID == %d' % p.pid], capture_output=True, text=True)
+        recs = [l.split('[com.hao:diag] ', 1)[1] for l in r.stdout.splitlines() if '[com.hao:diag] ' in l]
+        if recs: break
+    res.append('%s rc=%d log=%s records=%d public=%d' % (d, rc, 'yes' if os.path.exists(out + '/' + d + '/console.log') else 'no',
+                                                     len(recs), sum(1 for l in recs if l.strip() != '<private>')))
+print('; '.join(res))
+EOF
+)
+case $m in
+"w777 rc=7 log=no records="[1-9]*" public=0; r555 rc=7 log=no records="[1-9]*" public=0")
+    pass "M other-writable directory not used; unified-log records private ($m)" ;;
+*) bad "M other-writable directory / private records: $m" ;;
+esac
+
+# The 64 MB cap holds for every write: a log 30 bytes short of the cap less the room kept for the closing line gets
+# its first line cut there and one "reached its cap" line; a second process adds nothing, and the file stays under
+# the cap. The log is sparse up to there.
+C=$OUT/cap; mkdir -p "$C" && chmod 755 "$C"
+m=$(python3 -I - "$HAO" "$G" "$C" "$T" <<'EOF'
+import os, subprocess, sys
+hao, guest, d, t = sys.argv[1:]
+cap, keep = 64 << 20, 200
+boot = subprocess.run(['/usr/sbin/sysctl', '-n', 'kern.bootsessionuuid'], capture_output=True, text=True).stdout.strip()
+p = d + '/console.log'
+with open(p, 'wb') as f:
+    f.write(('hao: console.log of boot %s\n' % boot).encode())
+    f.truncate(cap - keep - 30)
+os.chmod(p, 0o600)
+for k in range(2):
+    subprocess.run([hao, guest], env={'HAO_DIAG_DIR': d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=int(t))
+    if k == 0: first = os.path.getsize(p)
+size = os.path.getsize(p)
+with open(p, 'rb') as f:
+    f.seek(cap - keep - 30); tail = f.read()
+print('size=%s first=%s caplines=%d' % ('under' if size <= cap else 'over', 'same' if first == size else 'grew', tail.count(b'reached its cap')))
+EOF
+)
+[ "$m" = "size=under first=same caplines=1" ] && pass "M the cap holds across processes: one cap line ($m)" || bad "M cap: $m"
 
 exit $fail

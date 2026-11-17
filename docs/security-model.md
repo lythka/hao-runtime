@@ -238,7 +238,7 @@ ignored.
 
 Boot arguments reach every process of a boot, set-ID programs and PID 1
 included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
-`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_diag_time=1`, `hao_no_aot=1`, `hao_no_chain=1`,
+`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_diag_time=1`, `hao_swift_value_survey=1`, `hao_no_aot=1`, `hao_no_chain=1`,
 `hao_jit_helpers_only=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
 `hao_verbose=N`. No boot argument turns library validation or the signature
 check off.
@@ -246,14 +246,19 @@ check off.
 A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
 never for a release image. It also reads the test switches
 (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
-`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`) from an open
+`HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`, `HAO_AOT_FREE_MB`,
+`HAO_CRASH`) from an open
 process's environment, and the bridging and signal bring-up knobs as boot
 arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a
 process to the guarded or set-ID rules.
 
 With `hao_crash=1`, root processes log to `/private/var/log/hao/console.log`
 and other users to a directory of their own under it. The logs hold register
-dumps and image addresses, so each is readable by its owner only (0600).
+dumps and image addresses, so each is readable by its owner only (0600). A
+log directory that a user other than its owner may write, or a log file of
+another user, is not used. A process that cannot write a log (an App Sandbox
+one) sends the lines to the unified log as private records, which `log show`
+prints as `<private>` unless the Mac logs private data.
 ## AOT caches
 
 An AOT cache (`<LC_UUID>.aot`, written by `hao --aot [--cache DIR] FILE...`) is x86_64 code that
