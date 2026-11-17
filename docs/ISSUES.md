@@ -11,7 +11,11 @@ only measures (`xb_init_count`) at the block's own address and keeps its
 records on the stack, so it shares nothing and its RIP displacements are the
 first emission's; it counts no statistics. Test: `guest/signals` mode `locate` (8 threads spinning in
 one loop, a signal to each, 400 rounds): before the fix 140-380 contexts per
-run had a pc outside the loop; after it none, under JIT and AOT. Limits:
+run had a pc outside the loop; after it none, under JIT and AOT. Mode
+`locatefp` does the same in a loop of FADD/FMAX, whose blocks carry an
+interpreter fallback; with `--stats` its JIT leg must count native + helper
+= guest_insns (before, each locate there took one off `helper`, which
+wrapped below zero). Limits:
 in the interpreter (`--interp`, no JIT memory, the JIT's helper) an
 asynchronous signal can see a register written at the instruction's own pc,
 or the next pc before the write (the mode counts 300-400 such contexts a
