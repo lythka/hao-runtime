@@ -666,6 +666,14 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
         fprintf(HAO_DIAG, "%s no longer names the file this process runs; refusing to load its ARM code from another file\n", exe);
         return 126;
     }
+    /* The slice is taken once, here, and left for the loader. Its policy decides which switches stand
+     * before anything they select is loaded; a signature that does not verify is refused by the loader. */
+    char w[400];
+    hao_slice *sl = hao_slice_open(fd, w, sizeof w);
+    if (sl) {
+        if (sl->sig_size && hao_slice_verify(sl, NULL, w, sizeof w) == 0) hao_guest_switches_for(&sl->sig);
+        hao_slice_hand(sl);
+    }
     return run_guest(exe, fd, HAO_ENTRY_EMBEDDED, argc, argv, envp);
 }
 
