@@ -33,7 +33,7 @@ done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/svpolicy.arm64e" >"$OUT/aot.gen" 2>&1 || echo "svpolicy: aot generation failed"
 fail=0
-for part in pass refuse gate wide result frozen boxed task array box unreflected anyarray anycopy anyassign anybox; do
+for part in pass refuse gate wide result frozen boxed task array box unreflected anyarray anycopy anyassign anybox anymany; do
     timeout -s KILL "$T" "$OUT/svpolicy.arm64" $part >"$OUT/native.$part.out" 2>/dev/null; nrc=$?
     [ $nrc = 0 ] || { echo "$part native rc=$nrc"; fail=1; }
 done
@@ -76,7 +76,7 @@ for c in "owner-opaque .*NSObject" "identical-representation .*Int) -> Swift.Int
     echo "class $c: $r"
 done
 # Storage holding guest-written nils inside Any, destroyed by the runtime: converted at that destruction.
-for part in anyarray anycopy anyassign anybox; do
+for part in anyarray anycopy anyassign anybox anymany; do
     timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" "$OUT/svpolicy.arm64e" $part >"$OUT/jit.$part.out" 2>"$OUT/jit.$part.err"; rc=$?
     if [ $rc = 0 ] && cmp -s "$OUT/native.$part.out" "$OUT/jit.$part.out"; then r=SAME; else r=DIFF; fail=1; fi
     printf '%-9s jit rc=%s %s\n' $part "$rc" "$r"

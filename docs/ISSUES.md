@@ -1,5 +1,25 @@
 # Runtime issues and measured scope
 
+## Open (high): guest-written Swift values copied by native code in storage
+
+hao certifies a Swift value where it crosses a boundary it intercepts, and
+the contents of array storage and generic boxes at their final destruction
+(entry below). Before that, native code can still copy, assign or destroy
+an element itself: an array's copy on write and `swift_arrayInitWithCopy`
+or `swift_arrayAssignWith*` called inside libswiftCore, and the element
+witnesses those call. A nil guest code wrote there in the arm64 encoding
+(an `Any` holding a `C??` nil in an `[Any]`, for example) then reaches a
+native witness unconverted, which can retain or release an invalid
+reference. Also not covered: Dictionary and Set storage, boxes whose
+metadata no guest-made box hooked, and storage of an element type guest
+code never made storage of. In storage native code made, a value the walk
+cannot read is destroyed as found; one it finds in the guest's encoding
+but cannot convert (in a shared existential box) is refused. Hooking a
+storage type and registering guest-made storage are conditions of
+admitting it: when either fails, the storage is refused. Coverage of
+native copies and assignments (initialized-storage tracking and the
+runtime's array operations) is the next step.
+
 ## Swift values hao cannot certify are refused again
 
 A Swift value crossing to native code that the walk could not certify
@@ -63,8 +83,11 @@ generic box of such a type, hao takes over that metadata's destroy function
 too) and, before the runtime destroys the contents, walks each live element
 and rewrites its nils in place to the native encoding (the destruction is
 exclusive and final). A shared existential box is never rewritten; an
-element the walk cannot certify is refused in storage guest code made and
-left as found in other storage. This hook replaces symbol interposition of
+element the walk cannot certify is refused in storage guest code made; in
+other storage one in the guest's encoding that cannot be converted is
+refused and anything else left as found (the open entry above). Registered
+storage is kept in a set whose removed slots are reused and compacted
+(`svpolicy` anymany: 200000 arrays). This hook replaces symbol interposition of
 `swift_arrayDestroy`: the array storage's deinit calls it directly inside
 libswiftCore (measured), where no interposition reaches. Guest calls of an
 opaque existential's own witnesses (`Any`, `any P`) are intercepted like an

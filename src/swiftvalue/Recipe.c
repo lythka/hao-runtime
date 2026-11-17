@@ -918,7 +918,10 @@ static int boxed_payload(reflection *r, const void *payload, const unsigned char
     r->boxed--;
     if (!ok) return 0;
     for (unsigned i = 0; i < n; ++i)
-        if (local[i].bits != local[i].receiver_bits || local[i].bits != local[i].arm_bits) return 0;
+        if (local[i].bits != local[i].receiver_bits || local[i].bits != local[i].arm_bits) {
+            r->passes |= HAO_SV_UNCONVERTIBLE;
+            return 0;
+        }
     r->passes |= HAO_SV_PASS_OWNED;
     return 1;
 #else
@@ -1325,6 +1328,7 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
     if (!type || !value || !out || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional) return -1;
     if (!collect(&r, type, value, 0, out, capacity, &used, 0) || (r.surveyed && survey_mode != 2)) {
         if (unresolved && r.unresolved) *unresolved = r.unresolved;
+        if (passes) *passes = r.passes & HAO_SV_UNCONVERTIBLE;
         return -1;
     }
     if (unresolved) *unresolved = NULL;

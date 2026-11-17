@@ -17,6 +17,8 @@
 #include "swiftvalue/NativeLeaf.h"
 #include "swiftvalue/Tables.h"
 #include <dlfcn.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -49,6 +51,7 @@ typedef struct {
 } builder;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t witness_setup_lock = PTHREAD_MUTEX_INITIALIZER;   /* guest calls of witnesses, below */
+static pthread_mutex_t storage_lock = PTHREAD_MUTEX_INITIALIZER;         /* storage destroy hooks, below */
 static plan *plans;
 static const witnesses *vwt(const void *type) { return ((const witnesses *const *)type)[-1]; }
 static bool native_function(uint64_t pc)
@@ -59,6 +62,7 @@ void hao_swift_value_fork_child(void)
 {
     lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     witness_setup_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    storage_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     hao_sv_native_leaf_fork_child();
     tables_fork_child();
 }
@@ -950,15 +954,64 @@ void hao_swift_storage_element(const void *element, uint64_t lr)
  * operations and witness calls inside native code), Dictionary and Set
  * storage, storage of element types guest code never made storage of. */
 typedef void SWIFT heap_destroy_fn(void *__attribute__((swift_context)));
+/* The runtime's destroy functions the hooks call on: set once, under
+ * storage_lock, from a captured and validated pointer, before any hook that
+ * calls them is published. */
 static heap_destroy_fn *array_destroy_original, *box_destroy_original;
-static hao_gmap guest_storage = HAO_GMAP_INIT(2, 1, 8, 22);   /* object -> 1 made by guest code and live, 0 gone */
-static void storage_note(uint64_t object, uint64_t live)
+
+/* Storage guest code made and the runtime has not destroyed yet: an open-
+ * addressed set of object addresses (0 empty, 1 a removed entry, which an
+ * insert reuses), rebuilt without removed entries when live and removed ones
+ * fill three quarters of it. Read and written under storage_lock only. */
+static uint64_t *guest_storage;
+static size_t guest_storage_cap, guest_storage_live, guest_storage_gone;
+static size_t storage_slot(const uint64_t *t, size_t cap, uint64_t object, bool insert)
 {
-    hao_crit_enter(); pthread_mutex_lock(&lock);
-    bool fresh;
-    uint64_t *slot = live || hao_gmap_get1(&guest_storage,object) ? hao_gmap_claim1(&guest_storage,object,&fresh) : NULL;
-    if (slot) { slot[1] = live; if (fresh) hao_gmap_publish1(&guest_storage,slot,object); }
-    pthread_mutex_unlock(&lock); hao_crit_leave();
+    size_t h = (size_t)((object >> 4) * 0x9E3779B97F4A7C15ull) & (cap - 1), reuse = SIZE_MAX;
+    for (size_t n = 0; n < cap; ++n, h = (h + 1) & (cap - 1)) {
+        if (t[h] == object) return h;
+        if (t[h] == 1 && reuse == SIZE_MAX) reuse = h;
+        if (!t[h]) return insert && reuse != SIZE_MAX ? reuse : h;
+    }
+    return insert ? reuse : SIZE_MAX;
+}
+/* Register OBJECT (LIVE) or retire it; false when it cannot be registered. */
+static bool storage_note_locked(uint64_t object, bool live)
+{
+    if (!live) {
+        size_t at = guest_storage ? storage_slot(guest_storage,guest_storage_cap,object,false) : SIZE_MAX;
+        if (at != SIZE_MAX && guest_storage[at] == object) { guest_storage[at] = 1; guest_storage_live--; guest_storage_gone++; }
+        return true;
+    }
+    if (!guest_storage || 4 * (guest_storage_live + guest_storage_gone + 1) > 3 * guest_storage_cap) {
+        size_t cap = guest_storage_cap ? guest_storage_cap : 1024;
+        while (2 * (guest_storage_live + 1) > cap) cap *= 2;   /* at most half full after the rebuild */
+        if (cap > ((size_t)1 << 26)) return false;
+        uint64_t *t = calloc(cap,sizeof *t);
+        if (!t) return false;
+        for (size_t i = 0; guest_storage && i < guest_storage_cap; ++i)
+            if (guest_storage[i] > 1) t[storage_slot(t,cap,guest_storage[i],true)] = guest_storage[i];
+        free(guest_storage);
+        guest_storage = t; guest_storage_cap = cap; guest_storage_gone = 0;
+    }
+    size_t at = storage_slot(guest_storage,guest_storage_cap,object,true);
+    if (at == SIZE_MAX) return false;
+    if (guest_storage[at] != object) {
+        if (guest_storage[at] == 1) guest_storage_gone--;
+        guest_storage[at] = object;
+        guest_storage_live++;
+    }
+    return true;
+}
+/* Whether OBJECT is registered, retiring it: its final destruction. */
+static bool storage_take(void *object)
+{
+    hao_crit_enter(); pthread_mutex_lock(&storage_lock);
+    size_t at = guest_storage ? storage_slot(guest_storage,guest_storage_cap,(uint64_t)(uintptr_t)object,false) : SIZE_MAX;
+    bool registered = at != SIZE_MAX && guest_storage[at] == (uint64_t)(uintptr_t)object;
+    if (registered) storage_note_locked((uint64_t)(uintptr_t)object,false);
+    pthread_mutex_unlock(&storage_lock); hao_crit_leave();
+    return registered;
 }
 static void storage_value(const void *type, char *value, bool guest_made)
 {
@@ -966,9 +1019,15 @@ static void storage_value(const void *type, char *value, bool guest_made)
     const char *why = "stored value has unresolved active representation at its final destruction";
     if (guest_made) witness_walk(type,value,&w,why,0,0);
     else {
+        /* Storage native code made: what the walk proves is converted; a value
+         * it finds in the guest's encoding but cannot convert (in a shared
+         * existential box) is refused; anything else it cannot read is left
+         * as found, native-made for all hao knows (docs/ISSUES.md). */
         const void *unresolved;
-        unsigned passes;
+        unsigned passes = 0;
         w.count = collect_value_patches(type,value,w.p,64,&unresolved,1,NULL,&passes);
+        if (w.count < 0 && (passes & HAO_SV_UNCONVERTIBLE))
+            decline(unresolved ? unresolved : type,"guest-encoded nil in a shared box at its final destruction",type,value,type,0,0);
         if (w.count > 0 && !witness_strip_guest(type,&w)) w.count = 0;
     }
     unsigned changed = 0;
@@ -989,14 +1048,12 @@ static void SWIFT array_storage_destroy(void *__attribute__((swift_context)) obj
 {
     const uint64_t *o = object;
     const void *element = array_element((const uint64_t *)(uintptr_t)o[0]);
-    const uint64_t *e = hao_gmap_get1(&guest_storage,(uint64_t)(uintptr_t)object);
-    bool guest_made = e && e[1];
+    bool guest_made = storage_take(object);
     if (element && (int64_t)o[2] > 0) {   /* _ContiguousArrayStorage: HeapObject, count, capacity and flags, elements */
         const witnesses *v = vwt(element);
         uint64_t mask = v->flags & 255, at = (32 + mask) & ~mask, n = o[2];
         for (uint64_t i = 0; i < n && v->stride; ++i) storage_value(element,(char *)object + at + i * v->stride,guest_made);
     }
-    if (e) storage_note((uint64_t)(uintptr_t)object,0);
     array_destroy_original(object);
 }
 static void SWIFT box_storage_destroy(void *__attribute__((swift_context)) object)
@@ -1004,44 +1061,71 @@ static void SWIFT box_storage_destroy(void *__attribute__((swift_context)) objec
     const uint64_t *m = (const uint64_t *)(uintptr_t)*(const uint64_t *)object;   /* GenericBoxHeapMetadata */
     uint32_t offset; memcpy(&offset,(const char *)m + 8,4);
     const void *boxed = (const void *)(uintptr_t)m[2];
-    const uint64_t *e = hao_gmap_get1(&guest_storage,(uint64_t)(uintptr_t)object);
-    if (boxed) storage_value(boxed,(char *)object + offset,e && e[1]);
-    if (e) storage_note((uint64_t)(uintptr_t)object,0);
+    bool guest_made = storage_take(object);
+    if (boxed) storage_value(boxed,(char *)object + offset,guest_made);
     box_destroy_original(object);
 }
-/* Take over METADATA's destroy (word -2) when it is ORIGINAL's. */
-static bool storage_hook(uint64_t *metadata, heap_destroy_fn *original, heap_destroy_fn *wrapper)
+/* Whether the page holding ADDR may be written (instantiated metadata is;
+ * metadata in an image's constant data is not). */
+static bool storage_writable(const void *addr)
+{
+    mach_vm_address_t region = (mach_vm_address_t)(uintptr_t)addr & ~(mach_vm_address_t)(vm_page_size - 1);
+    mach_vm_size_t bytes = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    kern_return_t kr = mach_vm_region(mach_task_self(),&region,&bytes,VM_REGION_BASIC_INFO_64,(vm_region_info_t)&info,
+                                      &count,&object);
+    if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(),object);
+    return kr == KERN_SUCCESS && region <= (mach_vm_address_t)(uintptr_t)addr && (info.protection & VM_PROT_WRITE);
+}
+/* Under storage_lock: METADATA's destroy (word -2) is the hook, or becomes
+ * it while it is still ORIGINAL. */
+static bool storage_hook_locked(uint64_t *metadata, heap_destroy_fn *original, heap_destroy_fn *wrapper)
 {
     uint64_t now = __atomic_load_n(&metadata[-2],__ATOMIC_ACQUIRE);
     if (now == (uint64_t)(uintptr_t)wrapper) return true;
-    if (now != (uint64_t)(uintptr_t)original) return false;
+    if (!original || now != (uint64_t)(uintptr_t)original || !storage_writable(&metadata[-2])) return false;
     return __atomic_compare_exchange_n(&metadata[-2],&now,(uint64_t)(uintptr_t)wrapper,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE) ||
            now == (uint64_t)(uintptr_t)wrapper;
 }
 /* OBJECT, just made by guest code (swift_allocObject, swift_allocBox,
- * _allocateUninitializedArray): array storage or a generic box. */
+ * _allocateUninitializedArray): array storage or a generic box. For an
+ * element type that is not settled, hooking its metadata and registering
+ * the object are conditions of admitting it: either failing refuses it. */
 void hao_swift_storage_made(void *object)
 {
     if (hao_opt.no_swift_values || !object) return;
     uint64_t *m = (uint64_t *)(uintptr_t)*(const uint64_t *)object;
     if (!m) return;
-    if (m[0] == 0x500) {   /* HeapGenericLocalVariable: {kind, Offset, BoxedType} */
-        if (!box_destroy_original) {
-            Dl_info a, b;
-            void *alloc = HAO_DLSYM("swift_allocBox");
-            if (!alloc || !dladdr((void *)(uintptr_t)m[-2],&a) || !dladdr(alloc,&b) || a.dli_fbase != b.dli_fbase) return;
-            __atomic_store_n(&box_destroy_original,(heap_destroy_fn *)(uintptr_t)m[-2],__ATOMIC_RELEASE);
-        }
-        const void *boxed = (const void *)(uintptr_t)m[2];
-        if (!boxed || witness_state(boxed) == WITNESS_SETTLED) return;
-        if (storage_hook(m,box_destroy_original,box_storage_destroy)) storage_note((uint64_t)(uintptr_t)object,1);
-        return;
+    const void *element;
+    bool box = m[0] == 0x500;   /* HeapGenericLocalVariable: {kind, Offset, BoxedType} */
+    if (box) element = (const void *)(uintptr_t)m[2];
+    else if (m[0] > 0x7ff && (m[4] & 3) && (const void *)(uintptr_t)m[8] == HAO_DLSYM("$ss23_ContiguousArrayStorageCMn"))
+        element = array_element(m);
+    else return;
+    if (!element || witness_state(element) == WITNESS_SETTLED) return;
+    void *array_original = box ? NULL : HAO_DLSYM("$ss23_ContiguousArrayStorageCfD");
+    void *alloc_box = box ? HAO_DLSYM("swift_allocBox") : NULL;
+    bool admitted = false;
+    hao_crit_enter(); pthread_mutex_lock(&storage_lock);
+    if (box) {
+        uint64_t now = __atomic_load_n(&m[-2],__ATOMIC_ACQUIRE);
+        Dl_info a, b;
+        if (!box_destroy_original && now != (uint64_t)(uintptr_t)box_storage_destroy && alloc_box &&
+            dladdr((void *)(uintptr_t)now,&a) && dladdr(alloc_box,&b) && a.dli_fbase == b.dli_fbase)
+            box_destroy_original = (heap_destroy_fn *)(uintptr_t)now;   /* the runtime's, validated as captured */
+        admitted = storage_hook_locked(m,box_destroy_original,box_storage_destroy);
+    } else {
+        if (!array_destroy_original) array_destroy_original = (heap_destroy_fn *)array_original;
+        admitted = storage_hook_locked(m,array_destroy_original,array_storage_destroy);
     }
-    if (m[0] <= 0x7ff || !(m[4] & 3) || (const void *)(uintptr_t)m[8] != HAO_DLSYM("$ss23_ContiguousArrayStorageCMn")) return;
-    if (!array_destroy_original) array_destroy_original = HAO_DLSYM("$ss23_ContiguousArrayStorageCfD");
-    const void *element = array_element(m);
-    if (!array_destroy_original || !element || witness_state(element) == WITNESS_SETTLED) return;
-    if (storage_hook(m,array_destroy_original,array_storage_destroy)) storage_note((uint64_t)(uintptr_t)object,1);
+    admitted = admitted && storage_note_locked((uint64_t)(uintptr_t)object,true);
+    pthread_mutex_unlock(&storage_lock); hao_crit_leave();
+    if (!admitted)
+        decline(element,box ? "box of a type that is not settled cannot be certified at its destruction"
+                            : "array storage of a type that is not settled cannot be certified at its destruction",
+                NULL,NULL,element,0,0);
 }
 
 /* The value witnesses (slots 0-5) of TYPE, a native struct or enum whose

@@ -48,6 +48,9 @@ int collect_survey_patches(const void *type, const void *value, empty_patch *out
  *              ObjC reference, a block, a Swift object), an existential a
  *              native witness only copies. */
 enum { HAO_SV_PASS_IDENTICAL = 1, HAO_SV_PASS_INACTIVE = 2, HAO_SV_PASS_OWNED = 4 };
+/* Set in *PASSES also when the walk refuses: a value it found in the
+ * guest's encoding needing a conversion it may not make (a shared box). */
+enum { HAO_SV_UNCONVERTIBLE = 8 };
 /* collect_empty_patches_detail, or with EXISTENTIALS collect_witness_patches,
  * also reporting the pass classes of a certified walk. */
 int collect_value_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
