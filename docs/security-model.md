@@ -350,7 +350,9 @@ image with that cdhash ever loads the cache.
 `hao --aot` with no FILE runs itself once per program of `/usr/lib/hao/aot-list`
 (written by `tools/hao-image-payload`), else per path of
 `/usr/lib/hao/stub-identities`, each as `hao --aot FILE` above. A list that is
-not a root-owned regular file writable only by root is not used. A program whose cache in a directory this process reads already passes the
+not a root-owned regular file writable only by root (mode and ACL), or whose
+directories from / are not, is not used. `hao --aot --auto` marks a run done
+only when every program succeeded. A program whose cache in a directory this process reads already passes the
 loader's checks is skipped; `hao --aot --check` runs those checks and writes
 nothing.
 
