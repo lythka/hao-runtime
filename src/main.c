@@ -247,11 +247,11 @@ static bool aot_file_ok(int fd, uid_t owner)
     struct stat st;
     acl_t acl = NULL;
     bool ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == owner && !(st.st_mode & 022);
-    if (ok && !(acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) && errno != ENOENT) ok = false;
-    if (acl) {
-        ok = ok && !hao_aot_acl_allows(acl);
-        acl_free(acl);
+    if (ok) {
+        acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+        ok = !hao_aot_acl_allows(acl, errno);   /* none: only ENOENT means no ACL */
     }
+    if (acl) acl_free(acl);
     return ok;
 }
 
