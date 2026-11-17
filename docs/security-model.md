@@ -123,7 +123,9 @@ The first route that answers decides:
 2. **Trusted cdhash list**: Apple. `tools/hao-image-payload` writes
    `/usr/lib/hao/trusted-cdhashes` with `tools/hao-trust-list`: the cdhash of
    every arm64-only program, library and bundle under the image's root that
-   passes `codesign --verify --strict -R='anchor apple'` on the build host. hao
+   passes `codesign --verify --strict -R='anchor apple'` on the build host
+   (codesign checks a private copy of the bytes the cdhash was computed
+   from, so a file changed meanwhile is not listed under another's check). hao
    reads the list only if root owns it and every directory above it, and
    nobody else can write them. `HAO_TRUST_LIST=/abs/file` adds a list in an
    open-tier process, for tests. A process reads the lists once, when it

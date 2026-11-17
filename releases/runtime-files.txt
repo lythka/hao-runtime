@@ -747,6 +747,7 @@ tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
 tests/tools/test_onmac_pin.py
 tests/tools/test_release.py
+tests/tools/test_trustlist.py
 tests/translate/run.sh
 tools/check_distribution.py
 tools/check_x86.sh

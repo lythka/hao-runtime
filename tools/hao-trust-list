@@ -17,7 +17,11 @@ slice (the one hao runs: plain arm64e > arm64e.* > arm64) satisfies
 `codesign --verify --strict --ignore-resources -R='anchor apple'` here, at
 image build, where trustd runs (bundle resources are not code: neither the
 kernel nor hao checks them at exec). A program that does not verify is left out (reported on stderr):
-at run time hao then authenticates its CMS by the slower routes.
+at run time hao then authenticates its CMS by the slower routes. Each file is
+read once: the cdhash is computed from those bytes and codesign verifies a
+private copy of the same bytes (with its bundle's Info.plist, when the
+signature binds one), so a file changed in the meantime cannot have one
+version hashed and another verified.
 
 The cdhash is computed as xnu does (cs_validate_csblob: the CodeDirectory of
 highest hash rank, SHA-1 < SHA-256/20 < SHA-256 < SHA-384, hashed with its own
@@ -49,9 +53,11 @@ import plistlib
 import struct
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
 
 _spec = importlib.util.spec_from_loader("hao_embed", importlib.machinery.SourceFileLoader("hao_embed", os.path.join(HERE, "hao-embed")))
@@ -144,8 +150,44 @@ def scan(root):
     return sorted(found)
 
 
+def staged_copy(path, data, work):
+    """A private copy of DATA (PATH's bytes, read once) for codesign to verify: in WORK (a new directory only this
+    user can open), created exclusively. When the signature binds an Info.plist (special slot -1) and the
+    bundle's has that hash (BUNDLE/Contents/Info.plist beside Contents/MacOS, a framework version's
+    Resources/Info.plist, or one beside the file), that Info.plist is copied too, at the same place relative to
+    the bundle, as codesign looks for it; else codesign fails, as it would on the file. Resources are not copied
+    (--ignore-resources). Whatever the path holds later, codesign sees only these bytes."""
+    mo, _ = slice_and_arch(data)
+    want = hao_codesig.special_slots(mo, hao_codesig.CSSLOT_INFOSLOT)
+    d = os.path.dirname(os.path.realpath(path))
+    plist = None
+    for f in ([os.path.join(os.path.dirname(d), "Info.plist")] if os.path.basename(d) == "MacOS" else []) + \
+            [os.path.join(d, "Resources", "Info.plist"), os.path.join(d, "Info.plist")]:
+        if want and os.path.isfile(f):
+            with open(f, "rb") as fh:
+                blob = fh.read()
+            if all(hao_codesig.digest(t, blob) == h for t, h in want.items()):
+                plist = (f, blob)
+                break
+    top = d   # the bundle: the nearest directory above the file with an extension (X.app, X.framework)
+    while plist and "." not in os.path.basename(top) and os.path.dirname(top) != top:
+        top = os.path.dirname(top)
+    base = os.path.dirname(top) if plist and "." in os.path.basename(top) else d
+    dst = os.path.join(work, os.path.relpath(os.path.realpath(path), base))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if plist:
+        q = os.path.join(work, os.path.relpath(plist[0], base))
+        os.makedirs(os.path.dirname(q), exist_ok=True)
+        with open(q, "xb") as f:
+            f.write(plist[1])
+    with open(dst, "xb") as f:
+        f.write(data)
+    return dst
+
+
 def verdict(root, path):
-    """(cdhash, relpath, None) if PATH is listed, else (None, relpath, why)."""
+    """(cdhash, relpath, None) if PATH is listed, else (None, relpath, why). The file is read once; the cdhash
+    and codesign's anchor check are both of those bytes (staged_copy), never of a second reading of PATH."""
     rel = os.path.relpath(os.path.realpath(path), root)
     try:
         data = open(path, "rb").read()
@@ -157,8 +199,13 @@ def verdict(root, path):
             return None, rel, "not signed"
     except (OSError, ValueError, struct.error) as e:
         return None, rel, str(e)
-    r = subprocess.run(["codesign", "--verify", "--strict", "--ignore-resources", "-R=anchor apple", "--arch", arch, path],
-                       capture_output=True, text=True)
+    with tempfile.TemporaryDirectory(prefix="hao-trust-list.") as work:
+        try:
+            copy = staged_copy(path, data, work)
+        except (OSError, RuntimeError, ValueError) as e:
+            return None, rel, "not staged: %s" % e
+        r = subprocess.run(["codesign", "--verify", "--strict", "--ignore-resources", "-R=anchor apple", "--arch", arch,
+                            copy], capture_output=True, text=True)
     if r.returncode != 0:
         return None, rel, (r.stderr.strip().splitlines() or ["codesign exit %d" % r.returncode])[-1]
     return h, rel, None
