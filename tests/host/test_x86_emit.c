@@ -399,6 +399,7 @@ int main(int argc, char **argv)
         if (fails) return 1;
     }
     begin(); x_mfence(&B); end("mfence");
+    begin(); x_vzeroupper(&B); end("vzeroupper");
     begin(); x_int3(&B); end("int3");
     begin(); x_nop(&B); end("nop");
     begin(); x_lahf(&B); end("lahf");

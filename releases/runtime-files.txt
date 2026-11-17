@@ -674,6 +674,9 @@ tests/guest/xinhab.swift
 tests/guest/xinhab_lib.swift
 tests/guest/xpac.c
 tests/guest/xpac.sh
+tests/guest/ymmupper.c
+tests/guest/ymmupper.sh
+tests/guest/ymmupper_lib.c
 tests/host/async_package.py
 tests/host/bridge.c
 tests/host/chain.c

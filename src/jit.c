@@ -5948,6 +5948,24 @@ void hao_aot_note_jit_block(hao_image *im, uint64_t pc)
 
 /* ------------------------------------------------------------- glue */
 
+/* Nonzero when the CPU and OS enable AVX state (CPUID.1:ECX AVX and OSXSAVE,
+ * XCR0 SSE and AVX): the entry stub and hao_native_call (bridge_x86_64.S)
+ * then clear the upper ymm halves with vzeroupper, so legacy-SSE translated
+ * code never runs with dirty uppers (a false dependency on every SSE
+ * instruction from Skylake on). Under Rosetta only with
+ * ROSETTA_ADVERTISE_AVX=1. Set by build_stubs, before any native call; a
+ * local check until the translator has a host feature word. */
+__attribute__((visibility("hidden"))) uint8_t hao_vzeroupper;
+
+static bool avx_state_enabled(void)
+{
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d) || !(c & bit_AVX) || !(c & bit_OSXSAVE)) return false;
+    uint32_t lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return (lo & 6) == 6;
+}
+
 static void build_stubs(void)
 {
     xbuf b;
@@ -5962,6 +5980,8 @@ static void build_stubs(void)
      * entries (callbacks/signals) save and restore it here. Guest integer
      * and vector registers stay in hao_cpu; recovery needs no new locations. */
     x_mov_ld(&b, 8, R12, xm(RBX, CPU_OFF_RT_JC));
+    hao_vzeroupper = avx_state_enabled();
+    if (hao_vzeroupper) x_vzeroupper(&b);   /* a native caller's uppers are dead here (SysV) */
     x_jmp_r(&b, RSI);
     while (xb_len(&b) & 15) x_int3(&b);
     exit_stub = b.p;

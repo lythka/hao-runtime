@@ -386,6 +386,7 @@ size_t x_jrcxz8(xbuf *b)
 void x_mfence(xbuf *b) { xb_u8(b, 0x0F); xb_u8(b, 0xAE); xb_u8(b, 0xF0); }
 void x_stmxcsr(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP2(0x0F, 0xAE), 3, m); }
 void x_ldmxcsr(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP2(0x0F, 0xAE), 2, m); }
+void x_vzeroupper(xbuf *b) { xb_u8(b, 0xC5); xb_u8(b, 0xF8); xb_u8(b, 0x77); }
 void x_xchg_mr(xbuf *b, int size, xmem m, int r)
 {
     if (!oksize(b, size)) return;

@@ -163,6 +163,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/varsniff | PASS | 2 | |
 | guest/xinhab | XFAIL | 2 | see known failures |
 | guest/xpac | PASS | 1 | |
+| guest/ymmupper | PASS | 1 | upper ymm halves a native callee leaves dirty are clear after the call and on a native-to-guest callback, JIT and `--interp`, with and without ROSETTA_ADVERTISE_AVX=1 |
 | guest/run-async | PASS | 9 | |
 | guest/keypath-identity | PASS | 2 | |
 | guest/late-method-signatures | PASS | 10 | |
