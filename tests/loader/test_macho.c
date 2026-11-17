@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <signal.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -268,6 +269,40 @@ static void slice_tests(const uint8_t *seed, size_t n, const uint8_t *lib, size_
         if (img) hao_unload_image(img);
     }
     hao_slice_test_path = 0;
+
+    /* Which files are mapped: a root-owned file without write bits on the read-only volume the system booted
+     * from, and no other. One on another local volume (the data volume, a disk image) is copied: its owner
+     * and mode do not say who can change its storage. Host files: an arm64e slice of a system program, and
+     * the first root-owned arm64 program found outside the System volume. */
+    {
+        static const char *const sys[] = {"/usr/bin/true", "/bin/ls", "/usr/lib/dyld"};
+        static const char *const other[] = {"/Library/Developer/CommandLineTools/usr/bin/git", "/Library/Developer/CommandLineTools/usr/bin/clang",
+                                            "/Applications/Xcode.app/Contents/Developer/usr/bin/git", "/Applications/Xcode.app/Contents/MacOS/Xcode"};
+        const uint32_t system = MNT_ROOTFS | MNT_RDONLY | MNT_LOCAL;
+        for (int pass = 0; pass < 2; pass++) {
+            const char *const *list = pass ? other : sys;
+            size_t count = pass ? sizeof other / sizeof *other : sizeof sys / sizeof *sys;
+            const char *used = NULL;
+            bool copied = false;
+            for (size_t k = 0; k < count && !used; k++) {
+                int f = open(list[k], O_RDONLY);
+                struct stat st;
+                struct statfs fs;
+                if (f < 0) continue;
+                if (fstat(f, &st) == 0 && st.st_uid == 0 && !(st.st_mode & (S_IWGRP | S_IWOTH)) && fstatfs(f, &fs) == 0 &&
+                    (fs.f_flags & MNT_LOCAL) && ((fs.f_flags & system) == system) == !pass) {
+                    hao_slice *s = hao_slice_open(f, err, sizeof err);
+                    if (s) { used = list[k]; copied = s->copied; hao_slice_close(s); }
+                }
+                close(f);
+            }
+            char what[300];
+            snprintf(what, sizeof what, pass ? "root-owned file without write bits on another local volume (%s): copied"
+                                             : "root-owned file on the read-only System volume (%s): mapped", used ? used : "");
+            if (!used) printf("note no %s file with an arm64 slice found here: not tested\n", pass ? "root-owned non-System" : "System");
+            else note(copied == (pass == 1), what);
+        }
+    }
 
     /* a caller checks the slice, the file changes, the loader builds the image: from the slice the caller left */
     put_file(path, seed, n, n);

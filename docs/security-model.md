@@ -139,20 +139,29 @@ counts only for the cdhash hao computed on the bytes it took.
 Natively the kernel validates each page of a signed image as it pages it
 in. Nothing does that for pages hao maps as data, so hao must not read a
 guest file twice: whoever may write the file could change it between the
-check and the load. How the slice is taken depends on who can change the
-file:
+check and the load. How the slice is taken depends on whether the file can
+change at all:
 
 | File | How its slice is taken |
 |---|---|
-| Someone other than root may change it: not owned by root, or writable by its group or by others, or with an ACL, or on a volume that is not local | Read once into memory. The mach header, load commands, signature, hashed pages, linkedit data and segments all come from that copy; rewriting the file during or after the load changes nothing in the process |
-| Only root can change it (the system's own files; every file of a sealed system volume) | Mapped. Its pages are shared with every process that maps the file, as natively |
+| On the volume the system booted from, mounted read-only (the System volume, sealed or booted from an APFS snapshot: `MNT_ROOTFS` and `MNT_RDONLY`), owned by root, not writable by its group or others, without an ACL | Mapped. Its pages are shared with every process that maps the file, as natively |
+| Any other file, root-owned or not: the data volume (`/Applications`, `/Library`, `/usr/local`), a disk image, a removable or network volume | Read once into memory. The mach header, load commands, signature, hashed pages, linkedit data and segments all come from that copy; rewriting the file, or the storage under it, during or after the load changes nothing in the process |
+
+Owner, mode and ACL say who may write a file through its volume, not who
+controls the storage under it: a disk image's owner can change a root-owned
+file in it without any write bit. So only the read-only System volume is
+mapped.
 
 A copied image shares no memory with its file or with other processes. It
 costs its slice's size in anonymous memory, per process, for as long as it
 is loaded: 7.2 MB more peak footprint for an 8.4 MB library and 66 MB for a
 67 MB one, measured. The programs that loaded them ran in 0.04 s and 0.21 s,
-against 0.04 s and 0.20 s with the files mapped. Guest libraries are taken
-the same way as the main executable.
+against 0.04 s and 0.20 s with the files mapped. For root-owned programs on
+the data volume, which were mapped before, measured under Rosetta: the
+Command Line Tools' `clang --version` (124 MB slice) went from 51 MB to
+142 MB peak footprint, in 1.00 s both ways (median of 5); `git --version`
+(3.8 MB) from 7.4 MB to 10.2 MB, 0.06 s both ways. Guest libraries are
+taken the same way as the main executable.
 
 The loader also bounds what a guest file may claim: 4 MiB of load commands,
 256 MiB for an exports trie, chained fixups, a legacy dyld stream or
@@ -470,13 +479,12 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 
 ## Known limitations
 
-- A guest file that only root can change is mapped, not copied. If root
-  rewrites such a file in place while hao loads it, hao does not notice;
-  natively the kernel would kill the process at the changed page.
-- Whether only root can change a file is judged from its owner, mode and ACL
-  and from its volume being local. A local volume whose storage someone else
-  can write (a disk image or removable disk mounted with ownership enabled)
-  can hold root-owned files that change all the same; hao maps them.
+- A guest file on the read-only System volume is mapped, not copied. That
+  volume is taken to be unchanging while it is mounted: sealed, or an APFS
+  snapshot (an image whose seal was broken boots from one). A root process
+  that remounts the root file system writable and rewrites such a file
+  while hao loads it is not noticed; natively the kernel would kill the
+  process at the changed page.
 - HaoExec hands hao a path, not the file the kernel examined, and hao opens
   it again. Routing grants nothing, so a path that names another file by then
   only runs that file under the same checks.

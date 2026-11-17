@@ -131,17 +131,18 @@ uint64_t hao_island_room(uint64_t nfstarts_bound);
  * nothing does that for pages hao maps as data. So the slice is taken once,
  * and the mach header, the load commands, the signature, every hashed page,
  * the linkedit blobs and the segments all come from bytes:
- *  - copied: a file that somebody other than root may change. The slice was
+ *  - copied: every file not on the read-only System volume. The slice was
  *    read once into anonymous memory, and the image's segments are made of
  *    that memory (whole pages are handed over, not copied again). The image
  *    then shares no page with the file or with another process: it costs
  *    the slice's size for as long as it is loaded, in memory that can be
  *    compressed but not dropped (measured: 7.2 MB more peak footprint for an
  *    8.4 MB library, 66 MB for a 67 MB one; load time unchanged);
- *  - not copied: a file only root can change (root owns it, no group or
- *    other write bit, no ACL, on a local volume: the system's own files).
- *    bytes is the file, mapped, and the segments are mapped from the file
- *    as before, shared with every process that maps it.
+ *  - not copied: a file on the volume the system booted from, mounted
+ *    read-only (the System volume, sealed or a snapshot), that root owns
+ *    with no group or other write bit and no ACL. bytes is the file,
+ *    mapped, and the segments are mapped from the file as before, shared
+ *    with every process that maps it.
  * fd stays the file for what the kernel is asked about it (F_ADDFILESIGS_INFO,
  * F_CHECK_LV); the slice does not own it.
  */
@@ -191,8 +192,9 @@ void hao_slice_close(hao_slice *sl);
  * caller that has checked these bytes and must load what it checked
  * (hao_guest_sig_enforce). */
 void hao_slice_hand(hao_slice *sl);
-/* The loader's unit tests: 1 maps every file, 2 copies every file (0: by
- * what the file's owner, mode, ACL and volume say). */
+/* The loader's unit tests: 1 maps every file, 2 copies every file (0: maps
+ * only a root-owned file without write bits or ACL on the read-only volume
+ * the system booted from). */
 extern int hao_slice_test_path;
 
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply
