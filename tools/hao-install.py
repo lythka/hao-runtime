@@ -244,7 +244,11 @@ def install_root(admitted, staged, dst):
     return len(copies)
 
 
-LC_SEGMENT_64, LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB = 0x19, 0xC, 0x80000018, 0x8000001F
+LC_SEGMENT_64 = 0x19
+# load commands that name a library (LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LAZY_LOAD_DYLIB,
+# LC_LOAD_UPWARD_DYLIB)
+DYLIB_CMDS = (0xC, 0x80000018, 0x8000001F, 0x20, 0x80000023)
+X86_CPUS = (hao_fat.CPU_X86_64, 7)   # x86_64 (every subtype, x86_64h too) and i386
 SLICE_MAGIC = b"haoslice"
 
 
@@ -259,72 +263,99 @@ def arm_slice(slices):
     return best
 
 
-def stub_binding(data):
-    """None if DATA's x86_64 slice is not a hao stub (an executable that links libhao.dylib; hao's launcher,
-    with __TEXT,__hao_cli, is not one). Otherwise "" if its __TEXT,__hao_slice record (tools/hao-embed
-    slice_record) names the cdhash of DATA's arm slice, else why not: src/libval.c runs only that slice under
-    the stub."""
+def _hao_slice(mo):
+    """(is a hao executable, has __TEXT,__hao_cli, __hao_slice record or None) for the x86 slice MO. A hao
+    executable is an executable that names libhao in any form: a library load command of any kind whose name is
+    libhao*, or the bytes "libhao" anywhere (a dlopen of it)."""
+    record, cli, libhao = None, False, b"libhao" in mo.lower()
+    for cmd, off, size in hao_fat.load_commands(mo):
+        if cmd in DYLIB_CMDS and size >= 24:
+            name = mo[off + int.from_bytes(mo[off + 8:off + 12], "little"):off + size].split(b"\0")[0]
+            libhao |= name.rsplit(b"/", 1)[-1].lower().startswith(b"libhao")
+        elif cmd == LC_SEGMENT_64 and size >= 72 and mo[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
+            for k in range(min(int.from_bytes(mo[off + 64:off + 68], "little"), (size - 72) // 80)):
+                at = off + 72 + 80 * k
+                sect = mo[at:at + 16].rstrip(b"\0")
+                cli |= sect == b"__hao_cli"
+                if sect == b"__hao_slice":
+                    n, fo = struct.unpack_from("<QI", mo, at + 40)
+                    record = mo[fo:fo + n] if n == 32 and fo + n <= len(mo) else b""
+    return libhao, cli, record
+
+
+def stub_binding(data, cli_ok=None):
+    """None if no x86 slice of DATA (x86_64 of any subtype, x86_64h, i386: every one is examined) is a hao stub:
+    an executable naming libhao (_hao_slice), other than hao's launcher. Otherwise "" if every such slice's
+    __TEXT,__hao_slice record (tools/hao-embed slice_record) names the cdhash of DATA's arm slice, else why not:
+    src/libval.c runs only that slice under the stub. A slice with the launcher's __TEXT,__hao_cli marker counts
+    as the launcher only where CLI_OK(DATA) says this file is the payload's own launcher; anywhere else the
+    marker proves nothing."""
     sl = hao_fat.slices(data) or []
-    x86 = [p for c, _, p in sl if c == hao_fat.CPU_X86_64]
-    if len(x86) != 1 or x86[0][:4] != b"\xcf\xfa\xed\xfe" or int.from_bytes(x86[0][12:16], "little") != 2:
-        return None
-    mo, record, cli, libhao = x86[0], None, False, False
-    try:
-        for cmd, off, size in hao_fat.load_commands(mo):
-            if cmd in (LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB) and size >= 24:
-                name = mo[off + int.from_bytes(mo[off + 8:off + 12], "little"):off + size].split(b"\0")[0]
-                libhao |= name == b"libhao.dylib" or name.endswith(b"/libhao.dylib")
-            elif cmd == LC_SEGMENT_64 and size >= 72 and mo[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
-                for k in range(min(int.from_bytes(mo[off + 64:off + 68], "little"), (size - 72) // 80)):
-                    s = off + 72 + 80 * k
-                    sect = mo[s:s + 16].rstrip(b"\0")
-                    cli |= sect == b"__hao_cli"
-                    if sect == b"__hao_slice":
-                        n, at = struct.unpack_from("<QI", mo, s + 40)
-                        record = mo[at:at + n] if n == 32 and at + n <= len(mo) else b""
-    except (ValueError, struct.error) as x:
-        return "unreadable x86_64 slice (%s)" % x
-    if not libhao or cli:
-        return None
-    if record is None:
-        return "a hao stub without a __hao_slice record (legacy: it would run any arm slice)"
-    if record[:8] != SLICE_MAGIC or record[8:9] != b"\1":
-        return "a hao stub whose __hao_slice record is malformed"
-    arm = arm_slice(sl)
-    try:
-        c = hao_codesig.check(bytes(arm)) if arm is not None else {"verdict": "missing"}
-    except ValueError as x:
-        c = {"verdict": str(x)}
-    if c["verdict"] != "valid":
-        return "a hao stub whose arm slice is %s" % ("not signed validly" if arm is not None else "missing")
-    if record[9] != c["hash_type"] or record[12:32] != c["cdhash"]:
-        return "a hao stub whose __hao_slice record names another arm slice"
-    return ""
+    found, why = False, None
+    for c, _, mo in sl:
+        if c not in X86_CPUS:
+            continue
+        if mo[:4] not in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):
+            return "an x86 slice that is not a Mach-O"
+        if int.from_bytes(mo[12:16], "little") != 2:
+            continue
+        try:
+            libhao, cli, record = _hao_slice(mo)
+        except (ValueError, struct.error) as x:
+            return "an unreadable x86 slice (%s)" % x
+        if not libhao or (cli and cli_ok is not None and cli_ok(data)):
+            continue
+        found = True
+        if record is None:
+            why = why or "a hao stub without a __hao_slice record (legacy: it would run any arm slice)"
+        elif record[:8] != SLICE_MAGIC or record[8:9] != b"\1":
+            why = why or "a hao stub whose __hao_slice record is malformed"
+        else:
+            arm = arm_slice(sl)
+            try:
+                chk = hao_codesig.check(bytes(arm)) if arm is not None else {"verdict": "missing"}
+            except ValueError as x:
+                chk = {"verdict": str(x)}
+            if chk["verdict"] != "valid":
+                why = why or "a hao stub whose arm slice is %s" % ("not signed validly" if arm is not None else "missing")
+            elif record[9] != chk["hash_type"] or record[12:32] != chk["cdhash"]:
+                why = why or "a hao stub whose __hao_slice record names another arm slice"
+    return (why or "") if found else None
 
 
-def legacy_stubs(system):
-    """[(path under SYSTEM, why)] for every fat file in SYSTEM whose x86_64 slice is a hao stub that does not name
-    the file's arm slice (stub_binding). Symbolic links are not followed; each inode is read once."""
+MACHO_MAGICS = (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe")
+
+
+def legacy_stubs(system, cli_ok=None):
+    """[(path under SYSTEM, why)] for every Mach-O in SYSTEM (fat or thin) with a hao stub that does not name the
+    file's arm slice (stub_binding; CLI_OK(path, data) is the launcher exemption), and for every file or
+    directory the scan cannot read: it cannot say there is no stub there. Symbolic links are not followed; each
+    inode is read once."""
     seen, out = set(), []
-    for base, dirs, names in os.walk(system):
+
+    def unreadable(x):
+        out.append((os.path.relpath(x.filename or system, system), "not readable (%s): not checked" % x.strerror))
+    for base, dirs, names in os.walk(system, onerror=unreadable):
         dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
         for name in names:
             p = os.path.join(base, name)
+            rel = os.path.relpath(p, system)
             try:
                 st = os.lstat(p)
                 if not stat.S_ISREG(st.st_mode) or st.st_size < 4096 or (st.st_dev, st.st_ino) in seen:
                     continue
                 seen.add((st.st_dev, st.st_ino))
                 with open(p, "rb") as f:
-                    if f.read(4) not in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                    if f.read(4) not in MACHO_MAGICS:
                         continue
                     f.seek(0)
                     data = f.read()
-            except OSError:
+            except OSError as x:
+                out.append((rel, "not readable (%s): not checked" % x.strerror))
                 continue
-            why = stub_binding(data)
+            why = stub_binding(data, (lambda d, r=rel: cli_ok(r, d)) if cli_ok else None)
             if why:
-                out.append((os.path.relpath(p, system), why))
+                out.append((rel, why))
     return sorted(out)
 
 
@@ -588,7 +619,8 @@ def install_staged(system, payload, admitted, work):
     aot_dirs = ensure_aot_dirs(system, errors)
     aot_caches = check_aot_caches(system, errors)
     reported = {x.split(" (")[0] for x in errors}
-    legacy = legacy_stubs(system)
+    cli = admitted.get("root/usr/libexec/hao", ("",))[0]
+    legacy = legacy_stubs(system, lambda rel, d: rel == "usr/libexec/hao" and hashlib.sha256(d).hexdigest() == cli)
     errors += ["%s (%s)" % (p, why) for p, why in legacy if p not in reported]
     required = manifest.get("required", LEGACY_REQUIRED)
     for r in required:

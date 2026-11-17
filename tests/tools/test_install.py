@@ -257,15 +257,30 @@ class InstallPaths(unittest.TestCase):
         self.untouched()
 
     def test_legacy_stub_elsewhere(self):
-        """a hao stub without a __hao_slice record anywhere in SYSTEM is an error; hao's launcher is not a stub"""
-        legacy = hao_fat.combine(executable(hao_fat.CPU_ARM64, '3' * 32, b'old'), hao_stub('6' * 32))
-        launcher = hao_fat.combine(executable(hao_fat.CPU_ARM64, '4' * 32, b'cli'), hao_stub('7' * 32, cli=True))
-        (self.system / 'usr/bin/old').write_bytes(legacy)
-        (self.system / 'usr/bin/cli').write_bytes(launcher)
+        """a hao stub without a __hao_slice record anywhere in SYSTEM is an error, whatever hides it: another x86
+        slice beside it, libhao named only as a string (a dlopen), a launcher marker away from usr/libexec/hao;
+        the payload's own launcher is not a stub, and a file the scan cannot read is an error too"""
+        arm = executable(hao_fat.CPU_ARM64, '3' * 32, b'old')
+        legacy = hao_fat.combine(arm, hao_stub('6' * 32))
+        launcher = hao_stub('7' * 32, cli=True) + bytes(8192)
+        (self.payload / 'root/usr/libexec/hao').write_bytes(launcher)
+        cases = {
+            'usr/bin/old': legacy,
+            'usr/bin/two': hao_fat.build([(hao_fat.CPU_ARM64, 0, arm), (hao_fat.CPU_X86_64, 3, hao_stub('6' * 32)),
+                                          (hao_fat.CPU_X86_64, 8, executable(hao_fat.CPU_X86_64, '8' * 32, b'plain'))]),
+            'usr/bin/dlopen': hao_fat.combine(arm, executable(hao_fat.CPU_X86_64, '9' * 32, b'/usr/lib/hao/libhao.dylib')),
+            'usr/bin/cli': hao_fat.combine(arm, hao_stub('7' * 32, cli=True)),
+        }
+        for name, data in cases.items():
+            (self.system / name).write_bytes(data)
+        (self.system / 'usr/bin/closed').write_bytes(bytes(8192))
+        (self.system / 'usr/bin/closed').chmod(0)
+        self.addCleanup((self.system / 'usr/bin/closed').chmod, 0o644)
         out = self.refused('usr/bin/old (a hao stub without a __hao_slice record')
-        self.assertNotIn('usr/bin/cli', out)
         record = json.loads((self.system / 'usr/lib/hao/install.json').read_text())
-        self.assertEqual((record['legacy_stubs'], record['embedded']), (['usr/bin/old'], 1))
+        self.assertEqual(sorted(record['legacy_stubs']), sorted(list(cases) + ['usr/bin/closed']), out)
+        self.assertNotIn('usr/libexec/hao (', out)
+        self.assertEqual(record['embedded'], 1)
         self.assertEqual((self.system / 'usr/bin/old').read_bytes(), legacy)
 
     def test_legacy_stub_restubbed(self):
