@@ -268,6 +268,28 @@ class InstallPaths(unittest.TestCase):
         self.assertNotEqual((self.system / 'usr/lib/hao/libhao.dylib').stat().st_ino, self.victim.stat().st_ino)
         self.assertEqual((self.outside / 'tool').read_bytes(), b'old tool')
 
+    def test_shared_destination_directory(self):
+        """a directory the installer writes in that others can change (group-writable, or an ACL granting
+        write) is refused"""
+        d = self.system / 'usr/lib/hao'
+        d.chmod(0o775)
+        self.refused('usr/lib/hao: hao: writable by group or others')
+        d.chmod(0o755)
+        subprocess.run(['chmod', '+a', 'everyone allow add_file', str(d)], check=True)
+        self.addCleanup(subprocess.run, ['chmod', '-N', str(d)])
+        self.refused('an ACL grants write')
+
+    def test_aot_cache_hard_link(self):
+        """a file in the AOT directory with another hard link is reported, and its mode left alone"""
+        aot = self.system / 'usr/lib/hao/aot'
+        aot.mkdir()
+        other = self.outside / 'cache'
+        other.write_bytes(b'x')
+        other.chmod(0o600)
+        os.link(other, aot / ('b' * 32 + '.aot'))
+        out = self.refused('usr/lib/hao/aot/%s.aot (has another hard link)' % ('b' * 32))
+        self.assertEqual(other.stat().st_mode & 0o777, 0o600, out)
+
     def test_name_collisions(self):
         """names that are one file on a case-insensitive volume, or a file and a directory, are refused
         (hao_release's rule; such a payload can only be made on a case-sensitive volume)"""

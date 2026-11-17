@@ -23,8 +23,12 @@ host):
     unless com.apple.security.cs.allow-dyld-environment-variables.
 """
 import hashlib
+import os
 import plistlib
+import shutil
+import stat
 import struct
+import tempfile
 
 import hao_fat
 
@@ -429,3 +433,123 @@ def bind_special_slots(mo, data_by_slot):
             at = cd + hash_off - slot * hash_size
             out[at:at + hash_size] = bytes(hash_size) if data is None else digest(hash_type, data)
     return bytes(out)
+
+
+# --- private working directories for code signing (hao-embed, hao-trust-list) ----------------------------------------
+# codesign is given a path, so the directory holding what it signs or verifies must be one nobody else can change:
+# else a file could be replaced between hao's write (or hash) and codesign's open.
+ACL_WRITE_PERMS = {"write", "add_file", "add_subdirectory", "delete", "delete_child", "append", "writeattr",
+                   "writeextattr", "writesecurity", "chown"}
+
+
+def acl_grants_write(path):
+    """True if the extended ACL of PATH (a path, not following a link, or an open descriptor) has an allow entry
+    with a right that can change what it holds; an ACL that cannot be read counts as granting."""
+    import ctypes
+    import ctypes.util
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    libc.acl_get_link_np.restype = ctypes.c_void_p
+    libc.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_to_text.restype = ctypes.c_void_p
+    libc.acl_to_text.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(path, 0x100) if isinstance(path, int) else \
+        libc.acl_get_link_np(os.fsencode(path), 0x100)   # ACL_TYPE_EXTENDED
+    if not acl:
+        return ctypes.get_errno() != 2   # ENOENT: no ACL
+    text = libc.acl_to_text(acl, None)
+    try:
+        if not text:
+            return True
+        lines = ctypes.string_at(text).decode(errors="replace").splitlines()
+    finally:
+        if text:
+            libc.acl_free(text)
+        libc.acl_free(acl)
+    for line in lines[1:]:
+        f = line.split(":")
+        if len(f) >= 6 and f[4] == "allow" and set(f[5].split(",")) & ACL_WRITE_PERMS:
+            return True
+    return False
+
+
+def unshared_dir(path):
+    """None if only this user or root can change the directory PATH (a canonical path): it and every directory
+    above it owned by this user or root, without an ACL granting a write-type right, PATH not writable by group
+    or others at all (a sticky shared directory such as /tmp is refused too), an ancestor only if sticky.
+    Otherwise why not."""
+    uid = os.geteuid()
+    parts = [p for p in path.split("/") if p]
+    for k in range(len(parts) + 1):
+        p = "/" + "/".join(parts[:k])
+        st = os.lstat(p)
+        last = k == len(parts)
+        if not stat.S_ISDIR(st.st_mode):
+            return "%s is not a directory" % p
+        if st.st_uid not in (0, uid):
+            return "%s is owned by uid %d" % (p, st.st_uid)
+        if st.st_mode & 0o022 and (last or not st.st_mode & stat.S_ISVTX):
+            return "%s is writable by group or others (mode %o)" % (p, st.st_mode & 0o7777)
+        if acl_grants_write(p):
+            return "%s has an ACL that grants write" % p
+    return None
+
+
+def dir_fd_unshared(fd, owners):
+    """None if the directory open at FD is owned by one of OWNERS, writable by neither group nor others, and
+    without an ACL granting a write-type right: nobody else can rename or replace its entries. Else why not."""
+    st = os.fstat(fd)
+    if not stat.S_ISDIR(st.st_mode):
+        return "not a directory"
+    if st.st_uid not in owners:
+        return "owned by uid %d" % st.st_uid
+    if st.st_mode & 0o022:
+        return "writable by group or others (mode %o)" % (st.st_mode & 0o7777)
+    if acl_grants_write(fd):
+        return "an ACL grants write"
+    return None
+
+
+class PrivateDir:
+    """A new directory (mode 0700) for files codesign will read, made only under a parent unshared_dir accepts
+    (TMPDIR, else the system temporary directory): ValueError otherwise (set TMPDIR to such a directory).
+    check() confirms, before each codesign, that the path still names that same directory (inode, owner,
+    mode), and that each given file under it is still the inode written there."""
+
+    def __init__(self, prefix):
+        parent = os.path.realpath(tempfile.gettempdir())
+        why = unshared_dir(parent)
+        if why:
+            raise ValueError("no private place for code-signing work: %s (set TMPDIR to a directory only you can "
+                             "change)" % why)
+        self.name = tempfile.mkdtemp(prefix=prefix, dir=parent)
+        st = os.lstat(self.name)
+        self.ident = (st.st_dev, st.st_ino)
+        self.files = {}
+
+    def created(self, path):
+        """Record the file PATH (just written under this directory) by inode, for check()."""
+        st = os.lstat(path)
+        self.files[path] = (st.st_dev, st.st_ino)
+
+    def check(self, *paths):
+        st = os.lstat(self.name)
+        if (st.st_dev, st.st_ino) != self.ident or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() \
+                or st.st_mode & 0o077:
+            raise ValueError("the code-signing work directory %s was replaced or opened up" % self.name)
+        for p in paths:
+            st = os.lstat(p)
+            if (st.st_dev, st.st_ino) != self.files.get(p) or not stat.S_ISREG(st.st_mode):
+                raise ValueError("%s was replaced before codesign read it" % p)
+
+    def cleanup(self):
+        shutil.rmtree(self.name, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.cleanup()

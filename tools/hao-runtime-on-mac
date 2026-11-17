@@ -14,6 +14,7 @@ nothing else is there.
 import hashlib, json, os, shutil, stat, struct, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hao_codesig
 import hao_fat
 
 
@@ -104,7 +105,7 @@ def pin(data, want_sha):
 def real_dir(top, rel):
     """A descriptor of TOP/REL, each component opened through its parent's descriptor without following a link
     (made 0755 if missing); exits if one is a link or not a directory, or if someone else could rename or replace
-    entries in it (owned by another user, or writable by group or others without the sticky bit)."""
+    entries in it (owned by another user, writable by group or others, or an ACL granting write)."""
     fd = os.open(top, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     for part in rel.split('/'):
         try:
@@ -117,9 +118,9 @@ def real_dir(top, rel):
             sys.exit('hao-runtime-on-mac: %s/%s: a symbolic link or not a directory' % (top, rel))
         os.close(fd)
         fd = nfd
-        st = os.fstat(fd)
-        if st.st_uid != os.geteuid() or (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX):
-            sys.exit('hao-runtime-on-mac: %s/%s: others can replace what is written there' % (top, rel))
+        why = hao_codesig.dir_fd_unshared(fd, {os.geteuid()})
+        if why:
+            sys.exit('hao-runtime-on-mac: %s/%s: %s: others could replace what is written there' % (top, rel, why))
     return fd
 
 
