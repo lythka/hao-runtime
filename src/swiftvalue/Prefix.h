@@ -12,6 +12,7 @@
 #define collect_value_patches hao_sv_collect_value_patches
 #define collect_partial_patches hao_sv_collect_partial_patches
 #define settled_node hao_sv_settled_node
+#define guest_owned_type hao_sv_guest_owned_type
 #define collect_inline_patches hao_sv_collect_inline_patches
 #define discover_enum_case hao_sv_discover_enum_case
 #define discover_fixed_enum_case hao_sv_discover_fixed_enum_case
@@ -36,4 +37,6 @@
 #define holds_archdiff_memo hao_sv_holds_archdiff_memo
 #define holds_archdiff_remember hao_sv_holds_archdiff_remember
 #define native_frozen_type hao_sv_native_frozen_type
+#define native_resilient_type hao_sv_native_resilient_type
+#define native_type_place hao_sv_native_type_place
 #endif

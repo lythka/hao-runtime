@@ -1572,6 +1572,7 @@ static void trap_continuation_init(hao_thread *t, uint64_t arg)
  * swift_asyncLet_begin(alet, options, futureResultType, closureEntryPoint, closureContext, resultBuffer) */
 static void trap_task_entry(hao_thread *t, uint64_t arg)
 {
+    hao_swift_task_result((const void *)(uintptr_t)t->cpu.x[2], t->cpu.x[30]);   /* futureResultType */
     t->cpu.x[3] = task_entry(t->cpu.x[3], false);
     hao_thunk_native_args(t);
     t->native_calls++;

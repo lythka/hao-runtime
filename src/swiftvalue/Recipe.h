@@ -65,6 +65,11 @@ int collect_partial_patches(const void *type, const void *value, empty_patch *ou
  * *WHOLE says nothing below needs it. Anything not settled needs the walk
  * at a boundary (swiftvalue.c graph). */
 int settled_node(const void *type, int *whole);
+/* A guest-defined struct or enum whose copy, move and destroy witnesses are
+ * all guest code, or an Optional of one whose tag witnesses are guest code
+ * too: native code reaches its bytes only through them (walked as
+ * owner-opaque at a guest call of a native witness). */
+int guest_owned_type(const void *type);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
 /* The same, where each struct on an extra-inhabitant path (other than Array and String) must be one
  * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */

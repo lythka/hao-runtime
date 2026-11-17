@@ -185,7 +185,9 @@ static bool graph(builder *b, const void *type, unsigned depth)
     converts |= kind == 0x202 && translated_nil_type(type);   /* a spare-bit enum XI that differs (Data?) */
     b->converts |= converts;
     int whole = 0;
-    bool settled = settled_node(type,&whole);
+    /* At a guest call of a native witness, a guest type its own (guest)
+     * witnesses handle whole is the walk's owner-opaque class. */
+    bool settled = (b->existentials && guest_owned_type(type)) ? (whole = 1) : settled_node(type,&whole);
     bool affected = converts || !settled;
     if (whole && !converts) {
         /* nothing below needs looking at */
@@ -766,6 +768,35 @@ static int guest_layout(const void *type)
 /* For the walk (Tables.h): a listed type guest code lays out is a frozen one. */
 int native_frozen_type(const void *type) { return native_frozen(type); }
 
+/* A native struct positively resilient (Tables.h): the generator lists every
+ * frozen struct of each image build it covers (frozenstruct_gen.inc), so a
+ * struct of a covered build that it lists neither at its descriptor nor by
+ * name was not frozen in that module's interface. Absence alone proves
+ * nothing: an uncovered image, and any enum (the table lists structs only),
+ * are not resilient for hao. */
+static hao_gmap resilient_types = HAO_GMAP_INIT(2, 1, 6, 14);    /* nominal descriptor -> 1 resilient, 2 not proven */
+int native_resilient_type(const void *type)
+{
+    const void *const *m = type;
+    if (!type || (uintptr_t)m[0] != 0x200 || !m[1]) return 0;
+    uint64_t desc = (uint64_t)(uintptr_t)m[1];
+    const uint64_t *e = hao_gmap_get1(&resilient_types,desc);
+    if (e) return e[1] == 1;
+    char uuid[33];
+    uint64_t offset;
+    bool covered = false, listed = false;
+    if (native_type_place(type,uuid,&offset))
+        for (size_t k = 0; k < sizeof frozen_structs / sizeof *frozen_structs; ++k)
+            if (!strcmp(frozen_structs[k].uuid,uuid)) { covered = true; listed |= frozen_structs[k].offset == offset; }
+    bool resilient = covered && !listed && !native_frozen(type);
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim1(&resilient_types,desc,&fresh);
+    if (slot && fresh) { slot[1] = resilient ? 1 : 2; hao_gmap_publish1(&resilient_types,slot,desc); }
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    return resilient;
+}
+
 /* A guest struct built with layout-string value witnesses whose layout
  * depends on a resilient field (Foundation's UUID or Date) is laid out at
  * run time: its metadata completion function passes every field's metadata
@@ -826,6 +857,22 @@ bool hao_swift_native_result_to_guest(const void *type, void *value)
     unsigned before = t->swift_made_n;
     witness_to_guest(t,type,value,"native result has unresolved active representation",t->cpu.x[30],0);
     return t->swift_made_n != before;
+}
+
+/* swift_task_create or swift_asyncLet_begin with FUTURE, the result type
+ * (swiftmeta.c; LR the guest call). The child's guest code writes its result
+ * into the task, and the concurrency runtime copies and destroys it with the
+ * type's native witnesses before any boundary hao sees (a waiting task's
+ * copy, the task's release). A type whose values need certification is
+ * refused here, the earliest point hao sees: converting the result where the
+ * guest writes it is not done. */
+void hao_swift_task_result(const void *future, uint64_t lr)
+{
+    if (hao_opt.no_swift_values || !future) return;
+    int state = witness_state(future);
+    if (state == WITNESS_SETTLED) return;
+    decline(future,state == WITNESS_UNCERTIFIABLE ? "type graph past the walk's bounds" :
+            "child task result is copied by native code before it can be certified",NULL,NULL,future,lr,0);
 }
 
 /* The value witnesses (slots 0-5) of TYPE, a native struct or enum whose

@@ -71,6 +71,10 @@ static void nominals(reflection *r)
     r->single[4] = HAO_DLSYM("$s10ObjectiveC8SelectorVMn");   /* NULL until ObjectiveC is loaded */
 }
 static int guest_laid_listed(const void *type);
+static int guest_witnessed(reflection *r, const void *type);
+static int holds_archdiff(reflection *r, const void *type, unsigned depth);
+static int scalar_only(reflection *r, const void *type, unsigned depth);
+static int guest_tag_witnesses(reflection *r, const void *g);
 
 static const witnesses *vwt(const void *type)
 {
@@ -555,15 +559,17 @@ static int guest_laid_listed(const void *type)
     return archdiff_type(type) && native_frozen_type(type);
 }
 
-/* A native struct or enum its module did not freeze: guest code holds it
- * only through native witnesses, so nothing inline in it is guest-laid-out. */
+/* A native struct its module positively did not freeze (Tables.h
+ * native_resilient_type): guest code holds it only through native
+ * witnesses, so nothing inline in it is guest-laid-out. A native enum, or a
+ * struct of an image the table does not cover, has no such evidence. */
 static int native_opaque(reflection *r, const void *type)
 {
     uintptr_t kind = r->kind(type);
     const void *const *m = type;
-    if ((kind != 0x200 && kind != 0x201) || !m[1] || type == r->string || m[1] == r->array ||
+    if (kind != 0x200 || !m[1] || type == r->string || m[1] == r->array ||
         hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return 0;
-    return !native_frozen_type(type);
+    return native_resilient_type(type);
 }
 
 /* A nominal type with generic arguments (its context descriptor's generic flag). */
@@ -576,7 +582,7 @@ static int generic_nominal(const void *type)
     return (flags & 0x80) != 0;
 }
 
-/* A native struct or enum its module did not freeze and that has no generic
+/* A native struct positively resilient (native_opaque) with no generic
  * argument, or an Optional (of any depth) of one. Guest code cannot lay out
  * such a value or name its extra inhabitants: it is made and read only by
  * native witnesses (the Optional's ask the payload's), so every byte of it,
@@ -590,6 +596,62 @@ static int native_owned_opaque(reflection *r, const void *type)
         return native_opaque(r,type) && !generic_nominal(type);
     }
     return 0;
+}
+
+/* A type built of integers and floats only: Builtin integers and floats
+ * (no extra inhabitants, or under 8 bytes: Builtin.Int1), and structs,
+ * tuples, Optionals and enums (inline payloads) of them, POD throughout and
+ * holding no type declared differently on arm64 (a relaid one admitted).
+ * No reference, metatype, function or raw pointer: their inhabitants and
+ * spare bits are the ones that differ by architecture (a metatype's XI k is
+ * k on arm64 and 2k on x86_64). A scalar's inhabitants and spare bits are
+ * the same on both, so the compiler and the runtime lay out every enum of
+ * them alike, and a value is the same bytes on both whatever its case. */
+static int scalar_only(reflection *r, const void *type, unsigned depth)
+{
+    const witnesses *v = vwt(type);
+    const void *const *m = type;
+    if (depth > 16 || (v->flags & 0x10000) || v->size > 4096) return 0;
+    if (guest_laid_listed(type)) return hao_swift_relaid_type(type);
+    switch (r->kind(type)) {
+    case 0x300: return !v->extra || v->size < 8;
+    case 0x202: return m[2] && scalar_only(r,m[2],depth + 1);
+    case 0x200: case 0x301: {
+        intptr_t count = r->count(type);
+        if (count < 0 || count > 64) return 0;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type,i,&info);
+            if (info.free_name) info.free_name(info.name);
+            if (!child || !scalar_only(r,child,depth + 1)) return 0;
+        }
+        return 1;
+    }
+    case 0x201: {
+        const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
+        int n = enum_inline_payloads(type,payloads);
+        if (n < 0) return 0;
+        for (int i = 0; i < n; ++i) if (!scalar_only(r,payloads[i],depth + 1)) return 0;
+        return 1;
+    }
+    default: return 0;
+    }
+}
+
+int guest_owned_type(const void *type)
+{
+    reflection r = {
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
+    };
+    if (!type || !r.kind || !r.optional) return 0;
+    const void *const *m = type;
+    if (guest_witnessed(&r,type)) return 1;
+    return r.kind(type) == 0x202 && m[1] == r.optional && m[2] && vwt(type)->size == vwt(m[2])->size &&
+           guest_tag_witnesses(&r,m[2]) && guest_witnessed(&r,m[2]);
 }
 
 int settled_node(const void *type, int *whole)
@@ -607,11 +669,13 @@ int settled_node(const void *type, int *whole)
     const witnesses *v = vwt(type);
     const void *const *m = type;
     uintptr_t kind = r.kind(type);
+    /* A listed type is settled only where hao gave its native metadata the
+     * arm64 layout and verified it (Swift.Float16: src/swift.c). */
+    if (guest_laid_listed(type) && !hao_swift_relaid_type(type)) return 0;
     /* A POD of fewer than 8 bytes with no extra inhabitants holds no pointer
-     * and no nil: its bytes mean the same to both (also a listed type whose
-     * metadata hao gave its arm64 layout, Swift.Float16: src/swift.c). */
+     * and no nil: its bytes mean the same to both. */
     if (v->size < 8 && !(v->flags & 0x10000) && !v->extra) { *whole = 1; return 1; }
-    if (guest_laid_listed(type)) return 0;
+    if (scalar_only(&r,type,0)) { *whole = 1; return 1; }
     /* The walk's own rules for these (collect): no pointer word in fewer than 8 bytes; a native type its
      * module did not freeze, with no generic argument, and Optionals of it, made and read by native code only. */
     if (v->size < 8 || native_owned_opaque(&r,type)) { *whole = 1; return 1; }
@@ -736,7 +800,6 @@ static int other_kind(reflection *r, const void *type, uintptr_t kind)
  * count says on either architecture (hao_swift_struct_layout_done). Only for
  * that walk (r->existentials): a published value's native readers are not
  * shown to be G's witnesses. */
-static int guest_tag_witnesses(reflection *r, const void *g);
 static int guest_witnessed_optional(reflection *r, const void *type)
 {
     const void *const *m = type;
@@ -788,14 +851,46 @@ static int guest_witnessed(reflection *r, const void *type)
 #endif
 }
 
+/* An out-of-line existential value: the buffer's first word is a box
+ * (swift_allocBox: a HeapObject, then the value at the header size rounded
+ * up to its alignment). Copying the container only retains the box; but
+ * destroying or assigning it can release the last reference, and the
+ * runtime then destroys the value with the dynamic type's own witnesses. A
+ * box is shared storage no conversion may rewrite, so its value must need
+ * none: walked as the dynamic type, every nil in it reading alike on both
+ * architectures. */
+static int boxed_payload(reflection *r, const void *payload, const unsigned char *value, unsigned depth)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    const witnesses *pv = vwt(payload);
+    uint64_t box, word, mask = pv->flags & 255, at = (16 + mask) & ~mask;
+    memcpy(&box,value,8);
+    if (box < 4096 || (box & 7) || pv->size > 4096 || !hao_probe_read8(box,&word) ||
+        (pv->size && !hao_probe_read8(box + at + ((pv->size - 1) & ~(uint64_t)7),&word))) return 0;
+    empty_patch local[64];
+    unsigned n = 0;
+    r->boxed++;
+    int ok = collect(r,payload,(const unsigned char *)(uintptr_t)(box + at),0,local,64,&n,depth + 1);
+    r->boxed--;
+    if (!ok) return 0;
+    for (unsigned i = 0; i < n; ++i)
+        if (local[i].bits != local[i].receiver_bits || local[i].bits != local[i].arm_bits) return 0;
+    r->passes |= HAO_SV_PASS_OWNED;
+    return 1;
+#else
+    (void)r; (void)payload; (void)value; (void)depth;
+    return 0;
+#endif
+}
+
 /* The contents of a live existential (Metadata.h TargetExistentialTypeMetadata,
  * ExistentialMetadataImpl.h). Native code copying, assigning or destroying
  * the container calls the dynamic type's own witnesses on an inline value,
  * so a guest-encoded nil inside it reaches them as it is: the inline value is
  * walked as a value of the dynamic type, at the container's offset 0. Passed
- * as found: a class-bound container's object (the shared native domain's) and
- * an out-of-line value, whose buffer holds a box the native runtime allocated
- * and copies by retaining. */
+ * as found: a class-bound container's object (the shared native domain's),
+ * and an out-of-line value whose boxed contents need no conversion
+ * (boxed_payload). */
 static int existential_payload(reflection *r, const void *type, const unsigned char *value, uint64_t base,
                                empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
 {
@@ -810,7 +905,7 @@ static int existential_payload(reflection *r, const void *type, const unsigned c
 #endif
     const void *payload = (const void *)(uintptr_t)dynamic;
     const witnesses *pv = vwt(payload);
-    if (pv->flags & 0x00020000) { r->passes |= HAO_SV_PASS_OWNED; return 1; }   /* out of line: a native box */
+    if (pv->flags & 0x00020000) return boxed_payload(r,payload,value,depth);   /* out of line: a box */
     if (pv->size > 24) return 0;
     r->boxed++;
     int ok = collect(r,payload,value,base,out,capacity,used,depth + 1);
@@ -834,6 +929,11 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
      * holds no pointer, so no nil in it has a pointer extra inhabitant and
      * the case it is in cannot hide one: there is nothing to patch. */
     if (v->size < 8) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }
+    /* A guest type built of integers and floats only (scalar_only): the same
+     * bytes on both architectures, whatever its case. */
+    const void *const *gm = type;
+    if ((kind == 0x200 || kind == 0x201) && gm[1] && hao_image_for_addr((uint64_t)(uintptr_t)gm[1]) &&
+        scalar_only(r,type,0)) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }
     if ((kind == 0x302 || kind == 0x202) && function_value(r,type)) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }
     if (type == r->string) {
         empty_plan shape;

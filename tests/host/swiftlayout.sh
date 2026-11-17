@@ -25,7 +25,8 @@
 #    another XI count is ignored), the tables' lookups (T lookup), and native types of this host found in
 #    them: spare-bit enums walked by their rows; types declared differently on arm64 (archdiff_gen.inc)
 #    walked as before where resilient (guest code holds them only through native witnesses), refused
-#    where frozen (Float16: alone, in a tuple, as an Optional nil) unless inside a native unfrozen struct.
+#    where frozen (Float16: alone, in a tuple, as an Optional nil), also inside a native struct the
+#    frozen-struct table does not cover: an unlisted struct is no evidence of resilience.
 #    Where this host's image is not the build the tables describe, the program prints "T LABEL none" and
 #    that label's lines are skipped.
 # N. nils of standard pointer-word types (Set/Dictionary storage, Any, any P, AnyHashable, AnyObject, Swift
@@ -380,7 +381,7 @@ T Swift.Float16 archdiff s size=0
 W Swift.Float16 refused Float16
 W Swift.Float16 in a tuple refused (Int, Float16)
 W Swift.Float16 Optional nil refused Optional<Float16>
-W Swift.Float16 in a native unfrozen struct walk 0
+W Swift.Float16 in a native unfrozen struct refused Inline<Float16>
 W N Optional<Set<String>> nil walk 1 0:0>0
 W N Optional<Set<String>> some walk 0
 W N Optional<Optional<Set<String>>> outer nil walk 1 0:2>2

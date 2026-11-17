@@ -578,7 +578,7 @@ func listedType(_ label: String, _ path: String, _ uuid: String, _ offset: Int,
     let n = storage(meta(o), 0)
     fn(meta(o), 13, Inject.self)(n, 1, meta(o))   // Optional.none
     walkRaw("\(label) Optional nil", meta(o), n)
-    func unfrozen<T>(_: T.Type) -> Any.Type { Inline<T>.self }   // this program's own struct: not frozen
+    func unfrozen<T>(_: T.Type) -> Any.Type { Inline<T>.self }   // this program's own struct: not in the frozen-struct table's images
     let u = _openExistential(unsafeBitCast(m, to: Any.Type.self), do: unfrozen)
     let z = storage(meta(u), 0)
     fill(z + 8)
