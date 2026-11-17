@@ -98,6 +98,14 @@ static const char *env_get(hao_opts_t *o, char **envp, const char *name, int tie
     return NULL;
 }
 
+/* An on/off environment switch: on unless absent, empty or "0", so
+ * HAO_INTERP=0 does not turn the interpreter on. */
+static bool env_on(hao_opts_t *o, char **envp, const char *name, int tier)
+{
+    const char *v = env_get(o, envp, name, tier);
+    return v && v[0] && strcmp(v, "0");
+}
+
 void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *bootargs, bool pid1, int tier)
 {
     memset(o, 0, sizeof *o);
@@ -124,7 +132,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     }
     const char *v;
     if ((v = env_get(o, envp, "HAO_VERBOSE", tier))) o->verbose = atoi(v);
-    if (env_get(o, envp, "HAO_INTERP", tier)) o->interp = true;
+    if (env_on(o, envp, "HAO_INTERP", tier)) o->interp = true;
     if ((v = env_get(o, envp, "HAO_WATCHDOG", tier))) o->watchdog = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_JIT_CACHE_MB", tier)) && atoi(v) > 0) o->jit_cache_mb = (unsigned)atoi(v);
     if ((v = env_get(o, envp, "HAO_AOT_LIMIT_KB", tier)) && atoi(v) > 0) o->aot_limit_kb = (unsigned)atoi(v);
@@ -133,7 +141,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)
             name[4 + i] = (char)(knobs[k].name[i] >= 'a' && knobs[k].name[i] <= 'z' ? knobs[k].name[i] - 32 : knobs[k].name[i]);
-        if (env_get(o, envp, name, tier)) *(bool *)((char *)o + knobs[k].off) = true;
+        if (env_on(o, envp, name, tier)) *(bool *)((char *)o + knobs[k].off) = true;
     }
     if ((v = env_get(o, envp, "HAO_CACHE", tier))) snprintf(o->cache, sizeof o->cache, "%s", v);
     if ((v = env_get(o, envp, "HAO_GUEST_ROOT", tier))) snprintf(o->guest_root, sizeof o->guest_root, "%s", v);

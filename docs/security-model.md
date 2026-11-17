@@ -217,7 +217,8 @@ for the program.
 An embedded program runs with its own credentials and entitlements, and its
 environment comes from whoever started it. hao reads its `HAO_*` switches
 once, at startup, and honours them by how far the process's environment can
-be trusted:
+be trusted. An on/off switch is on when set to anything but an empty value
+or `0`.
 
 | Process | Switches honoured |
 |---|---|

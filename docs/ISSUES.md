@@ -1,5 +1,13 @@
 # Runtime issues and measured scope
 
+## On/off environment switches set to 0
+
+An on/off `HAO_*` switch was on whenever it was present, so `HAO_INTERP=0`
+or `HAO_NO_AOT=0` turned it on. An empty value and `0` now count as absent;
+any other value turns the switch on. Numeric switches (`HAO_VERBOSE`,
+`HAO_WATCHDOG`, ...) and boot arguments (`hao_<knob>=1` only) are unchanged.
+Test: `tests/aot/opts_test.c`.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
