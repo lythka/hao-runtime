@@ -209,6 +209,14 @@ def rows(path, stubpath):
 for p in m:
     assert rows(p, p)["dylibs.protected"] == "SAME", p
 assert rows("Library/Tools/prog", "usr/bin/prog")["dylibs.protected"] == "DIFF"
+# libhao named by any other path under /usr/lib/hao (here through ..) fails too
+src = os.path.join(sys.argv[3], "usr/bin/prog")
+arm = embed.arm_slice(open(src, "rb").read())
+stub = bytearray(open(os.path.join(sys.argv[2], m["usr/bin/prog"]["stub"]), "rb").read())
+at = stub.index(b"/usr/lib/hao/libhao.dylib\0")
+stub[at:at + 31] = b"/usr/lib/hao/../x/libhao.dylib\0"
+r = {f: v for f, v, *_ in g.compare(arm, bytes(stub), embed, src, x86)}
+assert r["dylibs.protected"] == "DIFF", r["dylibs.protected"]
 PY
 otool -arch x86_64 -l prog.emb | grep -A2 LC_RPATH | grep -q "path @executable_path/lib " &&
     pass "deps: the program's LC_RPATH is carried (hao's binder and native dlopens expand @rpath with it)" || bad "deps: no @executable_path/lib rpath in the stub"
