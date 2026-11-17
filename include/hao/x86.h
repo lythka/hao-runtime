@@ -61,9 +61,14 @@ typedef struct {
     uint8_t *end;
     bool overflow;  /* the buffer ran out */
     bool bad;       /* contract violation or displacement out of range (see top) */
+    bool count;     /* advance p over [start, end) as if emitting, write nothing */
 } xbuf;
 
 void xb_init(xbuf *b, void *mem, size_t size);
+/* A buffer that only measures: every encoder and patch computes what it would
+ * write at `at` (RIP and branch displacements included) and writes nothing,
+ * so the memory there may be live code or not writable. */
+void xb_init_count(xbuf *b, const void *at, size_t size);
 static inline size_t xb_len(const xbuf *b) { return (size_t)(b->p - b->start); }
 void xb_u8(xbuf *b, uint8_t v);
 void xb_u16(xbuf *b, uint16_t v);

@@ -749,7 +749,12 @@ static pending_cat *pend_cats;
 static size_t npend_cats, cap_pend_cats;
 static size_t npend_live;   /* atomic: entries not yet attached */
 static pthread_mutex_t pend_lock = PTHREAD_MUTEX_INITIALIZER;
-void hao_objc_fork_child(void) { pend_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+static void typestr_fork_child(void);
+void hao_objc_fork_child(void)
+{
+    pend_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    typestr_fork_child();
+}
 static uint64_t st_deferred, st_attached_late, st_late_classes;
 /* guest classes realized by the Swift runtime after registration, seen by
  * class_realized (written under pend_lock) */
@@ -1759,6 +1764,13 @@ static void enum_init(void)
 #define TYPESTR_MAX 1024
 static struct { uint64_t key, val; } typestr_tab[TYPESTR_TAB];
 uint64_t hao_objc_bool_strings, hao_objc_bool_unconverted;
+
+/* fork child: free the slots being made (as hao_vafmt_fork_child) */
+static void typestr_fork_child(void)
+{
+    for (uint32_t i = 0; i < TYPESTR_TAB; i++)
+        if (typestr_tab[i].key && !typestr_tab[i].val) typestr_tab[i].key = 0;
+}
 
 static uint64_t typestr_make(uint64_t a)
 {

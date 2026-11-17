@@ -373,6 +373,8 @@ void hao_guest_svc(hao_thread *t);
 void hao_signals_init(void);
 int hao_signal_raw_sigaction(int sig, const void *nsa, void *osa);   /* a guest svc sigaction(2) */
 void hao_signals_stats(void);
+void hao_signals_fork_child(void);   /* the disposition lock */
+void hao_vafmt_fork_child(void);     /* vafmt.c: constant formats being made */
 bool hao_signal_forward(int sig, siginfo_t *info, void *uc);
 /* on_fault gives up on a fault: SIG_DFL, the signal and SIGILL/SIGTRAP unblocked (also in the
  * context the kernel restores), a sent signal raised again: the default action is certain */
@@ -463,7 +465,7 @@ void hao_dsc_fork_child(void);
 /* gss.c: GSS-API calls and data with x86_64 pack(2) layouts (gss_gen.inc) */
 bool hao_gss_interpose(const char *name, uint64_t *addr);
 void hao_gss_fork_child(void);
-void hao_objc_fork_child(void);      /* objc.c: the deferred-category lock */
+void hao_objc_fork_child(void);      /* objc.c: the deferred-category lock, type strings being made */
 /* objc.c: categories deferred to Swift-runtime realization, attached since, classes realized so */
 void hao_objc_late_stats(uint64_t *deferred, uint64_t *attached, uint64_t *classes);
 /* swiftcc.c: x86_64 swifttailcc argument area (callee pop) of a guest async
