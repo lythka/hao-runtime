@@ -149,6 +149,10 @@ bool hao_env_switch_allowed(const char *name, int tier);
 /* Was this hao built with HAO_TEST_SWITCHES (a test or bring-up build,
  * never a release)? */
 extern const bool hao_test_switches;
+/* Was this hao built with HAO_SURVEY_BUILD (make SURVEY=1: a survey image's
+ * diagnostics build, never a release)? Only it and a test build honour
+ * hao_swift_value_audit. */
+extern const bool hao_survey_build;
 /* Is `name` one of the test switches (never read by a build without
  * HAO_TEST_SWITCHES)? */
 bool hao_env_test_switch(const char *name);

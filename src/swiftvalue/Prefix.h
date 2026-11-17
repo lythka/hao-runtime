@@ -40,4 +40,11 @@
 #define native_frozen_type hao_sv_native_frozen_type
 #define native_resilient_type hao_sv_native_resilient_type
 #define native_type_place hao_sv_native_type_place
+#define walk_fact_of hao_sv_walk_fact_of
+#define walk_fact_mangled hao_sv_walk_fact_mangled
+#define walk_fact_key hao_sv_walk_fact_key
+#define walk_fact_image hao_sv_walk_fact_image
+#define walk_facts_fork_child hao_sv_walk_facts_fork_child
+#define walk_facts_load hao_sv_walk_facts_load
+#define collect_audit_patches hao_sv_collect_audit_patches
 #endif

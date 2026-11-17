@@ -243,11 +243,48 @@ func typeAt(_ header: UnsafeRawPointer, _ offset: Int) -> UnsafeRawPointer? {
     return unsafeBitCast(fn, to: Access1.self)(0, meta(Int.self))
 }
 
+// F. Rows of the walk's facts table from a fixture: an unlisted Optional chain over a POINTER row read in the
+// encoding of the side that wrote it (FBox???.some(.none) is 2 on x86_64, arm64's FBox???.none); CONVERT
+// rows recognizing a case by its defined bits on a 9-byte value; an empty case whose mask is all zero, or
+// whose x86_64 mask is not what the type's witness defines, is refused; a REFUSE row on a small POD is
+// unsettled.
+final class FBox { let n: Int; init(_ n: Int) { self.n = n } }
+let fixtureRows = """
+type 11swiftlayout4FBoxC SAME POINTER 0
+type 11swiftlayout4FBoxC_SbtSgSg CONVERT
+image 11swiftlayout4FBoxC_SbtSgSg 0 000000000000000000 000000000000000000 000000000000000000 000000000000000000
+image 11swiftlayout4FBoxC_SbtSgSg 1 010000000000000000 ffffffffffffffff00 020000000000000000 ffffffffffffffff00
+type 11swiftlayout4FBoxC_s4Int8VtSgSg CONVERT
+image 11swiftlayout4FBoxC_s4Int8VtSgSg 0 000000000000000000 000000000000000000 000000000000000000 000000000000000000
+image 11swiftlayout4FBoxC_s4Int8VtSgSg 1 010000000000000000 000000000000000000 020000000000000000 ffffffffffffffff00
+type 11swiftlayout4FBoxC_s5UInt8VtSgSg CONVERT
+image 11swiftlayout4FBoxC_s5UInt8VtSgSg 0 000000000000000000 000000000000000000 000000000000000000 000000000000000000
+image 11swiftlayout4FBoxC_s5UInt8VtSgSg 1 010000000000000000 ffffffffffffffff00 020000000000000000 ffffffffffffffffff
+type s4Int8V REFUSE
+
+"""
+typealias Sourced = @convention(c) (UnsafeRawPointer, UnsafeRawPointer, UnsafeMutableRawPointer, UInt32,
+                                    UnsafeMutablePointer<UnsafeRawPointer?>, Int32, UnsafeRawPointer?,
+                                    UnsafeMutablePointer<UInt32>?) -> Int32
+typealias Settled = @convention(c) (UnsafeRawPointer, UnsafeMutablePointer<Int32>) -> Int32
+var sourced: Sourced? = nil
+var settled: Settled? = nil
+
 if CommandLine.arguments.count > 1 {
     guard let lib = dlopen(CommandLine.arguments[1], RTLD_NOW),
           let sym = dlsym(lib, "hao_sv_collect_empty_patches_detail") else { print("no libhao walker"); exit(2) }
     walker = unsafeBitCast(sym, to: Walk.self)
     if let s = dlsym(lib, "hao_sv_collect_survey_patches") { surveyor = unsafeBitCast(s, to: Walk.self) }
+    // Section F's fixture rows, before the first table lookup (a test build only: else F is skipped).
+    let facts = NSTemporaryDirectory() + "swiftlayout-\(getpid()).facts"
+    try? fixtureRows.write(toFile: facts, atomically: true, encoding: .utf8)
+    if let l = dlsym(lib, "hao_sv_walk_facts_load"), let v = dlsym(lib, "hao_sv_collect_value_patches"),
+       let n = dlsym(lib, "hao_sv_settled_node"),
+       unsafeBitCast(l, to: (@convention(c) (UnsafePointer<CChar>) -> Int32).self)(facts) == 1 {
+        sourced = unsafeBitCast(v, to: Sourced.self)
+        settled = unsafeBitCast(n, to: Settled.self)
+    }
+    unlink(facts)
     // The table entry points (a libhao without them prints no R or T line, and the script fails).
     if let fr = dlsym(lib, "hao_sv_discover_fixed_enum_case_row"), let at = dlsym(lib, "hao_sv_archdiff_type"),
        let mt = dlsym(lib, "hao_sv_mpenum_type"), let al = dlsym(lib, "hao_sv_archdiff_lookup"),
@@ -675,4 +712,97 @@ do {   // guest-made (arm64) nils: XI 0 and 1 of the arm64 layout
     fn(meta(t), 13, Inject.self)(p, 1, meta(t))
     walkRaw("N2 Data, 13 Optionals: outer nil (no arm64 encoding)", meta(t), p)
     p.deallocate()
+}
+
+// M. Inhabitants of two carriers the walk certifies by ABI rule. An existential metatype with a witness
+// table (`any NP.Type`: metadata word, table word) takes its inhabitants from the metadata word as a
+// thick metatype does: XI0 0, XI k k on arm64 and 2k on x86_64; also through a struct whose most-inhabited
+// field it is. A one-byte carrier whose inhabitants are byte values (Bool: 2...255; an enum with no
+// payload and N cases: N...255) gives the same byte on both, also as a struct's trailing field and under
+// SwiftUI's ToolbarItemGroup (its isEmpty Bool).
+struct MetaHolder { var t: any NP.Type; var n: Int }
+struct FlagTail { var n: Int; var on: Bool }
+enum Mode { case a, b, c }
+struct ModeTail { var n: Int; var m: Mode }
+struct G0: View { var body: some View { EmptyView() } }
+typealias TG0 = ToolbarItemGroup<G0>
+for (label, t) in [("anyNP.Type", (any NP.Type).self as Any.Type), ("MetaHolder", MetaHolder.self),
+                   ("FlagTail", FlagTail.self), ("ModeTail", ModeTail.self), ("TG0", TG0.self)] {
+    layout(label, t)
+    inhabitants(label, t, 3)
+}
+@inline(never) func mnils<T>(_ label: String, _ some: T) {
+    walk("M Optional<\(label)> nil", T?.none)
+    walk("M Optional<\(label)> some", T?.some(some))
+    walk("M Optional<Optional<\(label)>> outer nil", T??.none)
+    walk("M Optional<Optional<\(label)>> inner nil", T??.some(nil))
+    walk("M Optional<Optional<\(label)>> some", T??.some(some))
+}
+mnils("anyNP.Type", NPS.self as any NP.Type)
+mnils("MetaHolder", MetaHolder(t: NPS.self, n: 1))
+mnils("FlagTail", FlagTail(n: 1, on: true))
+mnils("ModeTail", ModeTail(n: 1, m: .c))
+mnils("TG0", ToolbarItemGroup { G0() })
+do {   // guest-made (arm64) nils of the metatype word: XI1 1
+    let t = MetaHolder??.self
+    let p = storage(meta(t), 0)
+    p.storeBytes(of: UInt64(1), as: UInt64.self)
+    walkRaw("M Optional<Optional<MetaHolder>> arm64 outer nil", meta(t), p)
+    p.deallocate()
+}
+
+// K. The facts table's key of a mangled name (Facts.c walk_fact_key): a private context's address removed.
+typealias KeyFn = @convention(c) (UnsafePointer<CChar>, UInt64, UnsafeMutablePointer<CChar>, UInt64) -> Int32
+if CommandLine.arguments.count > 1, let lib = dlopen(CommandLine.arguments[1], RTLD_NOW), let k = dlsym(lib, "hao_sv_walk_fact_key") {
+    let key = unsafeBitCast(k, to: KeyFn.self)
+    for name in ["7SwiftUI12$7ff82d37b2d0yXZ19ViewFactoryProtocol_pXp", "7SwiftUI15BoundInputsViewVSg",
+                 "7SwiftUI24MaterialActiveAppearanceV7$10a5c9350yXZ7StorageO", "Si"] {
+        var out = [CChar](repeating: 0, count: 256)
+        let ok = name.withCString { key($0, UInt64(strlen($0)), &out, 256) }
+        print("W K \(name) \(ok) \(String(cString: out))")
+    }
+}
+
+
+// F (see above): the fixture's rows, walked with the value's source: 2 guest storage, 4 native-made, 0 unknown.
+func walkSourced(_ label: String, _ type: Any.Type, _ bytes: [UInt8], _ source: Int32) {
+    guard let w = sourced else { return }
+    let m = meta(type)
+    let p = storage(m, 0x5a)
+    for (i, b) in bytes.enumerated() { p.storeBytes(of: b, toByteOffset: i, as: UInt8.self) }
+    var unresolved: UnsafeRawPointer? = nil
+    let n = w(m, p, patches, 64, &unresolved, source, nil, nil)
+    var line = "W F \(label) source=\(source) " + (n < 0 ? "refused" : "walk \(n)")
+    for i in 0..<max(0, Int(n)) {
+        let e = patches + 40 * i
+        line += " \(e.load(as: UInt64.self)):\(hex(e.load(fromByteOffset: 8, as: UInt64.self)))>\(hex(e.load(fromByteOffset: 16, as: UInt64.self)))~\(hex(e.load(fromByteOffset: 32, as: UInt64.self)))"
+    }
+    print(line)
+    p.deallocate()
+}
+func le(_ w: UInt64, _ extra: [UInt8] = []) -> [UInt8] { (0..<8).map { UInt8((w >> (8 * $0)) & 0xff) } + extra }
+if sourced == nil { print("T F none") } else {
+    let fb = FBox(1)
+    let live = UInt64(UInt(bitPattern: Unmanaged.passUnretained(fb).toOpaque()))
+    for source: Int32 in [4, 2, 0] {
+        walkSourced("FBox??? word 2", FBox???.self, le(2), source)   // native .some(.none), arm64 .none
+        walkSourced("FBox??? word 4", FBox???.self, le(4), source)   // native .none
+        walkSourced("FBox??? word 1", FBox???.self, le(1), source)   // arm64 .some(.none)
+        walkSourced("FBox??? word 0", FBox???.self, le(0), source)   // .some(.some(.none)) on both
+        walkSourced("FBox??? live", FBox???.self, le(live), source)
+    }
+    for source: Int32 in [4, 2] {
+        walkSourced("(FBox,Bool)?? word 2", (FBox, Bool)??.self, le(2, [0x5a]), source)
+        walkSourced("(FBox,Bool)?? word 1", (FBox, Bool)??.self, le(1, [0x5a]), source)
+        // low byte 2, upper bytes set: not the image's word, which defines all eight bytes: a payload
+        walkSourced("(FBox,Bool)?? word 0x100000002", (FBox, Bool)??.self, le(0x1_0000_0002, [0x5a]), source)
+        walkSourced("(FBox,Bool)?? live", (FBox, Bool)??.self, le(live, [1]), source)
+        walkSourced("(FBox,Int8)?? live (an empty case no bit proves)", (FBox, Int8)??.self, le(live, [0]), source)
+        walkSourced("(FBox,UInt8)?? live (a stale x86_64 mask)", (FBox, UInt8)??.self, le(live, [0]), source)
+    }
+    if let st = settled {
+        var whole: Int32 = 0
+        print("W F settled Int8 (REFUSE row) \(st(meta(Int8.self), &whole)) UInt8 (no row) \(st(meta(UInt8.self), &whole))")
+    }
+    withExtendedLifetime(fb) {}
 }

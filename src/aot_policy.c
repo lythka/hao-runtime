@@ -179,7 +179,8 @@ static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "H
  * a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
-                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", NULL};
+                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR",
+                                            "HAO_SWIFT_WALK_FACTS", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {
@@ -193,6 +194,12 @@ const bool hao_test_switches = true;
 const bool hao_test_switches = false;
 #endif
 
+#ifdef HAO_SURVEY_BUILD
+const bool hao_survey_build = true;
+#else
+const bool hao_survey_build = false;
+#endif
+
 bool hao_env_test_switch(const char *name) { return listed(test_switches, name); }
 
 /* Everything not listed above is OPEN only, because it does one of:
@@ -204,8 +211,9 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *    the untyped bridge or are refused, bridge.c), HAO_NATIVE_LIBCXX (guest code meets a libc++ with another
  *    std::string layout, runtime.c), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
- *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH (a Swift value hao cannot certify reaches native code,
- *    swiftvalue.c);
+ *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH and HAO_SWIFT_VALUE_AUDIT (a Swift value hao cannot certify
+ *    reaches native code, swiftvalue.c; the audit only in a SURVEY or test build, its boot argument in every
+ *    tier there, opts.c BOOT_SURVEY);
  *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the
  *    frame, signals.c), HAO_NO_PROBE, HAO_WATCHDOG (takes SIGALRM and exits 124), HAO_JIT_CACHE_MB.
  * A switch nobody listed is OPEN only too. SETUGID honours none: even an engine switch lets the caller slow a
@@ -213,6 +221,7 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
 bool hao_env_switch_allowed(const char *name, int tier)
 {
     if (!hao_test_switches && listed(test_switches, name)) return false;
+    if (!hao_survey_build && !hao_test_switches && !strcmp(name, "HAO_SWIFT_VALUE_AUDIT")) return false;
     if (tier <= HAO_ENV_OPEN) return true;
     return tier == HAO_ENV_GUARDED && (listed(engine_switches, name) || listed(diag_switches, name));
 }
