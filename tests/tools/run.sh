@@ -59,7 +59,7 @@ if [ "$(cat "$d/victim" "$d/victim2")" = "$(printf 'victim\nvictim')" ] && [ ! -
     pass "-o: a symlink at the output is replaced, not written through; no fixed temporary name is used"
 else bad "-o through a symlink: $(cat "$d/out.log"; cat "$d/victim" "$d/victim2"; ls -la "$d")"; fi
 # --- launch constraints (signature slots 8-11) go into the stub's signature byte for byte; one codesign cannot
-# express (a category constraint) refuses the program unless it is on --allow-dropped-constraints
+# express (a category constraint) refuses the program unless --allow-dropped-constraints pins that blob
 d=$OUT/lc; rm -rf "$d"; mkdir -p "$d"
 printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>is-init-proc</key><true/></dict></plist>\n' >"$d/parent.plist"
 cp "$G" "$d/carried"; codesign -s - -f --launch-constraint-parent "$d/parent.plist" "$d/carried" 2>/dev/null
@@ -77,12 +77,24 @@ open(sys.argv[3], 'wb').write(hao_codesig.bind_special_slots(bytes(out), {9: cat
 PY
 "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$d/carried.emb" "$d/carried" >"$d/a.log" 2>&1
 "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" -o "$d/category.emb" "$d/category" >"$d/b.log" 2>&1; rb=$?
-echo "$d/category" >"$d/allow"
+# pins: PATH parent CDHASH SHA256 for FILE (the arm slice's cdhash, the parent constraint blob's sha256)
+pin() { python3 -I -c 'import hashlib, sys
+sys.path.insert(0, sys.argv[1])
+import hao_codesig, hao_fat
+sl = {c: p for c, _, p in hao_fat.slices(open(sys.argv[3], "rb").read())}
+b = hao_codesig.constraints(sl[hao_fat.CPU_ARM64])[9]
+print(sys.argv[2], "parent", hao_codesig.check(sl[hao_fat.CPU_ARM64])["cdhash"].hex(), sys.argv[4] if len(sys.argv) > 4 else hashlib.sha256(b).hexdigest())' "$repo/tools" "$@"; }
+pin "$d/category" "$d/category" "$(printf '0%.0s' $(seq 64))" >"$d/allow.wrong"
+"$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" --allow-dropped-constraints "$d/allow.wrong" -o "$d/wrong.emb" "$d/category" >"$d/w.log" 2>&1; rw=$?
+pin "$d/category" "$d/category" >"$d/allow"
 "$repo/tools/hao-embed" --host-test --stub "$B/hao-stub" --allow-dropped-constraints "$d/allow" -o "$d/dropped.emb" "$d/category" >"$d/c.log" 2>&1; rc=$?
+pin "$d/dropped.emb" "$d/category" >"$d/gate.allow"
 python3 -I "$repo/tools/stub_identity_gate.py" --host-test "$d/carried.emb" >"$d/gate.log" 2>&1; rg=$?
 python3 -I "$repo/tools/stub_identity_gate.py" --host-test "$d/dropped.emb" >"$d/gate2.log" 2>&1; rg2=$?
+python3 -I "$repo/tools/stub_identity_gate.py" --host-test --dropped-constraints "$d/gate.allow" "$d/dropped.emb" >"$d/gate3.log" 2>&1; rg3=$?
 if python3 -I - "$repo/tools" "$d/carried.emb" "$d/dropped.emb" <<'PY' && [ $rb = 1 ] && grep -q "parent constraint codesign cannot carry" "$d/b.log" && [ $rc = 0 ] \
-    && [ $rg = 0 ] && [ $rg2 = 1 ] && grep -q "sig.constraint-parent.*DIFF\|DIFF.*sig.constraint-parent" "$d/gate2.log"; then
+    && [ $rw = 1 ] && grep -q "does not name that blob" "$d/w.log" \
+    && [ $rg = 0 ] && [ $rg2 = 1 ] && grep -q "sig.constraint-parent.*DIFF\|DIFF.*sig.constraint-parent" "$d/gate2.log" && [ $rg3 = 0 ]; then
 import sys
 sys.path.insert(0, sys.argv[1])
 import hao_codesig, hao_fat
@@ -91,8 +103,8 @@ for f, want in ((sys.argv[2], True), (sys.argv[3], False)):
     arm, x86 = hao_codesig.constraints(sl[hao_fat.CPU_ARM64]), hao_codesig.constraints(sl[hao_fat.CPU_X86_64])
     assert set(arm) == {9} and (x86 == arm) == want and (x86 == {}) != want, (f, arm, x86)
 PY
-    pass "launch constraints: a parent constraint is sealed into the stub byte for byte; a category constraint refuses the program unless allowed, then is left out (the gate: SAME, DIFF without the manifest)"
-else bad "launch constraints: rb $rb rc $rc gate $rg $rg2: $(cat "$d/a.log" "$d/b.log" "$d/c.log"; grep constraint "$d/gate.log" "$d/gate2.log")"; fi
+    pass "launch constraints: a parent constraint is sealed into the stub byte for byte; a category constraint refuses the program unless its blob is pinned (another digest is refused), then is left out; the gate: SAME, DIFF unless the release list pins it"
+else bad "launch constraints: rb $rb rc $rc rw $rw gate $rg $rg2 $rg3: $(cat "$d/a.log" "$d/b.log" "$d/c.log" "$d/w.log"; grep constraint "$d/gate.log" "$d/gate2.log" "$d/gate3.log")"; fi
 d=$OUT/links
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/x" --scan >/dev/null 2>"$d/scan.err"
 grep -q "needs --root" "$d/scan.err" && pass "--scan without --root: usage error" || bad "--scan without --root: $(cat "$d/scan.err")"

@@ -128,9 +128,11 @@ the stub's. Each one the arm slice seals is given to codesign and must come
 out of it byte for byte. codesign can express only a constraint of
 requirements (category 0); a program with any other (a category constraint,
 such as a platform-only self constraint) is refused unless it is listed in
---allow-dropped-constraints FILE, and then embedded without it. The
-manifest's "constraints" records which slots were carried and which dropped;
-tools/stub_identity_gate.py compares them.
+--allow-dropped-constraints FILE ("PATH SLOT CDHASH SHA256": that slot of
+that program, with that arm slice cdhash and that constraint blob), and then
+embedded without it. The manifest's "constraints" records which slots were
+carried and which dropped (with their pins); tools/stub_identity_gate.py
+compares the slots against the same file, not the manifest.
 
 --in-place keeps the file's inode: every hard link to it is embedded too.
 A symlink is refused (embed the file it names).
@@ -962,11 +964,10 @@ def save_skeleton(linked, sections, key):
         if cmd == 0x1B and size >= 24:
             mo[off + 8:off + 24] = bytes(16)
     d = SKELETONS["save"]
-    with open(os.path.join(d, key + ".skel"), "wb") as f:
-        f.write(mo)
-    with open(os.path.join(d, key + ".json"), "w") as f:
-        json.dump({"sections": sorted([seg, name, off, size] for (seg, name), (off, size) in ranges.items())},
-                  f, sort_keys=True)
+    d.publish(key + ".skel", bytes(mo))
+    d.publish(key + ".json", json.dumps(
+        {"sections": sorted([seg, name, off, size] for (seg, name), (off, size) in ranges.items())},
+        sort_keys=True).encode())
 
 
 def fill_skeleton(sections, key, out):
@@ -1146,14 +1147,38 @@ def constraint_options(arm, work):
     return opts, have, carried, dropped
 
 
-def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=False):
+def read_dropped(path):
+    """{program path: {(slot name, arm cdhash hex, constraint sha256)}} from a --allow-dropped-constraints file:
+    one constraint per line, "PATH SLOT CDHASH SHA256" (# comments). A line names exactly one blob of one build
+    of one program; nothing else may be left out. ValueError for a malformed line."""
+    out = {}
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            w = line.split()
+            if len(w) != 4 or w[1] not in hao_codesig.CONSTRAINT_SLOTS.values() or len(w[2]) != 40 or len(w[3]) != 64 \
+                    or (w[2] + w[3]).strip("0123456789abcdef"):
+                raise ValueError(f"{path}:{n}: not PATH SLOT CDHASH SHA256")
+            out.setdefault(w[0], set()).add((w[1], w[2], w[3]))
+    return out
+
+
+def constraint_pin(arm, slot, blob):
+    """(slot name, the arm slice's cdhash, the constraint blob's sha256): what a dropped-constraints line names."""
+    return hao_codesig.CONSTRAINT_SLOTS[slot], hao_codesig.check(bytes(arm))["cdhash"].hex(), hashlib.sha256(blob).hexdigest()
+
+
+def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset()):
     """Sign a copy of the stub as SRC's identity; returns (path, identifier,
     entitlement keys, bound, deps, constraints) with bound from bound_data (the
     slots set), deps (links, skipped) from native_deps and constraints
     (carried, dropped) the launch and library constraint slots: the arm
     slice's constraints are sealed into the stub byte for byte (checked after
     signing); one codesign cannot express is refused unless DROP_OK (the
-    program is on --allow-dropped-constraints), then left out. With DATA the stub is always
+    program's lines of --allow-dropped-constraints) names it (constraint_pin),
+    then left out; dropped holds those pins. With DATA the stub is always
     relinked: it links the program's native dependencies (X86, an
     X86Libraries), gets its own LC_UUID (stub_uuid) and the arm slice's
     load-time identity (apply_identity; a load command no rule names is
@@ -1192,9 +1217,11 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=False):
     # Launch and library constraints: the kernel evaluates the stub's signature, not the arm slice's, so the
     # program's constraints go into the stub's (or the program is refused).
     lc, have, carried, dropped = constraint_options(arm, work)
-    if dropped and not drop_ok:
-        raise RuntimeError("its signature has a %s constraint codesign cannot carry into the stub (not on "
-                           "--allow-dropped-constraints)" % ", ".join(hao_codesig.CONSTRAINT_SLOTS[k] for k in dropped))
+    dropped = [constraint_pin(arm, k, have[k]) for k in dropped]
+    if any(d not in drop_ok for d in dropped):
+        raise RuntimeError("its signature has a %s constraint codesign cannot carry into the stub, and "
+                           "--allow-dropped-constraints does not name that blob of this build" % ", ".join(
+                               d[0] for d in dropped if d not in drop_ok))
     r = subprocess.run(["codesign", "-s", "-", "-f", "-i", ident] + (["-o", ",".join(opts)] if opts else []) +
                        lc + ["--entitlements", entfile, copy], capture_output=True, text=True)
     if r.returncode != 0:
@@ -1222,15 +1249,64 @@ def x86_cache_dir(a):
              ("" if a.x86_cache else " (give --x86-cache DIR: the release's RosettaOS or OS cryptex dyld directory)"))
 
 
+class OutDir:
+    """An output directory used only through a descriptor (opened without following a link at its last
+    component; made if missing): files go in through publish, so renaming or replacing the directory's path
+    changes nothing written. Refused (RuntimeError) if someone else could rename or replace its entries: owned
+    by neither this user nor root, or writable by group or others without the sticky bit."""
+
+    def __init__(self, path, parent=None):
+        if parent is None:
+            os.makedirs(path, exist_ok=True)
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        else:
+            try:
+                os.mkdir(path, 0o755, dir_fd=parent.fd)
+            except FileExistsError:
+                pass
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+        st = os.fstat(fd)
+        if st.st_uid not in (0, os.geteuid()) or (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX):
+            os.close(fd)
+            raise RuntimeError(f"{path}: others can replace what is written there (owner {st.st_uid}, "
+                               f"mode {st.st_mode & 0o7777:o})")
+        self.fd, self.path = fd, path
+
+    def publish(self, name, data, mode=0o644, owner=None):
+        """DATA as NAME: a new file created exclusively here (no link followed) with MODE (and OWNER, a
+        (uid, gid), when root), renamed over NAME, which is replaced, never written through."""
+        if not name or "/" in name or name in (".", ".."):
+            raise RuntimeError(f"bad output name {name!r}")
+        while True:
+            tmp = ".hao-embed.%s" % os.urandom(6).hex()
+            try:
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd)
+                break
+            except FileExistsError:
+                continue
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                if owner is not None and os.geteuid() == 0:
+                    os.fchown(f.fileno(), *owner)
+                os.fchmod(f.fileno(), mode)
+            os.rename(tmp, name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=self.fd)
+            except OSError:
+                pass
+            raise
+
+
 def write_like(dst, data, like, in_place=False):
     """Write DATA to DST with LIKE's owner and mode. In place (DST is LIKE)
     the inode is kept, so other hard links see the embedded file too; a
     symlink is refused rather than replaced by a copy, and the file is
-    opened without following one. Otherwise DATA goes to a new file created
-    exclusively in a new private directory beside DST (mkdtemp: an
-    unpredictable name, mode 0700), gets LIKE's owner and mode there, and is
-    renamed over DST: DST is replaced, never written through, and no fixed
-    name in DST's directory is ever opened."""
+    opened without following one. Otherwise DATA is published into DST's
+    directory (OutDir: through a descriptor, a new file created exclusively
+    and renamed over DST, which is replaced, never written through; a
+    directory others could rename entries in is refused)."""
     if in_place and os.path.islink(dst):
         raise RuntimeError("is a symlink; embed the file it names")
     st = os.stat(like)
@@ -1244,18 +1320,11 @@ def write_like(dst, data, like, in_place=False):
             f.flush()
             os.fsync(f.fileno())
         return
-    work = tempfile.mkdtemp(prefix=".hao-embed.", dir=os.path.dirname(os.path.abspath(dst)))
+    out = OutDir(os.path.dirname(os.path.abspath(dst)))
     try:
-        tmp = os.path.join(work, "out")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            if os.geteuid() == 0:
-                os.fchown(f.fileno(), st.st_uid, st.st_gid)
-            os.fchmod(f.fileno(), st.st_mode & 0o7777)
-        os.rename(tmp, dst)
+        out.publish(os.path.basename(dst), data, st.st_mode & 0o7777, (st.st_uid, st.st_gid))
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        os.close(out.fd)
 
 
 def main():
@@ -1281,8 +1350,8 @@ def main():
     ap.add_argument("--require-embedded", action="store_true",
                     help="with --stubs: every manifest entry is required")
     ap.add_argument("--allow-dropped-constraints", metavar="FILE",
-                    help="programs (one per line, relative to --root or as given; # comments) whose launch "
-                         "constraint codesign cannot carry may be embedded without it")
+                    help="constraints codesign cannot carry that may be left out: one per line, PATH (relative "
+                         "to --root, or as given) SLOT CDHASH (the arm slice's) SHA256 (the constraint blob's)")
     ap.add_argument("--x86-cache", metavar="DIR",
                     help="directory of the dyld_shared_cache_x86_64 the stubs run with (default: with --stubs, "
                          "the one under --root; otherwise this host's)")
@@ -1293,18 +1362,19 @@ def main():
                     help="fill the skeletons in DIR from each program instead of running ld")
     ap.add_argument("programs", nargs="*")
     a = ap.parse_args()
-    if a.save_skeletons:
-        os.makedirs(a.save_skeletons, exist_ok=True)
-    SKELETONS["save"], SKELETONS["use"] = a.save_skeletons, a.skeletons
+    try:
+        SKELETONS["save"], SKELETONS["use"] = OutDir(a.save_skeletons) if a.save_skeletons else None, a.skeletons
+    except (OSError, RuntimeError) as e:
+        sys.exit(f"hao-embed: --save-skeletons: {e}")
     if not os.path.exists(a.stub):
         sys.exit(f"hao-embed: no stub at {a.stub} (run make)")
     if a.scan and not a.root:
         sys.exit("hao-embed: --scan needs --root")
     _, inputs = build_inputs(a.stub)
-    drop_ok = set()
-    if a.allow_dropped_constraints:
-        with open(a.allow_dropped_constraints) as f:
-            drop_ok = {l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")}
+    try:
+        drop_ok = read_dropped(a.allow_dropped_constraints) if a.allow_dropped_constraints else {}
+    except (OSError, ValueError) as e:
+        sys.exit(f"hao-embed: --allow-dropped-constraints: {e}")
     progs = list(a.programs)
     if a.list:
         progs += [l.strip() for l in open(a.list) if l.strip()]
@@ -1315,7 +1385,11 @@ def main():
     if a.stubs:
         if not a.root:
             sys.exit("hao-embed: --stubs needs --root")
-        os.makedirs(os.path.join(a.stubs, "stubs"), exist_ok=True)
+        try:
+            stubs_out = OutDir(a.stubs)
+            stubs_sub = OutDir("stubs", stubs_out)
+        except (OSError, RuntimeError) as e:
+            sys.exit(f"hao-embed: --stubs: {e}")
     x86 = X86Libraries(x86_cache_dir(a), a.root if a.stubs else "/") if progs else None
     manifest, bad, seen = [], 0, {}
     for p in progs:
@@ -1338,7 +1412,7 @@ def main():
                     continue
                 translate = hao_fat.has_cpu(data, hao_fat.CPU_X86_64)
                 rel = os.path.relpath(os.path.realpath(p), os.path.realpath(a.root)) if a.root else None
-                may_drop = bool({p, os.path.realpath(p), rel} & drop_ok)
+                may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, os.path.realpath(p), rel}))
                 stub, ident, keys, bound, (links, skipped), (carried, dropped) = signed_stub(
                     p, a.stub, work, a.host_test, data, x86, may_drop)
                 stub_bytes = open(stub, "rb").read()
@@ -1348,8 +1422,7 @@ def main():
                     if rel.startswith(".."):
                         raise RuntimeError(f"not under {a.root}")
                     name = hashlib.sha256(rel.encode()).hexdigest()[:24] + ".stub"
-                    with open(os.path.join(a.stubs, "stubs", name), "wb") as f:
-                        f.write(stub_bytes)
+                    stubs_sub.publish(name, stub_bytes)
                     entry = {"path": rel, "identifier": ident, "stub": "stubs/" + name,
                              "stub_sha256": hashlib.sha256(stub_bytes).hexdigest(),
                              "source_sha256": hashlib.sha256(data).hexdigest(),
@@ -1371,7 +1444,7 @@ def main():
                         entry["bound"].append(b)
                     if carried or dropped:
                         entry["constraints"] = {"carried": [hao_codesig.CONSTRAINT_SLOTS[k] for k in carried],
-                                                "dropped": [hao_codesig.CONSTRAINT_SLOTS[k] for k in dropped]}
+                                                "dropped": [{"slot": n, "cdhash": c, "sha256": h} for n, c, h in dropped]}
                     if translate:
                         entry["mode"] = "translate"
                     manifest.append(entry)
@@ -1387,7 +1460,7 @@ def main():
                       (f" (not {len(skipped)})" if skipped else "") +
                       "".join(f"\tbound -{slot} {os.path.basename(bsrc)}" for slot, bsrc, _ in bound) +
                       (f"\tconstraints {','.join(hao_codesig.CONSTRAINT_SLOTS[k] for k in carried) or '-'}" +
-                       (f" (dropped {','.join(hao_codesig.CONSTRAINT_SLOTS[k] for k in dropped)})" if dropped else "")
+                       (f" (dropped {','.join(d[0] for d in dropped)})" if dropped else "")
                        if carried or dropped else ""))
             except (OSError, RuntimeError, ValueError) as e:
                 print(f"fail\t{p}\t{e}")
@@ -1395,11 +1468,10 @@ def main():
     if a.stubs:
         required = a.require + ([e["path"] for e in manifest] if a.require_embedded else [])
         required = list(dict.fromkeys(required))
-        with open(os.path.join(a.stubs, "manifest.json"), "w") as f:
-            json.dump({"stub_sha256": sha256_file(a.stub), "x86_cache_uuid": x86.uuid if x86 else None,
-                       "inputs_sha256": {k: sha256_file(v) for k, v in inputs.items()},
-                       "required": required, "files": manifest}, f, indent=1)
-            f.write("\n")
+        stubs_out.publish("manifest.json", (json.dumps(
+            {"stub_sha256": sha256_file(a.stub), "x86_cache_uuid": x86.uuid if x86 else None,
+             "inputs_sha256": {k: sha256_file(v) for k, v in inputs.items()},
+             "required": required, "files": manifest}, indent=1) + "\n").encode())
     return 1 if bad else 0
 
 

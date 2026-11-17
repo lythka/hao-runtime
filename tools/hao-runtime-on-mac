@@ -102,27 +102,41 @@ def pin(data, want_sha):
 
 
 def real_dir(top, rel):
-    """TOP/REL, made a directory if missing, after checking that neither it nor a directory between TOP and it is a
-    symbolic link or anything but a directory."""
-    p = top
+    """A descriptor of TOP/REL, each component opened through its parent's descriptor without following a link
+    (made 0755 if missing); exits if one is a link or not a directory, or if someone else could rename or replace
+    entries in it (owned by another user, or writable by group or others without the sticky bit)."""
+    fd = os.open(top, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     for part in rel.split('/'):
-        p = os.path.join(p, part)
-        if not os.path.lexists(p):
-            os.mkdir(p, 0o755)
-        if not stat.S_ISDIR(os.lstat(p).st_mode):
-            sys.exit('hao-runtime-on-mac: %s is a symbolic link or not a directory' % p)
-    return p
+        try:
+            os.mkdir(part, 0o755, dir_fd=fd)
+        except FileExistsError:
+            pass
+        try:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            sys.exit('hao-runtime-on-mac: %s/%s: a symbolic link or not a directory' % (top, rel))
+        os.close(fd)
+        fd = nfd
+        st = os.fstat(fd)
+        if st.st_uid != os.geteuid() or (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX):
+            sys.exit('hao-runtime-on-mac: %s/%s: others can replace what is written there' % (top, rel))
+    return fd
 
 
-def publish(data, dst, mode, work):
-    """DATA to DST: written to a new file in WORK (created exclusively, in a directory only this user can open),
-    then renamed over DST, so DST is replaced, never written through (a symbolic link there is replaced, not
-    followed)."""
-    fd, tmp = tempfile.mkstemp(dir=work)
+def publish(data, dfd, name, mode):
+    """DATA as NAME in the directory DFD: a new file created there exclusively (no link followed), renamed over
+    NAME, which is replaced, never written through (a symbolic link there is replaced, not followed)."""
+    while True:
+        tmp = '.on-mac.%s' % os.urandom(6).hex()
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+            break
+        except FileExistsError:
+            continue
     with os.fdopen(fd, 'wb') as f:
         f.write(data)
         os.fchmod(f.fileno(), mode)
-    os.replace(tmp, dst)
+    os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
 
 
 def inventory(pay, files):
@@ -182,7 +196,8 @@ def main(argv):
         out = os.path.join(work, 'embed')
         drop = os.path.join(work, 'dropped-constraints')   # the payload build's decision, from its manifest
         with open(drop, 'w') as f:
-            f.write(''.join(e['path'] + '\n' for e in embed['files'] if e.get('constraints', {}).get('dropped')))
+            f.write(''.join('%s %s %s %s\n' % (e['path'], d['slot'], d['cdhash'], d['sha256'])
+                            for e in embed['files'] for d in e.get('constraints', {}).get('dropped', [])))
         cmd = [sys.executable, '-I', os.path.join(top, 'tools', 'hao-embed'), '--stub', os.path.join(top, 'build', 'hao-stub'),
                '--stubs', out, '--root', root, '--x86-cache', x86, '--skeletons', os.path.join(pay, 'embed', 'skeletons'),
                '--require', 'sbin/launchd', '--require', 'usr/libexec/xpcproxy', '--allow-dropped-constraints', drop,
@@ -195,16 +210,14 @@ def main(argv):
             sys.stderr.write(''.join(fails[:10] or lines[-5:]))
             sys.exit('hao-runtime-on-mac: hao-embed failed (exit %d, %d programs)' % (rc, len(fails)))
         stubs = real_dir(pay, 'embed/stubs')
-        stage = os.path.join(work, 'stage')
-        os.mkdir(stage, 0o700)
         pinned = 0
         for n in sorted(os.listdir(os.path.join(out, 'stubs'))):
-            src, dst = os.path.join(out, 'stubs', n), os.path.join(stubs, n)
+            src = os.path.join(out, 'stubs', n)
             want = manifest['files'].get('embed/stubs/' + n)
             data = open(src, 'rb').read()
             fixed = pin(data, want) if want else data
             pinned += fixed is not data
-            publish(fixed, dst, os.stat(src).st_mode & 0o777, stage)
+            publish(fixed, stubs, n, os.stat(src).st_mode & 0o777)
         if 'replace/dyld' not in manifest['files']:
             return finish(pay, manifest, pinned)
         replace = real_dir(pay, 'replace')
@@ -219,7 +232,7 @@ def main(argv):
         data = open(made, 'rb').read()
         fixed = pin(data, want) if want else data
         pinned += fixed is not data
-        publish(fixed, os.path.join(replace, 'dyld'), os.stat(made).st_mode & 0o777, stage)
+        publish(fixed, replace, 'dyld', os.stat(made).st_mode & 0o777)
         return finish(pay, manifest, pinned)
     finally:
         shutil.rmtree(work, ignore_errors=True)
