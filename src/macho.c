@@ -939,19 +939,7 @@ hao_image *hao_image_sealed_at(uint64_t a, size_t n)
 
 bool hao_image_sealed_cas(uint64_t a, uint64_t expected, uint64_t desired)
 {
-    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-    uint64_t pg = a & ~(PAGE - 1), pe = (a + 8 + PAGE - 1) & ~(PAGE - 1);
-    pthread_mutex_lock(&lock);
-    bool ok = !mprotect((void *)(uintptr_t)pg, pe - pg, PROT_READ | PROT_WRITE);
-    if (ok) {
-        ok = __atomic_compare_exchange_n((uint64_t *)(uintptr_t)a, &expected, desired, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-        if (mprotect((void *)(uintptr_t)pg, pe - pg, PROT_READ)) {
-            fprintf(stderr, "hao: sealed guest data at %#llx cannot be made read-only again; stopping\n", (unsigned long long)a);
-            abort();
-        }
-    }
-    pthread_mutex_unlock(&lock);
-    return ok;
+    return hao_guest_cas_ro(a, expected, desired);   /* code.c: one guest write at a time, fork-safe */
 }
 
 bool hao_island_reserve;

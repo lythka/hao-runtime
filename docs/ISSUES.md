@@ -136,7 +136,17 @@ by page: the page's protection is read, the page is writable for the
 copy only and gets that protection back (a poisoned `HAO_CODE_ALIAS`
 page stays `PROT_NONE`). A page that cannot be made writable is reported
 and the write refused; one that cannot be made read-only again stops the
-process. The patches are applied before any of the image's code runs
+process. These writes, the sealed-data stores of blocks.c and the Swift
+metadata field rewrites of swiftmeta.c go through one writer in code.c
+(`hao_guest_write_begin`/`_end`), one at a time, which reads a page's
+protection under its lock and records the interval it made writable: a
+fork child gives that interval its protection back and frees the lock
+(`hao_code_fork_child`; before, a fork during such a write left the
+page writable and the lock held in the child). A fork during
+`hao_wx_region` leaves at most a region that is read/write and not
+executable, or read/execute with no memory entry, which nothing in the
+child writes. The fork-lock audit script of another branch
+(tests/host/fork_locks.py) is not in this tree. The patches are applied before any of the image's code runs
 and an image patched this way gets no AOT cache. Test: `test_macho`
 (page read-only again at the guest address and in the alias, a patch
 across a page boundary, an unmapped page refused). Limits: guest
