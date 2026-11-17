@@ -86,6 +86,8 @@ import sys
 import tempfile
 import unicodedata
 
+# run from the payload it installs: importing its helpers must not write __pycache__ into it (an unlisted file)
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hao_codesig  # noqa: E402
 import hao_fat  # noqa: E402
