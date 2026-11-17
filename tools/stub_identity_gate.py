@@ -390,6 +390,24 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
         ok = all(any(d == x for x in it) for d in sdeps)
         add("dylibs", ok, f"{len(adeps)} in the arm slice", f"{len(sdeps)} linked",
             "a subsequence of the arm slice's, same kind and versions")
+    # what dyld loads into the stub before hao sets CS_REQUIRE_LV: libhao and libhao_identity through the stub's
+    # own first rpath (/usr/lib/hao), and native libraries from protected storage only (hao-embed
+    # X86Libraries.unprotected); anything else must be left to hao's binder
+    own_dirs = [r for r in sr if r not in ar] if stub_own_rpaths is None else stub_own_rpaths
+    if not host_test:
+        bad_own = [d[1] for d in stub_deps if d not in sdeps and not (
+            d[1] in own_names and own_dirs[:1] == ["/usr/lib/hao"] or d[1].startswith("/usr/lib/hao/"))]
+    else:
+        bad_own = []
+    if x86 is not None and src_path:
+        exe = os.path.realpath(src_path)
+        bad_deps = [n for _, n, _, _ in sdeps if x86.unprotected(n, exe, embed.macho_rpaths_mo(arm))]
+    else:
+        bad_deps = [n for _, n, _, _ in sdeps
+                    if not (n.startswith(embed.PROTECTED_TREES) and not n.startswith("/usr/local/"))]
+    add("dylibs.protected", not bad_own and not bad_deps, f"{len(sdeps)} native",
+        ";".join(bad_own + bad_deps) or "all protected",
+        "load-time libraries: libhao from /usr/lib/hao, the rest from the sealed system volume or a cryptex")
     # signature
     ai, si = hao_codesig.info(arm), hao_codesig.info(stub)
     aid, aflags = cd_fields(arm)

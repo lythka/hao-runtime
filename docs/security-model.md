@@ -211,6 +211,17 @@ hardened-runtime or library-flag binary without its own
 A signed image's pages are hashed once in its process, whichever of these
 routes then decides about it.
 
+dyld loads the stub's own dependencies, and runs their initializers, before
+hao can set `CS_REQUIRE_LV`, and the stub's `disable-library-validation`
+admits any of them. `tools/hao-embed` therefore links a program's native
+dependency into its stub only from protected storage: the x86_64 shared
+cache, or a file on the sealed system volume (not behind one of its
+firmlinks to the data volume) or in a cryptex, when every path dyld would
+try first and every library that file loads at launch are such files too.
+Any other native dependency (a bundle's framework, a file under /Library) is
+loaded by hao's binder with the program's image, after library validation is
+on.
+
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
 `DYLD_EXIT_REASON_DYLIB_MISSING`). In a test build (`HAO_TEST_SWITCHES`),
