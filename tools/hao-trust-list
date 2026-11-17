@@ -150,36 +150,50 @@ def scan(root):
     return sorted(found)
 
 
+def plain_name(n):
+    """N if it is one ordinary path component, else ValueError: a staged name never leaves its directory."""
+    if not n or n in (".", "..") or "/" in n or "\0" in n:
+        raise ValueError("unusable name %r" % n)
+    return n
+
+
 def staged_copy(path, data, work):
-    """A private copy of DATA (PATH's bytes, read once) for codesign to verify: in WORK (a new directory only this
-    user can open), created exclusively. When the signature binds an Info.plist (special slot -1) and the
-    bundle's has that hash (BUNDLE/Contents/Info.plist beside Contents/MacOS, a framework version's
-    Resources/Info.plist, or one beside the file), that Info.plist is copied too, at the same place relative to
-    the bundle, as codesign looks for it; else codesign fails, as it would on the file. Resources are not copied
-    (--ignore-resources). Whatever the path holds later, codesign sees only these bytes."""
+    """A private copy of DATA (PATH's bytes, read once) for codesign to verify, in WORK (a new directory only this
+    user can open, kept until codesign is done), created exclusively. When the signature binds an Info.plist
+    (special slot -1) and the bundle's has that hash, a copy of it goes beside the file as codesign looks for it:
+    WORK/B/Contents/Info.plist for WORK/B/Contents/MacOS/NAME (a bundle's main executable), WORK/B/Versions/V/
+    Resources/Info.plist for WORK/B/Versions/V/NAME (a framework), WORK/B/Info.plist for WORK/B/NAME. Only NAME, B
+    and V come from PATH (resolved once), each one plain component, so nothing is written outside WORK; else
+    codesign fails, as it would on the file. Resources are not copied (--ignore-resources). Whatever PATH holds
+    later, codesign sees only these bytes."""
+    rp = os.path.realpath(path)
+    d, name = os.path.dirname(rp), plain_name(os.path.basename(rp))
     mo, _ = slice_and_arch(data)
     want = hao_codesig.special_slots(mo, hao_codesig.CSSLOT_INFOSLOT)
-    d = os.path.dirname(os.path.realpath(path))
-    plist = None
-    for f in ([os.path.join(os.path.dirname(d), "Info.plist")] if os.path.basename(d) == "MacOS" else []) + \
-            [os.path.join(d, "Resources", "Info.plist"), os.path.join(d, "Info.plist")]:
-        if want and os.path.isfile(f):
-            with open(f, "rb") as fh:
+    up = lambda k: os.path.basename(os.path.dirname(d) if k == 1 else os.path.dirname(os.path.dirname(d)))
+    layouts = []
+    if os.path.basename(d) == "MacOS" and os.path.basename(os.path.dirname(d)) == "Contents":
+        layouts.append((os.path.join(os.path.dirname(d), "Info.plist"), (up(2), "Contents", "MacOS"), (up(2), "Contents")))
+    if os.path.basename(os.path.dirname(d)) == "Versions":
+        v = os.path.basename(d)
+        layouts.append((os.path.join(d, "Resources", "Info.plist"), (up(2), "Versions", v), (up(2), "Versions", v, "Resources")))
+    layouts.append((os.path.join(d, "Info.plist"), (os.path.basename(d),), (os.path.basename(d),)))
+    exe_dir, plist = (), None
+    for src, at, pat in layouts if want else []:
+        try:
+            with open(src, "rb") as fh:
                 blob = fh.read()
-            if all(hao_codesig.digest(t, blob) == h for t, h in want.items()):
-                plist = (f, blob)
-                break
-    top = d   # the bundle: the nearest directory above the file with an extension (X.app, X.framework)
-    while plist and "." not in os.path.basename(top) and os.path.dirname(top) != top:
-        top = os.path.dirname(top)
-    base = os.path.dirname(top) if plist and "." in os.path.basename(top) else d
-    dst = os.path.join(work, os.path.relpath(os.path.realpath(path), base))
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
+        except OSError:
+            continue
+        if all(hao_codesig.digest(t, blob) == h for t, h in want.items()):
+            exe_dir, plist = tuple(map(plain_name, at)), (tuple(map(plain_name, pat)), blob)
+            break
+    os.makedirs(os.path.join(work, *exe_dir), exist_ok=True)
     if plist:
-        q = os.path.join(work, os.path.relpath(plist[0], base))
-        os.makedirs(os.path.dirname(q), exist_ok=True)
-        with open(q, "xb") as f:
+        os.makedirs(os.path.join(work, *plist[0]), exist_ok=True)
+        with open(os.path.join(work, *plist[0], "Info.plist"), "xb") as f:
             f.write(plist[1])
+    dst = os.path.join(work, *exe_dir, name)
     with open(dst, "xb") as f:
         f.write(data)
     return dst
@@ -202,7 +216,7 @@ def verdict(root, path):
     with tempfile.TemporaryDirectory(prefix="hao-trust-list.") as work:
         try:
             copy = staged_copy(path, data, work)
-        except (OSError, RuntimeError, ValueError) as e:
+        except (OSError, ValueError) as e:
             return None, rel, "not staged: %s" % e
         r = subprocess.run(["codesign", "--verify", "--strict", "--ignore-resources", "-R=anchor apple", "--arch", arch,
                             copy], capture_output=True, text=True)
