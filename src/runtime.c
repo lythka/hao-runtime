@@ -3134,15 +3134,13 @@ static bool os_library_path(const char *real)
         if (path_under(real, roots[i])) return true;
     return false;
 }
-static bool cache_only_library(const char *path)
-{
-    return path[0] == '/' && hao_dsc_has(path);
-}
+/* A path with no file (an OS library that exists only in the shared cache) is never an app library;
+ * the shared cache is not consulted here, so classification maps nothing. */
 enum library_location { LIBRARY_MISSING, LIBRARY_OS, LIBRARY_APP };
 static enum library_location library_location(const char *path, char real[PATH_MAX])
 {
     if (realpath(path, real)) return os_library_path(real) ? LIBRARY_OS : LIBRARY_APP;
-    return errno == ENOENT && cache_only_library(path) ? LIBRARY_OS : LIBRARY_MISSING;
+    return LIBRARY_MISSING;
 }
 static bool guest_app_library(const char *path)
 {
