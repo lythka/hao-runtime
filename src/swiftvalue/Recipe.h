@@ -53,6 +53,13 @@ enum { HAO_SV_PASS_IDENTICAL = 1, HAO_SV_PASS_INACTIVE = 2, HAO_SV_PASS_OWNED = 
 enum { HAO_SV_UNCONVERTIBLE = 8 };
 /* collect_empty_patches_detail, or with EXISTENTIALS collect_witness_patches,
  * also reporting the pass classes of a certified walk. */
+/* The EXISTENTIALS argument of collect_value_patches, collect_partial_patches
+ * and collect_audit_patches is 1 (or 0) or'ed with the side that wrote the
+ * value's bytes, where the walk must read an encoding the two share
+ * (Recipe.c pointer_word_xi): guest storage (the guest's encoding: hao keeps
+ * it so) or a value native code made. Without either a word both encodings
+ * read as different values is refused. */
+enum { HAO_SV_SOURCE_GUEST = 2, HAO_SV_SOURCE_NATIVE = 4 };
 int collect_value_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
                           const void **unresolved, int existentials, int (*known_layout)(const void *),
                           unsigned *passes);
@@ -79,6 +86,19 @@ int guest_owned_type(const void *type);
  * lay that type out, so every nil in those inhabitants was written by its
  * native witnesses, in the native encoding. */
 int xi_native_owned(const void *type);
+/* The same, also listing the innermost refusing types (at most MAX into
+ * ENTRIES, their number into *N): each with its offset in the value, its
+ * depth and the types from the root down to its parent. For the survey
+ * image's audit records (swiftvalue.c audit_record). */
+enum { HAO_SV_AUDIT_CHAIN = 33 };
+typedef struct {
+    const void *type;
+    uint64_t offset;
+    unsigned depth;
+    const void *chain[HAO_SV_AUDIT_CHAIN];   /* chain[0] the root, chain[depth - 1] the parent */
+} audit_entry;
+int collect_audit_patches(const void *type, const void *value, empty_patch *out, unsigned capacity, int existentials,
+                          audit_entry *entries, unsigned max, unsigned *n);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
 /* The same, where each struct on an extra-inhabitant path (other than Array and String) must be one
  * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */

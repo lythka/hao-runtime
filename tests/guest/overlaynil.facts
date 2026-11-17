@@ -1,0 +1,5 @@
+# A fixture row of the Swift value walk's facts table (src/swiftvalue/Facts.c), for tests/guest/overlaynil.sh:
+# the overlay content's placeholder P, measured on arm64 and x86_64: its inhabitants differ only in the
+# pointer word at offset 16 (P?: 1 against 2, P??: 2 against 4). Its Optionals have no row: the walk
+# translates their nils by the POINTER rule (Recipe.c pointer_word_xi).
+type 7SwiftUI15ModifiedContentVyACyAA6ZStackVy10overlaynil4LeafVSgGAA14_PaddingLayoutVGAA25_AllowsHitTestingModifierVG SAME POINTER 16

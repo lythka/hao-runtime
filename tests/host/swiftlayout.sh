@@ -35,6 +35,16 @@
 #    only their first Optional is planned; IndexPath's XIs are tag bytes, the same on both; Data's differ
 #    and are translated from the mpenum table's masks (N2: native and arm64 nils of Data?, Data??, a struct
 #    holding Data?, the patches' arm64 words after "~"; an XI arm64 has no encoding for is refused).
+# M. an existential metatype with a witness table (`any P.Type`) takes its inhabitants from the metadata
+#    word as a thick metatype does (k against 2k), also through a struct; its nils are planned and patched.
+#    Optionals whose inhabitants are a byte carrier's values (Bool, a payload-free enum, both as a struct's
+#    trailing field, and SwiftUI's ToolbarItemGroup with its Bool) have the same nil on both: walked, no patch.
+# K. the walk's facts table keys: a mangled name's private-context addresses removed; the table sorted.
+# F. fixture rows (a TEST_SWITCHES build, LIB=build-ts; skipped elsewhere): an unlisted Optional chain over a
+#    POINTER row read in its source's encoding (FBox???'s word 2: native .some(.none), guest .none, refused
+#    when the source is not known); CONVERT rows recognizing a case only by its defined bits on a 9-byte
+#    value, refusing an empty case no bit proves or a stale x86_64 mask; a REFUSE row on a small POD leaves
+#    it unsettled.
 # Every measured line must be equal on both architectures except the listed keys, the contract lines must
 # hold on each, and the walk, row and table lines must be exactly the expected ones.
 #   OUT=dir [LIB=build] tests/host/swiftlayout.sh   (Apple silicon host: the arm64 program runs natively)
@@ -54,6 +64,9 @@ timeout -s KILL 60 "$OUT/swiftlayout.x86_64" "$LIB/libhao.dylib" >"$OUT/x86_64" 
 fail=0
 a5="a5a5a5a5a5a5a5a5"; z="0000000000000000"
 # The tables' lookups are binary searches: rows strictly ascending by UUID, then offset.
+# The walk's facts table is looked up by binary search on its keys (strcmp order).
+grep -o '^    {"[^"]*", SWIFTWALK_' "$repo/src/swiftwalk_gen.inc" | sed 's/^    {"//; s/", SWIFTWALK_$//' >"$OUT/swiftwalk.keys"
+LC_ALL=C sort -c "$OUT/swiftwalk.keys" 2>/dev/null || { echo "FAIL swiftwalk_gen.inc: keys out of order"; fail=1; }
 for t in mpenum archdiff; do
     awk -F'[{", ]+' '/^    \{"/ { h = sprintf("%16s", substr($3, 3)); gsub(/ /, "0", h); o = $2 " " h; if (o <= last) { print "FAIL " FILENAME ": row out of order: " $0; bad = 1 } last = o }
                      END { exit bad }' "$repo/src/${t}_gen.inc" || fail=1
@@ -82,6 +95,7 @@ comm -3 "$OUT/arm64.keyed" "$OUT/x86_64.keyed" | sed 's/^[[:space:]]*//; s/ | .*
     echo "L Data"; echo "L Optional<Data>"
     echo "C Optional<Optional<Data>>#0 f"; echo "C Optional<Optional<Data>>#1 f"; echo "L Optional<Optional<Data>>"
     echo "L DataBox"; echo "X DataBox 0"; echo "X DataBox 1"
+    for t in anyNP.Type MetaHolder; do echo "X $t 1"; echo "X $t 2"; done
 } | sort -u >"$OUT/differ.expected"
 # The native spare-bit enums of section E must have been measured on both (their lines are then equal).
 for k in "C NWListener.State#4 z" "C BundleDescription#2 z" "C ResizeBehavior#1 z" "C ZoomBehavior#2 z"; do
@@ -169,6 +183,17 @@ L IndexPath size=17 stride=24 flags=0x2010007 xi=0xfc
 X IndexPath 0 $a5 $a5 ff
 X IndexPath 1 $a5 $a5 fe
 C Optional<IndexPath>#1 f $a5 $a5 ff back=1
+L anyNP.Type size=16 stride=16 flags=0x7 xi=0x7fffffff
+X anyNP.Type 0 $z $a5
+L MetaHolder size=24 stride=24 flags=0x7 xi=0x7fffffff
+X MetaHolder 0 $z $a5 $a5
+L FlagTail size=9 stride=16 flags=0x7 xi=0xfe
+X FlagTail 0 $a5 02
+X FlagTail 2 $a5 04
+L ModeTail size=9 stride=16 flags=0x7 xi=0xfd
+X ModeTail 0 $a5 03
+L TG0 size=42 stride=48 flags=0x30007 xi=0xfe
+X TG0 0 $a5 $a5 $a5 $a5 $a5 a502
 EOF
 )
 arm=$(cat <<EOF
@@ -194,6 +219,8 @@ X Data 0 $z f000000000000000
 C Optional<Data>#1 f $z f000000000000000 back=1
 C Optional<Optional<Data>>#1 f $z b000000000000000 back=1
 X DataBox 0 $z b000000000000000 $a5
+X anyNP.Type 1 0000000000000001 $a5
+X MetaHolder 2 0000000000000002 $a5 $a5
 EOF
 )
 intel=$(cat <<EOF
@@ -219,6 +246,8 @@ X Data 0 $z ff00000000000000
 C Optional<Data>#1 f $z ff00000000000000 back=1
 C Optional<Optional<Data>>#1 f $z bf00000000000000 back=1
 X DataBox 0 $z bf00000000000000 $a5
+X anyNP.Type 1 0000000000000002 $a5
+X MetaHolder 2 0000000000000004 $a5 $a5
 EOF
 )
 need() {   # ARCH LINES
@@ -469,6 +498,64 @@ W N2 Optional<Data> arm64 nil walk 1 8:f000000000000000>ff00000000000000~f000000
 W N2 Optional<Optional<Data>> arm64 outer nil walk 1 8:b000000000000000>bf00000000000000~b000000000000000
 W N2 Optional<Optional<Data>> arm64 inner nil walk 1 8:f000000000000000>ff00000000000000~f000000000000000
 W N2 Data, 13 Optionals: outer nil (no arm64 encoding) refused Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Optional<Data>>>>>>>>>>>>>
+W M Optional<anyNP.Type> nil walk 1 0:0>0
+W M Optional<anyNP.Type> some walk 0
+W M Optional<Optional<anyNP.Type>> outer nil walk 1 0:2>2
+W M Optional<Optional<anyNP.Type>> inner nil walk 1 0:0>0
+W M Optional<Optional<anyNP.Type>> some walk 0
+W M Optional<MetaHolder> nil walk 1 0:0>0
+W M Optional<MetaHolder> some walk 0
+W M Optional<Optional<MetaHolder>> outer nil walk 1 0:2>2
+W M Optional<Optional<MetaHolder>> inner nil walk 1 0:0>0
+W M Optional<Optional<MetaHolder>> some walk 0
+W M Optional<FlagTail> nil walk 0
+W M Optional<FlagTail> some walk 0
+W M Optional<Optional<FlagTail>> outer nil walk 0
+W M Optional<Optional<FlagTail>> inner nil walk 0
+W M Optional<Optional<FlagTail>> some walk 0
+W M Optional<ModeTail> nil walk 0
+W M Optional<ModeTail> some walk 0
+W M Optional<Optional<ModeTail>> outer nil walk 0
+W M Optional<Optional<ModeTail>> inner nil walk 0
+W M Optional<Optional<ModeTail>> some walk 0
+W M Optional<TG0> nil walk 0
+W M Optional<TG0> some walk 0
+W M Optional<Optional<TG0>> outer nil walk 0
+W M Optional<Optional<TG0>> inner nil walk 0
+W M Optional<Optional<TG0>> some walk 0
+W M Optional<Optional<MetaHolder>> arm64 outer nil walk 1 0:1>2
+W K 7SwiftUI12$7ff82d37b2d0yXZ19ViewFactoryProtocol_pXp 1 7SwiftUI$yXZ19ViewFactoryProtocol_pXp
+W K 7SwiftUI15BoundInputsViewVSg 1 7SwiftUI15BoundInputsViewVSg
+W K 7SwiftUI24MaterialActiveAppearanceV7$10a5c9350yXZ7StorageO 1 7SwiftUI24MaterialActiveAppearanceV$yXZ7StorageO
+W K Si 1 Si
+W F FBox??? word 2 source=4 walk 1 0:2>2~1
+W F FBox??? word 4 source=4 walk 1 0:4>4~2
+W F FBox??? word 1 source=4 refused
+W F FBox??? word 0 source=4 walk 1 0:0>0~0
+W F FBox??? live source=4 walk 0
+W F FBox??? word 2 source=2 walk 1 0:2>4~2
+W F FBox??? word 4 source=2 walk 1 0:4>4~2
+W F FBox??? word 1 source=2 walk 1 0:1>2~1
+W F FBox??? word 0 source=2 walk 1 0:0>0~0
+W F FBox??? live source=2 walk 0
+W F FBox??? word 2 source=0 refused
+W F FBox??? word 4 source=0 walk 1 0:4>4~2
+W F FBox??? word 1 source=0 walk 1 0:1>2~1
+W F FBox??? word 0 source=0 walk 1 0:0>0~0
+W F FBox??? live source=0 walk 0
+W F (FBox,Bool)?? word 2 source=4 walk 1 0:2>2~1
+W F (FBox,Bool)?? word 1 source=4 walk 0
+W F (FBox,Bool)?? word 0x100000002 source=4 walk 0
+W F (FBox,Bool)?? live source=4 walk 0
+W F (FBox,Int8)?? live (an empty case no bit proves) source=4 refused
+W F (FBox,UInt8)?? live (a stale x86_64 mask) source=4 refused
+W F (FBox,Bool)?? word 2 source=2 walk 0
+W F (FBox,Bool)?? word 1 source=2 walk 1 0:1>2~1
+W F (FBox,Bool)?? word 0x100000002 source=2 walk 0
+W F (FBox,Bool)?? live source=2 walk 0
+W F (FBox,Int8)?? live (an empty case no bit proves) source=2 refused
+W F (FBox,UInt8)?? live (a stale x86_64 mask) source=2 refused
+W F settled Int8 (REFUSE row) 0 UInt8 (no row) 1
 EOF
 grep '^[WRT] ' "$OUT/x86_64" >"$OUT/walk" || true
 # Native types whose image on this host is another build than the tables': their lines are skipped.

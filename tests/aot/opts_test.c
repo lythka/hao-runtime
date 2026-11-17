@@ -62,20 +62,25 @@ int main(void)
         static const char *never[] = {"no_libval", "aot_learn", "no_jit_memory", "bridge_abort", "sigreturn_user", "code_alias",
                                       "libval_user", "swift_value_passthrough", "interp", "stats", "allow_unsigned", "watchdog", "cache", "guest_root",
                                       "if_dir", "trust_list", "diag_dir", "async_contract_library", "aot_limit_kb",
-                                      "jit_cache_mb", "swift_pop", NULL};
+                                      "jit_cache_mb", "swift_pop", "swift_walk_facts", NULL};
+        /* boot argument in every tier, environment open only (opts.c BOOT_SURVEY) */
+        static const char *survey[] = {"swift_value_audit", NULL};
         static const int tiers[] = {HAO_ENV_OPEN, HAO_ENV_GUARDED, HAO_ENV_SETUGID};
         hao_opts_t zero;
         hao_opts_parse(&zero, none, NULL, NULL, false, HAO_ENV_OPEN);
         int nknobs = 0;
-        for (int pass = 0; pass < 3; pass++) {
-            const char **l = pass == 0 ? yes : pass == 1 ? dev : never;
-            bool want = pass == 0 || (pass == 1 && hao_test_switches);
-            for (; *l; l++, nknobs += pass < 2) {
+        for (int pass = 0; pass < 4; pass++) {
+            const char **l = pass == 0 ? yes : pass == 1 ? dev : pass == 2 ? survey : never;
+            bool want = pass == 0 || (pass == 1 && hao_test_switches) || (pass == 2 && (hao_test_switches || hao_survey_build));
+            for (; *l; l++, nknobs += pass < 3) {
                 char arg[96], up[64] = "HAO_";
                 snprintf(arg, sizeof arg, "hao_%s=1 hao_%s=/x", *l, *l);
                 for (int t = 0; t < 3; t++) {
                     hao_opts_parse(&o, none, NULL, arg, t == 1, tiers[t]);
                     o.ready = zero.ready;
+                    /* a survey knob a release build ignores is said so once: the only trace it leaves */
+                    if (pass == 2) CHECK(o.swift_value_audit_ignored == !want, "hao_%s=1: ignored flag at tier %d", *l, tiers[t]);
+                    o.swift_value_audit_ignored = false;
                     bool set = memcmp(&o, &zero, sizeof o) != 0;
                     CHECK(set == want, "boot argument hao_%s=1 %s at tier %d", *l, want ? "read" : "not read", tiers[t]);
                 }
@@ -83,9 +88,12 @@ int main(void)
                 for (size_t i = 0; (*l)[i]; i++) up[4 + i] = (char)((*l)[i] >= 'a' && (*l)[i] <= 'z' ? (*l)[i] - 32 : (*l)[i]);
                 if (pass == 0) CHECK(hao_env_switch_allowed(up, HAO_ENV_GUARDED), "%s: boot-listed, so guarded-allowed", up);
                 if (pass == 1) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) && !hao_env_test_switch(up), "%s: bring-up knob", up);
+                if (pass == 2) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) &&
+                                     hao_env_switch_allowed(up, HAO_ENV_OPEN) == (hao_test_switches || hao_survey_build),
+                                     "%s: survey knob, environment open only, survey or test builds only", up);
             }
         }
-        CHECK(nknobs == 21, "boot-argument lists name 21 knobs (%d)", nknobs);
+        CHECK(nknobs == 22, "boot-argument lists name 22 knobs (%d)", nknobs);
     }
     /* the test switches: read from an ordinary environment by a HAO_TEST_SWITCHES build only */
     {

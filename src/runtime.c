@@ -1186,8 +1186,8 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * configured, every write the file does not take (no file could be opened,
  * the write failed, the program closed the descriptor) goes to the unified
  * log instead, subsystem "com.hao", category "diag": one public record per
- * line, a line longer than UNI_PIECE bytes cut into pieces, each but the last
- * ending in "\x1f" (log show --predicate 'subsystem == "com.hao"';
+ * line (a Swift value audit record a private one), a line longer than
+ * UNI_PIECE bytes cut into pieces, each but the last ending in "\x1f" (log show --predicate 'subsystem == "com.hao"';
  * the bridge worklist tool, not part of this repository, reads them). Lines the file took are not repeated
  * there. Not while PID 1 waits for the Data volume (diag_retry), and not past
  * the file's cap. os_log is not async-signal-safe (its first use allocates; a
@@ -1412,6 +1412,7 @@ static void *uni_drain(void *arg)
 {
     (void)arg;
     char l[UNI_PIECE + 1];
+    bool line_start = true, private_line = false;   /* this drain thread's only state */
     for (;;) {
         semaphore_wait(uni_sem);
         uint64_t t = __atomic_load_n(&uni_tail, __ATOMIC_ACQUIRE), h = __atomic_load_n(&uni_head, __ATOMIC_ACQUIRE);
@@ -1425,7 +1426,14 @@ static void *uni_drain(void *arg)
             }
             if (!end && t < h && uni_ring[t % UNI_RING] == '\n') { end = true; t++; }   /* UNI_PIECE bytes, then the newline */
             l[n] = 0;
-            if (end || t >= h) {
+            /* A Swift value audit record (swiftvalue.c audit_record) names
+             * program types and image offsets: a private record, all its pieces. */
+            if (line_start) private_line = !strncmp(l, "hao-swift-audit ", 16);
+            line_start = end || t >= h;
+            if (private_line) {
+                if (end || t >= h) { if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s", l); }
+                else os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s\x1f", l);
+            } else if (end || t >= h) {
                 if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{public}s", l);
             } else
                 os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{public}s\x1f", l);

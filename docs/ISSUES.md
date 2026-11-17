@@ -20,6 +20,71 @@ admitting it: when either fails, the storage is refused. Coverage of
 native copies and assignments (initialized-storage tracking and the
 runtime's array operations) is the next step.
 
+## Swift value walk: per-type facts, carrier rules, the survey image's audit
+
+The walk (`src/swiftvalue/Recipe.c`) consults a per-type facts table before
+its own rules: `src/swiftwalk_gen.inc` (generated for one OS build, keyed by
+mangled type name with private contexts' addresses removed, applied only in
+a process whose x86_64 shared cache is the table's and only while the live
+value witness table has the row's size, stride, flags and XI count;
+`src/swiftvalue/Facts.h`). A row decides before any rule, the small-POD one
+included: SAME passes the type as found and settles its node at the gate;
+DYNAMIC walks it by the rules (an existential's contained value as its
+dynamic type); REFUSE refuses; CONVERT (Optionals) lists every case with
+each architecture's image and defined-bit mask, and a value whose bits
+under an empty case's mask are its image is patched, only those bits
+rewritten, each patched word inside the value (any size). An empty case
+whose mask is empty, or whose x86_64 image or mask is not what the type's
+own witness writes over zeros and ones, is refused. An Optional the table
+does not list (a guest's instantiation) over a listed type of XI class
+POINTER has its nil translated by the pointer rule at the row's word (q on
+arm64, 2q on x86_64, any depth; the offset checked against the Optional's
+own witness). A type with no row (every guest type, and native types not
+listed) keeps the rules, which refuse what they cannot certify.
+
+Source encoding: from three Optional levels a pointer word's encodings
+overlap (arm64's 2 is x86_64's first inhabitant). The walk is told who wrote
+the bytes (`Recipe.h` `HAO_SV_SOURCE_*`): guest storage (results of guest
+callbacks, guest calls of native witnesses) is read in the guest's encoding,
+a value native code made (`witness_to_guest`: nils native witnesses make,
+native generic results) in the native one, and a word two readings of a
+value of unknown source give different meanings is refused. So native
+`T???.some(.none)` (word 2) becomes guest 1, not guest `.none`. CONVERT
+images take the same reading.
+
+ABI rules added to the walk, needing no table: an existential metatype with
+witness tables (`any P.Type`, metadata word then tables) has a thick
+metatype's inhabitants at its first word (k against 2k; the carrier of
+`Optional<BoundInputsView>`); an Optional whose inhabitants are a one-byte
+carrier's values (Bool, an enum with no payload case) has the same nil on
+both, when arm64's choice of most-inhabited field is the same (the carrier
+of `Optional<ToolbarItemGroup<V>>`, its `isEmpty` Bool).
+
+The survey image's audit: boot argument `hao_swift_value_audit=1` (every
+process, every tier; `HAO_SWIFT_VALUE_AUDIT=1` in an open process), read
+only by a survey build (`make SURVEY=1`) or a test build; a release build
+ignores it, says so once and refuses. It lets a value hao would refuse go
+on, as `HAO_SWIFT_VALUE_PASSTHROUGH=1` does, and writes one
+`hao-swift-audit {JSON}` line per (refused type, reason) with the type's
+table key, kind, size, flags, XI count, offset and depth, the keys from the
+root, the boundary and the guest caller and native witness by image UUID and
+offset: no address, no path; private records in the unified log
+(`swiftvalue.c` `audit_record`; CONTRIBUTING.md, Debugging).
+
+Measured on the host (27.2, whose caches are not the table's):
+`host/swiftlayout` sections M (both carriers on arm64 and x86_64, walked;
+refused before), K (table keys, table order) and F (fixture rows in a test
+build: `FBox???`'s word 2 is `.some(.none)` read as native, `.none` read as
+guest, refused unknown; a 9-byte CONVERT row by its masks; an empty mask and
+a stale x86_64 mask refused; a REFUSE row on `Int8` unsettled);
+`guest/svcarriers` (the carriers through native tuple witnesses, equal to
+native under JIT, `--interp`, AOT; refused before); `guest/svfacts`
+(fixture rows SAME, CONVERT, REFUSE; the audit record; a release build
+ignoring the audit); `guest/overlaynil` with a fixture row for its
+placeholder (POINTER at word 16) equals native by default. Not measured: the
+generated rows themselves (their cache is 26B131's), the native-source path
+through a real native generic result, and a whole image under the audit.
+
 ## Swift values hao cannot certify are refused again
 
 A Swift value crossing to native code that the walk could not certify

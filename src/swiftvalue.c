@@ -16,14 +16,17 @@
 #include "swiftvalue/Common.h"
 #include "swiftvalue/NativeLeaf.h"
 #include "swiftvalue/Tables.h"
+#include "swiftvalue/Facts.h"
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach-o/loader.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #define SWIFT __attribute__((swiftcall))
 #define NODE_LIMIT 1024
 #define ENTRY_LIMIT (NODE_LIMIT * 6)
@@ -67,6 +70,7 @@ void hao_swift_value_fork_child(void)
     storage_fork_child();
     hao_sv_native_leaf_fork_child();
     tables_fork_child();
+    walk_facts_fork_child();
 }
 typedef struct { const char *text; uintptr_t length; } type_name;
 static type_name name_of(const void *type)
@@ -121,12 +125,156 @@ static bool first_report(const void *type, const char *why)
     if (full) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG,"Swift value survey: %u types reported; later ones are not\n",SEEN_LIMIT); }
     return first;
 }
+/* The survey image's audit (boot argument hao_swift_value_audit=1, every
+ * process; HAO_SWIFT_VALUE_AUDIT in an open one), honoured only by a survey
+ * build (make SURVEY=1) or a test build; a release build says once that it
+ * ignores it and refuses as always. A value hao would refuse goes on as
+ * under HAO_SWIFT_VALUE_PASSTHROUGH, accepting the same corruption: a
+ * survey image is for listing, not for use. Instead of the survey lines,
+ * each innermost refusing type of the value is one line
+ *   hao-swift-audit {JSON}
+ * the first time its (type, reason) occurs in the process (the reason names
+ * the boundary: a result publication, a guest call of a native witness, a
+ * lent value, an array element...; "class" groups the reasons). The fields:
+ * v (record version, 1), process (its name), reason, class, type (its key in
+ * the walk's facts table: the mangled name, private contexts' addresses
+ * removed; the table's generator takes these as its input list), kind, size,
+ * stride, flags and xi (its value witness table), offset and depth in the
+ * refused value, chain (the keys from the value's root down to the parent),
+ * walked (the refused value's type), root (the activation's type),
+ * caller_image and caller_offset (the guest image's LC_UUID and the call's
+ * offset in it), witness_image and witness_offset (the same for the native
+ * code called), x86_cache (this process's x86_64 shared cache UUID). No
+ * address and no path. The records go where hao's diagnostics go: with
+ * hao_crash=1 the owner-only console.log under /private/var/log/hao (a
+ * user's processes: their directory under it), else stderr; from a
+ * sandboxed process the unified log (subsystem com.hao, category diag), as
+ * private records. */
+static const char *refusal_class(const char *why)
+{
+    if (strstr(why,"representation")) return "representation";
+    if (strstr(why,"assignment") || strstr(why,"ownership") || strstr(why,"borrowed")) return "ownership";
+    if (strstr(why,"allocation")) return "allocation";
+    if (strstr(why,"storage") || strstr(why,"extent") || strstr(why,"overlap")) return "storage";
+    if (strstr(why,"bound")) return "walk-limit";
+    return "abi";
+}
+static void json_text(FILE *f, const char *text, uint64_t n)
+{
+    fputc('"',f);
+    for (uint64_t i = 0; text && i < n && i < 2048; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '"' || c == '\\') fprintf(f,"\\%c",c);
+        else if (c < 0x20 || c >= 0x7f) fprintf(f,"\\u%04x",c);
+        else fputc(c,f);
+    }
+    fputc('"',f);
+}
+/* TYPE's table key (Facts.h walk_fact_key): the mangled name with every
+ * private context's address removed, so a record names no address. */
+static void json_mangled(FILE *f, const void *type)
+{
+    uint64_t n = 0;
+    char key[2048];
+    const char *m = walk_fact_mangled(type,&n);
+    if (!m || !walk_fact_key(m,n,key,sizeof key)) key[0] = 0;
+    json_text(f,key,strlen(key));
+}
+static void json_uuid(FILE *f, const uint8_t *uuid)
+{
+    fputc('"',f);
+    for (unsigned k = 0; uuid && k < 16; ++k) fprintf(f,"%02X",uuid[k]);
+    fputc('"',f);
+}
+/* The LC_UUID of the native image that holds PC, and PC's offset from its header. */
+static bool native_image_of(uint64_t pc, uint8_t uuid[16], uint64_t *offset)
+{
+    Dl_info info;
+    if (!pc || !dladdr((const void *)(uintptr_t)pc,&info) || !info.dli_fbase) return false;
+    const struct mach_header_64 *h = info.dli_fbase;
+    if (h->magic != MH_MAGIC_64 || h->sizeofcmds > (1u << 24)) return false;
+    const uint8_t *p = (const uint8_t *)(h + 1), *end = p + h->sizeofcmds;
+    for (uint32_t k = 0; k < h->ncmds && p + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *lc = (const void *)p;
+        if (lc->cmdsize < sizeof *lc || lc->cmdsize > (uint64_t)(end - p)) return false;
+        if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
+            memcpy(uuid,((const struct uuid_command *)(const void *)lc)->uuid,16);
+            *offset = pc - (uint64_t)(uintptr_t)info.dli_fbase;
+            return true;
+        }
+        p += lc->cmdsize;
+    }
+    return false;
+}
+/* One audit record (see above). Types by their table keys, code by image
+ * UUID and offset: no address, no path. */
+static void audit_record(const void *type, const char *why, uint64_t offset, unsigned depth, const void *const *chain,
+                         const void *walked, const void *root, uint64_t lr, uint64_t pc)
+{
+    if (!first_report(type,why)) return;
+    FILE *f = HAO_DIAG;
+    const witnesses *v = vwt(type);
+    typedef uintptr_t SWIFT kind_fn(const void *);
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    hao_image *img = lr ? hao_image_for_addr(lr) : NULL;
+    uint8_t witness[16];
+    uint64_t witness_offset = 0;
+    bool native = native_image_of(pc,witness,&witness_offset);
+    extern bool _dyld_get_shared_cache_uuid(unsigned char uuid[16]);
+    unsigned char cache[16] = {0};
+    (void)_dyld_get_shared_cache_uuid(cache);
+    flockfile(f);
+    fprintf(f,"hao-swift-audit {\"v\":1,\"process\":");
+    json_text(f,getprogname(),strlen(getprogname()));
+    fprintf(f,",\"reason\":");
+    json_text(f,why,strlen(why));
+    fprintf(f,",\"class\":\"%s\",\"type\":",refusal_class(why));
+    json_mangled(f,type);
+    fprintf(f,",\"kind\":%lu,\"size\":%llu,\"stride\":%llu,\"flags\":%u,\"xi\":%u,\"offset\":%llu,\"depth\":%u,\"chain\":[",
+        kind ? (unsigned long)kind(type) : 0ul,(unsigned long long)v->size,(unsigned long long)v->stride,v->flags,v->extra,
+        (unsigned long long)offset,depth);
+    for (unsigned k = 0; chain && k < depth && k < HAO_SV_AUDIT_CHAIN; ++k) {
+        if (k) fputc(',',f);
+        json_mangled(f,chain[k]);
+    }
+    fprintf(f,"],\"walked\":");
+    json_mangled(f,walked ? walked : type);
+    fprintf(f,",\"root\":");
+    json_mangled(f,root ? root : type);
+    fprintf(f,",\"caller_image\":");
+    json_uuid(f,img && img->has_uuid ? img->uuid : NULL);
+    fprintf(f,",\"caller_offset\":%llu,\"witness_image\":",(unsigned long long)(img ? lr - img->base : 0));
+    json_uuid(f,native ? witness : NULL);
+    fprintf(f,",\"witness_offset\":%llu,\"x86_cache\":",(unsigned long long)witness_offset);
+    json_uuid(f,cache);
+    fprintf(f,"}\n");
+    funlockfile(f);
+}
+static void audit(const void *type, const char *why, const void *walked, const void *value, int existentials,
+                  const void *root, uint64_t lr, uint64_t pc)
+{
+    audit_entry entries[8];
+    unsigned found = 0;
+    if (walked && value) {
+        empty_patch scratch[64];
+        (void)collect_audit_patches(walked,value,scratch,64,existentials,entries,8,&found);
+    }
+    for (unsigned i = 0; i < found; ++i)
+        audit_record(entries[i].type,why,entries[i].offset,entries[i].depth,entries[i].chain,walked,root,lr,pc);
+    if (!found) audit_record(type,why,0,0,NULL,walked,root,lr,pc);
+}
+
 /* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
  * walk refused it, ROOT the type of the activation, LR and PC the guest call. */
-/* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH. */
-static void decline(const void *type, const char *why, const void *walked, const void *value,
-                    const void *root, uint64_t lr, uint64_t pc)
+/* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH or the audit. */
+static void decline_walk(const void *type, const char *why, const void *walked, const void *value, int existentials,
+                         const void *root, uint64_t lr, uint64_t pc)
 {
+    if (hao_opt.swift_value_audit) { audit(type,why,walked,value,existentials,root,lr,pc); return; }
+    if (hao_opt.swift_value_audit_ignored && first_report(NULL,"audit ignored")) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1); refusing\n");
+    }
     bool pass = hao_opt.swift_value_passthrough;
     if (pass && !first_report(type,why)) return;
     if (walked && value) {
@@ -141,6 +289,11 @@ static void decline(const void *type, const char *why, const void *walked, const
     fprintf(HAO_DIAG,"Swift value survey: passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH): %s (metadata=%p size=%llu "
         "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
         vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
+}
+static void decline(const void *type, const char *why, const void *walked, const void *value,
+                    const void *root, uint64_t lr, uint64_t pc)
+{
+    decline_walk(type,why,walked,value,0,root,lr,pc);
 }
 /* Under HAO_BRIDGE_CHECK, the pass classes by which a certified value of
  * TYPE goes on with parts as found, once per (type, class) in a process. */
@@ -167,7 +320,7 @@ static int certified_patches(const void *type, const void *value, empty_patch *p
     if (!value) { decline(type,"null value storage",NULL,NULL,root,lr,pc); return 0; }
     int n = collect_value_patches(type,value,p,64,&unresolved,existentials,known_layout,&passes);
     if (n >= 0) { pass_note(type,passes); return n; }
-    decline(unresolved ? unresolved : type,why,type,value,root,lr,pc);
+    decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc);
     n = collect_partial_patches(type,value,p,64,existentials,known_layout);
     return n < 0 ? 0 : n;
 }
@@ -331,7 +484,7 @@ static bool handle(hao_thread *t, const entry *e)
     void *destination = (void *)(uintptr_t)c->x[0];
     if (!source) DECLINE(e->type,"null value storage",NULL,NULL);
     empty_patch patches[64];
-    int count = certified_patches(e->type,source,patches,0,NULL,"unresolved active representation",root,c->x[30],e->pc);
+    int count = certified_patches(e->type,source,patches,HAO_SV_SOURCE_GUEST,NULL,"unresolved active representation",root,c->x[30],e->pc);
     bool foreign = false;
     for (int i = 0; i < count; ++i) foreign |= patches[i].bits != patches[i].receiver_bits;
     bool assignment = (e->slots & ((1u << 3) | (1u << 5))) != 0;
@@ -424,7 +577,7 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
     if (t->swift_values != scope) refuse(scope->plan->type,"activation lifetime mismatch");
     hao_cpu saved = t->cpu;
     empty_patch patches[64];
-    int count = certified_patches(scope->plan->type,scope->output,patches,0,NULL,
+    int count = certified_patches(scope->plan->type,scope->output,patches,HAO_SV_SOURCE_GUEST,NULL,
                                   "result publication has unresolved active representation",scope->plan->type,saved.x[30],0);
     t->cpu = saved;
     unsigned changed = 0;
@@ -687,7 +840,7 @@ typedef struct { int count; empty_patch p[64]; } witness_patches;
 static bool witness_strip_guest(const void *type, witness_patches *w);
 static void witness_walk(const void *type, const void *value, witness_patches *w, const char *why, uint64_t lr, uint64_t pc)
 {
-    w->count = certified_patches(type,value,w->p,1,NULL,why,type,lr,pc);
+    w->count = certified_patches(type,value,w->p,1 | HAO_SV_SOURCE_GUEST,NULL,why,type,lr,pc);   /* guest storage */
     if (w->count > 0 && !witness_strip_guest(type,w)) {   /* which nils lie in guest-defined fields is not known */
         decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,lr,pc);
         w->count = 0;
@@ -858,7 +1011,7 @@ void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const 
 static void witness_to_guest(hao_thread *t, const void *type, void *value, const char *why, uint64_t lr, uint64_t pc)
 {
     witness_patches w;
-    w.count = certified_patches(type,value,w.p,1,guest_layout,why,type,lr,pc);
+    w.count = certified_patches(type,value,w.p,1 | HAO_SV_SOURCE_NATIVE,guest_layout,why,type,lr,pc);   /* native-made */
     for (int i = 0; i < w.count; ++i) {
         char *at = (char *)value + w.p[i].offset;
         if (w.p[i].arm_bits != w.p[i].bits) guest_bits_note(t,value,at,w.p[i].bits,w.p[i].arm_bits);
