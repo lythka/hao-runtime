@@ -10,12 +10,17 @@ Runs as root inside an image builder (pure Python, no developer tools):
      Mac has none, and `hao --aot` makes them after the first boot. Every
      file the install reads from PAYLOAD (root/, the manifests, the stubs
      and replacements they name) is then copied once into a private
-     directory and its sha256 checked against payload-manifest.json; only
-     those copies are read afterwards.
+     directory (Staging: used through a descriptor, each copy checked by
+     inode when read back) and its sha256 checked against
+     payload-manifest.json; only those copies are read afterwards. Every
+     other listed file is hashed too, and two root/ names that are one file
+     on a case-insensitive volume (or a file and a directory) are refused.
   1. The listed PAYLOAD/root/** files -> SYSTEM (usr/libexec/hao,
      usr/lib/hao/..., among them usr/lib/hao/trusted-cdhashes, which hao
      trusts only root-owned and not writable by group or others), root:wheel,
-     0755 if the payload's file has an execute bit, else 0644.
+     0755 if the payload's file has an execute bit, else 0644, each written
+     to a new file and renamed over the old one through directory
+     descriptors (another hard link to the old file keeps its bytes).
   2. For every PAYLOAD/embed/manifest.json entry whose file in SYSTEM has the
      recorded source hash, add the signed x86_64 stub slice in place (same
      inode, owner, mode and flags). An entry with "mode": "translate" is a
@@ -37,7 +42,10 @@ Runs as root inside an image builder (pure Python, no developer tools):
      it would carry another bundle identifier than the program.
   3. PAYLOAD/replace/manifest.json, if the payload has one: whole-file fixes
      (e.g. 27.0 x86_64 dyld's PID-1 boot-spec count), each applied only to the
-     exact source hash. Without one, no other system file is touched.
+     exact source hash and never to a file with another hard link. Without
+     one, no other system file is touched. Programs to embed and files to
+     replace are opened through directory descriptors that follow no link,
+     read and written through that one descriptor.
   4. The AOT cache directories hao trusts for root, PID 1 and daemons:
      usr/lib/hao/aot (sealed system volume; what PID 1 can read) and
      private/var/db/hao (only when SYSTEM has private/var/db), each root:wheel
@@ -67,6 +75,7 @@ manifest's "required" list (empty for a runtime-only payload), or for
 payloads that predate it, sbin/launchd and usr/libexec/xpcproxy.
 """
 import hashlib
+import io
 import json
 import os
 import posixpath
@@ -75,6 +84,7 @@ import stat
 import struct
 import sys
 import tempfile
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hao_codesig  # noqa: E402
@@ -184,37 +194,126 @@ def payload_inventory(payload):
     return have
 
 
-def stage(payload, admitted, rels, work, out):
-    """Add to OUT ({rel: path of a private copy in WORK}) each of RELS not yet in it (a file ADMITTED by
-    payload_inventory): read once through a descriptor that follows no link, written to a new file in WORK (a
-    directory only this user can open) and checked against its sha256 in MANIFEST; Unsafe for a file not
-    admitted or not matching. Only the copies are read afterwards."""
-    for rel in sorted(set(rels) - set(out)):
+class Staging:
+    """A private directory (mkdtemp: mode 0700, this user's) for copies of payload files, used only through a
+    descriptor of it, so renaming or replacing its path changes nothing. Each copy is created exclusively and
+    remembered by inode; read() opens it again through the descriptor and refuses anything else (another inode,
+    another owner, a second link)."""
+
+    def __init__(self):
+        self.path = tempfile.mkdtemp(prefix="hao-install.")
+        self.fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self.files = {}   # rel -> (name, dev, ino)
+
+    def close(self):
+        os.close(self.fd)
+        shutil.rmtree(self.path, ignore_errors=True)
+
+    def __contains__(self, rel):
+        return rel in self.files
+
+    def __iter__(self):
+        return iter(self.files)
+
+    def add(self, rel, src):
+        """Copy the open file SRC as REL; returns the sha256 of what was copied."""
+        name = "%d" % len(self.files)
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd)
+        h = hashlib.sha256()
+        with os.fdopen(fd, "wb") as fc:
+            for block in iter(lambda: src.read(1 << 20), b""):
+                h.update(block)
+                fc.write(block)
+            st = os.fstat(fc.fileno())
+        self.files[rel] = (name, st.st_dev, st.st_ino)
+        return h.hexdigest()
+
+    def open(self, rel):
+        name, dev, ino = self.files[rel]
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self.fd)
+        st = os.fstat(fd)
+        if (st.st_dev, st.st_ino) != (dev, ino) or st.st_uid != os.geteuid() or st.st_nlink != 1:
+            os.close(fd)
+            raise Unsafe("the private copy of payload %s was changed" % rel)
+        return os.fdopen(fd, "rb")
+
+    def read(self, rel):
+        with self.open(rel) as f:
+            return f.read()
+
+
+def stage(payload, admitted, rels, out):
+    """Add to OUT (a Staging) each of RELS not yet in it (a file ADMITTED by payload_inventory): read once through
+    a descriptor that follows no link and checked against its sha256 in MANIFEST; Unsafe for a file not admitted
+    or not matching. Only the copies are read afterwards."""
+    for rel in sorted(set(rels)):
+        if rel in out:
+            continue
         if rel not in admitted:
             raise Unsafe("payload %s is not in %s" % (rel, MANIFEST))
-        copy = os.path.join(work, "%d" % len(out))
-        h = hashlib.sha256()
         try:
             fd = os.open(inside(payload, rel), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError as x:
             raise Unsafe("payload %s: not read (%s)" % (rel, x.strerror))
-        with os.fdopen(fd, "rb") as fs, open(copy, "xb") as fc:
+        with os.fdopen(fd, "rb") as fs:
             if not stat.S_ISREG(os.fstat(fs.fileno()).st_mode):
                 raise Unsafe("payload %s is not a regular file" % rel)
-            for block in iter(lambda: fs.read(1 << 20), b""):
-                h.update(block)
-                fc.write(block)
-        if h.hexdigest() != admitted[rel][0]:
+            digest = out.add(rel, fs)
+        if digest != admitted[rel][0]:
             raise Unsafe("payload %s does not match its sha256 in %s" % (rel, MANIFEST))
-        out[rel] = copy
     return out
 
 
+def dir_at(top_fd, parts, create=False):
+    """A descriptor of the directory TOP_FD/PARTS..., each component opened through its parent's descriptor
+    without following a link (made 0755, root:wheel as root, where CREATE and missing); Unsafe otherwise."""
+    fd = os.dup(top_fd)
+    for part in parts:
+        try:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except FileNotFoundError:
+            if not create:
+                os.close(fd)
+                raise
+            os.mkdir(part, 0o755, dir_fd=fd)
+            if os.geteuid() == 0:
+                os.chown(part, 0, 0, dir_fd=fd, follow_symlinks=False)
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError as x:
+            os.close(fd)
+            raise Unsafe("%s: %s is a symbolic link or not a directory (%s)" % ("/".join(parts), part, x.strerror))
+        os.close(fd)
+        fd = nfd
+    return fd
+
+
+def publish(dfd, name, src, mode):
+    """The bytes of the open file SRC as NAME in the directory DFD: written to a new file there (exclusive, no
+    link followed), root:wheel as root, MODE, then renamed over NAME. NAME is replaced, never written through: a
+    link or another hard link to the old file is left as it was."""
+    for _ in range(100):
+        tmp = ".hao-install.%s" % os.urandom(6).hex()
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+            break
+        except FileExistsError:
+            continue
+    with os.fdopen(fd, "wb") as f:
+        shutil.copyfileobj(src, f)
+        if os.geteuid() == 0:
+            os.fchown(f.fileno(), 0, 0)
+        os.fchmod(f.fileno(), mode)
+        f.flush()
+        os.fsync(f.fileno())
+    os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+
+
 def install_root(admitted, staged, dst):
-    """Copy the staged root/ files onto DST, root:wheel, 0755 or 0644 (the payload file's execute bit), making
+    """Install the staged root/ files onto DST, root:wheel, 0755 or 0644 (the payload file's execute bit), making
     their directories and usr/lib/hao (the record's, the AOT caches' parent) 0755. Every path is checked before
-    the first write: Unsafe for a symbolic link or a non-directory/non-file in the way."""
-    new_dirs, copies = [], []
+    the first write (Unsafe for a symbolic link or a non-directory/non-file in the way); the writes then go
+    through directory descriptors and replace each file by rename (publish)."""
+    plan = []
     for rel in sorted(r for r in staged if r.startswith("root/")) + [None]:
         name = rel[len("root/"):] if rel else "usr/lib/hao/install.json"
         d = inside(dst, name)
@@ -223,25 +322,24 @@ def install_root(admitted, staged, dst):
             p = os.path.join(p, part)
             if os.path.lexists(p) and not os.path.isdir(p):
                 raise Unsafe("%s exists and is not a directory" % os.path.relpath(p, dst))
-            if not os.path.lexists(p) and p not in new_dirs:
-                new_dirs.append(p)
         if os.path.lexists(d) and not os.path.isfile(d):
             raise Unsafe("%s is not a regular file (SYSTEM)" % name)
-        if rel:
-            copies.append((staged[rel], d, 0o755 if admitted[rel][1] & 0o111 else 0o644))
-    root = os.geteuid() == 0
-    for d in new_dirs:
-        os.mkdir(d, 0o755)
-        if root:
-            os.chown(d, 0, 0)
-    for s, d, mode in copies:
-        with open(s, "rb") as fs, open_nofollow(d, create=True) as fd:
-            fd.truncate()
-            shutil.copyfileobj(fs, fd)
-            os.fchmod(fd.fileno(), mode)
-            if root:
-                os.fchown(fd.fileno(), 0, 0)
-    return len(copies)
+        plan.append((rel, relative(name)))
+    top = os.open(dst, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    n = 0
+    try:
+        for rel, parts in plan:
+            dfd = dir_at(top, parts[:-1], create=True)
+            try:
+                if rel:
+                    with staged.open(rel) as src:
+                        publish(dfd, parts[-1], src, 0o755 if admitted[rel][1] & 0o111 else 0o644)
+                    n += 1
+            finally:
+                os.close(dfd)
+    finally:
+        os.close(top)
+    return n
 
 
 LC_SEGMENT_64 = 0x19
@@ -399,17 +497,17 @@ def ensure_aot_dirs(system, errors):
             continue
         if not os.path.isdir(d):
             os.mkdir(d, 0o755)
-        os.chmod(d, 0o755)
+        os.chmod(d, 0o755, follow_symlinks=False)
         if root:
-            os.chown(d, 0, 0)
+            os.chown(d, 0, 0, follow_symlinks=False)
         for name in os.listdir(d):
             f = os.path.join(d, name)
             if os.path.islink(f) or not os.path.isfile(f):
                 errors.append(os.path.join(rel, name) + " (not a regular file)")
                 continue
-            os.chmod(f, 0o644)
+            os.chmod(f, 0o644, follow_symlinks=False)
             if root:
-                os.chown(f, 0, 0)
+                os.chown(f, 0, 0, follow_symlinks=False)
         st = os.stat(d)
         done.append("%s (uid %d, mode %o)" % (rel, st.st_uid, st.st_mode & 0o7777))
     return done
@@ -500,6 +598,80 @@ def check_bound(system, e, stub):
     return None
 
 
+def check_names(names):
+    """Unsafe if two of NAMES (paths under SYSTEM) are one file on a case-insensitive volume (case or Unicode
+    normalisation only) or one names a directory of another (tools/hao_release.py's rule)."""
+    names = list(names)
+    folded = {}
+    for n in names:
+        k = unicodedata.normalize("NFD", n).casefold()
+        if k in folded:
+            raise Unsafe("payload root/%s and root/%s are one file on a case-insensitive volume" % (folded[k], n))
+        folded[k] = n
+    for n in names:
+        d = posixpath.dirname(n)
+        while d:
+            if unicodedata.normalize("NFD", d).casefold() in folded:
+                raise Unsafe("payload root/%s is a file and a directory of root/%s" % (folded[unicodedata.normalize("NFD", d).casefold()], n))
+            d = posixpath.dirname(d)
+
+
+def hash_rest(payload, admitted, staged):
+    """Check the sha256 of every admitted payload file not staged (read once, no link followed): the install
+    reads none of them, but the payload is what its manifest says or the install is refused."""
+    for rel in sorted(set(admitted) - set(staged)):
+        try:
+            fd = os.open(inside(payload, rel), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError as x:
+            raise Unsafe("payload %s: not read (%s)" % (rel, x.strerror))
+        h = hashlib.sha256()
+        with os.fdopen(fd, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        if h.hexdigest() != admitted[rel][0]:
+            raise Unsafe("payload %s does not match its sha256 in %s" % (rel, MANIFEST))
+
+
+def open_target(system, rel):
+    """REL under SYSTEM opened for reading and writing in place, through directory descriptors that follow no
+    link; None if it is missing, a link or not a regular file."""
+    parts = relative(rel)
+    top = os.open(system, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        dfd = dir_at(top, parts[:-1])
+    except (OSError, Unsafe):
+        return None
+    finally:
+        os.close(top)
+    try:
+        fd = os.open(parts[-1], os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+    except OSError:
+        return None
+    finally:
+        os.close(dfd)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return None
+    return os.fdopen(fd, "r+b")
+
+
+def close_all(files):
+    while files:
+        f = files.pop()
+        if f is not None:
+            f.close()
+
+
+def rewrite(f, data):
+    """DATA as the whole content of the open file F (same inode: every hard link to an embedded program is
+    embedded too, as the image builder may have kept or broken the link)."""
+    f.seek(0)
+    f.write(data)
+    f.truncate()
+    f.flush()
+    os.fsync(f.fileno())
+
+
 def write_in_place(path, data):
     with open_nofollow(path) as f:
         f.write(data)
@@ -518,19 +690,19 @@ def main():
 
 def install(system, payload):
     admitted = payload_inventory(payload)
-    work = tempfile.mkdtemp(prefix="hao-install.")
+    work = Staging()
     try:
         return install_staged(system, payload, admitted, work)
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        work.close()
 
 
-def install_staged(system, payload, admitted, work):
+def install_staged(system, payload, admitted, staged):
     names = ["embed/manifest.json"] + (["replace/manifest.json"] if "replace/manifest.json" in admitted else [])
-    staged = stage(payload, admitted, names, work, {})
+    stage(payload, admitted, names, staged)
     try:
-        manifest = json.loads(open(staged["embed/manifest.json"], "rb").read())
-        replace = json.loads(open(staged["replace/manifest.json"], "rb").read()) if len(names) > 1 else None
+        manifest = json.loads(staged.read("embed/manifest.json"))
+        replace = json.loads(staged.read("replace/manifest.json")) if len(names) > 1 else None
     except ValueError as x:
         raise Unsafe("a payload manifest is not JSON (%s)" % x)
     manifest_names(manifest, replace)
@@ -538,9 +710,12 @@ def install_staged(system, payload, admitted, work):
     rels = [r for r in admitted if r.startswith("root/")]
     rels += [posixpath.join("embed", e["stub"]) for e in manifest["files"]]
     rels += [posixpath.join("replace", e["file"]) for e in (replace["files"] if replace is not None else [])]
-    stage(payload, admitted, rels, work, staged)
+    stage(payload, admitted, rels, staged)
+    check_names(r[len("root/"):] for r in staged if r.startswith("root/"))
+    hash_rest(payload, admitted, staged)
     installed = install_root(admitted, staged, system)
     done, already, native, missing, errors, bound, restubbed, kept_stubs = [], [], [], [], [], [], [], []
+    targets = []   # the file opened for embedding or replacing (one at a time)
     for e in manifest["files"]:
         if e["path"] in done or e["path"] in missing:
             continue  # listed twice (payloads built before hao-embed skipped repeats)
@@ -549,12 +724,15 @@ def install_staged(system, payload, admitted, work):
         except Unsafe as x:
             errors.append("%s (%s; not embedded)" % (e["path"], x))
             continue
-        if not os.path.isfile(target) or os.path.islink(target):
+        close_all(targets)
+        f = open_target(system, e["path"])
+        if f is None:
             missing.append(e["path"])
             continue
-        data = open(target, "rb").read()
+        data = f.read()
+        targets.append(f)
         translate = e.get("mode") == "translate"
-        stub = open(staged[posixpath.join("embed", e["stub"])], "rb").read()
+        stub = staged.read(posixpath.join("embed", e["stub"]))
         why = check_bound(system, e, stub)
         if why:
             errors.append(e["path"] + " (" + why + "; not embedded)")
@@ -596,7 +774,7 @@ def install_staged(system, payload, admitted, work):
         if why:
             errors.append("%s (the payload's stub is %s; not embedded)" % (e["path"], why))
             continue
-        write_in_place(target, merged)
+        rewrite(f, merged)
         done.append(e["path"])
     replaced = []
     for e in (replace["files"] if replace is not None else []):
@@ -605,16 +783,21 @@ def install_staged(system, payload, admitted, work):
         except Unsafe as x:
             errors.append("%s (%s; not replaced)" % (e["path"], x))
             continue
-        data = open(target, "rb").read() if os.path.isfile(target) else b""
-        new = open(staged[posixpath.join("replace", e["file"])], "rb").read()
+        close_all(targets)
+        f = open_target(system, e["path"])
+        targets.append(f)
+        data = f.read() if f is not None else b""
+        new = staged.read(posixpath.join("replace", e["file"]))
         if hashlib.sha256(new).hexdigest() != e["result_sha256"]:
             errors.append(e["path"] + " (replacement file corrupt)")
         elif hashlib.sha256(data).hexdigest() == e["result_sha256"]:
             replaced.append(e["path"])
         elif hashlib.sha256(data).hexdigest() != e["source_sha256"]:
             errors.append(e["path"] + " (source hash differs; fix not applicable)")
+        elif os.fstat(f.fileno()).st_nlink != 1:
+            errors.append(e["path"] + " (has another hard link; not replaced)")
         else:
-            write_in_place(target, new)
+            rewrite(f, new)
             replaced.append(e["path"])
     aot_dirs = ensure_aot_dirs(system, errors)
     aot_caches = check_aot_caches(system, errors)
@@ -632,10 +815,16 @@ def install_staged(system, payload, admitted, work):
               "bundle_bound": sum(p in done for p in bound),
               "missing": missing, "replaced": replaced, "aot_dirs": aot_dirs, "aot_caches": aot_caches, "errors": errors,
               "stub_sha256": manifest["stub_sha256"]}
-    with open_nofollow(record_path, create=True) as f:
-        f.truncate()
-        f.write((json.dumps(record, indent=1) + "\n").encode())
-        os.fchmod(f.fileno(), 0o644)
+    close_all(targets)
+    top = os.open(system, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        dfd = dir_at(top, relative(os.path.relpath(os.path.dirname(record_path), system)))
+    finally:
+        os.close(top)
+    try:
+        publish(dfd, "install.json", io.BytesIO((json.dumps(record, indent=1) + "\n").encode()), 0o644)
+    finally:
+        os.close(dfd)
     print(f"hao: installed {installed} runtime files; embedded {len(done)} executables; "
           f"{sum(p in done for p in bound)} bind their bundle's Info.plist; kept {len(native)} native; {len(restubbed)} restubbed; {len(kept_stubs)} kept hao stubs of another build; "
           f"{len(legacy)} unbound hao stubs; {len(missing)} missing; replaced {replaced}; AOT dirs {aot_dirs}; "

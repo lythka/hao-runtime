@@ -251,6 +251,34 @@ class InstallPaths(unittest.TestCase):
         self.assertEqual(((self.system / 'usr/libexec/hao').stat().st_mode & 0o7777,
                           (self.system / 'usr/lib/hao/libhao.dylib').stat().st_mode & 0o7777), (0o755, 0o644))
 
+    def test_hard_linked_destinations(self):
+        """a runtime file is replaced by rename, so another hard link to the old one keeps its bytes; a file to
+        replace (replace/) that has another hard link is not written"""
+        os.link(self.victim, self.system / 'usr/lib/hao/libhao.dylib')
+        new = b'replacement'
+        (self.payload / 'replace').mkdir()
+        (self.payload / 'replace/new').write_bytes(new)
+        (self.system / 'usr/bin/tool').write_bytes(b'old tool')
+        os.link(self.system / 'usr/bin/tool', self.outside / 'tool')
+        rc, out = self.run_install(dict(files=[dict(path='usr/bin/tool', file='new', source_sha256=digest(b'old tool'),
+                                                    result_sha256=digest(new))]))
+        self.assertEqual(rc, 1, out)
+        self.assertIn('usr/bin/tool (has another hard link; not replaced)', out)
+        self.assertEqual(self.victim.read_bytes(), b'not the installer\'s to write')
+        self.assertNotEqual((self.system / 'usr/lib/hao/libhao.dylib').stat().st_ino, self.victim.stat().st_ino)
+        self.assertEqual((self.outside / 'tool').read_bytes(), b'old tool')
+
+    def test_name_collisions(self):
+        """names that are one file on a case-insensitive volume, or a file and a directory, are refused
+        (hao_release's rule; such a payload can only be made on a case-sensitive volume)"""
+        install = importlib.machinery.SourceFileLoader('hao_install', str(INSTALL)).load_module()
+        for names in (['usr/lib/hao/A', 'usr/lib/hao/a'], ['usr/lib/caf\u00e9', 'usr/lib/cafe\u0301'],
+                      ['usr/lib/hao/x', 'usr/lib/hao/X/y']):
+            with self.subTest(names=names):
+                with self.assertRaises(install.Unsafe):
+                    install.check_names(names)
+        install.check_names(['usr/lib/hao/a', 'usr/lib/hao/b/c'])
+
     def test_no_payload_manifest(self):
         self.refused('payload-manifest.json: missing or malformed',
                      after=lambda: (self.payload / 'payload-manifest.json').unlink())
