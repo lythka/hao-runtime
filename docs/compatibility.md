@@ -110,6 +110,40 @@ python3 tools/hao-embed --in-place $(cat programs.txt)
 - Laptop test 2026-11-14, image f112087 (26B131): Xcode 27.2 embedded this
   way starts and stays up for about 3.5 minutes, until a plug-in load fails.
 
+## Results on the target system
+
+The target is a MacBookPro9,2 running macOS 27.2.1 (26B131) built with
+hao-patcher, whose Status lists the system-level results. The programs below
+depend on hao-runtime; each line names where it was last shown. A program not
+listed here has not been checked.
+
+Shown working:
+- Setup Assistant from Language to account creation, the menu bar, Dock,
+  Finder and Control Center: laptop test 2026-11-15, image b124c40 (26B131).
+- Safari loads pages and plays video; Maps shows the satellite globe and 3D
+  buildings; Weather shows current conditions and the hourly and 10-day
+  forecasts; Books, Calendar, Preview, News, Stocks, Terminal and System
+  Settings open and stay running: laptop test 2026-11-15, image b124c40
+  (26B131).
+- WallpaperAgent starts without a crash on three boots (8c0d9ab): laptop test
+  2026-11-15, image b124c40 (26B131).
+- The Dock's right-click menu opens next to the Dock (1a290d7); Find My stays
+  open for 5 minutes without an Apple Account (1a290d7): laptop test
+  2026-11-16, development image e49b304 (26B131).
+
+Fixed on main and shown with a development runtime (laptop test 2026-11-16,
+development image e49b304, 26B131), not yet on a release image:
+- Music opens its window within 10 s (5ae3d5e). An install of 2026-11-16 with
+  an earlier runtime did not open it.
+- The Dock keeps running through display resolution changes (6603027), and
+  Freeform opens existing and new boards (9bff6bb).
+
+Known not to work:
+- Freeform: adding a sticky note ends the app.
+- Books: the library grid ends the app after an EPUB import.
+- Notification Center shows no widgets (seen 2026-11-15).
+- Xcode: see the section above.
+
 ## Testing
 
 Every instruction and boundary change is compared with native ARM execution of
@@ -124,7 +158,6 @@ the same code on Apple silicon:
   tests under ASan and UBSan and fuzz targets ([tests/fuzz](../tests/fuzz/README.md)).
 - Packaging tools are tested on generated fixtures (`tests/tools/`).
 
-Applications, extensions and system services are tested on the target system,
-first in a virtual machine and then on MacBookPro9,2 hardware. A passing test
-suite establishes the tested behaviour only; it does not establish that every
-application works.
+Applications, extensions and system services are tested on the target system
+(above). A passing test suite establishes the tested behaviour only; it does
+not establish that every application works.

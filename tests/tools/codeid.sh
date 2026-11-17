@@ -15,7 +15,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-tools-codeid)}
+OUT=${OUT:-$(mktemp -d -t hao-pkgtest-codeid)}
 B=${B:-$repo/build}
 fails=0
 pass() { echo "PASS $*"; }

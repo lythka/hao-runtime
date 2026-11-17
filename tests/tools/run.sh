@@ -17,7 +17,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-OUT=${OUT:-$(mktemp -d -t hao-tools)}
+OUT=${OUT:-$(mktemp -d -t hao-pkgtest)}
 B=${B:-$repo/build}
 KC=${KC:-}
 fails=0
