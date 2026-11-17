@@ -1428,8 +1428,10 @@ static void *uni_drain(void *arg)
             l[n] = 0;
             /* A Swift value audit record (swiftvalue.c audit_record) names
              * program types and image offsets: a private record, all its pieces. */
+            /* Only a newline ends a line: a record written in several pieces
+             * (past stdio's buffer) keeps its privacy to the end. */
             if (line_start) private_line = !strncmp(l, "hao-swift-audit ", 16);
-            line_start = end || t >= h;
+            line_start = end;
             if (private_line) {
                 if (end || t >= h) { if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s", l); }
                 else os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s\x1f", l);

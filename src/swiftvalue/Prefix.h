@@ -45,6 +45,7 @@
 #define walk_fact_key hao_sv_walk_fact_key
 #define walk_fact_image hao_sv_walk_fact_image
 #define walk_facts_fork_child hao_sv_walk_facts_fork_child
+#define recipe_fork_child hao_sv_recipe_fork_child
 #define walk_facts_load hao_sv_walk_facts_load
 #define collect_audit_patches hao_sv_collect_audit_patches
 #endif

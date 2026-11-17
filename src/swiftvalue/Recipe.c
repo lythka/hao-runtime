@@ -1136,6 +1136,10 @@ static int injected_over(const void *type, unsigned which, int fill, uint64_t at
     return 1;
 }
 
+/* case_images' buffers, too big for a guest stack. */
+static pthread_mutex_t images_lock = PTHREAD_MUTEX_INITIALIZER;
+void recipe_fork_child(void) { images_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+
 /* A CONVERT row (Facts.h): an enum whose empty cases' encodings differ by
  * architecture, every case listed with each architecture's image and mask
  * (the bits its injection defines: the same over zeros and over ones). A
@@ -1164,7 +1168,6 @@ static int case_images(reflection *r, const void *type, const walk_fact *f, cons
         !f->nimages) return 0;
     static unsigned char arm[WALK_FACT_IMAGE_BYTES], amask[WALK_FACT_IMAGE_BYTES], x86[WALK_FACT_IMAGE_BYTES],
                          xmask[WALK_FACT_IMAGE_BYTES], zeros[WALK_FACT_IMAGE_BYTES], ones[WALK_FACT_IMAGE_BYTES];
-    static pthread_mutex_t images_lock = PTHREAD_MUTEX_INITIALIZER;   /* the buffers are too big for a guest stack */
     int verdict = -1;   /* -1: in no empty case (yet) */
     hao_crit_enter(); pthread_mutex_lock(&images_lock);
     for (unsigned i = 0; i < f->nimages && verdict < 0; ++i) {
