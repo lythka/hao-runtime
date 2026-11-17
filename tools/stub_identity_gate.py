@@ -379,9 +379,10 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     add("slice.record", want is not None and have == want, show(want), show(have), note)
     # dylibs
     stub_deps = embed.dylib_commands(stub)
-    own_names = embed.HAO_LIBS + tuple(embed.HAO_LIB_DIR + "/" + n.split("/")[-1] for n in embed.HAO_LIBS)
-    sdeps = [d for d in stub_deps if d[1] not in own_names and not d[1].endswith("/libhao.dylib")
-             and not d[1].endswith("/libhao_identity.dylib")]
+    # hao's own libraries: payload stubs name them exactly by their installed paths, --host-test stubs by @rpath
+    hao_names = embed.HAO_LIBS if host_test else tuple(embed.HAO_LIB_DIR + "/" + n.split("/")[-1] for n in embed.HAO_LIBS)
+    is_hao = lambda n: "libhao" in n.lower()
+    sdeps = [d for d in stub_deps if not is_hao(d[1])]
     if x86 is not None and src_path:
         own = {n for _, n, _, _ in stub_deps if n not in {d[1] for d in sdeps}}
         links, skipped, _ = embed.native_deps(src_path, arm, x86, own)
@@ -398,10 +399,9 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     # what dyld loads into the stub before hao sets CS_REQUIRE_LV: libhao and libhao_identity through the stub's
     # own first rpath (/usr/lib/hao), and native libraries from protected storage only (hao-embed
     # X86Libraries.unprotected); anything else must be left to hao's binder
-    if not host_test:   # by installed path: dyld searches no rpath for them (a later one could supply them)
-        bad_own = [d[1] for d in stub_deps if d not in sdeps and not d[1].startswith(embed.HAO_LIB_DIR + "/")]
-    else:
-        bad_own = []
+    # exactly the two installed paths (dyld searches no rpath for them); any other name with libhao in it fails
+    bad_own = [d[1] for d in stub_deps if is_hao(d[1]) and d[1] not in hao_names]
+    bad_own += [n for n in hao_names if [d[1] for d in stub_deps].count(n) != 1]
     if x86 is not None and src_path:
         eo = x86.os_path(os.path.realpath(src_path))
         rp = [(r, eo) for r in embed.macho_rpaths_mo(arm)]
