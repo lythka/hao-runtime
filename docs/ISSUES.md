@@ -27,19 +27,28 @@ that wrote it).
 
 Which values are examined: every value whose type graph has a node not
 settled from metadata alone (`Recipe.c` `settled_node`: a POD under 8
-bytes with no extra inhabitants, structs and tuples by their fields, an
-`Optional` whose nil reads alike, functions, objects, metatypes, Builtins,
-and a native type its module did not freeze with no generic argument). So
+bytes with no extra inhabitants, a type of integers and floats only,
+structs and tuples by their fields, an `Optional` whose nil reads alike,
+functions, objects, metatypes, Builtins, and a native struct positively
+resilient with no generic argument: the frozen-struct table covers its
+image's build and does not list it; an uncovered image or an enum is no
+evidence). A type declared differently on arm64 is settled only where hao
+installed and read back its arm64 layout (`Swift.Float16`). So
 an enum or existential, or a kind with no rule, is examined even with no
 nil to convert. A type graph past the walk's bounds (depth 32, 1024 nodes,
 64 fields, 4096 bytes) and a failed allocation of the type walk are
 refused, never cached as unaffected. A live existential is certified by
 walking its inline value as the dynamic type (native copies call that
-type's witnesses on it); a class-bound object, an out-of-line box and an
-Error box pass as owner-opaque, and so does a guest type, inside an
+type's witnesses on it); an out-of-line value is walked in its box and must
+need no conversion (a box is shared, and its last release destroys the
+value natively); a class-bound object and an Error box pass as owner-opaque, and so does a guest type, inside an
 existential or at a guest call of a native witness, whose witnesses are
 all guest code. Nils native witnesses make for guest code (`witness_to_guest`)
-and native generic results take the same decision on the way back.
+and native generic results take the same decision on the way back. A child
+task's result is written by guest code and copied by the concurrency
+runtime before any boundary hao sees, so `swift_task_create` and
+`swift_asyncLet_begin` refuse a result type that needs certification
+(converting the result where the guest writes it is not done).
 
 Closed gaps: guest calls of native Optional, tuple and array witnesses
 handed an uncertified value over unchanged without any decision; a lent
@@ -58,7 +67,12 @@ native arm64 under JIT, `--interp` and AOT (the `Any` faulted before the
 payload walk). Refused: beside an `InlineArray` (no rule for its kind; with
 the switch it equals native, its sibling nil converted), an `InlineArray`
 beside a class reference only (passed unexamined before), a 65-element tuple
-(faulted before) and a task group's `next()` returning such a value. `guest/overlaynil` now stops by default at an
+(faulted before), an AsyncStream's `next()` returning such a value, an `Any`
+whose boxed value holds a `C??` nil destroyed in a tuple (passed before) and
+a task group of `C??` (faulted before). A native frozen enum the guest
+built (`_PlaygroundQuickLook`) is examined (taken as native-made before).
+`guest/asyncnil` runs its `Task<Node??>` case on its own: refused by
+default, equal to native with the switch. `guest/overlaynil` now stops by default at an
 `Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
 engines run with the switch.
 
@@ -74,9 +88,10 @@ admit. Each of those programs now stops at that boundary. Certified since
 their survey (no refusal): `Optional<(Swift.Bool) -> ()>` (function rule)
 and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
 measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
-Limits: `InlineArray` has no rule and is always refused; native code
-copying a guest-made value itself (a child task's result, an array's
-storage freed natively) is no boundary hao sees; the tag witnesses of an
+Limits: `InlineArray` of anything but scalars has no rule and is refused;
+task results of any type that needs certification are refused, not
+converted; an array's storage that guest code fills and releases last is
+destroyed by native code with no boundary hao sees; the tag witnesses of an
 enclosing enum with more than one empty case are not intercepted. More
 values are walked at each intercepted call than before. The classes are
 host-tested only; an image run is needed to see which programs stop.

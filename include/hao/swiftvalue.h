@@ -41,6 +41,9 @@ void *hao_swift_borrow_to_native(const void *type, const void *value);
  * inhabitant count set to arm64's, which the guest's compiled witnesses
  * for it select a field by. */
 void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const *fields, const uint8_t *tags);
+/* swift_task_create / swift_asyncLet_begin with result type FUTURE: refused
+ * when its values need certification (swiftvalue.c). */
+void hao_swift_task_result(const void *future, uint64_t lr);
 void hao_swift_value_fork_child(void);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif

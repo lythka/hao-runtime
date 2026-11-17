@@ -38,6 +38,13 @@ int archdiff_type(const void *type);
 /* Whether a native struct's module froze it (frozenstruct_gen.inc), so that
  * guest code compiled against it lays it out inline (swiftvalue.c). */
 int native_frozen_type(const void *type);
+/* Whether a native struct is positively resilient: the frozen-struct table
+ * covers this build of its defining image and lists it neither by
+ * descriptor nor by name (swiftvalue.c). An uncovered image or an enum: 0. */
+int native_resilient_type(const void *type);
+/* A native struct or enum's defining image (LC_UUID as 32 hex digits) and
+ * descriptor offset; 0 for a guest type or another kind. */
+int native_type_place(const void *type, char uuid[33], uint64_t *offset);
 /* A memo for Recipe.c's holds_archdiff, by metadata: -1 unknown, 0, 1. */
 int holds_archdiff_memo(const void *type);
 void holds_archdiff_remember(const void *type, int listed);
