@@ -4,6 +4,7 @@ LICENSE
 Makefile
 NOTICE.md
 README.md
+SECURITY.md
 generated.lock
 docs/ISSUES.md
 docs/architecture.md
