@@ -3,8 +3,8 @@
  * code cache, thunks, islands; natively there is none) is found by walking the address space; each call
  * that would make it writable, unmap it or map over it is tried on one page: libc mprotect, munmap and
  * mmap MAP_FIXED, mach_vm_protect, vm_protect, mach_vm_deallocate, mach_vm_allocate with
- * VM_FLAGS_OVERWRITE, and the raw mprotect system call. Then mprotect of __DATA_CONST read/write
- * (natively allowed). Prints what was refused; the page's protection afterwards goes to stderr. */
+ * VM_FLAGS_OVERWRITE, and the raw mprotect system call. Then mprotect of __DATA_CONST read/write and a
+ * shared remap of it (both natively allowed). Prints what was refused; the page's protection afterwards goes to stderr. */
 #include <errno.h>
 #include <mach-o/loader.h>
 #include <mach/mach.h>
@@ -95,5 +95,12 @@ int main(void)
     uint64_t d = data_const();
     int r = d ? mprotect((void *)(d & ~4095ull), 4096, PROT_READ | PROT_WRITE) : -2;
     printf("__DATA_CONST made writable: %s\n", r == -2 ? "none" : r == 0 ? "yes" : errno == EACCES ? "refused" : "failed");
+    /* a second, shared view of it (natively allowed) */
+    mach_vm_address_t view = 0;
+    vm_prot_t cur = 0, max = 0;
+    kern_return_t kr = d ? mach_vm_remap(mach_task_self(), &view, 4096, 0, VM_FLAGS_ANYWHERE, mach_task_self(), d & ~4095ull, FALSE, &cur,
+                                         &max, VM_INHERIT_NONE)
+                         : KERN_INVALID_ADDRESS;
+    printf("__DATA_CONST remapped: %s\n", !d ? "none" : kr == KERN_SUCCESS ? "yes" : kr == KERN_PROTECTION_FAILURE ? "refused" : "failed");
     return 0;
 }

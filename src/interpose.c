@@ -562,32 +562,35 @@ static void trap_mvm(hao_thread *t, uint64_t which)
         if (self && hao_guest_vm_guarded(x[1], x[2], 0, true)) { kr = KERN_PROTECTION_FAILURE; break; }
         kr = mach_vm_deallocate(task, x[1], x[2]);
         break;
-    case MVM_ALLOCATE: {
-        mach_vm_address_t *a = (mach_vm_address_t *)(uintptr_t)x[1];
-        if (self && ((int)x[3] & VM_FLAGS_OVERWRITE) && a && hao_guest_vm_guarded(*a, x[2], 0, true)) { kr = KERN_PROTECTION_FAILURE; break; }
-        kr = mach_vm_allocate(task, a, x[2], (int)x[3]);
-        break;
-    }
-    case MVM_MAP: {
-        mach_vm_address_t *a = (mach_vm_address_t *)(uintptr_t)x[1];
-        int32_t cur, max;
-        uint32_t inh;
-        memcpy(&cur, sp, 4); memcpy(&max, sp + 4, 4); memcpy(&inh, sp + 8, 4);
-        if (self && ((int)x[4] & VM_FLAGS_OVERWRITE) && a && hao_guest_vm_guarded(*a, x[2], 0, true)) { kr = KERN_PROTECTION_FAILURE; break; }
-        kr = mach_vm_map(task, a, x[2], x[3], (int)x[4], (mem_entry_name_port_t)x[5], x[6], (boolean_t)x[7], cur, max, inh);
-        break;
-    }
-    default: {   /* remap, remap_new */
-        mach_vm_address_t *a = (mach_vm_address_t *)(uintptr_t)x[1];
-        uint64_t curp, maxp;
-        uint32_t inh;
-        memcpy(&curp, sp, 8); memcpy(&maxp, sp + 8, 8); memcpy(&inh, sp + 16, 4);
-        /* remapping hao's memory elsewhere would give the guest a view it could write */
-        if ((self && ((int)x[4] & VM_FLAGS_OVERWRITE) && a && hao_guest_vm_guarded(*a, x[2], 0, true)) ||
-            ((mach_port_t)x[5] == mach_task_self() && hao_wx_covers(x[6], x[2]))) { kr = KERN_PROTECTION_FAILURE; break; }
-        vm_prot_t *cp = (vm_prot_t *)(uintptr_t)curp, *mp = (vm_prot_t *)(uintptr_t)maxp;
-        kr = which == MVM_REMAP ? mach_vm_remap(task, a, x[2], x[3], (int)x[4], (vm_map_t)x[5], x[6], (boolean_t)x[7], cp, mp, inh)
-                                : mach_vm_remap_new(task, a, x[2], x[3], (int)x[4], (vm_map_read_t)x[5], x[6], (boolean_t)x[7], cp, mp, inh);
+    case MVM_ALLOCATE: case MVM_MAP: default: {
+        /* the address is read once, into hao's own storage: the value checked is the value used (another
+         * guest thread may change the guest's copy meanwhile), and the result is written back */
+        mach_vm_address_t *ga = (mach_vm_address_t *)(uintptr_t)x[1], addr = 0;
+        if (!ga) { kr = KERN_INVALID_ARGUMENT; break; }
+        memcpy(&addr, ga, sizeof addr);
+        int flags = (int)(which == MVM_ALLOCATE ? x[3] : x[4]);
+        if (self && (flags & VM_FLAGS_OVERWRITE) && hao_guest_vm_guarded(addr, x[2], 0, true)) { kr = KERN_PROTECTION_FAILURE; break; }
+        if (which == MVM_ALLOCATE) kr = mach_vm_allocate(task, &addr, x[2], flags);
+        else if (which == MVM_MAP) {
+            int32_t cur, max;
+            uint32_t inh;
+            memcpy(&cur, sp, 4); memcpy(&max, sp + 4, 4); memcpy(&inh, sp + 8, 4);
+            kr = mach_vm_map(task, &addr, x[2], x[3], flags, (mem_entry_name_port_t)x[5], x[6], (boolean_t)x[7], cur, max, inh);
+        } else {   /* remap, remap_new */
+            uint64_t curp, maxp;
+            uint32_t inh;
+            memcpy(&curp, sp, 8); memcpy(&maxp, sp + 8, 8); memcpy(&inh, sp + 16, 4);
+            /* a second view of hao's executable memory or of sealed constant data (copy or shared) would be
+             * one the guest could make writable */
+            if ((mach_port_t)x[5] == mach_task_self() && (hao_wx_covers(x[6], x[2]) || hao_image_sealed_overlap(x[6], x[2]))) {
+                kr = KERN_PROTECTION_FAILURE;
+                break;
+            }
+            vm_prot_t *cp = (vm_prot_t *)(uintptr_t)curp, *mp = (vm_prot_t *)(uintptr_t)maxp;
+            kr = which == MVM_REMAP ? mach_vm_remap(task, &addr, x[2], x[3], flags, (vm_map_t)x[5], x[6], (boolean_t)x[7], cp, mp, inh)
+                                    : mach_vm_remap_new(task, &addr, x[2], x[3], flags, (vm_map_read_t)x[5], x[6], (boolean_t)x[7], cp, mp, inh);
+        }
+        if (kr == KERN_SUCCESS) memcpy(ga, &addr, sizeof addr);
         break;
     }
     }
