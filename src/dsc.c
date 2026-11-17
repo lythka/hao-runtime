@@ -163,13 +163,16 @@ static bool add_file(const char *path, bool main_file)
     uint64_t start = main_file ? u64(h + 0xe0) : D.start, size = main_file ? u64(h + 0xe8) : D.size;
     if (!size || start + size < start) return bad_file(fd, path, "shared region range wraps");
     if (cnt > sizeof D.maps / sizeof *D.maps - (size_t)D.nmaps) return bad_file(fd, path, "more mappings than hao keeps");
+    bool maps_header = false;   /* hao reads the main header at the region's start (read_objc_opts) */
     for (uint32_t k = 0; k < cnt; k++) {
         const uint8_t *e = h + off + (size_t)k * esz;
         uint64_t addr = u64(e), len = u64(e + 8), fileoff = u64(e + 16);
         if (addr < start || len > size || addr - start > size - len) return bad_file(fd, path, "a mapping outside the shared region");
         if (fileoff > (uint64_t)st.st_size || len > (uint64_t)st.st_size - fileoff)
             return bad_file(fd, path, "a mapping past the end of the file");
+        maps_header |= addr == start && fileoff == 0 && len >= (uint64_t)n;
     }
+    if (main_file && !maps_header) return bad_file(fd, path, "no mapping holds the header");
     if (main_file && u32(h + 0x18c) > DSC_MAX_SUBCACHES) return bad_file(fd, path, "too many subcaches");
     if (main_file) {
         D.start = start;
@@ -323,6 +326,7 @@ static void build_ranges(void)
  * selector base instead of selector references. */
 static void read_objc_opts(void)
 {
+    if (!mapped_span(D.start, 0x1e0)) return;   /* add_file requires it; a mapping may still have failed */
     const uint8_t *h = at(D.start);
     if (u32(h + 0x10) < 0x1e0) return;   /* the header ends before objcOptsOffset */
     uint64_t off = u64(h + 0x1d0), size = u64(h + 0x1d8);

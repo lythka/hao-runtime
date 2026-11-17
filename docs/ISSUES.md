@@ -22,8 +22,9 @@ past `HAO_MAX_RANGES` dropped silently. Every mapping is now checked against
 the shared region and its file before anything is reserved or mapped, at
 most 1024 subcaches are read, and a cache or image over a limit is refused
 with the reason. Only `HAO_GUEST_ROOT` (open tier) points hao at a cache
-other than the system's. Test: `guest/dsc` refuses a header whose mapping
-lies past the end of its file (before: SIGBUS in `dsc_open`).
+other than the system's. The main file must also map its own header, which
+hao reads. Test: `guest/dsc` refuses a header whose mapping lies past the
+end of its file and one with no mappings (before: SIGBUS in `dsc_open`).
 
 ## Unchecked protection changes
 
