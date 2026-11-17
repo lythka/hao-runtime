@@ -1,5 +1,24 @@
 # Runtime issues and measured scope
 
+## Patched guest code pages stayed writable
+
+`hao_code_write` (the one writer of guest instructions: the shared-cache
+selector and GOT-load rewrites, and the compatibility patch of one
+image) made each page it touched readable and writable and never made it
+read-only again, so those guest code pages stayed writable for the life
+of the process, and no protection call was checked. It now writes page
+by page: the page's protection is read, the page is writable for the
+copy only and gets that protection back (a poisoned `HAO_CODE_ALIAS`
+page stays `PROT_NONE`). A page that cannot be made writable is reported
+and the write refused; one that cannot be made read-only again stops the
+process. The patches are applied before any of the image's code runs
+and an image patched this way gets no AOT cache. Test: `test_macho`
+(page read-only again at the guest address and in the alias, a patch
+across a page boundary, an unmapped page refused). Limits: guest
+`mprotect` of its own code pages still reaches the kernel unchanged, so
+a guest can make its code writable and change it before it is
+translated, as a native process without hardened runtime can.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

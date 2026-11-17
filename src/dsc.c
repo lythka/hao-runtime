@@ -862,10 +862,13 @@ static uint64_t pool_slot(uint64_t pc, uint64_t value)
     return slot;
 }
 
-/* the one writer of guest instructions: the cache mapping and its alias (hao/code.h) */
+/* the one writer of guest instructions: the cache mapping and its alias (hao/code.h). An ADRP
+ * retargeted without its reader would load from the wrong page: a write that fails stops the process. */
 static void put_insn(uint64_t pc, uint32_t w)
 {
-    hao_code_write((uint64_t)(uintptr_t)at(pc), D.code_delta, &w, 4);
+    if (hao_code_write((uint64_t)(uintptr_t)at(pc), D.code_delta, &w, 4)) return;
+    fprintf(stderr, "hao: dsc: cannot rewrite the instruction at %#llx; stopping\n", (unsigned long long)pc);
+    abort();
 }
 
 /* adrp xd, page(target) at pc; ldr xt, [xn, #(slot & 0xfff)] (all unslid) */
