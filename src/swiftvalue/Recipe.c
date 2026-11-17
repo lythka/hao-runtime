@@ -49,6 +49,7 @@ typedef struct {
     unsigned surveyed;  /* survey mode: refusing types printed (or, quiet, counted) so far (collect) */
     int survey;         /* 1 survey mode, 2 the same without printing (collect_partial_patches) */
     unsigned passes;    /* HAO_SV_PASS_* classes by which the walk left parts of the value as found */
+    unsigned boxed;     /* collect: existential payloads the walk is inside */
     unsigned opaque;    /* collect: native opaque types (native_opaque) the walk is inside */
     /* Exact identities of the standard types selected() plans (nominals()): */
     const void *set, *dictionary;               /* nominal descriptors $sShMn, $sSDMn */
@@ -565,6 +566,85 @@ static int native_opaque(reflection *r, const void *type)
     return !native_frozen_type(type);
 }
 
+/* A nominal type with generic arguments (its context descriptor's generic flag). */
+static int generic_nominal(const void *type)
+{
+    const char *desc = ((const char *const *)type)[1];
+    uint32_t flags;
+    if (!desc) return 1;
+    memcpy(&flags,desc,4);
+    return (flags & 0x80) != 0;
+}
+
+/* A native struct or enum its module did not freeze and that has no generic
+ * argument, or an Optional (of any depth) of one. Guest code cannot lay out
+ * such a value or name its extra inhabitants: it is made and read only by
+ * native witnesses (the Optional's ask the payload's), so every byte of it,
+ * nils included, is in the native encoding. Its fields are not reached by
+ * guest-laid-out values either (no generic argument brings one in). */
+static int native_owned_opaque(reflection *r, const void *type)
+{
+    for (unsigned depth = 0; depth < 16; ++depth) {
+        const void *const *m = type;
+        if (r->kind(type) == 0x202 && m[1] == r->optional && m[2]) { type = m[2]; continue; }
+        return native_opaque(r,type) && !generic_nominal(type);
+    }
+    return 0;
+}
+
+int settled_node(const void *type, int *whole)
+{
+    reflection r = {
+        HAO_DLSYM("swift_getMetadataKind"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
+        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
+    };
+    nominals(&r);
+    *whole = 0;
+    if (!type || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional) return 0;
+    const witnesses *v = vwt(type);
+    const void *const *m = type;
+    uintptr_t kind = r.kind(type);
+    /* A POD of fewer than 8 bytes with no extra inhabitants holds no pointer
+     * and no nil: its bytes mean the same to both (also a listed type whose
+     * metadata hao gave its arm64 layout, Swift.Float16: src/swift.c). */
+    if (v->size < 8 && !(v->flags & 0x10000) && !v->extra) { *whole = 1; return 1; }
+    if (guest_laid_listed(type)) return 0;
+    /* The walk's own rules for these (collect): no pointer word in fewer than 8 bytes; a native type its
+     * module did not freeze, with no generic argument, and Optionals of it, made and read by native code only. */
+    if (v->size < 8 || native_owned_opaque(&r,type)) { *whole = 1; return 1; }
+    switch (kind) {
+    case 0x200: case 0x301: return 1;   /* by its fields */
+    case 0x202: {                       /* by its payload, once its own nil reads alike */
+        const witnesses *payload = vwt(m[2]);
+        empty_plan plan;
+        uint64_t at;
+        uint32_t xi;
+        if (function_value(&r,type)) { *whole = 1; return 1; }
+        if (m[1] != r.optional) return 0;
+        return !payload->extra ||                                                   /* a trailing tag byte */
+               (selected(&r,type,&plan,0) && plan.consumed == 1) ||               /* a zero word */
+               (v->extra + 1 == payload->extra && tag_byte_xi(&r,m[2],&at,&xi) && xi >= payload->extra) ||
+               (v->extra + 1 == payload->extra && function_xi_word(&r,m[2],&at));
+    }
+    case 0x302:
+        if (function_value(&r,type)) { *whole = 1; return 1; }
+        {
+            uint64_t flags; memcpy(&flags,(const char *)type + 8,8);
+            if (((flags >> 16) & 0xff) != 1 || v->size != 8) return 0;
+        }
+        *whole = 1;
+        return 1;                       /* a block: an ObjC object */
+    case 0: case 0x305: case 0x203: case 0x204: case 0x300: case 0x304: case 0x306:
+        *whole = 1;                     /* objects of the shared native domain, metatypes, Builtins */
+        return 1;
+    default:                            /* enums, existentials, anything else: by the value */
+        return 0;
+    }
+}
+
 /* Whether TYPE is, or holds inline where guest code lays it out, a listed
  * frozen type: through struct fields, tuple elements, Optional payloads and
  * an enum's inline payload cases, stopping at a native opaque type. Such a
@@ -635,8 +715,7 @@ static int other_kind(reflection *r, const void *type, uintptr_t kind)
         r->passes |= HAO_SV_PASS_OWNED;
         return 1;
     }
-    case 0x303: case 0:       /* guest call of a native witness (r->existentials): it only copies the container
-                                 or object, through the runtime and the witnesses of the type that made it */
+    case 0:                   /* a Swift object (guest call of a native witness): the shared native domain's */
         if (!r->existentials) return 0;
         r->passes |= HAO_SV_PASS_OWNED;
         return 1;
@@ -657,19 +736,50 @@ static int other_kind(reflection *r, const void *type, uintptr_t kind)
  * count says on either architecture (hao_swift_struct_layout_done). Only for
  * that walk (r->existentials): a published value's native readers are not
  * shown to be G's witnesses. */
+static int guest_tag_witnesses(reflection *r, const void *g);
 static int guest_witnessed_optional(reflection *r, const void *type)
 {
-#ifdef HAO_SWIFT_VALUE_RUNTIME
     const void *const *m = type;
-    if (!r->existentials || m[1] != r->optional || !m[2]) return 0;
-    const void *g = m[2];
+    if (!r->existentials || m[1] != r->optional || !m[2] || vwt(type)->size != vwt(m[2])->size) return 0;
+    return guest_tag_witnesses(r,m[2]);
+}
+/* G is a guest-defined struct or enum with extra inhabitants whose single-
+ * payload tag witnesses are guest code (guest_witnessed_optional). The same
+ * holds for a guest single-payload enum whose empty cases are G's
+ * inhabitants: its tag is asked of G's witnesses too. */
+static int guest_tag_witnesses(reflection *r, const void *g)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
     const void *const *gm = g;
     uintptr_t k = r->kind(g);
     if ((k != 0x200 && k != 0x201) || !gm[1] || !hao_image_for_addr((uint64_t)(uintptr_t)gm[1]) ||
-        !vwt(g)->extra || vwt(type)->size != vwt(g)->size) return 0;
+        !vwt(g)->extra) return 0;
     for (unsigned slot = 6; slot <= 7; ++slot) {
         uint64_t f = (uint64_t)(uintptr_t)vwt(g)->functions[slot];
         if (!f || (!hao_is_trap(f) && !hao_image_for_code(f) && !hao_guest_of_entry(f))) return 0;   /* guest code */
+    }
+    return 1;
+#else
+    (void)r; (void)g;
+    return 0;
+#endif
+}
+
+static int collect(reflection *r, const void *type, const unsigned char *value,
+                   uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth);
+
+/* A guest-defined struct or enum whose copy, move and destroy witnesses
+ * (slots 0-5) are all guest code: native code holding one, an existential's
+ * runtime included, reaches its bytes only through them. */
+static int guest_witnessed(reflection *r, const void *type)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    const void *const *m = type;
+    uintptr_t k = r->kind(type);
+    if ((k != 0x200 && k != 0x201) || !m[1] || !hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return 0;
+    for (unsigned slot = 0; slot <= 5; ++slot) {
+        uint64_t f = (uint64_t)(uintptr_t)vwt(type)->functions[slot];
+        if (!f || (!hao_is_trap(f) && !hao_image_for_code(f) && !hao_guest_of_entry(f))) return 0;
     }
     return 1;
 #else
@@ -678,8 +788,36 @@ static int guest_witnessed_optional(reflection *r, const void *type)
 #endif
 }
 
-static int collect(reflection *r, const void *type, const unsigned char *value,
-                   uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth);
+/* The contents of a live existential (Metadata.h TargetExistentialTypeMetadata,
+ * ExistentialMetadataImpl.h). Native code copying, assigning or destroying
+ * the container calls the dynamic type's own witnesses on an inline value,
+ * so a guest-encoded nil inside it reaches them as it is: the inline value is
+ * walked as a value of the dynamic type, at the container's offset 0. Passed
+ * as found: a class-bound container's object (the shared native domain's) and
+ * an out-of-line value, whose buffer holds a box the native runtime allocated
+ * and copies by retaining. */
+static int existential_payload(reflection *r, const void *type, const unsigned char *value, uint64_t base,
+                               empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
+{
+    uint32_t flags; memcpy(&flags,(const char *)type + 8,4);
+    if (!(flags & 0x80000000u)) { r->passes |= HAO_SV_PASS_OWNED; return 1; }   /* class-bound: an object word */
+    uint64_t dynamic; memcpy(&dynamic,value + 24,8);
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    uint64_t table = 0;
+    if (dynamic < 4096 || (dynamic & 7) || !hao_probe_read8(dynamic - 8,&table) || !table || (table & 7)) return 0;
+#else
+    return 0;
+#endif
+    const void *payload = (const void *)(uintptr_t)dynamic;
+    const witnesses *pv = vwt(payload);
+    if (pv->flags & 0x00020000) { r->passes |= HAO_SV_PASS_OWNED; return 1; }   /* out of line: a native box */
+    if (pv->size > 24) return 0;
+    r->boxed++;
+    int ok = collect(r,payload,value,base,out,capacity,used,depth + 1);
+    r->boxed--;
+    return ok;
+}
+
 static int collect_inner(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
 {
@@ -836,6 +974,10 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
          * plan, even if another sibling already supplied a valid patch. */
         if (!selected(r, type, &plan, 0) || !plan.consumed) {
             if (guest_witnessed_optional(r,type)) { r->passes |= HAO_SV_PASS_OWNED; return 1; }
+            /* A nil a native witness made for guest code to read inline
+             * (r->known_layout): over a type guest code cannot lay out, it
+             * reads none inline; the native encoding stays. */
+            if (r->known_layout && native_owned_opaque(r,type)) { r->passes |= HAO_SV_PASS_OWNED; return 1; }
             return leaf(r,type,value);
         }
         uint64_t word; memcpy(&word, value + plan.offset, 8);
@@ -867,6 +1009,11 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         const void *single;
         unsigned empty_cases;
         empty_plan inner;
+        if (r->existentials && guest_single_payload_enum(type,&single,&empty_cases) && guest_tag_witnesses(r,single) &&
+            !selected(r,single,&inner,0)) {
+            r->passes |= HAO_SV_PASS_OWNED;   /* its case asked of the payload's guest witnesses */
+            return 1;
+        }
         if (guest_single_payload_enum(type,&single,&empty_cases) && selected(r,single,&inner,0) &&
             inner.offset <= v->size - 8) {
             uint64_t word, first = inner.consumed;
@@ -929,7 +1076,13 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             if (!table || !hao_probe_read8(table,&conformance) || !conformance) return 0;
             if (!guest_protocols && (hao_image_for_addr(table) || hao_image_for_addr(conformance))) return 0;
         }
-        return 1;
+        return existential_payload(r,type,value,base,out,capacity,used,depth);
+    }
+    if (kind == 0x303) {   /* a guest call of a native witness (r->existentials) */
+        uint32_t flags; memcpy(&flags,(const char *)type + 8,4);
+        if ((flags & 0x3f000000u) == 0x01000000u) { r->passes |= HAO_SV_PASS_OWNED; return 1; }   /* Error: a runtime box */
+        if (flags & 0x3f000000u) return 0;
+        return existential_payload(r,type,value,base,out,capacity,used,depth);
     }
     if (kind != 0x200 && kind != 0x301) return other_kind(r,type,kind);
     intptr_t count = r->count(type);
@@ -983,6 +1136,13 @@ static void survey(reflection *r, const void *type, uint64_t base, unsigned dept
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
 {
+    /* Inside an existential, a guest type its own (guest) witnesses handle
+     * whole: the guest's encoding is read by the code that wrote it. */
+    if (r->boxed && guest_witnessed(r,type)) { r->passes |= HAO_SV_PASS_OWNED; return 1; }
+    /* Also at a guest call of a native witness (r->existentials): the native
+     * witness hands such a value whole to its own guest witnesses, as
+     * swiftvalue.c guest_ranges takes it. */
+    if (r->existentials && guest_witnessed(r,type)) { r->passes |= HAO_SV_PASS_OWNED; return 1; }
     int opaque = !r->opaque && native_opaque(r,type);
     r->opaque += (unsigned)opaque;
     unsigned before = r->surveyed, first = *used;
@@ -1033,9 +1193,10 @@ int collect_empty_patches_detail(const void *type, const void *value, empty_patc
 }
 
 int collect_value_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
-                          const void **unresolved, int existentials, unsigned *passes)
+                          const void **unresolved, int existentials, int (*known_layout)(const void *),
+                          unsigned *passes)
 {
-    return collect_patches(type,value,out,capacity,unresolved,existentials,NULL,0,passes);
+    return collect_patches(type,value,out,capacity,unresolved,existentials,known_layout,0,passes);
 }
 
 int collect_survey_patches(const void *type, const void *value, empty_patch *out,
@@ -1045,9 +1206,9 @@ int collect_survey_patches(const void *type, const void *value, empty_patch *out
 }
 
 int collect_partial_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
-                            int existentials)
+                            int existentials, int (*known_layout)(const void *))
 {
-    return collect_patches(type,value,out,capacity,NULL,existentials,NULL,2,NULL);
+    return collect_patches(type,value,out,capacity,NULL,existentials,known_layout,2,NULL);
 }
 
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)

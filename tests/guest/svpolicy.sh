@@ -1,10 +1,12 @@
 #!/bin/sh
-# The Swift value boundary policy (tests/guest/svpolicy.swift): guest generic code copies tuples holding a
-# C?? through native tuple witnesses. "pass": a tuple whose other field is in a pass class (owner-opaque,
-# identical representation, inactive payload) is converted and must equal native arm64, each class named
-# under HAO_BRIDGE_CHECK. "refuse": a tuple with live weak ObjC storage is refused (the refusal line, then
-# abort) by default, and with HAO_SWIFT_VALUE_PASSTHROUGH=1 goes on with its nil still converted, equal to
-# native arm64. The program is arm64 natively and arm64e under hao (JIT, --interp, AOT).
+# The Swift value boundary policy (tests/guest/svpolicy.swift): guest generic code copies tuples through native
+# tuple witnesses. "pass": tuples of a C?? beside a field of each pass class (owner-opaque, identical
+# representation, inactive payload; named under HAO_BRIDGE_CHECK), and an Any holding a C?? walked through its
+# dynamic type, equal native arm64 under JIT, --interp and AOT. Refused (the refusal line, then abort):
+# "refuse" a C?? beside an InlineArray (no rule for its kind; with HAO_SWIFT_VALUE_PASSTHROUGH=1 it goes on, its
+# sibling nil converted, equal native), "gate" an InlineArray beside a class reference only (no Optional to
+# convert, still examined), "wide" a 65-element tuple (past the walk's bounds), "result" a task group's next()
+# returning such a value to guest code.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/svpolicy.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -21,31 +23,37 @@ done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/svpolicy.arm64e" >"$OUT/aot.gen" 2>&1 || echo "svpolicy: aot generation failed"
 fail=0
-for part in pass refuse; do
+for part in pass refuse gate wide result; do
     timeout -s KILL "$T" "$OUT/svpolicy.arm64" $part >"$OUT/native.$part.out" 2>/dev/null; nrc=$?
-    echo "$part native    rc=$nrc lines=$(wc -l <"$OUT/native.$part.out" | tr -d ' ')"
-    [ $nrc = 0 ] || fail=1
-    for mode in jit interp aot; do
-        case $mode in
-        jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
-        interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
-        aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
-        esac
-        timeout -s KILL "$T" "$@" "$OUT/svpolicy.arm64e" $part >"$OUT/$mode.$part.out" 2>"$OUT/$mode.$part.err"; rc=$?
-        if [ $part = pass ]; then
-            if [ $rc = $nrc ] && cmp -s "$OUT/native.$part.out" "$OUT/$mode.$part.out"; then r=SAME; else r=DIFF; fail=1; fi
-            printf '%s %-9s rc=%s %s\n' $part "$mode" "$rc" "$r"
-            [ $r = SAME ] || diff "$OUT/native.$part.out" "$OUT/$mode.$part.out" | sed 's/^/    /' | head -16
-        else
-            # refused before the first line; no output past the boundary
-            if [ $rc != 0 ] && [ ! -s "$OUT/$mode.$part.out" ] &&
-               grep -q 'Swift value boundary refused: .*type=svpolicy.W' "$OUT/$mode.$part.err"; then r=REFUSED
-            else r=NOT-REFUSED; fail=1; fi
-            printf '%s %-9s rc=%s %s\n' $part "$mode" "$rc" "$r"
-            [ $r = REFUSED ] || tail -5 "$OUT/$mode.$part.err" | sed 's/^/    /'
-        fi
-    done
+    [ $nrc = 0 ] || { echo "$part native rc=$nrc"; fail=1; }
 done
+echo "native    rc=0 lines=$(cat "$OUT"/native.*.out | wc -l | tr -d ' ')"
+for mode in jit interp aot; do
+    case $mode in
+    jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
+    interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
+    aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
+    esac
+    timeout -s KILL "$T" "$@" "$OUT/svpolicy.arm64e" pass >"$OUT/$mode.pass.out" 2>"$OUT/$mode.pass.err"; rc=$?
+    if [ $rc = 0 ] && cmp -s "$OUT/native.pass.out" "$OUT/$mode.pass.out"; then r=SAME; else r=DIFF; fail=1; fi
+    printf 'pass   %-9s rc=%s %s\n' "$mode" "$rc" "$r"
+    [ $r = SAME ] || diff "$OUT/native.pass.out" "$OUT/$mode.pass.out" | sed 's/^/    /' | head -16
+done
+# Each refused part: a nonzero exit, nothing printed past the boundary, the refusal line with its reason.
+refused() {   # part mode reason command...
+    part=$1 mode=$2 why=$3; shift 3
+    timeout -s KILL "$T" "$@" "$OUT/svpolicy.arm64e" $part >"$OUT/$mode.$part.out" 2>"$OUT/$mode.$part.err"; rc=$?
+    if [ $rc != 0 ] && [ ! -s "$OUT/$mode.$part.out" ] && grep -q "Swift value boundary refused: $why" "$OUT/$mode.$part.err"
+    then r=REFUSED; else r=NOT-REFUSED; fail=1; fi
+    printf '%-6s %-9s rc=%s %s\n' $part "$mode" "$rc" "$r"
+    [ $r = REFUSED ] || grep -v hao-schema "$OUT/$mode.$part.err" | tail -3 | sed 's/^/    /'
+}
+refused refuse jit "unresolved active representation" env HAO_NO_AOT=1 "$HAO"
+refused refuse interp "unresolved active representation" env HAO_NO_AOT=1 "$HAO" --interp
+refused refuse aot "unresolved active representation" env HAO_CACHE="$OUT/aot" "$HAO"
+refused gate jit "unresolved active representation" env HAO_NO_AOT=1 "$HAO"
+refused wide jit "type graph past the walk's bounds" env HAO_NO_AOT=1 "$HAO"
+refused result jit "native result has unresolved active representation" env HAO_NO_AOT=1 "$HAO"
 # The pass classes, named under HAO_BRIDGE_CHECK.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" pass >"$OUT/check.out" 2>"$OUT/check.err"
 for c in "owner-opaque .*NSObject" "identical-representation .*Int) -> Swift.Int" "inactive-payload .*Optional<Swift.Int>"; do

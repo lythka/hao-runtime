@@ -51,12 +51,20 @@ enum { HAO_SV_PASS_IDENTICAL = 1, HAO_SV_PASS_INACTIVE = 2, HAO_SV_PASS_OWNED = 
 /* collect_empty_patches_detail, or with EXISTENTIALS collect_witness_patches,
  * also reporting the pass classes of a certified walk. */
 int collect_value_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
-                          const void **unresolved, int existentials, unsigned *passes);
+                          const void **unresolved, int existentials, int (*known_layout)(const void *),
+                          unsigned *passes);
 /* Survey mode without printing: the patches of every part the walk can
  * certify, nothing inside a refusing type. For the experimental unrestricted
  * pass-through only (swiftvalue.c decline), which otherwise drops them. */
 int collect_partial_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
-                            int existentials);
+                            int existentials, int (*known_layout)(const void *));
+/* Whether the representation of TYPE's own storage is, from its metadata
+ * alone, the same on both architectures or its native owner's alone, for
+ * every value (the rules collect applies without reading the value). Its
+ * fields, payloads and Optional payload are the caller's to visit, unless
+ * *WHOLE says nothing below needs it. Anything not settled needs the walk
+ * at a boundary (swiftvalue.c graph). */
+int settled_node(const void *type, int *whole);
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity);
 /* The same, where each struct on an extra-inhabitant path (other than Array and String) must be one
  * KNOWN_LAYOUT accepts: the outer nils guest code can read inline, for a nil a native witness made. */
