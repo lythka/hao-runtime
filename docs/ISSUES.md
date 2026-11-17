@@ -1,5 +1,68 @@
 # Runtime issues and measured scope
 
+## Swift values hao cannot certify are refused again
+
+A Swift value crossing to native code that the walk could not certify
+passed through unpatched by default. That is not "at worst a low-address
+crash": an arm64 nil can be another valid value of the x86_64 type (a third
+pointer extra inhabitant: arm64's 2 is x86_64's `.some(.none)`), spare-bit
+enum tags select another case, and a wrong case releases what its owner
+releases again. Now (`swiftvalue.c` `decline`) such a value is refused: the
+survey lines and schema, then `Swift value boundary refused: REASON (...)`
+and abort. Refused: an active representation with no rule (including
+metadata kinds the walk has no rule for: extended existentials, fixed-size
+arrays, functions other than the measured closures and blocks), layout,
+spare-bit and extra-inhabitant counts that differ by architecture, an
+ambiguous witness ABI or ownership, an unresolved assignment destination,
+null or overlapping storage, and a failed allocation a needed conversion
+depends on. A value is passed as found only when the walk proves each part
+of it is a patched nil or in one of three classes (`Recipe.h`
+`HAO_SV_PASS_*`; named under `HAO_BRIDGE_CHECK` as `Swift value passed as
+found: CLASS`): identical representation and ownership, an inactive payload
+behind a discriminator both sides read alike, or opaque storage only its
+owner touches (a live object of the shared native domain, an existential a
+native witness only copies, an out-of-line box, and an `Optional` of a
+guest struct or enum whose tag witnesses are guest code, read by the code
+that wrote it).
+
+Closed gaps: guest calls of native Optional, tuple and array witnesses
+handed an uncertified value over unchanged without any decision; a lent
+view that needed conversion but was not bitwise-takable went unchanged; a
+failed scratch allocation left an assignment destination or array elements
+half converted. All are refused now. `HAO_SWIFT_VALUE_PASSTHROUGH=1` (open
+tier, no boot argument; it replaces `HAO_SWIFT_VALUE_STRICT`) is an
+experimental triage switch that accepts memory corruption: such a value goes
+on, reported once per (type, reason). It no longer drops the patches of the
+parts the walk certified (a refusing field's siblings).
+
+Measured: `guest/svpolicy` copies tuples of a `C??` outer nil through the
+native tuple witnesses. Beside an ObjC object, a closure and a nil `Int?`,
+each pass class is named and the output equals native arm64 under JIT,
+`--interp` and AOT. Beside live weak ObjC storage the value is refused. With
+the switch it equals native; before, the same run faulted at 0x8, since the
+sibling nil was dropped. `guest/overlaynil` now stops by default at an
+`Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
+engines run with the switch.
+
+Impact, from the survey lines of 26B131 runs (types seen, all of the
+"unresolved active representation" reason, in calls and in published
+results): refused now: a published `SwiftUI.DropDelegate` existential (a
+native protocol, guest conformance), `Optional<SwiftUI.BoundInputsView>`
+(88 bytes, no `Optional` rule), `Optional<SwiftUI.ToolbarItemGroup<G>>`
+(42 bytes, xi 0xfd; refused on the host too), `SwiftUI._Glass.Variant.Role`
+(an 8-byte native enum whose case the walk cannot read) and a published
+guest-protocol existential of 40 bytes that the guest-protocol rule did not
+admit. Each of those programs now stops at that boundary. Certified since
+their survey (no refusal): `Optional<(Swift.Bool) -> ()>` (function rule)
+and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
+measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
+Limits: a type whose graph exceeds the walk's bounds (depth, 1024 nodes,
+4096 bytes) is never intercepted and so still passes unexamined; values
+native code hands to the guest (a nil a witness made, native generic
+results) keep their old fallback; the tag witnesses of an enclosing enum
+with more than one empty case are not intercepted. The classes are
+host-tested only; an image run is needed to see which programs stop.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
@@ -2371,26 +2434,12 @@ Rules as implemented:
   from native metadata) was refused. `swiftlayout` section G: 5 walks
   refused before.
 
-Refusal policy (`swiftvalue.c` `decline`): a value the walk cannot certify,
-and the ownership cases it cannot carry out, pass through unpatched by
-default. The native witness runs on the guest's bytes, and a published result
-stays as the guest wrote it. The first time a (type, reason) pair occurs in a
-process, hao prints three things under the stable prefix `Swift value
-survey:`: the value's innermost refusing types (`refused at offset N depth D:
-... type=...`, from a second walk in survey mode), the schema of the value,
-and one `passed through unpatched: REASON (... type=...) root=... guest lr=...
-pc=...` line. Up to 1024 pairs are reported per process. This is the owner's
-choice: refusing by default hides what ARM apps send.
-
-The cost is that a nil in the guest's encoding inside such a value can make
-native code misbehave or crash later, away from the boundary. Read a crash
-after a survey line with that in mind. `HAO_SWIFT_VALUE_STRICT=1` (open tier
-only, no boot argument; for tests) restores the refusal: the same lines, then
-the `Swift value boundary refused:` line and abort. An activation lifetime
-mismatch, an internal invariant, still aborts. Not covered by a guest test:
-the publication and witness paths are reached from SwiftUI/AttributeGraph on
-the target. `swiftlayout` section S checks the survey walk itself (a value
-with two refusing fields prints both).
+Refusal policy (`swiftvalue.c` `decline`): see "Swift values hao cannot
+certify are refused again". From 2026-11-12 until that entry a value the walk
+could not certify passed through unpatched by default, with `Swift value
+survey:` lines the first time per (type, reason); `HAO_SWIFT_VALUE_STRICT=1`
+restored the refusal. `swiftlayout` section S checks the survey walk itself
+(a value with two refusing fields prints both).
 
 Laptop (26B131, MBP9,2, live swap): Weather.app, which aborted at
 `Swift.Optional<(Swift.Bool) -> ()>` under the refusing default, now passes

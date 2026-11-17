@@ -60,7 +60,7 @@ int main(void)
                                     "no_struct_thunks", "bridge_check", "no_varsniff", "no_ifunits", "no_swift_thunks",
                                     "no_swift_values", "native_libcxx", "no_thunks", "sigreturn_kernel", "no_probe", NULL};
         static const char *never[] = {"no_libval", "aot_learn", "no_jit_memory", "bridge_abort", "sigreturn_user", "code_alias",
-                                      "libval_user", "swift_value_strict", "interp", "stats", "allow_unsigned", "watchdog", "cache", "guest_root",
+                                      "libval_user", "swift_value_passthrough", "interp", "stats", "allow_unsigned", "watchdog", "cache", "guest_root",
                                       "if_dir", "trust_list", "diag_dir", "async_contract_library", "aot_limit_kb",
                                       "jit_cache_mb", "swift_pop", NULL};
         static const int tiers[] = {HAO_ENV_OPEN, HAO_ENV_GUARDED, HAO_ENV_SETUGID};

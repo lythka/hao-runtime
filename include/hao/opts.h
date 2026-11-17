@@ -29,8 +29,9 @@ typedef struct {
          no_probe,               /* HAO_NO_PROBE: no fault-tolerant reads; blocks.c reads candidates through Mach (signals.c) */
          code_alias,             /* HAO_CODE_ALIAS: hao reads guest code from an alias, the guest's text pages poisoned (code.c) */
          libval_user,            /* HAO_LIBVAL_USER: library validation's signer checks in user space, as on an x86_64 kernel (tests; libval.c) */
-         swift_value_strict;     /* HAO_SWIFT_VALUE_STRICT: a refused Swift value ends the process instead of passing
-                                    through unpatched (tests; swiftvalue.c) */
+         swift_value_passthrough; /* HAO_SWIFT_VALUE_PASSTHROUGH (open tier, no boot argument): experimental, for
+                                    triage only, accepting memory corruption: a Swift value hao cannot certify goes on
+                                    to native code instead of being refused (swiftvalue.c decline) */
     char cache[1024];           /* HAO_CACHE ("" = unset) */
     char guest_root[1024];      /* HAO_GUEST_ROOT ("" = unset) */
     char aot_list_dir[1024];    /* HAO_AOT_LIST_DIR: where hao --aot with no FILE reads its lists (tests; "" = /usr/lib/hao) */

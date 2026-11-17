@@ -46,8 +46,9 @@ typedef struct {
     int existentials;   /* admit existential and Swift class payloads (guest calls of native witnesses only) */
     int (*known_layout)(const void *type);   /* if set: a struct (other than Array and String) whose layout
                                                 it rejects ends the XI path (collect_inline_patches) */
-    unsigned surveyed;  /* survey mode: refusing types printed so far (collect) */
-    int survey;
+    unsigned surveyed;  /* survey mode: refusing types printed (or, quiet, counted) so far (collect) */
+    int survey;         /* 1 survey mode, 2 the same without printing (collect_partial_patches) */
+    unsigned passes;    /* HAO_SV_PASS_* classes by which the walk left parts of the value as found */
     unsigned opaque;    /* collect: native opaque types (native_opaque) the walk is inside */
     /* Exact identities of the standard types selected() plans (nominals()): */
     const void *set, *dictionary;               /* nominal descriptors $sShMn, $sSDMn */
@@ -599,6 +600,84 @@ static int holds_archdiff(reflection *r, const void *type, unsigned depth)
     return listed;
 }
 
+/* A Common.c leaf rule (common_leaf_value): each one is a layout measured
+ * identical on both architectures, live references in it the shared native
+ * domain's. */
+static int leaf(reflection *r, const void *type, const void *value)
+{
+    if (!common_leaf_value(type,value)) return 0;
+    r->passes |= HAO_SV_PASS_IDENTICAL;
+    return 1;
+}
+
+/* A live value of a kind other than a struct, tuple, enum, Optional, String,
+ * ObjC class wrapper, or (published) existential and Swift object, which the
+ * rules above take. Each kind passed as found names its class; a kind with
+ * no rule here has no certified representation and refuses the value
+ * (Metadata.h MetadataKind). */
+static int other_kind(reflection *r, const void *type, uintptr_t kind)
+{
+    const witnesses *v = vwt(type);
+    switch (kind) {
+    case 0x300:   /* Builtin: an integer, float or vector is the same bits on both; an object reference
+                     belongs to the native runtime that retains and releases it */
+        r->passes |= (v->flags & 0x10000) ? HAO_SV_PASS_OWNED : HAO_SV_PASS_IDENTICAL;
+        return 1;
+    case 0x304: case 0x306:   /* a metatype: a pointer to the native runtime's metadata, which guest code uses too */
+        r->passes |= HAO_SV_PASS_IDENTICAL;
+        return 1;
+    case 0x203: case 0x204:   /* a CF or foreign reference: the native runtime's object, retained by it */
+        r->passes |= HAO_SV_PASS_OWNED;
+        return 1;
+    case 0x302: {             /* a block (function_value took every other function): an ObjC object */
+        uint64_t flags; memcpy(&flags,(const char *)type + 8,8);
+        if (((flags >> 16) & 0xff) != 1 || v->size != 8) return 0;
+        r->passes |= HAO_SV_PASS_OWNED;
+        return 1;
+    }
+    case 0x303: case 0:       /* guest call of a native witness (r->existentials): it only copies the container
+                                 or object, through the runtime and the witnesses of the type that made it */
+        if (!r->existentials) return 0;
+        r->passes |= HAO_SV_PASS_OWNED;
+        return 1;
+    default:                  /* extended existentials, fixed-size arrays, anything newer: no rule */
+        return 0;
+    }
+}
+
+/* An Optional whose nil is an extra inhabitant of a guest-defined struct or
+ * enum G whose single-payload tag witnesses (getEnumTagSinglePayload,
+ * storeEnumTagSinglePayload) are guest code. The native Optional witnesses
+ * learn the case only from those (Enum.cpp: a payload with extra
+ * inhabitants decides a single-payload enum's case), so the guest's encoding
+ * is read and written by the code that made it, and a present G is handed
+ * whole to G's own witnesses; a guest call of a native witness rewrites
+ * nothing inside a guest-defined type (swiftvalue.c guest_ranges). The whole
+ * value then is opaque storage of its owner, whatever G's extra-inhabitant
+ * count says on either architecture (hao_swift_struct_layout_done). Only for
+ * that walk (r->existentials): a published value's native readers are not
+ * shown to be G's witnesses. */
+static int guest_witnessed_optional(reflection *r, const void *type)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    const void *const *m = type;
+    if (!r->existentials || m[1] != r->optional || !m[2]) return 0;
+    const void *g = m[2];
+    const void *const *gm = g;
+    uintptr_t k = r->kind(g);
+    if ((k != 0x200 && k != 0x201) || !gm[1] || !hao_image_for_addr((uint64_t)(uintptr_t)gm[1]) ||
+        !vwt(g)->extra || vwt(type)->size != vwt(g)->size) return 0;
+    for (unsigned slot = 6; slot <= 7; ++slot) {
+        uint64_t f = (uint64_t)(uintptr_t)vwt(g)->functions[slot];
+        if (!f || (!hao_is_trap(f) && !hao_image_for_code(f) && !hao_guest_of_entry(f))) return 0;   /* guest code */
+    }
+    return 1;
+#else
+    (void)r; (void)type;
+    return 0;
+#endif
+}
+
 static int collect(reflection *r, const void *type, const unsigned char *value,
                    uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth);
 static int collect_inner(reflection *r, const void *type, const unsigned char *value,
@@ -616,8 +695,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     /* A patch rewrites a whole pointer word. A value of fewer than 8 bytes
      * holds no pointer, so no nil in it has a pointer extra inhabitant and
      * the case it is in cannot hide one: there is nothing to patch. */
-    if (v->size < 8) return 1;
-    if ((kind == 0x302 || kind == 0x202) && function_value(r,type)) return 1;
+    if (v->size < 8) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }
+    if ((kind == 0x302 || kind == 0x202) && function_value(r,type)) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }
     if (type == r->string) {
         empty_plan shape;
         if (!selected(r,type,&shape,0)) return 0;
@@ -625,6 +704,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         /* An active String cannot be any admitted nil discriminator. Live
          * storage uses the existing native object/ARC domain; this is not a
          * validator for arbitrary string bytes or foreign-runtime objects. */
+        r->passes |= HAO_SV_PASS_OWNED;
         return bits > 2;
     }
     if (kind == 0x202) {
@@ -632,7 +712,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         const witnesses *payload = vwt(m[2]);
         int byte_case = common_byte_optional_case(type,value);
         if (byte_case >= 0) {
-            if (byte_case) return 1; /* inactive payload remains opaque */
+            if (byte_case) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; } /* inactive payload remains opaque */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
         /* A payload whose inhabitants are a function's code word: this
@@ -643,7 +723,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             function_xi_word(r,m[2],&code_at)) {
             uint64_t word, none = 0x7fffffffu - payload->extra;
             memcpy(&word,value + code_at,8);
-            if (word == none) return 1;                      /* inactive payload remains opaque */
+            if (word == none) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* inactive payload remains opaque */
             if (word > none && word < 0x7fffffffu) return 0; /* an outer Optional's nil: not this type's value */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
@@ -655,7 +735,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         if (m[1] == r->optional && payload->extra && v->extra + 1 == payload->extra &&
             tag_byte_xi(r,m[2],&tag_at,&enum_xi) && enum_xi >= payload->extra) {
             unsigned tag = value[tag_at], none = 255 - (enum_xi - payload->extra);
-            if (tag == none) return 1;                       /* inactive payload remains opaque */
+            if (tag == none) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }    /* inactive payload remains opaque */
             if (tag >= 256 - enum_xi && tag < none) return 0; /* an outer Optional's nil */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
@@ -731,7 +811,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             unsigned char nil[8 * HAO_SV_SPARE_WORDS];
             if (guest_spare_bit_xi(guest_enum,k,nil)) {
                 const unsigned char *found = value + guest_at;
-                if (!memcmp(found,nil,(size_t)size)) return 1;      /* inactive payload remains opaque */
+                if (!memcmp(found,nil,(size_t)size)) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* inactive payload */
                 for (uint32_t j = k + 1; j < vwt(guest_enum)->extra && j < k + 9; ++j)
                     if (guest_spare_bit_xi(guest_enum,j,nil) && !memcmp(found,nil,(size_t)size)) return 0;
                 return collect(r,m[2],value,base,out,capacity,used,depth + 1);
@@ -747,14 +827,17 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             (v->flags & 255) == (payload->flags & 255) &&
             v->stride == ((v->size + (v->flags & 255)) & ~(uint64_t)(v->flags & 255))) {
             unsigned tag = value[payload->size];
-            if (tag == 1) return 1;
+            if (tag == 1) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
             if (tag != 0) return 0;
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
         empty_plan plan;
         /* Unknown Optional means unknown active payload. Reject the entire
          * plan, even if another sibling already supplied a valid patch. */
-        if (!selected(r, type, &plan, 0) || !plan.consumed) return common_leaf_value(type,value);
+        if (!selected(r, type, &plan, 0) || !plan.consumed) {
+            if (guest_witnessed_optional(r,type)) { r->passes |= HAO_SV_PASS_OWNED; return 1; }
+            return leaf(r,type,value);
+        }
         uint64_t word; memcpy(&word, value + plan.offset, 8);
         if (plan.consumed == 1 ? word == 0 : (word == 1 || word == 2)) {
             if (*used == capacity) return 0;
@@ -771,7 +854,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
                        out, capacity, used, depth + 1);
     }
     if (kind == 0x201) {
-        if (common_leaf_value(type,value)) return 1;
+        if (leaf(r,type,value)) return 1;
         /* A guest enum with one payload case whose empty cases are the
          * payload's first extra inhabitants (Enum.c guest_single_payload_enum),
          * when selected() finds the word that carries them: there XI k is the
@@ -788,16 +871,18 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             inner.offset <= v->size - 8) {
             uint64_t word, first = inner.consumed;
             memcpy(&word,value + inner.offset,8);
-            if (word >= first && word < first + empty_cases) return 1;
+            if (word >= first && word < first + empty_cases) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
             if (word >= first + empty_cases && word < first + empty_cases + 8) return 0;
             return collect(r,single,value,base,out,capacity,used,depth + 1);
         }
         enum_case_plan active;
-        if (discover_enum_case(type,value,&active))
-            return !active.payload || collect(r,active.payload,value,base,out,capacity,used,depth + 1);
+        if (discover_enum_case(type,value,&active)) {
+            if (!active.payload) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* an empty case */
+            return collect(r,active.payload,value,base,out,capacity,used,depth + 1);
+        }
         fixed_enum_case fixed;
         if (!discover_fixed_enum_case(type,value,&fixed)) return 0;
-        if (!fixed.payload) return 1;     /* the empty case: no payload */
+        if (!fixed.payload) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* the empty case: no payload */
         if (!fixed.spare) return collect(r,fixed.payload,value,base,out,capacity,used,depth + 1);
         unsigned first = *used;
         if (!collect(r,fixed.payload,(const unsigned char *)fixed.copy,base,out,capacity,used,depth + 1)) return 0;
@@ -810,7 +895,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         }
         return 1;
     }
-    if (kind == 0x305) return common_objc_reference_value(type,value);
+    if (kind == 0x305) { r->passes |= HAO_SV_PASS_OWNED; return common_objc_reference_value(type,value); }
     /* A live existential or Swift object in a published value (the plain
      * walk; selected() plans their nils there too): native code takes it, so
      * each witness table must be native, its conformance descriptor in no
@@ -818,6 +903,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
      * table is instantiated on the heap), and a Swift object word a heap
      * pointer. A guest call of a native witness only copies them. */
     if ((kind == 0x303 || kind == 0) && !r->existentials) {
+        r->passes |= HAO_SV_PASS_OWNED;
         if (kind == 0) {
             uint64_t bits; memcpy(&bits,value,8);
             return bits >= 4096 && !(bits & 7);
@@ -845,7 +931,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         }
         return 1;
     }
-    if (kind != 0x200 && kind != 0x301) return 1;
+    if (kind != 0x200 && kind != 0x301) return other_kind(r,type,kind);
     intptr_t count = r->count(type);
     if (count < 0 || count > 64) return 0;
     for (intptr_t i = 0; i < count; ++i) {
@@ -878,6 +964,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
  * reason after a descendant was printed is not. */
 static void survey(reflection *r, const void *type, uint64_t base, unsigned depth)
 {
+    r->surveyed++;
+    if (r->survey != 1) return;
 #ifdef HAO_SWIFT_VALUE_RUNTIME
     typedef struct { const char *text; uintptr_t length; } type_name;
     typedef type_name SWIFT name_fn(const void *, bool);
@@ -890,7 +978,6 @@ static void survey(reflection *r, const void *type, uint64_t base, unsigned dept
 #else
     (void)type; (void)base; (void)depth;
 #endif
-    r->surveyed++;
 }
 
 static int collect(reflection *r, const void *type, const unsigned char *value,
@@ -898,12 +985,13 @@ static int collect(reflection *r, const void *type, const unsigned char *value,
 {
     int opaque = !r->opaque && native_opaque(r,type);
     r->opaque += (unsigned)opaque;
-    unsigned before = r->surveyed;
+    unsigned before = r->surveyed, first = *used;
     int ok = collect_inner(r,type,value,base,out,capacity,used,depth);
     r->opaque -= (unsigned)opaque;
     if (r->survey && (!ok || r->surveyed != before)) {
         if (!ok && r->surveyed == before) {
             if (!r->unresolved) r->unresolved = type;
+            *used = first;  /* nothing inside a refusing type is patched: its layout is not known */
             survey(r,type,base,depth);
         }
         return 1;           /* keep walking; collect_patches refuses the value */
@@ -914,7 +1002,7 @@ static int collect(reflection *r, const void *type, const unsigned char *value,
 
 static int collect_patches(const void *type, const void *value, empty_patch *out,
                            unsigned capacity, const void **unresolved, int existentials,
-                           int (*known_layout)(const void *), int survey_mode)
+                           int (*known_layout)(const void *), int survey_mode, unsigned *passes)
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
@@ -926,37 +1014,51 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
     };
     nominals(&r);
     unsigned used = 0;
+    if (passes) *passes = 0;
     if (unresolved) *unresolved = type;
     if (!type || !value || !out || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional) return -1;
-    if (!collect(&r, type, value, 0, out, capacity, &used, 0) || r.surveyed) {
+    if (!collect(&r, type, value, 0, out, capacity, &used, 0) || (r.surveyed && survey_mode != 2)) {
         if (unresolved && r.unresolved) *unresolved = r.unresolved;
         return -1;
     }
     if (unresolved) *unresolved = NULL;
+    if (passes) *passes = r.passes;
     return (int)used;
 }
 
 int collect_empty_patches_detail(const void *type, const void *value, empty_patch *out,
                                  unsigned capacity, const void **unresolved)
 {
-    return collect_patches(type,value,out,capacity,unresolved,0,NULL,0);
+    return collect_patches(type,value,out,capacity,unresolved,0,NULL,0,NULL);
+}
+
+int collect_value_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
+                          const void **unresolved, int existentials, unsigned *passes)
+{
+    return collect_patches(type,value,out,capacity,unresolved,existentials,NULL,0,passes);
 }
 
 int collect_survey_patches(const void *type, const void *value, empty_patch *out,
                            unsigned capacity, const void **unresolved)
 {
-    return collect_patches(type,value,out,capacity,unresolved,0,NULL,1);
+    return collect_patches(type,value,out,capacity,unresolved,0,NULL,1,NULL);
+}
+
+int collect_partial_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
+                            int existentials)
+{
+    return collect_patches(type,value,out,capacity,NULL,existentials,NULL,2,NULL);
 }
 
 int collect_witness_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)
 {
-    return collect_patches(type,value,out,capacity,NULL,1,NULL,0);
+    return collect_patches(type,value,out,capacity,NULL,1,NULL,0,NULL);
 }
 
 int collect_inline_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
                            int (*known_layout)(const void *))
 {
-    return collect_patches(type,value,out,capacity,NULL,1,known_layout,0);
+    return collect_patches(type,value,out,capacity,NULL,1,known_layout,0,NULL);
 }
 
 int collect_empty_patches(const void *type, const void *value, empty_patch *out, unsigned capacity)

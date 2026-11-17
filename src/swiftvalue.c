@@ -78,14 +78,25 @@ static void refuse(const void *type, const char *why)
     abort();
 }
 
-/* What a value the walk cannot certify does. By default it passes through
- * unpatched: the native code gets the guest's bytes as they are (a nil in
- * the guest's encoding can then misbehave later, so a crash after a survey
- * line is read with that in mind), and the first time a (type, reason)
- * pair occurs in the process hao prints the value's innermost refusing
- * types, the schema of the value and one line naming the root type and the
- * guest caller, all under the stable prefix "Swift value survey:". With
- * HAO_SWIFT_VALUE_STRICT (tests) it is refused: printed, then abort. */
+/* The boundary policy. A value crossing to native code is converted (its
+ * nils given the receiving encoding) or passed as found only where the walk
+ * certifies every part of it: each part then is a patched nil or in one of
+ * the pass classes of Recipe.h (HAO_SV_PASS_IDENTICAL, _INACTIVE, _OWNED),
+ * which pass_note names under HAO_BRIDGE_CHECK. Everything else is refused
+ * (decline): an active representation the walk has no rule for, a layout,
+ * spare-bit or extra-inhabitant rule that differs by architecture, an
+ * ambiguous witness ABI or ownership, an unresolved assignment destination,
+ * invalid or overlapping storage, and a failed allocation a required
+ * conversion needs. Passing such a value on is not "at worst a low-address
+ * crash": a nil of one encoding can be another valid value or case of the
+ * other, and a wrong case releases what its owner releases again.
+ *
+ * Refused, hao prints the value's innermost refusing types and its schema
+ * under the prefix "Swift value survey:", then "Swift value boundary
+ * refused:" and aborts. HAO_SWIFT_VALUE_PASSTHROUGH=1 (open tier; for
+ * triage only, accepting memory corruption) restores the earlier pass-
+ * through: such a value goes on with the patches of the parts the walk could
+ * certify, reported the first time per (type, reason). */
 #define SEEN_LIMIT 1024
 static struct { const void *type; const char *why; } seen[SEEN_LIMIT];
 static unsigned nseen;
@@ -104,23 +115,53 @@ static bool first_report(const void *type, const char *why)
 }
 /* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
  * walk refused it, ROOT the type of the activation, LR and PC the guest call. */
+/* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH. */
 static void decline(const void *type, const char *why, const void *walked, const void *value,
                     const void *root, uint64_t lr, uint64_t pc)
 {
-    bool strict = hao_opt.swift_value_strict;
-    if (!strict && !first_report(type,why)) return;
+    bool pass = hao_opt.swift_value_passthrough;
+    if (pass && !first_report(type,why)) return;
     if (walked && value) {
         empty_patch scratch[64];
         const void *unresolved;
         (void)collect_survey_patches(walked,value,scratch,64,&unresolved);
         hao_swift_schema_dump(HAO_DIAG,walked,root,type,lr,pc);
     }
-    if (strict) refuse(type,why);
+    if (!pass) refuse(type,why);
     type_name n = name_of(type), r = name_of(root);
     hao_diag_prefix(HAO_DIAG);
-    fprintf(HAO_DIAG,"Swift value survey: passed through unpatched: %s (metadata=%p size=%llu flags=%#x xi=%#x type=%.*s) "
-        "root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,vwt(type)->flags,vwt(type)->extra,
-        (int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
+    fprintf(HAO_DIAG,"Swift value survey: passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH): %s (metadata=%p size=%llu "
+        "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
+        vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
+}
+/* Under HAO_BRIDGE_CHECK, the pass classes by which a certified value of
+ * TYPE goes on with parts as found, once per (type, class) in a process. */
+static void pass_note(const void *type, unsigned passes)
+{
+    static const char *const names[] = {"identical-representation", "inactive-payload", "owner-opaque"};
+    if (!hao_opt.bridge_check) return;
+    for (unsigned k = 0; k < 3; ++k) {
+        if (!(passes & (1u << k)) || !first_report(type,names[k])) continue;
+        type_name n = name_of(type);
+        fprintf(HAO_DIAG,"hao: Swift value passed as found: %s (metadata=%p type=%.*s)\n",names[k],type,(int)n.length,n.text);
+    }
+}
+/* The patches of VALUE of TYPE for a conversion; with EXISTENTIALS the walk
+ * of a value a guest hands to a native witness. Where the walk cannot
+ * certify the value it is refused for WHY; under the experimental pass-
+ * through the patches of the parts it could certify are returned instead,
+ * so that a refusing field does not drop its siblings' patches. */
+static int certified_patches(const void *type, const void *value, empty_patch *p, int existentials, const char *why,
+                             const void *root, uint64_t lr, uint64_t pc)
+{
+    const void *unresolved = type;
+    unsigned passes = 0;
+    if (!value) { decline(type,"null value storage",NULL,NULL,root,lr,pc); return 0; }
+    int n = collect_value_patches(type,value,p,64,&unresolved,existentials,&passes);
+    if (n >= 0) { pass_note(type,passes); return n; }
+    decline(unresolved ? unresolved : type,why,type,value,root,lr,pc);
+    n = collect_partial_patches(type,value,p,64,existentials);
+    return n < 0 ? 0 : n;
 }
 static bool graph(builder *b, const void *type, unsigned depth)
 {
@@ -263,19 +304,17 @@ static bool handle(hao_thread *t, const entry *e)
     void *destination = (void *)(uintptr_t)c->x[0];
     if (!source) DECLINE(e->type,"null value storage",NULL,NULL);
     empty_patch patches[64];
-    const void *unresolved;
-    int count = collect_empty_patches_detail(e->type,source,patches,64,&unresolved);
-    if (count < 0) DECLINE(unresolved,"unresolved active representation",e->type,source);
+    int count = certified_patches(e->type,source,patches,0,"unresolved active representation",root,c->x[30],e->pc);
     bool foreign = false;
     for (int i = 0; i < count; ++i) foreign |= patches[i].bits != patches[i].receiver_bits;
     bool assignment = (e->slots & ((1u << 3) | (1u << 5))) != 0;
     if (assignment) {
         empty_patch old[64];
-        int n = collect_empty_patches_detail(e->type,destination,old,64,&unresolved);
-        if (n < 0) DECLINE(unresolved,"unresolved assignment destination",e->type,destination);
+        if (!destination) DECLINE(e->type,"null assignment destination",NULL,NULL);
+        int n = certified_patches(e->type,destination,old,0,"unresolved assignment destination",root,c->x[30],e->pc);
         for (int i = 0; i < n; ++i) foreign |= old[i].bits != old[i].receiver_bits;
     }
-    if (!foreign) return false;
+    if (!foreign) return false;   /* every nil already in the receiving encoding: identical */
     if (assignment || (!destroy && (e->slots & ~transfers))) DECLINE(e->type,"unsupported assignment or ownership alias",NULL,NULL);
     empty_plan empty;
     bool nil = discover_empty_plan(e->type,&empty);
@@ -358,15 +397,9 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
     if (t->swift_values != scope) refuse(scope->plan->type,"activation lifetime mismatch");
     hao_cpu saved = t->cpu;
     empty_patch patches[64];
-    const void *unresolved;
-    int count = collect_empty_patches_detail(scope->plan->type,scope->output,patches,64,&unresolved);
+    int count = certified_patches(scope->plan->type,scope->output,patches,0,
+                                  "result publication has unresolved active representation",scope->plan->type,saved.x[30],0);
     t->cpu = saved;
-    if (count < 0) {
-        decline(unresolved,"result publication has unresolved active representation",scope->plan->type,scope->output,
-                scope->plan->type,saved.x[30],0);
-        t->swift_values = scope->previous;   /* published as the guest wrote it */
-        return;
-    }
     unsigned changed = 0;
     for (int i = 0; i < count; ++i) {
         uint64_t bits = patches[i].receiver_bits;
@@ -402,7 +435,7 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
  * code stays x86_64); a nil it makes from nothing (store or inject a tag) gets
  * the guest's, since guest code made the call. Only the bounded outer-nil
  * words of collect_witness_patches change, never a live payload. A value the
- * walk cannot prove is handed over unchanged, as before. */
+ * walk cannot prove is refused (certified_patches). */
 #define WITNESS_MAX 160
 static struct { uint64_t pc; unsigned slot; } witness_pc[WITNESS_MAX];
 static unsigned witness_count;
@@ -592,16 +625,21 @@ static int guest_ranges(const void *type, uint64_t base, byte_range *out, int n,
 }
 
 typedef struct { int count; empty_patch p[64]; } witness_patches;
-/* The outer nils of a value native witnesses read; count -1 when the walk
- * cannot prove it. A nil inside a field of a guest-defined struct or enum
- * is left out: native witnesses hand that field to its own (guest) ones. */
-static void witness_walk(const void *type, const void *value, witness_patches *w)
+/* The outer nils of a value native witnesses read. A value the walk cannot
+ * prove is refused (certified_patches; LR and PC name the guest call). A nil
+ * inside a field of a guest-defined struct or enum is left out: native
+ * witnesses hand that field to its own (guest) ones. */
+static void witness_walk(const void *type, const void *value, witness_patches *w, const char *why, uint64_t lr, uint64_t pc)
 {
-    w->count = value ? collect_witness_patches(type,value,w->p,64) : -1;
+    w->count = certified_patches(type,value,w->p,1,why,type,lr,pc);
     if (w->count <= 0) return;
     byte_range guest[32];
     int ng = guest_ranges(type,0,guest,0,32,0);
-    if (ng < 0) { w->count = -1; return; }
+    if (ng < 0) {   /* which nils lie in guest-defined fields is not known: none may be rewritten */
+        decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,lr,pc);
+        w->count = 0;
+        return;
+    }
     int kept = 0;
     for (int i = 0; i < w->count; ++i) {
         bool inside = false;
@@ -837,17 +875,20 @@ void *hao_swift_borrow_to_native(const void *type, const void *value)
     hao_swift_witness_setup();
     if (!optional_metadata || !witness_affected(type)) return NULL;
     const witnesses *v = vwt(type);
-    if ((v->flags & 0x00100000) || (v->flags & 0xff) > 15 || !v->size) return NULL;   /* not bitwise-takable, alignment */
     witness_add_type(type);   /* the guest's later copies and destroys of it */
     witness_patches w;
-    witness_walk(type,value,&w);
+    witness_walk(type,value,&w,"lent value has unresolved active representation",0,0);
     unsigned changed = 0;
     for (int i = 0; i < w.count; ++i) changed += w.p[i].bits != w.p[i].receiver_bits;
     if (hao_opt.bridge_check)
         fprintf(HAO_DIAG,"hao: Swift value lent to native metadata=%p patches=%d changed=%u\n",type,w.count,changed);
-    if (w.count <= 0 || !changed) return NULL;
+    if (w.count <= 0 || !changed) return NULL;   /* its nils already the native encoding: identical */
+    if ((v->flags & 0x00100000) || (v->flags & 0xff) > 15 || !v->size) {   /* not bitwise-takable, alignment */
+        decline(type,"lent value needs conversion and cannot be borrowed as a copy",NULL,NULL,type,0,0);
+        return NULL;
+    }
     void *copy = malloc((size_t)v->size);
-    if (!copy) return NULL;
+    if (!copy) { decline(type,"scratch allocation",NULL,NULL,type,0,0); return NULL; }
     memcpy(copy,value,(size_t)v->size);
     witness_encode(copy,&w);
     return copy;
@@ -886,20 +927,22 @@ void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
 /* Each element's outer nils in the witness's encoding, in place; their
  * original bits recorded by element index and offset (rec, count *nrec). */
 typedef struct { uint64_t at, bits; } witness_bits;
-static bool witness_encode_elements(const void *type, char *base, uint64_t count, witness_bits **rec, size_t *nrec)
+static bool witness_encode_elements(const void *type, char *base, uint64_t count, witness_bits **rec, size_t *nrec,
+                                    uint64_t lr, uint64_t pc)
 {
     uint64_t stride = vwt(type)->stride;
     size_t cap = 0;
     *rec = NULL; *nrec = 0;
     for (uint64_t i = 0; i < count; ++i) {
         witness_patches w;
-        witness_walk(type,base + i * stride,&w);
-        if (w.count < 0) continue;   /* not proven: this element as before */
+        witness_walk(type,base + i * stride,&w,"array element has unresolved active representation",lr,pc);
+        if (w.count <= 0) continue;
         if (*nrec + (size_t)w.count > cap) {
             size_t ncap = cap ? cap * 2 : 16;
             while (ncap < *nrec + (size_t)w.count) ncap *= 2;
             witness_bits *grown = realloc(*rec,ncap * sizeof **rec);
-            if (!grown) { free(*rec); *rec = NULL; return false; }
+            /* Earlier elements are already in the witness's encoding: refused, not handed back half converted. */
+            if (!grown) { decline(type,"scratch allocation",NULL,NULL,type,lr,pc); free(*rec); *rec = NULL; return false; }
             *rec = grown; cap = ncap;
         }
         for (int k = 0; k < w.count; ++k) (*rec)[(*nrec)++] = (witness_bits){i * stride + w.p[k].offset,w.p[k].bits};
@@ -913,24 +956,27 @@ static bool witness_array(hao_thread *t, uint64_t pc, unsigned slot, const void 
     hao_cpu *c = &t->cpu;
     if (!witness_affected(type)) return false;
     char *dest = (char *)(uintptr_t)c->x[0], *src = (char *)(uintptr_t)c->x[1];
-    uint64_t count = slot == ARRAY_DESTROY ? c->x[1] : c->x[2], stride = vwt(type)->stride;
-    if (!count) return false;
-    if (!stride || count > (UINT64_MAX >> 1) / stride) return false;
+    uint64_t count = slot == ARRAY_DESTROY ? c->x[1] : c->x[2], stride = vwt(type)->stride, lr = c->x[30];
+    if (!count) return false;   /* no element: nothing to convert */
+    if (!stride || count > (UINT64_MAX >> 1) / stride) {
+        decline(type,"array extent out of range",NULL,NULL,type,lr,pc);
+        return false;
+    }
     witness_bits *in = NULL, *old = NULL;
     size_t nin = 0, nold = 0;
     char *scratch = NULL;
     if (slot == ARRAY_DESTROY) {
-        if (!witness_encode_elements(type,dest,count,&in,&nin)) return false;
+        if (!witness_encode_elements(type,dest,count,&in,&nin,lr,pc)) return false;
     } else {
         if (slot == ARRAY_INIT_COPY || slot == ARRAY_ASSIGN_COPY) {   /* borrowed source: a converted copy */
             scratch = malloc((size_t)(count * stride));
-            if (!scratch) return false;
+            if (!scratch) { decline(type,"scratch allocation",NULL,NULL,type,lr,pc); return false; }
             memcpy(scratch,src,(size_t)(count * stride));
             src = scratch;
         }
         if ((slot == ARRAY_ASSIGN_COPY || slot == ARRAY_ASSIGN_TAKE) &&
-            !witness_encode_elements(type,dest,count,&old,&nold)) { free(scratch); return false; }
-        if (!witness_encode_elements(type,src,count,&in,&nin)) { free(scratch); free(old); return false; }
+            !witness_encode_elements(type,dest,count,&old,&nold,lr,pc)) { free(scratch); return false; }
+        if (!witness_encode_elements(type,src,count,&in,&nin,lr,pc)) { free(scratch); free(old); return false; }
     }
     typedef void SWIFT destroy_fn(void *, size_t, const void *);
     typedef void SWIFT move_fn(void *, void *, size_t, const void *);
@@ -965,11 +1011,17 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
         if (slot == 6 || slot == 7) {
             if (c->x[slot == 6 ? 1 : 2] != 1) return false;
             walked = optional_metadata(0,type).metadata;
-            if (!walked) return false;
+            if (!walked) { decline(type,"Optional metadata unavailable",NULL,NULL,type,c->x[30],pc); return false; }
         }
         if (!witness_affected(walked)) return false;
         const witnesses *v = vwt(walked);
-        if (slot == 0 && (vwt(type)->flags & 0x00020000)) return false;   /* out-of-line buffer: a box */
+        if (slot == 0 && (vwt(type)->flags & 0x00020000)) {
+            /* An out-of-line buffer holds a box pointer: copying the buffer
+             * retains the box, which only the native runtime and the
+             * value's own witnesses touch. */
+            pass_note(type,HAO_SV_PASS_OWNED);
+            return false;
+        }
         void *dest = (void *)(uintptr_t)c->x[0], *src = (void *)(uintptr_t)c->x[1];
         bool borrowed_src = slot == 0 || slot == 2 || slot == 3;
         bool two = slot <= 5 && slot != 1;
@@ -977,25 +1029,28 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
         void *scratch = NULL;
         witness_patches in, old;
         in.count = old.count = 0;
+        const char *why = "unresolved active representation (guest call of a native witness)";
+        uint64_t lr = c->x[30];
         if (slot == 6 || slot == 11) {                        /* borrowed value: x0 */
-            witness_walk(walked,dest,&in);
+            witness_walk(walked,dest,&in,why,lr,pc);
             if (in.count > 0) {
                 scratch = v->size <= sizeof local ? local : malloc((size_t)v->size);
-                if (!scratch) return false;
+                if (!scratch) { decline(walked,"scratch allocation",NULL,NULL,walked,lr,pc); return false; }
                 memcpy(scratch,dest,(size_t)v->size);
                 witness_encode(scratch,&in);
             }
         } else if (two) {
-            witness_walk(type,src,&in);
-            if (slot == 3 || slot == 5) { witness_walk(type,dest,&old); witness_encode(dest,&old); }
+            witness_walk(type,src,&in,why,lr,pc);
+            if (slot == 3 || slot == 5) witness_walk(type,dest,&old,"unresolved assignment destination",lr,pc);
             if (in.count > 0 && borrowed_src) {
                 scratch = v->size <= sizeof local ? local : malloc((size_t)v->size);
-                if (!scratch) return false;
+                if (!scratch) { decline(type,"scratch allocation",NULL,NULL,type,lr,pc); return false; }
                 memcpy(scratch,src,(size_t)v->size);
                 witness_encode(scratch,&in);
             } else witness_encode(src,&in);                    /* owned by the callee */
+            witness_encode(dest,&old);                         /* after the last refusal point: never half converted */
         } else if (slot == 1 || slot == 12) {
-            witness_walk(type,dest,&in);
+            witness_walk(type,dest,&in,why,lr,pc);
             witness_encode(dest,&in);
         }
         typedef void *SWIFT ptr3_fn(void *, void *, const void *);
