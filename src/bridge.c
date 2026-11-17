@@ -1517,6 +1517,7 @@ int hao_bridge_bind(const char *gname, const char *nname, uint64_t native)
     }
     const hao_plan *p = publish(&tmp, nname ? nname : gname);
     note_async_entry(gname, native);
+    if (tmp.kind == HAO_KIND_SITEPACK) hao_swift_note_dispatch_thunk(nname ? nname : gname, native);
     int cls = p ? p->cls : HAO_BR_UNKNOWN;
     __atomic_fetch_add(&st_bind_cls[tmp.cls], 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&st_bind_src[tmp.src], 1, __ATOMIC_RELAXED);

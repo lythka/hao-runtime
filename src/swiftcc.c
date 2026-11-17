@@ -1541,14 +1541,12 @@ static size_t native_code(uint64_t fn, uint32_t skip[2 * SITEPACK_SKIPS], int *n
  * stack argument: the implementation its exported method descriptor (`...Tq`: Flags, then a relative
  * pointer to the implementation) names takes the same arguments, as does every override. 0 if FN is
  * not such a thunk, or the method is async or has no implementation here. */
-static uint64_t dispatch_impl(uint64_t fn)
+static uint64_t descriptor_impl(const char *thunk)
 {
-    Dl_info di;
-    if (!dladdr((const void *)(uintptr_t)fn, &di) || !di.dli_sname || (uint64_t)(uintptr_t)di.dli_saddr != fn) return 0;
-    size_t n = strlen(di.dli_sname);
+    size_t n = strlen(thunk);
     char q[1024];
-    if (n < 3 || n >= sizeof q || strncmp(di.dli_sname, "$s", 2) || strcmp(di.dli_sname + n - 2, "Tj")) return 0;
-    memcpy(q, di.dli_sname, n + 1);
+    if (n < 3 || n >= sizeof q || strncmp(thunk, "$s", 2) || strcmp(thunk + n - 2, "Tj")) return 0;
+    memcpy(q, thunk, n + 1);
     q[n - 1] = 'q';
     const uint8_t *d = dlsym(RTLD_DEFAULT, q);
     if (!d) return 0;
@@ -1558,6 +1556,36 @@ static uint64_t dispatch_impl(uint64_t fn)
     memcpy(&rel, d + 4, 4);
     if ((flags & 0x40) || !rel) return 0;
     return (uint64_t)(uintptr_t)(d + 4 + rel);
+}
+
+/* thunk -> implementation, noted when a guest import binds one by name: in the shared cache dladdr can
+ * name a thunk's address after a nearby local symbol instead */
+static hao_gmap dispatch_thunks = HAO_GMAP_INIT(2, 1, 4, 14);
+
+void hao_swift_note_dispatch_thunk(const char *gname, uint64_t native)
+{
+    if (!gname || gname[0] != '_' || !native) return;
+    uint64_t impl = descriptor_impl(gname + 1), key = untag(native);
+    if (!impl) return;
+    bool fresh;
+    hao_crit_enter();
+    pthread_mutex_lock(&sitepack_lock);
+    uint64_t *s = hao_gmap_claim(&dispatch_thunks, &key, &fresh);
+    if (s && fresh) {
+        s[1] = impl;
+        hao_gmap_publish(&dispatch_thunks, s, &key);
+    }
+    pthread_mutex_unlock(&sitepack_lock);
+    hao_crit_leave();
+}
+
+static uint64_t dispatch_impl(uint64_t fn)
+{
+    const uint64_t *e = hao_gmap_get1(&dispatch_thunks, fn);
+    if (e) return e[1];
+    Dl_info di;
+    if (!dladdr((const void *)(uintptr_t)fn, &di) || !di.dli_sname || (uint64_t)(uintptr_t)di.dli_saddr != fn) return 0;
+    return descriptor_impl(di.dli_sname);
 }
 
 /* The stack-argument slots of the native function NATIVE (following up to three trampolines, and a
@@ -1769,7 +1797,7 @@ int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t 
             cw[m] = 0;
             char ib[48] = "";
             if (impl) snprintf(ib, sizeof ib, " (implementation %#llx)", (unsigned long long)impl);
-            if (n || why || (shown && u.nslots > 2))
+            if (n || why || !called || (shown && u.nslots > 2))
                 fprintf(HAO_DIAG, "hao: call-site layout at %#llx for %#llx%s: %s%s; callee %s, %d slots [%s]\n",
                         (unsigned long long)(lr - 4), (unsigned long long)native, ib,
                         !called ? "the site does not call it: word copy" : n ? "taken " : why ? "refused: " : "not packed: word copy",
