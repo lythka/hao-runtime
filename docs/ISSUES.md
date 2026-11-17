@@ -2873,19 +2873,75 @@ Remaining limitations:
 - A vector with a subnormal, infinite or NaN lane, or a tiny or zero
   result in a lane, is computed lane by lane. (`.4S` with one zero
   multiplicand lane and nonzero results is admitted whole: 159 to 23 ns.)
-- Double precision stays in the software path: there is no wider host type
-  to hold the product. It would need error-free transformations in
-  binary64 itself (Dekker's product with Veltkamp splitting, TwoSum, and
-  the Boldo-Melquiond three-addition scheme with an emulated round-to-odd
-  addition), with guards for splitting overflow, an inexact low product
-  part near the subnormal range, and separate handling of the directed
-  modes.
+- Double precision: see "Double-precision fused multiply-add" below.
 - Half precision vectors keep `fp_vec16_muladd`, which admits a lane only
   when the exact sum fits binary64. The round-to-odd step would remove
   that bound (53 >= 11 + 2); the final rounding would stay in `fp_cvt`,
   since the profile has no half-precision conversion instruction. Scalar
   half fused operations are always computed in software.
 - Not measured on Intel hardware or in an application.
+
+
+## Double-precision fused multiply-add
+
+FMADD, FMSUB, FNMADD and FNMSUB on doubles, FMLA/FMLS `.2D` and their
+by-element and scalar by-element forms always ran in the exact software
+path, and in translated code as a helper call. They now take the
+Boldo-Melquiond emulated FMA in binary64, SSE2 only (no FMA3 instruction):
+Dekker's exact product of Veltkamp halves (uh + ul = a * b), TwoSum of the
+addend and uh (th + tl), tl + ul rounded to odd (TwoSum and the
+one-unit step of the single path), and one round-to-nearest addition
+th + v. When tl is zero, v = ul exactly; otherwise |tl + ul| <= 1.5 ulp(th)
+and every rounding boundary of the result near th is a multiple of
+ulp(th) / 4 with at most four significant bits, which the odd v never
+crosses or lands on.
+
+- `fma64` (`src/a64_fp.c`), first in `fp_muladd` for the interpreter and
+  the helper: round to nearest without FTZ/DAZ, FPCR as for singles, a and
+  b normal with exponents in [-970, 994] and a sum in [-918, 1021], c zero
+  or normal with an exponent in [-970, 1021]. Every value formed is then a
+  multiple of 2^-1022 below 2^1024, so nothing is denormal, tiny or
+  infinite and only PE can be raised; when PE was clear, MXCSR is rewritten
+  with PE from the TwoSum errors.
+- `t_vfp_fma64` (`src/jit.c`) emits the same arithmetic on both lanes
+  inline, with a narrower window (a and b exponents in [-459, 510]) checked
+  on the bits of every active lane, and only while MXCSR already has PE set:
+  the intermediate PE is then not observable and MXCSR is never written.
+  With PE clear, another mode, FZ or an operand outside the window it calls
+  the helper.
+
+Directed rounding modes, FZ and other operands keep the software path.
+
+Checks: a native arm64 run of the algorithm against `fmadd` (2 x 10^9
+cases, 96% admitted, equal results and inexact flags); `make oracle` has an
+`fmad` mode (`fma64_case`: ordinary, arbitrary, near-tie by i^2 2^-104,
+gaps, 50-60 binade spans, overflow, tiny and window-edge exponents, exact
+cancellation, specials; half the records round to nearest without FZ, IXC
+preset in half) whose FPSR flags must match: 800,000 records (three seeds)
+matched in the interpreter and the JIT. Removing the odd step (JIT 5,536,
+C 9,348 mismatches), admitting with PE clear (681) or widening either window
+(1,033; 25,316) is detected. `guest/fma64` compares 21 forms (567,000
+instructions) with native under JIT, `--interp`, helpers-only and AOT;
+`test_jit_vector` requires ordinary operands to stay inline once IXC is
+set (fails on the previous translator).
+
+Development host under Rosetta, seconds per guest loop of 20M iterations
+(scalar: `s = fma(s, 0.999, x)`, a dependent chain; `fp`:
+`s += x*x - 0.5*s/(1+x)`, contracted by clang; `.2D`: two FMLA per
+iteration over 1024 doubles); native arm64 0.018 / 0.099 / 0.010.
+
+| Loop | Before | `fma64` only | Inline JIT |
+|---|---:|---:|---:|
+| scalar FMADD chain | 1.01 | 0.58 | 0.35 |
+| `fp` | 1.08 | 0.65 | 0.53 |
+| FMLA `.2D` + by element | 1.65 | - | 0.235 |
+
+Remaining limitations: about 40 SSE instructions per pair of lanes and a
+dependent chain of about 25; a CPU with FMA3 could use `vfmadd231sd/pd`
+behind the same admission (needs VEX encoding and an AOT profile bit).
+While IXC is clear (a new thread, or after software clears it) translated
+code calls the helper, until an inexact result sets it; code whose fused
+results are all exact stays there. Not measured on Intel hardware.
 
 
 ## Guest calls of private-library functions that take a `va_list`

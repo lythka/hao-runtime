@@ -1,7 +1,7 @@
 /*
  * Native arm64 oracle: executes random instruction encodings on the host
  * Apple silicon CPU and records input/output state. Build with -arch arm64.
- *   native_arm64 OUT.bin COUNT SEED MODE    (MODE: dp | simd | mem | block | pac | fma)
+ *   native_arm64 OUT.bin COUNT SEED MODE    (MODE: dp | simd | mem | block | pac | fma | fmad)
  *
  * Every record covers all of x0-x30, SP, NZCV, FPCR, FPSR and v0-v31. Register
  * fields take any value 0-31 (so SP and XZR are exercised) except 18, the
@@ -29,6 +29,11 @@
  *                  fma_cases.h, under every RMode/FZ/DN with preset FPSR
  *                  flags and aliased registers. The checker compares FPSR's
  *                  cumulative flags exactly for these records
+ *   fmad           the same for double precision (see fmad_gen): FMLA and
+ *                  FMLS .2D, by element, the scalar by-element forms and
+ *                  FMADD/FMSUB/FNMADD/FNMSUB, on fma64_case's classes; half
+ *                  the records under round to nearest without FZ, and IXC
+ *                  preset in half, so the translator's inline path runs too
  */
 #include "record.h"
 #include "fma_cases.h"
@@ -367,9 +372,49 @@ static uint32_t fma_gen(oracle_rec *r, bool operands)
     return 0;
 }
 
+/* ---- fmad mode: fma_gen's shape for double lanes. */
+static void set_lane64(unsigned __int128 *v, unsigned lane, uint64_t bits)
+{
+    uint64_t w[2];
+    memcpy(w, v, 16);
+    w[lane] = bits;
+    memcpy(v, w, 16);
+}
+static uint32_t fmad_gen(oracle_rec *r, bool operands)
+{
+    static unsigned form, sub, neg, idx, rd, rn, rm, ra;
+    if (!operands) {
+        form = rr(8); sub = rr(2); neg = rr(2); idx = rr(2);
+        rd = reg(); rn = reg(); rm = reg(); ra = reg();
+        switch (rr(12)) {
+        case 0: rn = rd; break;
+        case 1: rm = rd; break;
+        case 2: rm = rn; break;
+        case 3: rn = rm = rd; break;
+        default: break;
+        }
+        if (!rr(3)) ra = rr(3) == 0 ? rd : rr(2) ? rn : rm;
+        if (form < 3) return 0x4E60CC00u | sub << 23 | rm << 16 | rn << 5 | rd;                 /* FMLA/FMLS .2D */
+        if (form < 5) return 0x4FC01000u | sub << 14 | idx << 11 | rm << 16 | rn << 5 | rd;     /* by element */
+        if (form < 6) return 0x5FC01000u | sub << 14 | idx << 11 | rm << 16 | rn << 5 | rd;     /* scalar by element */
+        return 0x1F400000u | neg << 21 | rm << 16 | sub << 15 | ra << 10 | rn << 5 | rd;      /* FMADD family */
+    }
+    unsigned lanes = form < 5 ? 2 : 1, cat = rr(FC_N), acc = form < 6 ? rd : ra;
+    fma64_ops o[2];
+    for (unsigned l = 0; l < lanes; l++) {
+        o[l] = fma64_case(&rng, !l || rr(6) ? cat : rr(FC_N));
+        if (form >= 3 && l && rr(2)) o[l] = o[0];
+    }
+    for (unsigned l = 0; l < lanes; l++) set_lane64(&r->in.v[acc], l, o[l].c);
+    for (unsigned l = 0; l < lanes; l++) set_lane64(&r->in.v[rn], l, o[l].a);
+    for (unsigned l = 0; l < lanes && form < 3; l++) set_lane64(&r->in.v[rm], l, o[l].b);
+    if (form >= 3) set_lane64(&r->in.v[rm], form < 6 ? idx : 0, o[0].b);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 5) { fprintf(stderr, "usage: %s OUT COUNT SEED dp|simd|mem|block|pac|fma|known|reserved\n", argv[0]); return 2; }
+    if (argc < 5) { fprintf(stderr, "usage: %s OUT COUNT SEED dp|simd|mem|block|pac|fma|known|reserved|fmad\n", argv[0]); return 2; }
     long count = atol(argv[2]);
     rng = strtoull(argv[3], 0, 0) | 1;
     int mode = -1;
@@ -448,6 +493,7 @@ int main(int argc, char **argv)
             r.n = 1;
         }
         else if (mode == OM_FMA) { r.code[0] = fma_gen(&r, false); r.n = 1; }
+        else if (mode == OM_FMAD) { r.code[0] = fmad_gen(&r, false); r.n = 1; }
         else {
             uint32_t insn = (uint32_t)rnd();
             static const uint32_t dp[] = {0x8, 0x9, 0x5, 0xD}, simd[] = {0x7, 0xF}, mem[] = {0x4, 0x6, 0xC, 0xE};
@@ -509,6 +555,11 @@ int main(int argc, char **argv)
             fma_gen(&r, true);
             r.in.fpcr = random_fpcr();                       /* RMode, FZ, DN, FZ16, AHP */
             r.in.fpsr = rr(2) ? 0 : (uint32_t)(rnd() & 0x0800009f);
+        }
+        if (mode == OM_FMAD) {
+            fmad_gen(&r, true);
+            r.in.fpcr = rr(2) ? random_fpcr() : rr(2) ? 1u << 25 : 0;
+            r.in.fpsr = (rr(2) ? 0 : (uint32_t)(rnd() & 0x0800009f)) | (rr(2) ? 0x10u : 0);
         }
 
         /* harness: prologue, code, epilogue */

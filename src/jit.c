@@ -1837,6 +1837,7 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
 }
 
 static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc);
+static void t_vfp_fma64(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, uint32_t insn, uint64_t pc);
 static void t_scalar_indexed_mul(tctx *t, uint32_t i, uint64_t pc, int dbl, int idx);
 enum { RI_N, RI_M, RI_P, RI_Z, RI_A, RI_X, RI_I };
 static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsigned rn, uint32_t insn, uint64_t pc);
@@ -1856,6 +1857,10 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
     int dbl = type == 1, pfx = dbl ? 0xF2 : 0xF3;
     if ((i & 0xFFC00000) == 0x1F000000) {
         t_vfp_fma(t, BIT(i, 15) != BIT(i, 21), rd, rn, rm, -1, 0, i, pc);
+        return true;
+    }
+    if ((i & 0xFFC00000) == 0x1F400000) {
+        t_vfp_fma64(t, BIT(i, 15) != BIT(i, 21), rd, rn, rm, -1, i, pc);
         return true;
     }
 
@@ -3125,6 +3130,24 @@ static void t_vfp_wide(tctx *t, int op, bool dbl, unsigned rd, unsigned rn, unsi
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
+/* The step of fma32_odd on two double lanes: the RN sum s moves one unit
+ * toward its exact TwoSum error a when a != 0 and s is even, giving the sum
+ * rounded to odd. a, b, c and e are destroyed. */
+static void vfp_odd_step(tctx *t, int a, int b, int c, int s, int e)
+{
+    vzero(t, c); P(0x6F, e, a);
+    x_sse_rri(&t->b, 0x66, 0xC2, a, c, 4);                      /* error != 0 */
+    P(0x6F, b, s); P(0xEF, b, e);
+    x_sse_shift_ri(&t->b, 0x72, 4, b, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, b, b, 0xF5);                   /* signs differ */
+    vones(t, e); x_sse_shift_ri(&t->b, 0x73, 2, e, 63);
+    P(0xEB, b, e);                                               /* -1 or +1 */
+    P(0x6F, c, s); x_sse_shift_ri(&t->b, 0x73, 6, c, 63);
+    x_sse_shift_ri(&t->b, 0x72, 4, c, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, c, c, 0xF5);                   /* sum odd */
+    P(0xDF, c, a); P(0xDB, b, c); P(0xD4, s, b);               /* round to odd */
+}
+
 /* fma32_odd (a64_fp.c), two low single lanes -> two doubles in s.
  * a/b/c are destroyed; e is scratch. All inputs have passed integer
  * admission and MXCSR is RN. The product is exact; TwoSum recovers the
@@ -3139,17 +3162,7 @@ static void vfp_fma_odd(tctx *t, int a, int b, int c, int s, int e)
     P(0x6F, b, s); P(0x5C, b, a);                               /* c' */
     P(0x6F, e, s); P(0x5C, e, b);                               /* p' */
     P(0x5C, a, e); P(0x5C, c, b); P(0x58, a, c);               /* error */
-    vzero(t, c); P(0x6F, e, a);
-    x_sse_rri(&t->b, 0x66, 0xC2, a, c, 4);                      /* error != 0 */
-    P(0x6F, b, s); P(0xEF, b, e);
-    x_sse_shift_ri(&t->b, 0x72, 4, b, 31);
-    x_sse_rri(&t->b, 0x66, 0x70, b, b, 0xF5);                   /* signs differ */
-    vones(t, e); x_sse_shift_ri(&t->b, 0x73, 2, e, 63);
-    P(0xEB, b, e);                                               /* -1 or +1 */
-    P(0x6F, c, s); x_sse_shift_ri(&t->b, 0x73, 6, c, 63);
-    x_sse_shift_ri(&t->b, 0x72, 4, c, 31);
-    x_sse_rri(&t->b, 0x66, 0x70, c, c, 0xF5);                   /* sum odd */
-    P(0xDF, c, a); P(0xDB, b, c); P(0xD4, s, b);               /* round to odd */
+    vfp_odd_step(t, a, b, c, s, e);
 }
 
 /* fp_vec32_muladd's admission, arithmetic and rollback, with no EFLAGS
@@ -3244,6 +3257,103 @@ static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, 
     vfp_constants(t);
     x_patch32(&t->b, done, xb_len(&t->b));
     t->vfp_consts = true;
+}
+
+/* two_sum (a64_fp.c) on two double lanes: s = RN(a + b), and a becomes the
+ * exact error in the same operation order. b is destroyed; bb, x scratch. */
+static void vfp_two_sum(tctx *t, int a, int b, int s, int bb, int x)
+{
+    P(0x6F, s, a); P(0x58, s, b);                                /* s */
+    P(0x6F, bb, s); P(0x5C, bb, a);                             /* bb = s - a */
+    P(0x6F, x, s); P(0x5C, x, bb);                              /* s - bb */
+    P(0x5C, a, x); P(0x5C, b, bb); P(0x58, a, b);               /* error */
+}
+
+/* Veltkamp's split of a (split_hi in a64_fp.c) with xmm15 = 2^27 + 1:
+ * hi + lo = a, each of at most 26 significant bits and a sign. */
+static void vfp_split(tctx *t, int a, int hi, int lo, int g)
+{
+    P(0x6F, g, a); P(0x59, g, 15);
+    P(0x6F, hi, a); P(0x5C, hi, g); P(0x58, hi, g);
+    P(0x6F, lo, a); P(0x5C, lo, hi);
+}
+
+/* Double fused multiply-add: FMADD/FMSUB/FNMADD/FNMSUB, FMLA/FMLS .2D and
+ * the by-element forms, with fma64's arithmetic (a64_fp.c) on both lanes:
+ * Dekker's exact product, TwoSum with the addend, the low parts' sum
+ * rounded to odd and one final RN addition. Admission is narrower than
+ * fma64's and checked on the bits of every active lane before any FP
+ * instruction: a and b normal with exponents in [-459, 510] (so their sum
+ * lies in [-918, 1020]), c zero or normal with an exponent in [-970, 1021].
+ * MXCSR must be round to nearest without FTZ/DAZ and already have PE set,
+ * and FPCR must hold no control beyond RMode, FZ and DN. Every value formed
+ * is then zero or a normal number, so the intermediate steps can raise PE
+ * only, which is already set, and the result needs no flag of its own:
+ * MXCSR is never written. A scalar form's upper lanes are zero and raise
+ * nothing. Other operands, modes and a clear PE take the helper. No EFLAGS
+ * writes; xmm0-15 are scratch (vfp_constants are not kept). */
+static void t_vfp_fma64(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, uint32_t insn, uint64_t pc)
+{
+    bool scalar = BIT(insn, 28), three = (insn & 0x5F000000) == 0x1F000000;
+    if (scalar) {
+        x_movq_ld(&t->b, 0, VR(rn)); x_movq_ld(&t->b, 1, velem(rm, 8, idx < 0 ? 0 : idx));
+        x_movq_ld(&t->b, 2, VR(three ? BITS(insn, 14, 10) : rd));
+    } else {
+        vld(t, 0, rn); vld(t, 2, rd);
+        if (idx < 0) vld(t, 1, rm);
+        else { x_movq_ld(&t->b, 1, velem(rm, 8, idx)); P(0x6C, 1, 1); }
+    }
+    /* Biased exponents: a's in dwords 0 and 2 of xmm3, b's in 1 and 3. */
+    P(0x6F, 3, 0); x_sse_shift_ri(&t->b, 0x73, 6, 3, 1); x_sse_shift_ri(&t->b, 0x73, 2, 3, 53);
+    P(0x6F, 4, 1); x_sse_shift_ri(&t->b, 0x73, 6, 4, 1); x_sse_shift_ri(&t->b, 0x73, 2, 4, 53);
+    x_sse_shift_ri(&t->b, 0x73, 6, 4, 32); P(0xEB, 3, 4);
+    vconst(t, 5, 564 * 0x100000001ull, true); P(0x66, 5, 3);   /* below 564 */
+    vconst(t, 6, 1533 * 0x100000001ull, true); P(0x66, 3, 6);  /* above 1533 */
+    P(0xEB, 3, 5);
+    /* c: in dwords 0 and 2 (the others are zero on both sides) */
+    P(0x6F, 4, 2); x_sse_shift_ri(&t->b, 0x73, 6, 4, 1);
+    vzero(t, 6); P38(0x29, 6, 4);                                /* c is a zero */
+    x_sse_shift_ri(&t->b, 0x73, 2, 4, 53);
+    vconst(t, 5, 53, true); P(0x66, 5, 4);
+    vconst(t, 7, 2044, true); P(0x66, 4, 7);
+    P(0xEB, 4, 5); P(0xDF, 6, 4); P(0xEB, 3, 6);
+    if (scalar) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 3, 3);           /* lane 0 only */
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 3);
+    size_t decline = jrcxnz32(t);
+    /* MXCSR: RC = 0, FTZ = DAZ = 0, PE = 1. FPCR: as fp_muladd's contract. */
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    x_movd_ld(&t->b, 5, MXCSR_SLOT);
+    vconst(t, 6, 0xE060, false); P(0xDB, 5, 6);
+    vconst(t, 6, 0x20, false); P(0xEF, 5, 6);
+    x_movd_ld(&t->b, 6, xm(RBX, offsetof(hao_cpu, fpcr)));
+    vconst(t, 7, 0x03c00000, false); P(0xDF, 7, 6);
+    P(0xEB, 5, 7);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 5, RCX);
+    size_t control = jrcxnz32(t);
+    if (sub || (three && BIT(insn, 21))) {
+        vones(t, 5); x_sse_shift_ri(&t->b, 0x73, 6, 5, 63);
+        if (sub) P(0xEF, 0, 5);                                  /* negate the product exactly */
+        if (three && BIT(insn, 21)) P(0xEF, 2, 5);               /* and the addend */
+    }
+    vconst(t, 15, 0x41A0000002000000ull, true);                  /* 2^27 + 1 */
+    P(0x6F, 8, 0); P(0x59, 8, 1);                                /* uh */
+    vfp_split(t, 0, 3, 4, 6);                                    /* ah, al */
+    vfp_split(t, 1, 5, 7, 6);                                    /* bh, bl */
+    P(0x6F, 10, 8);                                              /* ul = al*bl - (((uh - ah*bh) - al*bh) - ah*bl) */
+    P(0x6F, 9, 3); P(0x59, 9, 5); P(0x5C, 10, 9);
+    P(0x6F, 9, 4); P(0x59, 9, 5); P(0x5C, 10, 9);
+    P(0x6F, 9, 3); P(0x59, 9, 7); P(0x5C, 10, 9);
+    P(0x6F, 9, 4); P(0x59, 9, 7); P(0x5C, 9, 10);
+    vfp_two_sum(t, 2, 8, 10, 11, 12);                            /* th; tl in xmm2 */
+    vfp_two_sum(t, 2, 9, 11, 12, 13);                            /* tl + ul; error in xmm2 */
+    vfp_odd_step(t, 2, 12, 13, 11, 14);                          /* v */
+    P(0x58, 10, 11);                                             /* RN(th + v) */
+    vst(t, rd, 10, !scalar);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, decline, xb_len(&t->b));
+    x_patch32(&t->b, control, xb_len(&t->b));
+    helper_keep_flags(t, insn, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
 }
 
 /* The half path keeps input vectors in xmm8-10, the uncommitted result in
@@ -3753,6 +3863,9 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
         case 0x04: case 0x44: case 0x64:
             t_vfp_compare64(t, !U ? VFP_EQ : size & 2 ? VFP_GT : VFP_GE, i, pc);
             return true;
+        case 0x01: case 0x21:                                   /* FMLA, FMLS */
+            t_vfp_fma64(t, size >> 1, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, i, pc);
+            return true;
         case 0x02: wide_op = VFP_ADD; break;
         case 0x22: wide_op = VFP_SUB; break;
         case 0x43: wide_op = VFP_MUL; break;
@@ -3824,6 +3937,10 @@ static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
     }
     if (!BIT(i, 29) && BITS(i, 23, 22) == 3 && op == 9 && BIT(i, 30) && !BIT(i, 21)) {
         t_vfp_wide(t, VFP_MUL, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), 1, i, pc);
+        return true;
+    }
+    if (!BIT(i, 29) && BITS(i, 23, 22) == 3 && (op == 1 || op == 5) && BIT(i, 30) && !BIT(i, 21)) {
+        t_vfp_fma64(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), (int)BIT(i, 11), i, pc);
         return true;
     }
     if (BIT(i, 29) || BITS(i, 23, 22) != 2 || (op != 9 && op != 1 && op != 5)) return false;
@@ -4280,9 +4397,10 @@ static bool t_scalar_indexed(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned size = BITS(i, 23, 22), op = BITS(i, 15, 12);
     if (BIT(i, 29) || (size != 2 && size != 3) || (op != 1 && op != 5 && op != 9)) return false;
-    if (size == 3 && (BIT(i, 21) || op != 9)) return false;       /* reserved L; double FMA remains a helper */
+    if (size == 3 && BIT(i, 21)) return false;                    /* reserved L */
     int idx = size == 3 ? (int)BIT(i, 11) : (int)(BIT(i, 11) << 1 | BIT(i, 21));
     if (op == 9) t_scalar_indexed_mul(t, i, pc, size == 3, idx);
+    else if (size == 3) t_vfp_fma64(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), idx, i, pc);
     else t_vfp_fma(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), idx, 0, i, pc);
     return true;
 }
