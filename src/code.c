@@ -101,11 +101,17 @@ static pthread_mutex_t gw_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t gw_lo, gw_hi;          /* made writable by the open write, or 0 */
 static int gw_prot;                    /* what it had */
 
+/* runtime.c's critical section (a guest signal arriving meanwhile is delivered after it: its handler
+ * cannot wait on gw_lock held by the thread it interrupted); the loader tests link no runtime */
+__attribute__((weak)) void hao_crit_enter(void) {}
+__attribute__((weak)) void hao_crit_leave(void) {}
+
 int hao_guest_write_begin(uint64_t lo, uint64_t hi)
 {
+    hao_crit_enter();
     pthread_mutex_lock(&gw_lock);
     int prot = page_prot(lo);
-    if (prot < 0 || hi <= lo) { pthread_mutex_unlock(&gw_lock); return -1; }
+    if (prot < 0 || hi <= lo) { pthread_mutex_unlock(&gw_lock); hao_crit_leave(); return -1; }
     if (!(prot & PROT_WRITE)) {
         gw_prot = prot;
         gw_lo = lo;
@@ -113,6 +119,7 @@ int hao_guest_write_begin(uint64_t lo, uint64_t hi)
         if (mprotect((void *)(uintptr_t)lo, hi - lo, (prot & ~PROT_EXEC) | PROT_READ | PROT_WRITE)) {
             gw_lo = gw_hi = 0;
             pthread_mutex_unlock(&gw_lock);
+            hao_crit_leave();
             return -1;
         }
     }
@@ -128,6 +135,7 @@ void hao_guest_write_end(int prot)
     }
     gw_lo = gw_hi = 0;
     pthread_mutex_unlock(&gw_lock);
+    hao_crit_leave();
 }
 
 bool hao_guest_cas_ro(uint64_t a, uint64_t expected, uint64_t desired)
@@ -142,7 +150,11 @@ bool hao_guest_cas_ro(uint64_t a, uint64_t expected, uint64_t desired)
 
 void hao_code_fork_child(void)
 {
-    if (gw_hi) mprotect((void *)(uintptr_t)gw_lo, gw_hi - gw_lo, gw_prot);
+    if (gw_hi && mprotect((void *)(uintptr_t)gw_lo, gw_hi - gw_lo, gw_prot)) {
+        static const char m[] = "hao: a fork child cannot give guest memory hao was writing its protection back; stopping\n";
+        write(2, m, sizeof m - 1);
+        abort();
+    }
     gw_lo = gw_hi = 0;
     gw_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 }

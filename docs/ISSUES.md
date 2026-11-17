@@ -45,7 +45,11 @@ block with such a signature got a plain thunk. Both now stop the process
 with `bridge: REFUSED call to NAME ...` or `bridge: REFUSED callback into
 guest ...`, as a REFUSED binding does. The refusal and the W^X
 failures write their line with `hao_fatal_safe` (no stdio, no dladdr),
-as they may happen in a callback a signal interrupted. An encoding hao cannot read at all
+as they may happen in a callback a signal interrupted; the log's cap
+line is written without snprintf, and the guest writer's lock (code.c)
+is taken only inside a hao critical section, so a guest signal handler
+cannot wait on it while it interrupts its holder. A fork child that
+cannot restore an open write's protection stops. An encoding hao cannot read at all
 still takes the register bridge, as any call without a signature.
 
 A callback without a signature whose native caller gave no result buffer
