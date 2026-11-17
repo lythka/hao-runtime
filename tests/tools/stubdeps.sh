@@ -111,6 +111,44 @@ for p, w in (("Library/Tools/prog", "/Library"), ("usr/bin/prog3", "/Library"), 
     assert why(p) and why(p)[0].startswith("outside protected storage (%s)" % w), (p, why(p))
 assert m["usr/bin/prog"]["links"] == m["Library/Tools/prog"]["links"] + 1
 PY
+# dyld goes past a path that exists but has no x86_64 library (here a text file in usr/bin/lib0) to the next,
+# under /Library; and a library reached twice is judged in each rpath context and for each of its x86_64 slices
+mkdir -p sroot/usr/bin/lib0 sroot/Library/L2 sroot/usr/bin/ctx sroot/usr/bin/uni ctx
+echo 'not a library' >sroot/usr/bin/lib0/libfat.dylib; cp lib/libfat.dylib sroot/Library/L2/
+rprog sroot/usr/bin/prog6 -Wl,-rpath,@executable_path/lib0 -Wl,-rpath,/Library/L2
+echo 'void ctx_none(void) {}' >none.c
+dl() { local out=$1 arch=$2 inst=$3; shift 3; clang -arch "$arch" -dynamiclib -install_name "$inst" -o "$out" none.c "$@" || exit 2; }
+fat() { local out=$1; shift; lipo -create "$@" -output "$out" && codesign -s - -f "$out" 2>/dev/null || exit 2; }
+# libD (protected, beside libC); libC (@loader_path/libC.dylib to both) needs @rpath/libD and has no rpath of its
+# own: from libA the inherited rpaths find it beside libC,
+# from libB /Library/X comes first (where a libD could be put)
+for a in arm64e x86_64; do dl ctx/libD.$a $a @rpath/libD.dylib; done; fat sroot/usr/bin/ctx/libD.dylib ctx/libD.arm64e ctx/libD.x86_64
+for a in arm64e x86_64; do dl ctx/libC.$a $a @loader_path/libC.dylib -Lsroot/usr/bin/ctx -lD; done; fat sroot/usr/bin/ctx/libC.dylib ctx/libC.arm64e ctx/libC.x86_64
+for a in arm64e x86_64; do dl ctx/libA.$a $a @rpath/libA.dylib -Lsroot/usr/bin/ctx -lC -Wl,-rpath,@loader_path; done
+fat sroot/usr/bin/ctx/libA.dylib ctx/libA.arm64e ctx/libA.x86_64
+for a in arm64e x86_64; do dl ctx/libB.$a $a @rpath/libB.dylib -Lsroot/usr/bin/ctx -lC -Wl,-rpath,/Library/X -Wl,-rpath,@loader_path; done
+fat sroot/usr/bin/ctx/libB.dylib ctx/libB.arm64e ctx/libB.x86_64
+printf 'int main(void) { return 0; }\n' >m.c
+# libL needs both, so libC is reached twice in one closure
+for a in arm64e x86_64; do dl ctx/libL.$a $a @rpath/libL.dylib -Lsroot/usr/bin/ctx -lA -lB -Wl,-rpath,@loader_path; done
+fat sroot/usr/bin/ctx/libL.dylib ctx/libL.arm64e ctx/libL.x86_64
+clang -arch arm64e -o sroot/usr/bin/prog7 m.c -Lsroot/usr/bin/ctx -lL -Wl,-rpath,@executable_path/ctx && codesign -s - -f sroot/usr/bin/prog7 2>/dev/null || exit 2
+# libU: x86_64 slice with rpath @loader_path, x86_64h slice with /Library/X first, both needing @rpath/libD
+for a in arm64e x86_64 x86_64h; do
+    r=@loader_path/../ctx; [ $a = x86_64h ] && r=/Library/X
+    dl ctx/libU.$a $a @rpath/libU.dylib -Lsroot/usr/bin/ctx -lD -Wl,-rpath,$r -Wl,-rpath,@loader_path/../ctx
+done
+fat sroot/usr/bin/uni/libU.dylib ctx/libU.arm64e ctx/libU.x86_64 ctx/libU.x86_64h
+clang -arch arm64e -o sroot/usr/bin/prog8 m.c -Lsroot/usr/bin/uni -lU -Wl,-rpath,@executable_path/uni && codesign -s - -f sroot/usr/bin/prog8 2>/dev/null || exit 2
+python3 "$EMBED" --stub "$B/hao-stub" --stubs spay2 --root sroot --x86-cache "$X86" sroot/usr/bin/prog6 sroot/usr/bin/prog7 \
+    sroot/usr/bin/prog8 >spay2.log 2>&1 || bad "deps: --stubs (search): $(cat spay2.log)"
+python3 -I - spay2/manifest.json <<'PY' && pass "deps: a path with no x86_64 library does not end dyld's search; a library is judged in every rpath context and for every x86_64 slice" || bad "deps: search and contexts: $(cat spay2.log)"
+import json, sys
+m = {e["path"]: dict(e["not_linked"]) for e in json.load(open(sys.argv[1]))["files"]}
+assert m["usr/bin/prog6"]["@rpath/libfat.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog6"]
+assert m["usr/bin/prog7"]["@rpath/libL.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog7"]
+assert m["usr/bin/prog8"]["@rpath/libU.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog8"]
+PY
 # the identity gate: these stubs pass; usr/bin/prog's stub (it links @rpath/libfat.dylib) checked as the stub of
 # the same program under /Library fails dylibs.protected
 python3 -I - "$repo/tools" spay sroot "$X86" <<'PY' && pass "deps: the identity gate passes the stubs and finds a linked library outside protected storage" || bad "deps: identity gate dylibs.protected"
