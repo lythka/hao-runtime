@@ -5347,6 +5347,9 @@ int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
 {
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
     int w, nd;
+    bool verified = false;                  /* the file whose signature chose the directories */
+    uint64_t vdev = 0, vino = 0;
+    aot_id checked = {0};
     char why[700], where[PATH_MAX + 80], err[512];
     if (cache_dir) {
         if (!hao_aot_dir_explicit(hao_env_tier(), cache_dir, &dirs[0], why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return -1; }
@@ -5356,9 +5359,16 @@ int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
          * library validation (a signature that does not verify runs nowhere) */
         bool lv = false;
         int f = open(path, O_RDONLY | O_CLOEXEC);
-        hao_slice *sl = f >= 0 ? hao_slice_open(f, err, sizeof err) : NULL;
+        struct stat fst;
+        hao_slice *sl = f >= 0 && fstat(f, &fst) == 0 ? hao_slice_open(f, err, sizeof err) : NULL;
         bool bad = sl && sl->sig_size && hao_slice_verify(sl, NULL, err, sizeof err) != 0;
-        if (sl && sl->sig.cd) lv = hao_codesig_library_validated(&sl->sig);
+        if (sl && sl->sig.cd) {
+            lv = hao_codesig_library_validated(&sl->sig);
+            checked.kind = HAO_AOT_ID_CDHASH;
+            checked.hash = sl->sig.hash_type;
+            memcpy(checked.id, sl->sig.cdhash, sizeof sl->sig.cdhash);
+        }
+        if (sl) { verified = true; vdev = (uint64_t)fst.st_dev; vino = (uint64_t)fst.st_ino; }
         hao_slice_close(sl);
         if (f >= 0) close(f);
         if (bad) { fprintf(stderr, "hao-aot: %s: code signature invalid (%s)\n", path, err); return -1; }
@@ -5369,6 +5379,20 @@ int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
     hao_image *im = hao_map_image_only(path, err, sizeof err);
     if (!im) { fprintf(stderr, "hao-aot: %s: %s\n", path, err); return -1; }
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); hao_unload_image(im); return -1; }
+    if (verified) {
+        /* the image checked is the file whose signature chose the directories: the same file, and the
+         * same CodeDirectory (or, unsigned then, unsigned now) */
+        aot_id now;
+        bool same = im->dev == vdev && im->ino == vino && aot_image_id(im, &now, why, sizeof why) &&
+                    (checked.kind == HAO_AOT_ID_CDHASH ? now.kind == HAO_AOT_ID_CDHASH && now.hash == checked.hash &&
+                                                         !memcmp(now.id, checked.id, 20)
+                                                       : now.kind != HAO_AOT_ID_CDHASH);
+        if (!same) {
+            fprintf(stderr, "hao-aot: %s: the file changed while it was checked: not checked\n", path);
+            hao_unload_image(im);
+            return -1;
+        }
+    }
     int r = aot_state(im, dirs, nd, where, sizeof where, why, sizeof why);
     hao_unload_image(im);
     if (r == 0) { if (print) fprintf(stderr, "hao-aot: %s: valid (%s)\n", path, where); return 0; }

@@ -63,6 +63,8 @@ blocks) ran in 0.26 s from its cache and 0.24 s under the JIT.
 `hao --aot --check` and `hao --aot` decide valid or skipped with the same
 directories, after verifying the signature (`tests/aot/run.sh` V: a
 hardened program's cache in `HAO_CACHE` was "valid" and skipped before).
+`--check` checks the cache against the file it verified: a path repointed
+in between is refused (V, with `tests/aot/swapclose.c`).
 
 ## Swift `dynamic` functions under the image's interface units
 
