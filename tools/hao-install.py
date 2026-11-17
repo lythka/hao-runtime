@@ -1,17 +1,36 @@
 """hao-install.py SYSTEM PAYLOAD: install hao into a macOS System volume.
 
 Runs as root inside an image builder (pure Python, no developer tools):
-  1. PAYLOAD/root/** -> SYSTEM (usr/libexec/hao, usr/lib/hao/..., among them
-     usr/lib/hao/trusted-cdhashes, which hao trusts only root-owned and not
-     writable by group or others), root:wheel, modes as in the payload.
+  0. PAYLOAD must hold exactly what PAYLOAD/payload-manifest.json lists
+     (tools/hao-image-payload writes it; payload_inventory): a file it does
+     not list, a symbolic link or special file anywhere in PAYLOAD, a listed
+     file that is missing, or a file under root/ with a set-ID or sticky bit
+     refuses the install before anything is written. Listed AOT caches
+     (root/usr/lib/hao/aot/) may be absent: a payload remade on the user's
+     Mac has none, and `hao --aot` makes them after the first boot. Every
+     file the install reads from PAYLOAD (root/, the manifests, the stubs
+     and replacements they name) is then copied once into a private
+     directory and its sha256 checked against payload-manifest.json; only
+     those copies are read afterwards.
+  1. The listed PAYLOAD/root/** files -> SYSTEM (usr/libexec/hao,
+     usr/lib/hao/..., among them usr/lib/hao/trusted-cdhashes, which hao
+     trusts only root-owned and not writable by group or others), root:wheel,
+     0755 if the payload's file has an execute bit, else 0644.
   2. For every PAYLOAD/embed/manifest.json entry whose file in SYSTEM has the
      recorded source hash, add the signed x86_64 stub slice in place (same
      inode, owner, mode and flags). An entry with "mode": "translate" is a
      universal program: its own x86_64 slices are replaced by the stub. A file
-     that already has the recorded result hash counts as embedded. Other files
-     that already carry an x86_64 slice (kept from another release) are
-     reported and left alone; any other mismatch, or any mismatch of a
-     translate entry, is an error. A stub of a bundle's main executable binds
+     that already has the recorded result hash counts as embedded. A file
+     whose x86_64 slice is a hao stub of another build (it links
+     libhao.dylib; hao's own launcher, with __TEXT,__hao_cli, is not a stub)
+     gets this payload's stub instead when that gives the recorded result
+     ("restubbed"). Other files that already carry an x86_64 slice (kept from
+     another release) are reported and left alone, unless their x86_64 slice
+     is a hao stub that does not name the file's arm slice in a
+     __TEXT,__hao_slice record (stub_binding): such a legacy stub is an
+     error. Any other mismatch, or any mismatch of a translate entry, is an
+     error. A hao stub of the payload must name the arm slice it is embedded
+     with. A stub of a bundle's main executable binds
      the bundle's Info.plist and resource seal (code-signature special slots
      -1 and -3, the entry's "bound" list): it is embedded only if SYSTEM's
      files have exactly the hashes the stub binds (check_bound); otherwise
@@ -31,13 +50,15 @@ Runs as root inside an image builder (pure Python, no developer tools):
      the installed usr/lib/hao/libhao.dylib (left by an earlier payload) is
      removed, since hao would only read and reject it; install.json
      aot_caches records the count, bytes and removals.
-  5. Writes SYSTEM/usr/lib/hao/install.json.
+  5. Every fat file in SYSTEM whose x86_64 slice is a hao stub must name its
+     arm slice (legacy_stubs): one that does not is an error, wherever it is.
+  6. Writes SYSTEM/usr/lib/hao/install.json.
 Every name a manifest supplies ("path", "stub", "file", a bound "file") is a
 relative path under SYSTEM or PAYLOAD by the rule of tools/hao_release.py
 (relative, safe): not absolute, no "..", no backslash or NUL, already
 normalised. One that is not fails the install before anything is written.
-No such name, and no file of PAYLOAD/root, is read or written through a
-symbolic link: a link among the directories of the path, in PAYLOAD/root,
+No such name, and no file of PAYLOAD, is read or written through a
+symbolic link: a link among the directories of the path, in PAYLOAD,
 or where a file is to be written is an error, found before the first write
 where the payload alone decides it (a link in place of a program to embed
 counts as a missing program, as before).
@@ -51,7 +72,9 @@ import os
 import posixpath
 import shutil
 import stat
+import struct
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hao_codesig  # noqa: E402
@@ -105,43 +128,204 @@ def open_nofollow(path, create=False):
     return os.fdopen(fd, "wb")
 
 
-def install_tree(src, dst):
-    """Copy the regular files of SRC onto DST. The whole tree is checked
-    before the first write: Unsafe for a symbolic link or special file in
-    SRC, or a symbolic link or non-directory/non-file in the way in DST."""
-    if os.path.islink(src) or not os.path.isdir(src):
-        raise Unsafe("payload root is not a directory")
+MANIFEST = "payload-manifest.json"
+# Listed by the payload build, made on the installed system when absent: tools/hao-public-archive leaves the AOT
+# caches out, and `hao --aot` makes them after the first boot.
+MADE_LATER = "root/usr/lib/hao/aot/"
+
+
+def read_nofollow(path):
+    """The bytes of the regular file PATH, read through one descriptor that follows no symbolic link."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read()
+    finally:
+        os.close(fd)
+
+
+def payload_inventory(payload):
+    """{relative path: (sha256, mode)} of the files PAYLOAD holds, once it holds exactly what MANIFEST lists:
+    Unsafe for a file it does not list, a symbolic link or special file anywhere, a listed file that is missing
+    (an AOT cache under MADE_LATER may be), or a file under root/ with a set-ID or sticky bit."""
+    if os.path.islink(payload) or not os.path.isdir(payload):
+        raise Unsafe("payload is not a directory")
+    try:
+        files = json.loads(read_nofollow(os.path.join(payload, MANIFEST)))["files"]
+        listed = {relative(r) and r: d for r, d in files.items()}
+    except Unsafe as x:
+        raise Unsafe("%s: %s" % (MANIFEST, x))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as x:
+        raise Unsafe("%s: missing or malformed (%s)" % (MANIFEST, x))
+    for r, d in listed.items():
+        if r == MANIFEST or not isinstance(d, str) or len(d) != 64 or d.strip("0123456789abcdef"):
+            raise Unsafe("%s: bad entry %r" % (MANIFEST, r))
+    have = {}
+    for base, dirs, names in os.walk(payload):
+        for name in sorted(dirs + names):
+            p = os.path.join(base, name)
+            rel = os.path.relpath(p, payload)
+            st = os.lstat(p)
+            if stat.S_ISDIR(st.st_mode) or rel == MANIFEST:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                raise Unsafe("payload %s is %s" % (rel, "a symbolic link" if stat.S_ISLNK(st.st_mode) else
+                                                   "not a regular file"))
+            if rel not in listed:
+                raise Unsafe("payload %s is not in %s" % (rel, MANIFEST))
+            if rel.startswith("root/") and st.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
+                raise Unsafe("payload %s has a set-ID or sticky bit (mode %o)" % (rel, st.st_mode & 0o7777))
+            have[rel] = (listed[rel], st.st_mode)
+    for r in sorted(set(listed) - set(have)):
+        if not r.startswith(MADE_LATER):
+            raise Unsafe("payload %s is listed in %s but missing" % (r, MANIFEST))
+    return have
+
+
+def stage(payload, admitted, rels, work, out):
+    """Add to OUT ({rel: path of a private copy in WORK}) each of RELS not yet in it (a file ADMITTED by
+    payload_inventory): read once through a descriptor that follows no link, written to a new file in WORK (a
+    directory only this user can open) and checked against its sha256 in MANIFEST; Unsafe for a file not
+    admitted or not matching. Only the copies are read afterwards."""
+    for rel in sorted(set(rels) - set(out)):
+        if rel not in admitted:
+            raise Unsafe("payload %s is not in %s" % (rel, MANIFEST))
+        copy = os.path.join(work, "%d" % len(out))
+        h = hashlib.sha256()
+        try:
+            fd = os.open(inside(payload, rel), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError as x:
+            raise Unsafe("payload %s: not read (%s)" % (rel, x.strerror))
+        with os.fdopen(fd, "rb") as fs, open(copy, "xb") as fc:
+            if not stat.S_ISREG(os.fstat(fs.fileno()).st_mode):
+                raise Unsafe("payload %s is not a regular file" % rel)
+            for block in iter(lambda: fs.read(1 << 20), b""):
+                h.update(block)
+                fc.write(block)
+        if h.hexdigest() != admitted[rel][0]:
+            raise Unsafe("payload %s does not match its sha256 in %s" % (rel, MANIFEST))
+        out[rel] = copy
+    return out
+
+
+def install_root(admitted, staged, dst):
+    """Copy the staged root/ files onto DST, root:wheel, 0755 or 0644 (the payload file's execute bit), making
+    their directories and usr/lib/hao (the record's, the AOT caches' parent) 0755. Every path is checked before
+    the first write: Unsafe for a symbolic link or a non-directory/non-file in the way."""
     new_dirs, copies = [], []
-    for base, dirs, files in os.walk(src):
-        rel = os.path.relpath(base, src)
-        for name in dirs + files:
-            s = os.path.join(base, name)
-            r = name if rel == "." else os.path.join(rel, name)
-            d = inside(dst, r)
-            if os.path.islink(s):
-                raise Unsafe("payload root/%s is a symbolic link" % r)
-            if name in dirs:
-                if os.path.lexists(d) and not os.path.isdir(d):
-                    raise Unsafe("%s exists and is not a directory" % r)
-                new_dirs.append(d)
-            else:
-                if not os.path.isfile(s) or (os.path.lexists(d) and not os.path.isfile(d)):
-                    raise Unsafe("%s is not a regular file (payload or SYSTEM)" % r)
-                copies.append((s, d))
+    for rel in sorted(r for r in staged if r.startswith("root/")) + [None]:
+        name = rel[len("root/"):] if rel else "usr/lib/hao/install.json"
+        d = inside(dst, name)
+        p = dst
+        for part in relative(name)[:-1]:
+            p = os.path.join(p, part)
+            if os.path.lexists(p) and not os.path.isdir(p):
+                raise Unsafe("%s exists and is not a directory" % os.path.relpath(p, dst))
+            if not os.path.lexists(p) and p not in new_dirs:
+                new_dirs.append(p)
+        if os.path.lexists(d) and not os.path.isfile(d):
+            raise Unsafe("%s is not a regular file (SYSTEM)" % name)
+        if rel:
+            copies.append((staged[rel], d, 0o755 if admitted[rel][1] & 0o111 else 0o644))
     root = os.geteuid() == 0
     for d in new_dirs:
-        if not os.path.isdir(d):
-            os.mkdir(d, 0o755)
-            if root:
-                os.chown(d, 0, 0)
-    for s, d in copies:
+        os.mkdir(d, 0o755)
+        if root:
+            os.chown(d, 0, 0)
+    for s, d, mode in copies:
         with open(s, "rb") as fs, open_nofollow(d, create=True) as fd:
             fd.truncate()
             shutil.copyfileobj(fs, fd)
-            os.fchmod(fd.fileno(), os.stat(s).st_mode & 0o7777)
+            os.fchmod(fd.fileno(), mode)
             if root:
                 os.fchown(fd.fileno(), 0, 0)
     return len(copies)
+
+
+LC_SEGMENT_64, LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB = 0x19, 0xC, 0x80000018, 0x8000001F
+SLICE_MAGIC = b"haoslice"
+
+
+def arm_slice(slices):
+    """The arm64 slice hao runs (tools/hao-embed arm_slice): plain arm64e > other arm64e.* > arm64."""
+    best, rank = None, 0
+    for c, sub, payload in slices:
+        if c == hao_fat.CPU_ARM64:
+            r = (3 if sub & 0xFF000000 in (0, 0x80000000) else 2) if sub & 0x00FFFFFF == 2 else 1
+            if r > rank:
+                best, rank = payload, r
+    return best
+
+
+def stub_binding(data):
+    """None if DATA's x86_64 slice is not a hao stub (an executable that links libhao.dylib; hao's launcher,
+    with __TEXT,__hao_cli, is not one). Otherwise "" if its __TEXT,__hao_slice record (tools/hao-embed
+    slice_record) names the cdhash of DATA's arm slice, else why not: src/libval.c runs only that slice under
+    the stub."""
+    sl = hao_fat.slices(data) or []
+    x86 = [p for c, _, p in sl if c == hao_fat.CPU_X86_64]
+    if len(x86) != 1 or x86[0][:4] != b"\xcf\xfa\xed\xfe" or int.from_bytes(x86[0][12:16], "little") != 2:
+        return None
+    mo, record, cli, libhao = x86[0], None, False, False
+    try:
+        for cmd, off, size in hao_fat.load_commands(mo):
+            if cmd in (LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB) and size >= 24:
+                name = mo[off + int.from_bytes(mo[off + 8:off + 12], "little"):off + size].split(b"\0")[0]
+                libhao |= name == b"libhao.dylib" or name.endswith(b"/libhao.dylib")
+            elif cmd == LC_SEGMENT_64 and size >= 72 and mo[off + 8:off + 24].rstrip(b"\0") == b"__TEXT":
+                for k in range(min(int.from_bytes(mo[off + 64:off + 68], "little"), (size - 72) // 80)):
+                    s = off + 72 + 80 * k
+                    sect = mo[s:s + 16].rstrip(b"\0")
+                    cli |= sect == b"__hao_cli"
+                    if sect == b"__hao_slice":
+                        n, at = struct.unpack_from("<QI", mo, s + 40)
+                        record = mo[at:at + n] if n == 32 and at + n <= len(mo) else b""
+    except (ValueError, struct.error) as x:
+        return "unreadable x86_64 slice (%s)" % x
+    if not libhao or cli:
+        return None
+    if record is None:
+        return "a hao stub without a __hao_slice record (legacy: it would run any arm slice)"
+    if record[:8] != SLICE_MAGIC or record[8:9] != b"\1":
+        return "a hao stub whose __hao_slice record is malformed"
+    arm = arm_slice(sl)
+    try:
+        c = hao_codesig.check(bytes(arm)) if arm is not None else {"verdict": "missing"}
+    except ValueError as x:
+        c = {"verdict": str(x)}
+    if c["verdict"] != "valid":
+        return "a hao stub whose arm slice is %s" % ("not signed validly" if arm is not None else "missing")
+    if record[9] != c["hash_type"] or record[12:32] != c["cdhash"]:
+        return "a hao stub whose __hao_slice record names another arm slice"
+    return ""
+
+
+def legacy_stubs(system):
+    """[(path under SYSTEM, why)] for every fat file in SYSTEM whose x86_64 slice is a hao stub that does not name
+    the file's arm slice (stub_binding). Symbolic links are not followed; each inode is read once."""
+    seen, out = set(), []
+    for base, dirs, names in os.walk(system):
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
+        for name in names:
+            p = os.path.join(base, name)
+            try:
+                st = os.lstat(p)
+                if not stat.S_ISREG(st.st_mode) or st.st_size < 4096 or (st.st_dev, st.st_ino) in seen:
+                    continue
+                seen.add((st.st_dev, st.st_ino))
+                with open(p, "rb") as f:
+                    if f.read(4) not in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                        continue
+                    f.seek(0)
+                    data = f.read()
+            except OSError:
+                continue
+            why = stub_binding(data)
+            if why:
+                out.append((os.path.relpath(p, system), why))
+    return sorted(out)
 
 
 def manifest_names(embed, replace):
@@ -302,19 +486,35 @@ def main():
 
 
 def install(system, payload):
-    manifest = json.load(open(os.path.join(payload, "embed", "manifest.json")))
-    rman = os.path.join(payload, "replace", "manifest.json")
-    replace = json.load(open(rman)) if os.path.exists(rman) else None
+    admitted = payload_inventory(payload)
+    work = tempfile.mkdtemp(prefix="hao-install.")
+    try:
+        return install_staged(system, payload, admitted, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def install_staged(system, payload, admitted, work):
+    names = ["embed/manifest.json"] + (["replace/manifest.json"] if "replace/manifest.json" in admitted else [])
+    staged = stage(payload, admitted, names, work, {})
+    try:
+        manifest = json.loads(open(staged["embed/manifest.json"], "rb").read())
+        replace = json.loads(open(staged["replace/manifest.json"], "rb").read()) if len(names) > 1 else None
+    except ValueError as x:
+        raise Unsafe("a payload manifest is not JSON (%s)" % x)
     manifest_names(manifest, replace)
     record_path = inside(system, "usr/lib/hao/install.json")
-    installed = install_tree(os.path.join(payload, "root"), system)
-    done, already, native, missing, errors, bound = [], [], [], [], [], []
+    rels = [r for r in admitted if r.startswith("root/")]
+    rels += [posixpath.join("embed", e["stub"]) for e in manifest["files"]]
+    rels += [posixpath.join("replace", e["file"]) for e in (replace["files"] if replace is not None else [])]
+    stage(payload, admitted, rels, work, staged)
+    installed = install_root(admitted, staged, system)
+    done, already, native, missing, errors, bound, restubbed, kept_stubs = [], [], [], [], [], [], [], []
     for e in manifest["files"]:
         if e["path"] in done or e["path"] in missing:
             continue  # listed twice (payloads built before hao-embed skipped repeats)
         try:
             target = inside(system, e["path"], final_link=True)
-            stub_path = inside(os.path.join(payload, "embed"), e["stub"])
         except Unsafe as x:
             errors.append("%s (%s; not embedded)" % (e["path"], x))
             continue
@@ -323,7 +523,7 @@ def install(system, payload):
             continue
         data = open(target, "rb").read()
         translate = e.get("mode") == "translate"
-        stub = open(stub_path, "rb").read()
+        stub = open(staged[posixpath.join("embed", e["stub"])], "rb").read()
         why = check_bound(system, e, stub)
         if why:
             errors.append(e["path"] + " (" + why + "; not embedded)")
@@ -335,15 +535,35 @@ def install(system, payload):
             done.append(e["path"])
             already.append(e["path"])
             continue
-        if digest != e["source_sha256"]:
-            if translate:
+        merged = None
+        if digest == e["source_sha256"]:
+            merged = hao_fat.combine(data, stub, drop_x86_64=translate)
+        else:
+            old = stub_binding(data)
+            if old is not None:   # a hao stub of another build: this payload's, if that gives the recorded result
+                try:
+                    merged = hao_fat.combine(data, stub, drop_x86_64=True)
+                except ValueError:
+                    merged = b""
+                if hashlib.sha256(merged).hexdigest() != e["result_sha256"]:
+                    if old:
+                        errors.append("%s (%s; not replaced: the payload's stub is for another file)" % (e["path"], old))
+                    else:
+                        kept_stubs.append(e["path"])
+                    continue
+                restubbed.append(e["path"])
+            elif translate:
                 errors.append(e["path"] + " (source hash differs; not translated)")
+                continue
             else:
                 (native if hao_fat.has_cpu(data, hao_fat.CPU_X86_64) else errors).append(e["path"])
-            continue
-        merged = hao_fat.combine(data, stub, drop_x86_64=translate)
+                continue
         if hashlib.sha256(merged).hexdigest() != e["result_sha256"]:
             errors.append(e["path"] + " (merge result differs)")
+            continue
+        why = stub_binding(merged)
+        if why:
+            errors.append("%s (the payload's stub is %s; not embedded)" % (e["path"], why))
             continue
         write_in_place(target, merged)
         done.append(e["path"])
@@ -351,12 +571,11 @@ def install(system, payload):
     for e in (replace["files"] if replace is not None else []):
         try:
             target = inside(system, e["path"])
-            new_path = inside(os.path.join(payload, "replace"), e["file"])
         except Unsafe as x:
             errors.append("%s (%s; not replaced)" % (e["path"], x))
             continue
         data = open(target, "rb").read() if os.path.isfile(target) else b""
-        new = open(new_path, "rb").read()
+        new = open(staged[posixpath.join("replace", e["file"])], "rb").read()
         if hashlib.sha256(new).hexdigest() != e["result_sha256"]:
             errors.append(e["path"] + " (replacement file corrupt)")
         elif hashlib.sha256(data).hexdigest() == e["result_sha256"]:
@@ -368,12 +587,16 @@ def install(system, payload):
             replaced.append(e["path"])
     aot_dirs = ensure_aot_dirs(system, errors)
     aot_caches = check_aot_caches(system, errors)
+    reported = {x.split(" (")[0] for x in errors}
+    legacy = legacy_stubs(system)
+    errors += ["%s (%s)" % (p, why) for p, why in legacy if p not in reported]
     required = manifest.get("required", LEGACY_REQUIRED)
     for r in required:
         if r not in done:
             errors.append(r + " (required, not embedded)")
     record = {"installed_files": installed, "embedded": len(done), "already_embedded": len(already),
-              "required": required, "kept_native": native,
+              "required": required, "kept_native": native, "restubbed": restubbed, "kept_stubs": kept_stubs,
+              "legacy_stubs": [p for p, _ in legacy],
               "bundle_bound": sum(p in done for p in bound),
               "missing": missing, "replaced": replaced, "aot_dirs": aot_dirs, "aot_caches": aot_caches, "errors": errors,
               "stub_sha256": manifest["stub_sha256"]}
@@ -382,7 +605,8 @@ def install(system, payload):
         f.write((json.dumps(record, indent=1) + "\n").encode())
         os.fchmod(f.fileno(), 0o644)
     print(f"hao: installed {installed} runtime files; embedded {len(done)} executables; "
-          f"{sum(p in done for p in bound)} bind their bundle's Info.plist; kept {len(native)} native; {len(missing)} missing; replaced {replaced}; AOT dirs {aot_dirs}; "
+          f"{sum(p in done for p in bound)} bind their bundle's Info.plist; kept {len(native)} native; {len(restubbed)} restubbed; {len(kept_stubs)} kept hao stubs of another build; "
+          f"{len(legacy)} unbound hao stubs; {len(missing)} missing; replaced {replaced}; AOT dirs {aot_dirs}; "
           f"AOT caches {aot_caches['caches']} ({aot_caches['bytes'] >> 20} MB, {len(aot_caches['removed_stale'])} stale removed); "
           f"{len(errors)} errors", flush=True)
     for x in errors[:20]:
