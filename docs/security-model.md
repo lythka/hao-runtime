@@ -47,6 +47,43 @@ target, or where a file is to be written fails the install.
 `tools/hao_release.py` applies the same rule when it checks and materialises
 a bundle.
 
+The payload must hold exactly the files its `payload-manifest.json` lists,
+each with its sha256: a file it does not list (a LaunchDaemon added under
+`root/`, for example), a symbolic link or special file, a missing file other
+than an AOT cache (made after the first boot), a listed file whose sha256
+differs, a set-ID or sticky file under `root/`, or two `root/` names that are
+one file on a case-insensitive volume fails the install before the first
+write. The installer then copies every payload file it will read into a
+private directory used through a descriptor, checks the copy's sha256
+against the manifest and reads only the copy (checked by inode), so a
+payload that changes during the install changes nothing that is installed.
+It installs only the listed `root/` files, root:wheel, 0755 or 0644, each a
+new file renamed into place through directory descriptors, and opens
+programs to embed and files to replace the same way, following no link. The manifest's
+hashes give consistency, not authenticity: whoever can rewrite the payload
+can rewrite its manifest too, so the image builder must take both from an
+authenticated source.
+
+A hao stub (an executable x86 slice, of any subtype, that names libhao in a
+library command of any kind or as a string; the payload's own
+`/usr/libexec/hao` with its `__TEXT,__hao_cli` marker is the launcher, the
+marker anywhere else proves nothing) must name its file's ARM slice in
+`__TEXT,__hao_slice`. The installer embeds no stub that does not, gives a
+manifest program that still carries an older hao stub this payload's stub
+when that yields the recorded result, and fails if any other file in the
+System volume carries a stub without that record.
+
+The build-time tools (`hao-image-payload`, `hao-embed`, `hao-trust-list`,
+`stub_identity_gate.py`, `hao-runtime-on-mac`, `hao_release.py`) assume a
+build host whose inputs (the System root, the x86_64 cache, the hao build)
+and working directories no other user can write. They refuse what they can
+see breaks that (a shared temporary directory or output directory, an ACL
+granting write, a link where a file is written) but do not defend against
+another local user changing their inputs while they run. `hao-install.py`
+additionally defends against hostile payload contents: what it installs is
+only what the payload's manifest lists and hashes, read from private copies.
+Neither makes the manifest authentic: that is the image builder's input.
+
 The packaging tools read Mach-O files, code signatures and interface units
 from the image being built. Their readers share one bounded load-command walk
 (`hao_fat.load_commands`) and refuse malformed or truncated input with an
@@ -110,7 +147,9 @@ The first route that answers decides:
 2. **Trusted cdhash list**: Apple. `tools/hao-image-payload` writes
    `/usr/lib/hao/trusted-cdhashes` with `tools/hao-trust-list`: the cdhash of
    every arm64-only program, library and bundle under the image's root that
-   passes `codesign --verify --strict -R='anchor apple'` on the build host. hao
+   passes `codesign --verify --strict -R='anchor apple'` on the build host
+   (codesign checks a private copy of the bytes the cdhash was computed
+   from, so a file changed meanwhile is not listed under another's check). hao
    reads the list only if root owns it and every directory above it, and
    nobody else can write them. `HAO_TRUST_LIST=/abs/file` adds a list in an
    open-tier process, for tests. A process reads the lists once, when it
@@ -230,6 +269,21 @@ embedded route on the slice the loader then builds the image from, so the
 decision and the image come from the same bytes. The other open-tier
 switches select hao's own engines, diagnostics or bring-up behaviour, not
 code or trust. Guarded and set-ID processes ignore all of these anyway.
+
+dyld loads the stub's own dependencies, and runs their initializers, before
+hao can set `CS_REQUIRE_LV`, and the stub's `disable-library-validation`
+admits any of them. `tools/hao-embed` therefore links a program's native
+dependency into its stub only from protected storage: the x86_64 shared
+cache, or a file on the sealed system volume (not behind one of its
+firmlinks to the data volume) or in the OS or App cryptex, when every path
+dyld would try first, every directory and link on the way, and every
+library that file loads at launch are such files too: every path in dyld's
+search order (each rpath expansion and the fallback paths), not only the
+one expected to load. The stub names libhao and libhao_identity by their
+/usr/lib/hao paths, so dyld searches no rpath for them.
+Any other native dependency (a bundle's framework, a file under /Library) is
+loaded by hao's binder with the program's image, after library validation is
+on.
 
 A non-weak dependency that does not load ends the process as dyld does
 (`dyld[PID]: Library not loaded: ...`, then `abort_with_payload` with
@@ -365,7 +419,10 @@ image with that cdhash ever loads the cache.
 `hao --aot` with no FILE runs itself once per program of `/usr/lib/hao/aot-list`
 (written by `tools/hao-image-payload`), else per path of
 `/usr/lib/hao/stub-identities`, each as `hao --aot FILE` above. A list that is
-not a root-owned regular file writable only by root is not used. A program whose cache in a directory this process reads already passes the
+not a root-owned regular file writable only by root (mode and ACL), or whose
+directories from / are not, is not used. `hao --aot --auto` marks a run done
+only when every listed program is there and succeeded, and believes a marker
+only under the same ownership rules. A program whose cache in a directory this process reads already passes the
 loader's checks is skipped; `hao --aot --check` runs those checks and writes
 nothing. Both first verify the program's signature and, for a program that
 requires library validation, look in the system directories only, as a run
@@ -507,8 +564,10 @@ What this trusts, and what stops an attacker:
   `anchor apple` with an Apple identifier, for example an Apple-signed x86_64
   program from an earlier release with an inserted library. The lists do not
   widen that. Where AMFI's dyld policy is in force, dyld ignores `DYLD_*` for a
-  listed stub, because hao-embed signs platform and hardened programs' stubs
-  with the hardened runtime, and the guarded tier covers hao's own switches.
+  listed stub, because hao-embed signs the stubs of platform, hardened and
+  library-validated (library flag) programs with the hardened runtime, and
+  never with allow-dyld-environment-variables when the program requires
+  library validation, and the guarded tier covers hao's own switches.
 - **A translator bug reachable from input** inside such a process is the same
   class of risk as a memory bug in the native Apple program.
 
@@ -551,9 +610,23 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   for. A file that fails the check never runs.
 - An embedded program's stub carries `disable-library-validation`, and dyld
   loads the native libraries the stub links, and runs their initializers,
-  before hao sets `CS_REQUIRE_LV`. Library validation holds for what the
-  program loads from then on, not for the stub's own link-time
-  dependencies.
+  before hao sets `CS_REQUIRE_LV`; `tools/hao-embed` links them only from
+  protected storage (above). Library validation holds for what the program
+  loads from then on.
+- A stub made before `tools/hao-embed` wrote the `__hao_slice` record names
+  no ARM slice and runs none (status 126). `hao-install.py` restubs such a
+  program when the payload embeds it and otherwise fails the install while
+  one is left in the System volume; a copy kept elsewhere (a user's folder)
+  is not found and does not start until it is embedded again.
+- A stub seals its program's launch and library constraints (signature
+  slots 8-11) byte for byte; `tools/hao-embed` refuses a program with a
+  constraint codesign cannot express (a category constraint) unless
+  `releases/dropped-constraints.txt` pins that blob of that build (path,
+  slot, ARM cdhash, blob sha256), and then the stub has none for that slot;
+  the identity gate fails a stub missing any constraint not pinned there. A self constraint that asks for a platform binary cannot be
+  met by an ad hoc stub, so such a program does not start where the kernel
+  enforces launch constraints. Launch constraints that come from a trust
+  cache rather than the signature do not apply to a stub.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests

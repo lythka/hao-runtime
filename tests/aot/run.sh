@@ -375,6 +375,7 @@ else bad "H no HOME: rc=$rc $(cat "$OUT/h.err")"; fi
 # root:wheel when run as root, as in the image builder) and rejects a symlink
 I=$OUT/inst; mkdir -p "$I/sys/usr/lib" "$I/sys/private/var/db" "$I/pay/root/usr/lib/hao/aot" "$I/pay/embed"
 echo '{"files": [], "required": [], "stub_sha256": ""}' > "$I/pay/embed/manifest.json"
+echo '{"files": {"embed/manifest.json": "'$(shasum -a 256 "$I/pay/embed/manifest.json" | cut -d' ' -f1)'"}}' > "$I/pay/payload-manifest.json"
 python3 -I "$repo/tools/hao-install.py" "$I/sys" "$I/pay" >"$I/log" 2>&1; rc=$?
 m1=$(stat -f %Lp "$I/sys/usr/lib/hao/aot" 2>/dev/null); m2=$(stat -f %Lp "$I/sys/private/var/db/hao" 2>/dev/null)
 [ $rc = 0 ] && [ "$m1" = 755 ] && [ "$m2" = 755 ] && pass "I hao-install.py: usr/lib/hao/aot $m1, private/var/db/hao $m2" \
