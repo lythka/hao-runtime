@@ -402,11 +402,16 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
  * code stays x86_64); a nil it makes from nothing (store or inject a tag) gets
  * the guest's, since guest code made the call. Only the bounded outer-nil
  * words of collect_witness_patches change, never a live payload. A value the
- * walk cannot prove is handed over unchanged, as before. */
-#define WITNESS_MAX 160
-static struct { uint64_t pc; unsigned slot; } witness_pc[WITNESS_MAX];
-static unsigned witness_count;
-uint64_t hao_swift_witness_lo = 1, hao_swift_witness_hi = 0;   /* empty until set up */
+ * walk cannot prove is handed over unchanged, as before.
+ *
+ * The intercepted functions: pc -> the mask of slots (below) it serves in,
+ * grown as native types are added; read lock-free on every native call
+ * inside [lo, hi]; witness_entries counts (pc, slot) pairs. witness_ready
+ * is set once the first set is in, optional_metadata with it. */
+static hao_gmap witness_pcs = HAO_GMAP_INIT(2, 1, 8, 16);
+static bool witness_ready;
+static unsigned witness_entries, witness_dropped;
+uint64_t hao_swift_witness_lo = 1, hao_swift_witness_hi = 0;   /* empty until set up; hi read relaxed after lo */
 static hao_gmap witness_types = HAO_GMAP_INIT(2, 1, 6, 14);       /* metadata -> 1 affected, 2 not */
 typedef struct { const void *metadata; uintptr_t state; } SWIFT_RESPONSE;
 typedef SWIFT_RESPONSE SWIFT optional_accessor(uintptr_t, const void *);
@@ -435,17 +440,51 @@ static unsigned witness_metadata_reg(unsigned slot)
     return slot == 1 || slot == 11 || slot == 12 ? 1 : slot == 7 ? 3 : 2;
 }
 
+/* Whether calls of PC are intercepted as SLOT. */
+static bool witness_has(uint64_t pc, unsigned slot)
+{
+    const uint64_t *e = hao_gmap_get1(&witness_pcs,pc);
+    return e && (__atomic_load_n(&e[1],__ATOMIC_RELAXED) >> slot & 1);
+}
+/* Under witness_setup_lock in a hao critical section: intercept calls of
+ * PC as SLOT, widening [*lo, *hi]. A full map drops it, counted and said once. */
+static void witness_add_locked(uint64_t pc, unsigned slot, uint64_t *lo, uint64_t *hi)
+{
+    bool fresh;
+    uint64_t *e = hao_gmap_claim1(&witness_pcs,pc,&fresh);
+    if (!e) {
+        if (!witness_dropped++)
+            fprintf(HAO_DIAG,"hao: Swift value witness table full (%u entries): calls of %#llx and later witnesses are not converted\n",
+                    witness_entries,(unsigned long long)pc);
+        return;
+    }
+    if (fresh) { e[1] = 1ull << slot; hao_gmap_publish1(&witness_pcs,e,pc); }
+    else if (e[1] >> slot & 1) return;
+    else __atomic_store_n(&e[1],e[1] | 1ull << slot,__ATOMIC_RELEASE);
+    witness_entries++;
+    if (pc < *lo) *lo = pc;
+    if (pc > *hi) *hi = pc;
+}
+/* Publish the widened range: hi before lo, which readers load first. */
+static void witness_range_publish(uint64_t lo, uint64_t hi)
+{
+    __atomic_store_n(&hao_swift_witness_hi,hi,__ATOMIC_RELAXED);
+    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+}
+
 static void witness_setup_locked(void);
 static bool payload_witnesses_added;
 static void payload_witnesses_locked(void);
 void hao_swift_witness_setup(void)
 {
-    if ((__atomic_load_n(&witness_count,__ATOMIC_ACQUIRE) && __atomic_load_n(&payload_witnesses_added,__ATOMIC_ACQUIRE)) ||
+    if ((__atomic_load_n(&witness_ready,__ATOMIC_ACQUIRE) && __atomic_load_n(&payload_witnesses_added,__ATOMIC_ACQUIRE)) ||
         hao_opt.no_swift_values) return;
+    hao_crit_enter();
     pthread_mutex_lock(&witness_setup_lock);
-    if (!witness_count) witness_setup_locked();
-    if (witness_count && !payload_witnesses_added) payload_witnesses_locked();
+    if (!witness_ready) witness_setup_locked();
+    if (witness_ready && !payload_witnesses_added) payload_witnesses_locked();
     pthread_mutex_unlock(&witness_setup_lock);
+    hao_crit_leave();
 }
 
 /* The single-payload tag witnesses (getEnumTagSinglePayload, slot 6;
@@ -456,26 +495,20 @@ void hao_swift_witness_setup(void)
  * (its representation's spare bits; Recipe.c translated_nil_type). The
  * handler walks the type's Optional, as for an Optional's own witnesses.
  * Added when Foundation is loaded; the readers see a new entry once
- * witness_count includes it. */
+ * it is published. */
 static void payload_witnesses_locked(void)
 {
     const void *data = HAO_DLSYM("$s10Foundation4DataVN");
     if (!data || !optional_metadata) return;   /* Foundation not loaded yet: a later image retries */
     const void *optional = optional_metadata(0,data).metadata;
     if (!optional || !translated_nil_type(optional)) { __atomic_store_n(&payload_witnesses_added,true,__ATOMIC_RELEASE); return; }
-    unsigned n = witness_count;
     uint64_t lo = hao_swift_witness_lo, hi = hao_swift_witness_hi;
     static const unsigned slots[] = {6,7};
-    for (unsigned i = 0; i < 2 && n < WITNESS_MAX; ++i) {
+    for (unsigned i = 0; i < 2; ++i) {
         uint64_t pc = (uint64_t)(uintptr_t)((void *const *)vwt(data))[slots[i]];
-        if (!native_function(pc)) continue;
-        witness_pc[n++] = (typeof(witness_pc[0])){pc,slots[i]};
-        if (pc < lo) lo = pc;
-        if (pc > hi) hi = pc;
+        if (native_function(pc)) witness_add_locked(pc,slots[i],&lo,&hi);
     }
-    hao_swift_witness_hi = hi;
-    __atomic_store_n(&witness_count,n,__ATOMIC_RELEASE);
-    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+    witness_range_publish(lo,hi);
     __atomic_store_n(&payload_witnesses_added,true,__ATOMIC_RELEASE);
 }
 static void witness_setup_locked(void)
@@ -503,32 +536,22 @@ static void witness_setup_locked(void)
         tuple2(0,int_type,string_type,NULL,NULL).metadata, tuple2(0,string_type,string_type,NULL,NULL).metadata};
     for (unsigned k = 0; k < sizeof types / sizeof *types; ++k) if (!types[k]) return;
     static const unsigned slots[] = {0,1,2,3,4,5,6,7,11,12,13};
-    unsigned n = 0; uint64_t lo = UINT64_MAX, hi = 0;
+    uint64_t lo = UINT64_MAX, hi = 0;
     for (unsigned k = 0; k < sizeof types / sizeof *types; ++k)
         for (unsigned i = 0; i < (k < 2 ? 11u : 8u); ++i) {   /* enum witnesses (11-13) only in an enum's table */
             uint64_t pc = (uint64_t)(uintptr_t)((void *const *)vwt(types[k]))[slots[i]];
-            if (!native_function(pc)) continue;
-            bool dup = false;
-            for (unsigned j = 0; j < n; ++j) dup |= witness_pc[j].pc == pc && witness_pc[j].slot == slots[i];
-            if (dup || n == WITNESS_MAX) continue;
-            witness_pc[n++] = (typeof(witness_pc[0])){pc,slots[i]};
-            if (pc < lo) lo = pc;
-            if (pc > hi) hi = pc;
+            if (native_function(pc)) witness_add_locked(pc,slots[i],&lo,&hi);
         }
     /* The runtime's array operations (Array.cpp), which guest code calls
      * from inlined Array code: each element through its type's witnesses. */
     for (unsigned k = 0; k < sizeof array_ops / sizeof *array_ops; ++k) {
         uint64_t pc = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT,array_ops[k].name);
-        if (!native_function(pc) || n == WITNESS_MAX) continue;
-        witness_pc[n++] = (typeof(witness_pc[0])){pc,array_ops[k].slot};
-        if (pc < lo) lo = pc;
-        if (pc > hi) hi = pc;
+        if (native_function(pc)) witness_add_locked(pc,array_ops[k].slot,&lo,&hi);
     }
-    if (!n) return;
-    optional_metadata = opt;
-    hao_swift_witness_hi = hi;
-    __atomic_store_n(&witness_count,n,__ATOMIC_RELEASE);
-    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+    if (!witness_entries) return;
+    __atomic_store_n(&optional_metadata,opt,__ATOMIC_RELEASE);
+    __atomic_store_n(&witness_ready,true,__ATOMIC_RELEASE);
+    witness_range_publish(lo,hi);
 }
 
 /* Whether a value of this Optional may hold an outer nil in a pointer's
@@ -619,11 +642,12 @@ static void witness_encode(void *value, const witness_patches *w)
  * guest's ARM bits (hao_swift_witness_result). */
 static void guest_bits_note(hao_thread *t, const void *value, const void *at, uint64_t native, uint64_t arm)
 {
-    unsigned k = t->swift_made_n++ % (sizeof t->swift_made / sizeof *t->swift_made);
+    unsigned i = t->swift_made_n++, k = i % HAO_SWIFT_MADE_RING;
     t->swift_made[k].value = (uint64_t)(uintptr_t)value;
     t->swift_made[k].at = (uint64_t)(uintptr_t)at;
     t->swift_made[k].native = native;
     t->swift_made[k].arm = arm;
+    t->swift_made[k].idx = i;
 }
 /* A produced value (destination of a copy or take, a projected payload):
  * the source's guest bits again, noted where they differ from the witness's. */
@@ -763,26 +787,15 @@ static void witness_add_type(const void *type)
     const void *const *m = type;
     uintptr_t kind = (uintptr_t)m[0];
     if ((kind != 0x200 && kind != 0x201) || hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return;
-    uint64_t destroy = (uint64_t)(uintptr_t)vwt(type)->fn[1];
-    unsigned n = __atomic_load_n(&witness_count,__ATOMIC_ACQUIRE);
-    for (unsigned i = 0; i < n; ++i) if (witness_pc[i].pc == destroy && witness_pc[i].slot == 1) return;
+    if (witness_has((uint64_t)(uintptr_t)vwt(type)->fn[1],1)) return;
     hao_crit_enter();
     pthread_mutex_lock(&witness_setup_lock);
-    n = witness_count;
     uint64_t lo = hao_swift_witness_lo, hi = hao_swift_witness_hi;
     for (unsigned slot = 0; slot <= 5; ++slot) {
         uint64_t pc = (uint64_t)(uintptr_t)vwt(type)->fn[slot];
-        if (!native_function(pc)) continue;
-        bool dup = false;
-        for (unsigned j = 0; j < n; ++j) dup |= witness_pc[j].pc == pc && witness_pc[j].slot == slot;
-        if (dup || n == WITNESS_MAX) continue;
-        witness_pc[n++] = (typeof(witness_pc[0])){pc,slot};
-        if (pc < lo) lo = pc;
-        if (pc > hi) hi = pc;
+        if (native_function(pc)) witness_add_locked(pc,slot,&lo,&hi);
     }
-    hao_swift_witness_hi = hi;
-    __atomic_store_n(&witness_count,n,__ATOMIC_RELEASE);
-    __atomic_store_n(&hao_swift_witness_lo,lo,__ATOMIC_RELEASE);
+    witness_range_publish(lo,hi);
     pthread_mutex_unlock(&witness_setup_lock);
     hao_crit_leave();
 }
@@ -861,15 +874,19 @@ void *hao_swift_borrow_to_native(const void *type, const void *value)
  * still holding the guest bits hao wrote, gets back the bits the native
  * witness wrote. A value made elsewhere and copied there by guest code is
  * not tracked (a copy is the guest's own memcpy, not a witness call). */
+static uint64_t witness_made_lost;
 void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
 {
-    const unsigned ring = sizeof t->swift_made / sizeof *t->swift_made;
+    const unsigned ring = HAO_SWIFT_MADE_RING;
     unsigned n = t->swift_made_n;
     if (indirect && n != mark) {
+        /* this activation's entries [mark, n): those past the ring, or
+         * overwritten by a nested callback's, are lost */
         unsigned from = n - mark > ring ? n - ring : mark;
-        unsigned restored = 0;
+        unsigned restored = 0, lost = from - mark;
         for (unsigned i = from; i != n; ++i) {
             unsigned k = i % ring;
+            if (t->swift_made[k].idx != i) { lost++; continue; }
             if (t->swift_made[k].value != indirect) continue;
             uint64_t bits;
             memcpy(&bits,(const void *)(uintptr_t)t->swift_made[k].at,8);
@@ -879,8 +896,19 @@ void hao_swift_witness_result(hao_thread *t, unsigned mark, uint64_t indirect)
         }
         if (restored && hao_opt.bridge_check)
             fprintf(HAO_DIAG,"hao: Swift Optional witness nils returned to native: %u at %#llx\n",restored,(unsigned long long)indirect);
+        if (lost && !__atomic_fetch_add(&witness_made_lost,lost,__ATOMIC_RELAXED))
+            fprintf(HAO_DIAG,"hao: Swift Optional witness nils not tracked (%u past a ring of %u): a callback result at %#llx "
+                    "may keep the guest's encoding\n",lost,ring,(unsigned long long)indirect);
     }
     t->swift_made_n = mark;
+}
+
+void hao_swift_witness_stats(void)
+{
+    uint64_t lost = __atomic_load_n(&witness_made_lost,__ATOMIC_RELAXED);
+    if (witness_entries || witness_dropped || lost)
+        fprintf(HAO_DIAG,"hao-swift-witness: entries=%u dropped=%u map_kb=%llu nils_lost=%llu\n",witness_entries,witness_dropped,
+                (unsigned long long)(witness_pcs.bytes >> 10),(unsigned long long)lost);
 }
 
 /* Each element's outer nils in the witness's encoding, in place; their
@@ -950,9 +978,10 @@ static bool witness_array(hao_thread *t, uint64_t pc, unsigned slot, const void 
 bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
 {
     hao_cpu *c = &t->cpu;
-    for (unsigned i = 0; i < witness_count; ++i) {
-        if (witness_pc[i].pc != pc) continue;
-        unsigned slot = witness_pc[i].slot;
+    const uint64_t *e = hao_gmap_get1(&witness_pcs,pc);
+    if (!e) return false;
+    for (uint64_t slots = __atomic_load_n(&e[1],__ATOMIC_ACQUIRE); slots; slots &= slots - 1) {
+        unsigned slot = (unsigned)__builtin_ctzll(slots);
         const void *type = (const void *)(uintptr_t)c->x[witness_metadata_reg(slot)];
         if (slot >= ARRAY_DESTROY) return type && witness_array(t,pc,slot,type);
         if (!type || (uint64_t)(uintptr_t)((void *const *)vwt(type))[slot] != pc) continue;
@@ -963,8 +992,9 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
          * for such a pc. */
         const void *walked = type;
         if (slot == 6 || slot == 7) {
-            if (c->x[slot == 6 ? 1 : 2] != 1) return false;
-            walked = optional_metadata(0,type).metadata;
+            optional_accessor *opt = __atomic_load_n(&optional_metadata,__ATOMIC_ACQUIRE);
+            if (c->x[slot == 6 ? 1 : 2] != 1 || !opt) return false;
+            walked = opt(0,type).metadata;
             if (!walked) return false;
         }
         if (!witness_affected(walked)) return false;

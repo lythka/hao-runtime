@@ -59,6 +59,7 @@ typedef struct hao_eh_rec {
 #define HAO_JIT_JC_SLOTS 2048   /* a power of two */
 #define HAO_NCACHE_SLOTS 256    /* a power of two */
 #define HAO_STEP_RING 16        /* a power of two */
+#define HAO_SWIFT_MADE_RING 64  /* a power of two */
 typedef struct hao_thread {
     hao_cpu cpu;               /* must be first (16-byte aligned) */
     uint8_t *stack;
@@ -72,8 +73,10 @@ typedef struct hao_thread {
     /* Nils a guest call of an Optional witness made and hao wrote in the
      * guest's encoding (swiftvalue.c witness_to_guest), a ring: a callback
      * returning such a value to native code as its indirect result gets the
-     * native encoding back (hao_swift_witness_result). */
-    struct { uint64_t value, at, native, arm; } swift_made[16];
+     * native encoding back (hao_swift_witness_result). Nested callbacks
+     * share it; each entry keeps its index, so one a later note overwrote
+     * is seen as lost (counted), not taken for another. */
+    struct { uint64_t value, at, native, arm; unsigned idx; } swift_made[HAO_SWIFT_MADE_RING];
     unsigned swift_made_n;
     /* The guest state a native-to-guest call saves and restores (1 KB),
      * from the fifth nesting level on kept here instead of on the native
