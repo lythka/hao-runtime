@@ -78,7 +78,15 @@ static bool on_guest_stack(const hao_thread *t, uint64_t a, uint64_t n)
 /* Replace the guest function at *slot with its entry point; true if this call did it. */
 static bool patch(uint64_t *slot, uint64_t guest, uint64_t entry)
 {
-    if (entry == guest) return false;
+    if (entry == guest || __atomic_load_n(slot, __ATOMIC_RELAXED) != guest) return false;
+    /* constant data of a guest image (a global block, a descriptor) is read-only once the image is
+     * initialized: written for this one store */
+    if (hao_image_sealed_at((uint64_t)(uintptr_t)slot, 8)) {
+        hao_crit_enter();
+        bool ok = hao_image_sealed_cas((uint64_t)(uintptr_t)slot, guest, entry);
+        hao_crit_leave();
+        return ok;
+    }
     return __atomic_compare_exchange_n(slot, &guest, entry, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
 }
 
@@ -160,8 +168,9 @@ static void prepare_block(uint64_t *b)
     }
     if (d && (flags & BLOCK_HAS_COPY_DISPOSE)) {
         /* descriptors are shared, constant data in the guest image (its
-         * __DATA_CONST stays writable under hao); patching them is
-         * idempotent and each helper is patched once */
+         * __DATA_CONST, read-only once the image is initialized: patch
+         * writes it for the one store); patching them is idempotent and
+         * each helper is patched once */
         for (int k = 2; k <= 3; k++) {
             uint64_t h = d[k];
             if (!hao_is_guest_function(h)) continue;

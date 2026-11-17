@@ -920,7 +920,14 @@ static bool witness_array(hao_thread *t, uint64_t pc, unsigned slot, const void 
     size_t nin = 0, nold = 0;
     char *scratch = NULL;
     if (slot == ARRAY_DESTROY) {
-        if (!witness_encode_elements(type,dest,count,&in,&nin)) return false;
+        /* static values in an image's read-only constant data: destroyed as a converted copy (destroy only
+         * reads them, and natively nothing writes there) */
+        if (hao_image_sealed_at((uint64_t)(uintptr_t)dest, (size_t)(count * stride))) {
+            if (!(scratch = malloc((size_t)(count * stride)))) return false;
+            memcpy(scratch,dest,(size_t)(count * stride));
+            dest = scratch;
+        }
+        if (!witness_encode_elements(type,dest,count,&in,&nin)) { free(scratch); return false; }
     } else {
         if (slot == ARRAY_INIT_COPY || slot == ARRAY_ASSIGN_COPY) {   /* borrowed source: a converted copy */
             scratch = malloc((size_t)(count * stride));
@@ -996,7 +1003,13 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
             } else witness_encode(src,&in);                    /* owned by the callee */
         } else if (slot == 1 || slot == 12) {
             witness_walk(type,dest,&in);
-            witness_encode(dest,&in);
+            if (slot == 1 && in.count > 0 && hao_image_sealed_at((uint64_t)(uintptr_t)dest, (size_t)v->size)) {
+                /* a static value in read-only constant data: destroyed as a converted copy (ARRAY_DESTROY) */
+                scratch = v->size <= sizeof local ? local : malloc((size_t)v->size);
+                if (!scratch) return false;
+                memcpy(scratch,dest,(size_t)v->size);
+                witness_encode(scratch,&in);
+            } else witness_encode(dest,&in);
         }
         typedef void *SWIFT ptr3_fn(void *, void *, const void *);
         typedef void SWIFT void2_fn(void *, const void *);
@@ -1011,7 +1024,7 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
             result = (uint64_t)(uintptr_t)((ptr3_fn *)f)(dest,scratch ? scratch : src,type);
             witness_restore_produced(t,dest,&in);              /* the source's encoding */
             break;
-        case 1: ((void2_fn *)f)(dest,type); break;
+        case 1: ((void2_fn *)f)(scratch ? scratch : dest,type); break;
         case 6: result = ((single_get_fn *)f)(scratch ? scratch : dest,(unsigned)c->x[1],type); break;
         case 7:   /* case 0 is the payload: no nil is made, its encoding stays */
             ((single_store_fn *)f)(dest,(unsigned)c->x[1],(unsigned)c->x[2],type);

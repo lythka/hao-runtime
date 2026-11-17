@@ -668,6 +668,29 @@ static void code_write_tests(const uint8_t *seed, size_t n)
     if (m != MAP_FAILED) munmap(m, 0x1000);
 }
 
+/* hao_image_seal: the image's SG_READ_ONLY segments (__DATA_CONST) are writable after the load (hao adapts
+ * them) and read-only after the seal; hao_image_sealed_cas writes one word and leaves the page read-only. */
+static void seal_tests(const uint8_t *seed, size_t n)
+{
+    char path[1100], err[512] = "";
+    snprintf(path, sizeof path, "%s/seal.bin", scratch);
+    put_file(path, seed, n, n);
+    hao_image *img = hao_load_image(path, resolver, err, sizeof err);
+    size_t o = img ? find_cmd(seed, LC_SEGMENT_64, "__DATA_CONST") : 0;
+    const struct segment_command_64 *sg = o ? (const void *)(seed + o) : NULL;
+    bool ok = sg && (sg->flags & SG_READ_ONLY);
+    uint64_t a = ok ? sg->vmaddr + img->slide : 0;
+    ok = ok && (prot_at(a) & VM_PROT_WRITE) && hao_image_seal(img) && img->nsealed == 1 && prot_at(a) == VM_PROT_READ;
+    note(ok, "seal: __DATA_CONST writable after the load, read-only after hao_image_seal");
+    uint64_t old = 0;
+    if (ok) memcpy(&old, (const void *)(uintptr_t)a, 8);
+    ok = ok && hao_image_sealed_at(a, 8) == img && !hao_image_sealed_at(a + sg->vmsize, 8) &&
+         hao_image_sealed_cas(a, old, old ^ 0x5a5a) && *(const uint64_t *)(uintptr_t)a == (old ^ 0x5a5a) &&
+         !hao_image_sealed_cas(a, old, 1) && prot_at(a) == VM_PROT_READ;
+    note(ok, "seal: one word written through hao_image_sealed_cas, the page read-only again");
+    if (img) hao_unload_image(img);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--codesig")) return codesig_report(argv[2]);
@@ -684,6 +707,7 @@ int main(int argc, char **argv)
 
     FRESH(); expect("seed exec-arm64e loads", d, n, NULL);
     code_write_tests(seed, n);
+    seal_tests(seed, n);
     { size_t a; uint8_t *x = slurp("exec-arm64", &a); expect("seed exec-arm64 loads", x, a, NULL); free(x); }
     expect("seed lib-arm64e loads", lib, ln, NULL);
     expect("seed fat-x86_64-arm64e loads", fat, fn, NULL);
