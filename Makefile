@@ -180,7 +180,8 @@ $(B)/test_imm_cond: tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c inclu
 $(B)/opts_test: tests/aot/opts_test.c $(B)/libhaocore.a
 	$(CC) $(CFLAGS) -o $@ $< $(B)/libhaocore.a && codesign -s - -f $@
 
-# Fork while other threads hold the JIT, thunk, signature and block locks.
+# Fork while other threads hold the JIT, thunk, signature, bridge, signal-disposition
+# and name-index locks.
 $(B)/test_fork: tests/host/fork.c $(B)/libhao.dylib
 	$(CC) $(ARCH) -O1 -Iinclude -o $@ $< -L$(B) -lhao -Wl,-rpath,$(abspath $(B)) && codesign -s - -f $@
 
@@ -297,6 +298,7 @@ ioregtest: all $(B)/test_ioreg_guest
 
 test: unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
 	tools/check_x86.sh
+	python3.14 -I -B tests/host/fork_locks.py
 
 # Every other test script that runs unattended on a development host
 # (tests/check.list, tests/README.md), in parallel (CHECK_J jobs), each with a

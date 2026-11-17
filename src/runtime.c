@@ -245,6 +245,8 @@ static void fork_child(void)
     hao_swift_value_fork_child();
     hao_async_contract_fork_child();
     hao_varsniff_fork_child();
+    hao_signals_fork_child();
+    hao_vafmt_fork_child();
 }
 
 static pthread_once_t fork_once = PTHREAD_ONCE_INIT;
