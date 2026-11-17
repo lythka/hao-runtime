@@ -117,7 +117,7 @@ int main(int argc, char **argv)
         big[sizeof big - 2] = '\n';
         big[sizeof big - 1] = 0;
         for (int k = 0; k < 8; k++) send(big, false);
-        snprintf(want, sizeof want, "hao[%s:%d]: console.log reached its cap of %zu KB: later lines go to the console only\n",
+        snprintf(want, sizeof want, "hao[%s:%d]: console.log reached its cap of %zu KB: later lines are not kept\n",
                  getprogname(), (int)getpid(), hao_diag_log_cap >> 10);
         check(contains(log, want) && !*fmt_calls && !*alloc_calls, "cap", "the cap line without formatting or allocation");
     } else
