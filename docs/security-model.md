@@ -462,6 +462,30 @@ entitlements, platform or trust-cache status, or set-ID bits. Its own
 entitlements (`tools/hao.entitlements`: `allow-jit`,
 `disable-library-validation`) take no effect without the hardened runtime.
 
+## Executable memory
+
+hao's executable memory (translated code, thunks, Swift island entries)
+is held to what a native JIT on an Intel Mac offers: it is never
+writable where it runs, no lasting mapping writes it, and a guest cannot
+change its mapping or protection, nor make an image's sealed constant
+data writable, through libc, libsystem or raw system calls. This defends
+against an attacker who can corrupt memory but not run code. Code
+already running in the process, guest or native, is out of scope, as it
+is for a native JIT; known and not defended against:
+
+- the memory entries hao keeps for its writes can be mapped again by
+  code that finds them and calls Mach;
+- another thread can store into a write mapping while it is open (a
+  burst of translated blocks, a chain patch, a thunk page), at a random
+  page of a reserved window;
+- VM requests sent as Mach messages to the task port are not seen by
+  hao's checks of calls and traps.
+
+On the Rosetta development host the executable mapping is briefly made
+writable after each write so Rosetta drops stale translations; an Intel
+Mac does not do that, and lowers the mapping's maximum protection to
+read/execute.
+
 ## Known limitations
 
 - A guest file that only root can change is mapped, not copied. If root
