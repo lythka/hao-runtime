@@ -1243,6 +1243,41 @@ static size_t diag_stamp_fmt(char *out, uint64_t ns)
     return n;
 }
 
+/* v in BASE (10 or 16, no prefix) at out (at least 21 bytes); its length.
+ * Async-signal-safe, for lines hao_diag_write sends. */
+size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base)
+{
+    char d[24];
+    size_t k = 0, n = 0;
+    do { d[k++] = "0123456789abcdef"[v % base]; v /= base; } while (v);
+    while (k) out[n++] = d[--k];
+    return n;
+}
+
+/* s at out + *o, within cap (signal-safe line building). */
+static void diag_put(char *out, size_t *o, size_t cap, const char *s)
+{
+    while (*s && *o < cap) out[(*o)++] = *s++;
+}
+
+/* v in decimal at out + *o, within cap. */
+static void diag_put_u64(char *out, size_t *o, size_t cap, uint64_t v)
+{
+    char num[24];
+    num[hao_diag_fmt_u64(num, v, 10)] = 0;
+    diag_put(out, o, cap, num);
+}
+
+/* "hao[prog:pid]: " at out + *o, within cap. */
+static void diag_put_prefix(char *out, size_t *o, size_t cap)
+{
+    diag_put(out, o, cap, "hao[");
+    diag_put(out, o, cap, getprogname());
+    diag_put(out, o, cap, ":");
+    diag_put_u64(out, o, cap, (uint64_t)getpid());
+    diag_put(out, o, cap, "]: ");
+}
+
 /* Lines written while PID 1 (or another root process started by a boot task)
  * waits for the Data volume, which the file lives on: the console has no
  * recorder on hardware, so they are kept here and written to the file first
@@ -1250,13 +1285,16 @@ static size_t diag_stamp_fmt(char *out, uint64_t ns)
  * does not fit ends the kept bytes (pend_full), later ones are counted lost. */
 #define DIAG_PEND (256u << 10)
 static char diag_pend[DIAG_PEND];
+#define PEND_CLOSED (1ull << 63)   /* in pend_res: the file opened and took the kept bytes */
 static uint64_t pend_res, pend_done, pend_full = DIAG_PEND, pend_lost;
-static int pend_closed;
 
-static void pend_put(const char *b, size_t n)
+/* False: the file has opened since the caller looked (its descriptor is
+ * published first), so the caller writes there instead. The reservation and
+ * the close are one word, so no line falls between them. */
+static bool pend_put(const char *b, size_t n)
 {
-    if (__atomic_load_n(&pend_closed, __ATOMIC_ACQUIRE)) { __atomic_fetch_add(&pend_lost, n, __ATOMIC_RELAXED); return; }
     uint64_t at = __atomic_fetch_add(&pend_res, n, __ATOMIC_ACQ_REL);
+    if (at & PEND_CLOSED) return false;
     if (at + n <= DIAG_PEND) memcpy(diag_pend + at, b, n);
     else {
         uint64_t f = __atomic_load_n(&pend_full, __ATOMIC_RELAXED);
@@ -1264,6 +1302,7 @@ static void pend_put(const char *b, size_t n)
         __atomic_fetch_add(&pend_lost, n, __ATOMIC_RELAXED);
     }
     __atomic_fetch_add(&pend_done, n, __ATOMIC_RELEASE);
+    return true;
 }
 
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[%s:%d]: ", getprogname(), (int)getpid()); }
@@ -1547,11 +1586,20 @@ static int diag_boot_header(char *out, size_t n)
         size_t tl = sizeof tv;
         int mib[2] = {CTL_KERN, KERN_BOOTTIME};
         sysctl(mib, 2, &tv, &tl, NULL, 0);
-        snprintf(id, sizeof id, "time %ld.%06d", (long)tv.tv_sec, (int)tv.tv_usec);
+        size_t k = 0;   /* "time SEC.USEC", usec in six digits */
+        diag_put(id, &k, sizeof id - 8, "time ");
+        diag_put_u64(id, &k, sizeof id - 8, (uint64_t)tv.tv_sec);
+        id[k++] = '.';
+        for (uint64_t p = 100000, us = (uint64_t)tv.tv_usec % 1000000; p; p /= 10) id[k++] = (char)('0' + us / p % 10);
+        id[k] = 0;
     }
     id[sizeof id - 1] = 0;
-    int r = snprintf(out, n, "hao: console.log of boot %s\n", id);
-    return r < 0 || (size_t)r >= n ? 0 : r;
+    /* no stdio: a fatal report may be opening the log */
+    size_t k = 0;
+    diag_put(out, &k, n, "hao: console.log of boot ");
+    diag_put(out, &k, n, id);
+    diag_put(out, &k, n, "\n");
+    return k < n && out[k - 1] == '\n' ? (int)k : 0;
 }
 
 /* The directory lies on the root volume while /System/Volumes/Data is an
@@ -1638,19 +1686,31 @@ static int diag_log_open(const char *dir, bool mk)
  * retry state finish their copies first (at most 2 s). */
 static void pend_flush(int fd)
 {
-    int no = 0;
-    if (!__atomic_compare_exchange_n(&pend_closed, &no, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return;
-    for (int k = 0; k < 20000 && __atomic_load_n(&pend_done, __ATOMIC_ACQUIRE) != __atomic_load_n(&pend_res, __ATOMIC_ACQUIRE); k++)
+    uint64_t r = __atomic_fetch_or(&pend_res, PEND_CLOSED, __ATOMIC_ACQ_REL);
+    if (r & PEND_CLOSED) return;
+    uint64_t done = 0;
+    for (int k = 0; k < 20000 && (done = __atomic_load_n(&pend_done, __ATOMIC_ACQUIRE)) != r; k++)
         nanosleep(&(struct timespec){0, 100000}, NULL);
-    uint64_t r = __atomic_load_n(&pend_res, __ATOMIC_ACQUIRE), f = __atomic_load_n(&pend_full, __ATOMIC_ACQUIRE);
+    uint64_t f = __atomic_load_n(&pend_full, __ATOMIC_ACQUIRE);
     uint64_t n = r < f ? r : f, lost = __atomic_load_n(&pend_lost, __ATOMIC_ACQUIRE);
     if (!n && !lost) return;
-    char m[240];
-    int k = snprintf(m, sizeof m, "hao[%s:%d]: %llu bytes of lines kept from before the Data volume was mounted follow%s",
-                     getprogname(), (int)getpid(), (unsigned long long)n, lost ? "" : "\n");
-    if (lost && k > 0 && (size_t)k < sizeof m)
-        k += snprintf(m + k, sizeof m - (size_t)k, " (%llu bytes did not fit and are lost)\n", (unsigned long long)lost);
-    if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
+    char m[320];   /* no stdio: a fatal report may be opening the log */
+    size_t k = 0;
+    diag_put_prefix(m, &k, sizeof m);
+    diag_put_u64(m, &k, sizeof m, n);
+    diag_put(m, &k, sizeof m, " bytes of lines kept from before the Data volume was mounted follow");
+    if (lost) {
+        diag_put(m, &k, sizeof m, " (");
+        diag_put_u64(m, &k, sizeof m, lost);
+        diag_put(m, &k, sizeof m, " bytes did not fit and are lost)");
+    }
+    if (done != r) {   /* a writer stopped mid-copy (2 s): its bytes may be incomplete */
+        diag_put(m, &k, sizeof m, " (");
+        diag_put_u64(m, &k, sizeof m, r - done);
+        diag_put(m, &k, sizeof m, " bytes still being written may be incomplete)");
+    }
+    diag_put(m, &k, sizeof m, "\n");
+    diag_write_all(fd, m, k);
     if (n) diag_write_all(fd, diag_pend, (size_t)n);
 }
 
@@ -1677,23 +1737,6 @@ static int diag_log_fd(bool may_open)
     return fd;
 }
 
-/* v in BASE (10 or 16, no prefix) at out (at least 21 bytes); its length.
- * Async-signal-safe, for lines hao_diag_write sends. */
-size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base)
-{
-    char d[24];
-    size_t k = 0, n = 0;
-    do { d[k++] = "0123456789abcdef"[v % base]; v /= base; } while (v);
-    while (k) out[n++] = d[--k];
-    return n;
-}
-
-/* s at out + *o, within cap (signal-safe line building). */
-static void diag_put(char *out, size_t *o, size_t cap, const char *s)
-{
-    while (*s && *o < cap) out[(*o)++] = *s++;
-}
-
 /* How a writer may reach the log: DIAG_START, it may create the drain
  * thread (not a signal handler); DIAG_OPEN, it may open a log that waits for
  * the Data volume (stdio, report blocks, and the fatal reports: the process
@@ -1713,10 +1756,12 @@ static void diag_emit(const char *b, size_t n, int how)
     diag_write_all(diag_con, b, n);
     int fd = diag_log_fd(how & DIAG_OPEN);
     if (fd < 0 && __atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
-        pend_put(b, n);
-        if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
-        errno = e;
-        return;
+        if (pend_put(b, n)) {
+            if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
+            errno = e;
+            return;
+        }
+        fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);   /* opened meanwhile: kept bytes are closed */
     }
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || st.st_dev != diag_log_dev || st.st_ino != diag_log_ino)) {
@@ -1732,16 +1777,11 @@ static void diag_emit(const char *b, size_t n, int how)
             return;
         }
         if ((uint64_t)st.st_size + n >= hao_diag_log_cap) {   /* no stdio: a signal handler may be writing */
-            char m[320], num[24];
+            char m[320];
             size_t k = 0;
-            diag_put(m, &k, sizeof m, "hao[");
-            diag_put(m, &k, sizeof m, getprogname());
-            diag_put(m, &k, sizeof m, ":");
-            num[hao_diag_fmt_u64(num, (uint64_t)getpid(), 10)] = 0;
-            diag_put(m, &k, sizeof m, num);
-            diag_put(m, &k, sizeof m, "]: console.log reached its cap of ");
-            num[hao_diag_fmt_u64(num, hao_diag_log_cap >> 10, 10)] = 0;
-            diag_put(m, &k, sizeof m, num);
+            diag_put_prefix(m, &k, sizeof m);
+            diag_put(m, &k, sizeof m, "console.log reached its cap of ");
+            diag_put_u64(m, &k, sizeof m, hao_diag_log_cap >> 10);
             diag_put(m, &k, sizeof m, " KB: later lines go to the console only\n");
             diag_write_all(fd, m, k);
         }
@@ -1779,8 +1819,10 @@ static void diag_write(const char *b, size_t n, int how)
  * buffers and atomics only (a log still waiting for the Data volume is not
  * opened from here; its lines are kept, as before it opens). */
 void hao_diag_write(const char *b, size_t n) { diag_write(b, n, 0); }
-/* A fatal report's lines (fault_diag, hao_on_abort, sigreturn_report): may open the log. */
-static void diag_write_fatal(const char *b, size_t n) { diag_write(b, n, DIAG_OPEN); }
+/* A fatal report's lines (fault_diag, hao_on_abort, sigreturn_report): may
+ * open the log, still async-signal-safe (its header and the kept-lines note
+ * are built without stdio). */
+void hao_diag_write_fatal(const char *b, size_t n) { diag_write(b, n, DIAG_OPEN); }
 
 /* After a crash report: the process dies next (PID 1: the kernel panics). */
 static void diag_sync(void)
@@ -2038,7 +2080,7 @@ static void dl_guest_addr(dline *l, uint64_t a)
 
 static void dl_flush(dline *l)
 {
-    diag_write_fatal(l->b, l->n);
+    hao_diag_write_fatal(l->b, l->n);
     l->n = 0;
 }
 
@@ -2602,7 +2644,7 @@ static void sigreturn_report(int sig, int err, ucontext_t *uc, uint64_t tok, uin
     rep_add(rep, sizeof rep, &rn, &l);
     if (rn) {
         if (rep[rn - 1] != '\n') rep[rn - 1] = '\n';
-        diag_write_fatal(rep, rn);
+        hao_diag_write_fatal(rep, rn);
     }
 }
 
@@ -2716,7 +2758,7 @@ void hao_on_abort(int sig, siginfo_t *si, void *ctx, uint64_t tok)
     if (hao_opt.stats || hao_opt.nx_stats) {
         char rb[512];
         size_t rn = hao_sig_resume_line(rb, sizeof rb);
-        if (rn) diag_write_fatal(rb, rn);
+        if (rn) hao_diag_write_fatal(rb, rn);
     }
     diag_sync();
     hao_signal_die(failed ? SIGTRAP : sig);

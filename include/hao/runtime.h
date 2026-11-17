@@ -209,6 +209,7 @@ extern FILE *hao_diag_file;
 void hao_diag_init(void);                 /* once, at startup (hao_install_fault_handler) */
 void hao_diag_write(const char *b, size_t n);   /* async-signal-safe: console and log, whole */
 size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base);   /* async-signal-safe: v in base 10 or 16 */
+void hao_diag_write_fatal(const char *b, size_t n);   /* the same for a fatal report: may also open a log still waiting for its volume */
 extern size_t hao_diag_log_cap;           /* the log's size limit (bytes) */
 /* A multi-line report written with one hao_diag_write (hao_diag_block_end):
  * fprintf into hao_diag_block's FILE (HAO_DIAG if no memory). Not in signal handlers. */

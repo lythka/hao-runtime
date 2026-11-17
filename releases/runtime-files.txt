@@ -678,6 +678,9 @@ tests/host/chain.c
 tests/host/chain.sh
 tests/host/commpage.c
 tests/host/commpage.sh
+tests/host/diagsig.c
+tests/host/diagsig.sh
+tests/host/diagsig_interpose.c
 tests/host/dscselhoist.c
 tests/host/dscselhoist.sh
 tests/host/fork.c
