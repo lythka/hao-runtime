@@ -16,8 +16,14 @@ page writable for that one store, then read-only again. The Swift
 Optional witnesses (swiftvalue.c) converted a value's nils in place
 before a native destroy; a static value in sealed data (an array a
 `let` initializes at compile time) is now destroyed as a converted
-copy, as destroy only reads it (`guest/optwitness` faulted there with
-the seal and without this).
+copy (`guest/optwitness` faulted there with the seal and without this);
+only for a bitwise-takable type (value witness flag IsNonBitwiseTakable
+clear): weak references and the C++ values that may not move need
+run-time registration and cannot be static constants, so those stay in
+place. An image whose constant data cannot be sealed now stops the
+process before its initializers run; sealing again seals only what is
+left. The late Swift field rewrites of swiftmeta.c use the same guest
+writer as these stores (code.c, see the guest code entry).
 
 Test: `test_macho` (writable after the load, read-only after the seal, a
 sealed store leaves the page read-only), `guest/wx` (the program's

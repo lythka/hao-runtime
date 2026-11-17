@@ -899,7 +899,7 @@ static bool is_pagezero(const struct segment_command_64 *sg)
 
 bool hao_image_seal(hao_image *img)
 {
-    if (!img || img->dsc || img->nsealed || !img->base) return true;
+    if (!img || img->dsc || !img->base) return true;
     const struct mach_header_64 *mh = (const void *)(uintptr_t)img->base;
     if (mh->magic != MH_MAGIC_64) return true;
     bool ok = true;
@@ -911,8 +911,11 @@ bool hao_image_seal(hao_image *img)
         if (lc->cmd != LC_SEGMENT_64 || lc->cmdsize < sizeof(struct segment_command_64)) continue;
         const struct segment_command_64 *sg = (const void *)lc;
         if (!(sg->flags & SG_READ_ONLY) || !(sg->initprot & VM_PROT_WRITE) || !sg->vmsize) continue;
-        if (img->nsealed == HAO_MAX_RANGES) { ok = false; break; }
         uint64_t lo = sg->vmaddr + img->slide, hi = lo + sg->vmsize;
+        bool done = false;   /* sealed by an earlier call */
+        for (int j = 0; j < img->nsealed; j++) done |= img->sealed_lo[j] == lo;
+        if (done) continue;
+        if (img->nsealed == HAO_MAX_RANGES) { ok = false; break; }
         if (mprotect((void *)(uintptr_t)lo, hi - lo, PROT_READ)) { ok = false; continue; }
         img->sealed_lo[img->nsealed] = lo;
         img->sealed_hi[img->nsealed] = hi;
