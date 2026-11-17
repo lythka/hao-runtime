@@ -1667,7 +1667,7 @@ static void fp_store_checked(tctx *t, unsigned rd, int dbl, uint32_t insn, uint6
     x_patch32(&t->b, nan, xb_len(&t->b));
     for (unsigned k = 0; k < ndecline; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
     helper(t, insn, pc, true);
-    st_helper -= !t->dry;
+    if (!t->dry) st_helper--;
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1713,7 +1713,7 @@ static void fp_maxmin(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, den[1], xb_len(&t->b));
     x_patch32(&t->b, nan, xb_len(&t->b));
     helper(t, i, pc, true);
-    st_helper -= !t->dry;                                       /* counted as native */
+    if (!t->dry) st_helper--;                                   /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1770,7 +1770,7 @@ static void fp_to_int_z(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, out, xb_len(&t->b));
     x_patch32(&t->b, slow, xb_len(&t->b));
     helper(t, i, pc, true);
-    st_helper -= !t->dry;                                       /* counted as native */
+    if (!t->dry) st_helper--;                                   /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1829,7 +1829,7 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
         size_t done = x_jmp32(&t->b);
         for (int k = 0; k < nslow; k++) x_patch32(&t->b, slow[k], xb_len(&t->b));
         helper(t, i, pc, true);
-        st_helper -= !t->dry;                                   /* counted as native */
+        if (!t->dry) st_helper--;                               /* counted as native */
         x_patch32(&t->b, done, xb_len(&t->b));
     }
     return true;
@@ -1948,7 +1948,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         size_t done = x_jmp32(&t->b);
         for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
         helper(t, i, pc, true);
-        st_helper -= !t->dry;
+        if (!t->dry) st_helper--;
         x_patch32(&t->b, done, xb_len(&t->b));
         return true;
     }
@@ -1993,7 +1993,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
             size_t done = x_jmp32(&t->b);
             x_patch32(&t->b, big, xb_len(&t->b));
             helper(t, i, pc, true);
-            st_helper -= !t->dry;                                 /* counted as native */
+            if (!t->dry) st_helper--;                             /* counted as native */
             x_patch32(&t->b, done, xb_len(&t->b));
         }
         return true;
@@ -2852,7 +2852,7 @@ static void helper_keep_flags(tctx *t, uint32_t insn, uint64_t pc)
 {
     bool keep = t->in_eflags && t->live_out[t->idx], dirty = t->dirty;
     helper(t, insn, pc, true);
-    st_helper -= !t->dry;                                        /* counted as native */
+    if (!t->dry) st_helper--;                                    /* counted as native */
     if (keep) { x_mov_ld(&t->b, 2, RAX, FLAGS); fl_from_eax(t); }
     t->in_eflags = keep;
     t->dirty = keep && dirty;
@@ -2940,7 +2940,7 @@ static bool t_vfp_estimate(tctx *t, uint32_t i, uint64_t pc, bool scalar)
     vst(t, rd, 8, scalar ? 0 : (int)Q);
     size_t done = x_jmp32(&t->b);
     for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
-    helper(t, i, pc, true); st_helper -= !t->dry;
+    helper(t, i, pc, true); if (!t->dry) st_helper--;
     x_patch32(&t->b, done, xb_len(&t->b));
     return true;
 }
@@ -2967,7 +2967,7 @@ static void t_fccmp(tctx *t, uint32_t i, uint64_t pc)
     x_lea(&t->b, 0, RAX, xmi(RDX, RAX, 4, 0)); x_lea(&t->b, 0, RAX, xmi(RAX, RCX, 2, 0));
     x_mov_ld(&t->b, 8, RAX, xmi(RBX, RAX, 8, CPU_OFF_FCMP)); x_mov_st(&t->b, 8, FLAGS, RAX);
     size_t done = x_jmp32(&t->b);
-    x_patch32(&t->b, special, xb_len(&t->b)); helper(t, i, pc, true); st_helper -= !t->dry;
+    x_patch32(&t->b, special, xb_len(&t->b)); helper(t, i, pc, true); if (!t->dry) st_helper--;
     size_t helper_done = skip ? x_jmp32(&t->b) : 0;
     if (skip) {
         x_patch32(&t->b, skip, xb_len(&t->b));
@@ -4484,7 +4484,7 @@ static int fetch_block(uint64_t pc, hao_image *im, uint32_t *insns)
 /* Emit one block at the current position of t->b. */
 static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
 {
-    t->im = t->win ? NULL : hao_image_for_code(pc);
+    if (!t->dry || !t->im) t->im = t->win ? NULL : hao_image_for_code(pc);   /* hao_jit_locate passes it */
     bool live = n > 0 ? block_end_live(t, pc, insns, n) : true;   /* n == 0: the image was released under the fetch */
     for (int k = n - 1; k >= 0; k--) {
         t->live_out[k] = live;
@@ -4566,8 +4566,9 @@ static void *translate(uint64_t pc)
  * re-emitting the block: emission is deterministic. The re-emission only
  * measures (xb_init_count) at the block's own address, so its RIP and branch
  * displacements are those of the first emission and it writes nothing.
- * Async-signal-safe and reentrant: no locks, no allocation, no shared
- * state; about 1 KiB of stack besides the tctx. */
+ * Async-signal-safe and reentrant: no locks, no allocation, no writes to
+ * shared state (statistics count only real emissions; the image lookup
+ * leaves the hint alone); about 1 KiB of stack besides the tctx. */
 
 static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc);
 
@@ -4585,7 +4586,7 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
         }
         code = rmap[lo].code, pc = rmap[lo].pc;
     }
-    hao_image *im = hao_image_for_code(pc);
+    hao_image *im = hao_image_for_code_peek(pc);
     if (!im) return false;
     uint32_t insns[MAX_BLOCK_INSNS], off[MAX_BLOCK_INSNS + 1];
     bool fl[MAX_BLOCK_INSNS + 1];
@@ -4593,6 +4594,7 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
     tctx t;
     memset(&t, 0, sizeof t);
     t.dry = true;
+    t.im = im;
     t.rec_off = off;
     t.rec_fl = fl;
     t.base = im->base;

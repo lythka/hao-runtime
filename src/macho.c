@@ -369,7 +369,7 @@ bool hao_identity_guest_image(const void *address, hao_identity_info *info)
  * fails the range check at worst. */
 static hao_image *last_code_img;
 
-hao_image *hao_image_for_code(uint64_t a)
+static hao_image *image_for_code(uint64_t a, bool hint)
 {
     hao_image *last = __atomic_load_n(&last_code_img, __ATOMIC_ACQUIRE);
     if (last) {
@@ -383,12 +383,14 @@ hao_image *hao_image_for_code(uint64_t a)
         int n = __atomic_load_n(&im->ncode, __ATOMIC_ACQUIRE);
         for (int k = 0; k < n; k++)
             if (a >= im->code_lo[k] && a < im->code_hi[k]) {
-                __atomic_store_n(&last_code_img, im, __ATOMIC_RELEASE);
+                if (hint) __atomic_store_n(&last_code_img, im, __ATOMIC_RELEASE);
                 return im;
             }
     }
     return NULL;
 }
+hao_image *hao_image_for_code(uint64_t a) { return image_for_code(a, true); }
+hao_image *hao_image_for_code_peek(uint64_t a) { return image_for_code(a, false); }
 
 /* ------------------------------------------------------- chained fixups */
 
