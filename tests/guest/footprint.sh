@@ -152,6 +152,7 @@ measure_mode() {
 }
 
 fails=0
+failed=
 printf '%-8s %-7s %9s %9s %9s %9s %7s  %s\n' case route native_kb hao_kb overhead pt_delta budget result
 for cs in c objc spread bigaot limited; do
     modes=$MODES
@@ -192,7 +193,7 @@ for cs in c objc spread bigaot limited; do
             elif [ $tries -gt 1 ]; then r="PASS (smallest of $tries)"
             else r=PASS; fi
         fi
-        case $r in PASS|info*) ;; *) fails=$((fails + 1)) ;; esac
+        case $r in PASS*|info*) ;; *) fails=$((fails + 1)); failed="$failed $cs/$m" ;; esac
         printf '%-8s %-7s %9s %9s %9s %9s %7s  %s\n' "$cs" "$m" "$nat" "$h" "$ov" "$ptd" "$budget" "$r"
     done
     # the same guest as hao takes a file its owner may write: read into memory (not judged)
@@ -202,5 +203,5 @@ for cs in c objc spread bigaot limited; do
     printf '%-8s %-7s %9s %9s %9s %9s %7s  %s\n' "$cs" copied "$nat" "$1" "$ov" "$ptd" info \
         "info (guest file $(($(stat -f %z "$OUT/$g.arm64e") / 1024)) KB, read into memory)"
 done
-[ $fails = 0 ] && echo "footprint: all PASS" || echo "footprint: $fails FAIL"
+[ $fails = 0 ] && echo "footprint: all PASS" || echo "footprint: $fails FAIL:$failed"
 [ $fails = 0 ]
