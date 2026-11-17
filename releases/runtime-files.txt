@@ -448,6 +448,8 @@ tests/guest/fetchgiveup.c
 tests/guest/fetchgiveup.sh
 tests/guest/fma32.c
 tests/guest/fma32.sh
+tests/guest/fma64.c
+tests/guest/fma64.sh
 tests/guest/fmtpos.m
 tests/guest/fmtpos.sh
 tests/guest/fmtposhelper.m
@@ -674,6 +676,9 @@ tests/guest/xinhab.swift
 tests/guest/xinhab_lib.swift
 tests/guest/xpac.c
 tests/guest/xpac.sh
+tests/guest/ymmupper.c
+tests/guest/ymmupper.sh
+tests/guest/ymmupper_lib.c
 tests/host/async_package.py
 tests/host/bridge.c
 tests/host/chain.c

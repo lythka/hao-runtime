@@ -32,6 +32,8 @@ guest/aotdefault	300	par	tests/guest/aotdefault.sh
 guest/fenv	300	par	tests/guest/fenv.sh
 guest/fma16	300	par	tests/guest/fma16.sh
 guest/fma32	300	par	tests/guest/fma32.sh
+guest/fma64	300	par	tests/guest/fma64.sh
+guest/ymmupper	120	par	tests/guest/ymmupper.sh
 guest/fmtpos	300	par	tests/guest/fmtpos.sh
 guest/footprint	600	par	tests/guest/footprint.sh
 guest/fork	600	par	tests/guest/fork.sh

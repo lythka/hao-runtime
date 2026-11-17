@@ -571,6 +571,31 @@ int main(void)
         }
 
 
+    /* Double fused forms (FMADD family, FMLA/FMLS .2D, by element, scalar by
+     * element; both indices): all controls, aliases, FPSR clear, IXC alone
+     * or all flags preset, on fma64_case operands. Ordinary operands under
+     * round to nearest without FZ stay native once IXC is set and take the
+     * helper while it is clear. */
+    static const uint32_t fused64[] = {0x1f400000, 0x1f408000, 0x1f600000, 0x1f608000, 0x4e60cc00, 0x4ee0cc00,
+        0x4fc01000, 0x4fc05000, 0x4fc01800, 0x4fc05800, 0x5fc01000, 0x5fc05000, 0x5fc01800, 0x5fc05800};
+    for (unsigned ctl = 0; ctl < 16; ctl++) for (unsigned f = 0; f < sizeof fused64 / sizeof *fused64; f++)
+        for (unsigned k = 0; k < 144; k++) {
+            unsigned rd = reg(), rn = reg(), rm = reg(), ra = reg();
+            hao_cpu in; state(&in, rn, rm); in.fpcr = (k & 1 ? ctl & 8 : ctl) << 22;   /* odd k: the inline mode */
+            in.fpsr = k % 3 == 0 ? 0 : k % 3 == 1 ? 0x10 : 0x0800009f;
+            for (int lane = 0; lane < 2; lane++) {
+                fma64_ops o = fma64_case(&seed, k % FC_N);
+                in.v[f < 4 ? ra : rd].d[lane] = o.c; in.v[rn].d[lane] = o.a; in.v[rm].d[lane] = o.b;
+            }
+            if (k < 2) for (unsigned r = 0; r < 32; r++) { in.v[r].d[0] = 0x3ff0000000000001ull; in.v[r].d[1] = 0xbfe8000000000000ull; }
+            uint32_t i = fused64[f] | rn << 5 | rm << 16 | rd | (f < 4 ? ra << 10 : 0);
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k < 2 && (in.fpcr >> 22 & 7) == 0 && vector_helper_calls != (k == 0) && fails++ < 20)
+                    printf("MISMATCH double fused admission %08x fpcr %x fpsr %x: %u helper calls\n", i, in.fpcr, in.fpsr, vector_helper_calls);
+            }
+        }
+
     fpcr_pending_exception();
 
     estimate_tail();
