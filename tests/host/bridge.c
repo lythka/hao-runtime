@@ -27,6 +27,10 @@
 #include "hao/bridge.h"
 #include "hao/gen_stamp.h"
 #include "hao/swiftvalue.h"
+#include "hao/opts.h"
+#include <signal.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -55,6 +59,63 @@ static void *reader(void *arg)
     __atomic_fetch_add(&bad_reads, bad, __ATOMIC_RELAXED);
     __atomic_fetch_add(&reads, n, __ATOMIC_RELAXED);
     return NULL;
+}
+
+/* hao_diag_write from a signal handler (runtime.c): a log still waiting for its directory is not opened
+ * there (the open formats a header and flushes kept lines), its lines are kept until a stdio write opens
+ * it; the cap line is built without stdio. Runs last: it sets up the process's diagnostics. */
+static const char *diag_line;
+static void diag_handler(int sig) { (void)sig; hao_diag_write(diag_line, strlen(diag_line)); }
+static bool diag_contains(const char *path, const char *what)
+{
+    static char buf[1 << 16];
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    return strstr(buf, what) != NULL;
+}
+static int diag_sigsafe(void)
+{
+    char base[] = "/tmp/hao-diagsig.XXXXXX", parent[64], dir[80], log[96], want[160];
+    if (!mkdtemp(base)) { printf("diagsig    FAIL  mkdtemp\n"); return 1; }
+    snprintf(parent, sizeof parent, "%s/later", base);
+    snprintf(dir, sizeof dir, "%s/log", parent);
+    snprintf(log, sizeof log, "%s/console.log", dir);
+    snprintf(hao_opt.diag_dir, sizeof hao_opt.diag_dir, "%s", dir);
+    hao_diag_init();   /* its parent is missing: retried at a later write */
+    signal(SIGUSR1, diag_handler);
+    const char *why = NULL;
+    diag_line = "diagsig kept line one\n";
+    raise(SIGUSR1);
+    mkdir(parent, 0700);
+    diag_line = "diagsig kept line two\n";
+    raise(SIGUSR1);
+    struct stat st;
+    if (stat(dir, &st) == 0) why = "the log was opened from a signal handler";
+    fprintf(HAO_DIAG, "diagsig stdio line\n");
+    fflush(HAO_DIAG);
+    if (!why && !(diag_contains(log, "diagsig kept line one") && diag_contains(log, "diagsig kept line two") &&
+                  diag_contains(log, "diagsig stdio line")))
+        why = "kept lines not in the log once opened";
+    if (!why && stat(log, &st) == 0) {
+        hao_diag_log_cap = (size_t)st.st_size + 2048;
+        diag_line = "diagsig a line past the cap .................................................................."
+                    ".............................................................................................."
+                    ".............................................................................................."
+                    ".............................................................................................\n";
+        for (int k = 0; k < 8; k++) raise(SIGUSR1);
+        snprintf(want, sizeof want, "hao[%s:%d]: console.log reached its cap of %zu KB: later lines go to the console only\n",
+                 getprogname(), (int)getpid(), hao_diag_log_cap >> 10);
+        if (!diag_contains(log, want)) why = "no cap line, or another one";
+    } else if (!why) why = "no log";
+    printf("diagsig    %s  diagnostics from a signal handler: kept until opened, cap line without stdio%s%s\n",
+           why ? "FAIL" : "PASS", why ? ": " : "", why ? why : "");
+    char cmd[128];
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", base);
+    if (system(cmd)) {}
+    return why != NULL;
 }
 
 int main(int argc, char **argv)
@@ -262,5 +323,6 @@ int main(int argc, char **argv)
         free(t);
     }
     if (bad) fail = 1;
+    if (diag_sigsafe()) fail = 1;
     return fail;
 }

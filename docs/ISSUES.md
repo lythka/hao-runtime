@@ -1,5 +1,18 @@
 # Runtime issues and measured scope
 
+## Diagnostic writes from signal handlers
+
+`hao_diag_write`, which signal handlers use, was said to be
+async-signal-safe but formatted the log's cap line with `snprintf`, and
+while the log waited for its volume (PID 1 before the Data volume) it
+opened it, formatting the boot header and the kept-lines note. The cap line
+is now built from fixed strings and hand-converted numbers. A plain
+`hao_diag_write` no longer opens a waiting log: its lines are kept and
+written when a stdio write, a report block or a fatal report (fault, abort,
+failed sigreturn: the process dies next) opens it. Test: `test_bridge`
+(`diagsig`) writes from a signal handler while the log waits and across a
+small cap; before, the handler opened the log.
+
 ## Signature parsing on the native-call path
 
 A native function an interface unit types by aggregate signature kept the
@@ -58,7 +71,8 @@ The per-thread ring of nils a witness made for a callback's result held 16
 and was shared by nested callbacks, so an inner one could overwrite an outer
 one's entries unseen. It holds 64, each entry keeps its index, and a lost
 entry is counted, with one fixed line through the async-signal-safe
-diagnostic write (a callback may return inside a guest signal handler).
+diagnostic write (a callback may return inside a guest signal handler; the
+`HAO_BRIDGE_CHECK` line there is built on the stack the same way).
 `--stats` prints both (`hao-swift-witness: entries dropped nils_lost`). Limits: an entry lost past
 64 is still lost (its value keeps the guest's nil); no test reaches either
 bound in a guest; `test_bridge` (`nilring`) drives the ring directly.
