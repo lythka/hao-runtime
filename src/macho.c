@@ -18,6 +18,7 @@
 #include <mach-o/fixup-chains.h>
 #include <mach-o/loader.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/acl.h>
@@ -894,6 +895,57 @@ static bool is_pagezero(const struct segment_command_64 *sg)
            !strncmp(sg->segname, "__PAGEZERO", 16);
 }
 
+/* ------------------------------------------------------------- sealing */
+
+bool hao_image_seal(hao_image *img)
+{
+    if (!img || img->dsc || img->nsealed || !img->base) return true;
+    const struct mach_header_64 *mh = (const void *)(uintptr_t)img->base;
+    if (mh->magic != MH_MAGIC_64) return true;
+    bool ok = true;
+    const uint8_t *p = (const uint8_t *)(mh + 1), *end = p + mh->sizeofcmds;
+    for (uint32_t k = 0; k < mh->ncmds && p + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *lc = (const void *)p;
+        if (lc->cmdsize < sizeof *lc || lc->cmdsize > (uint64_t)(end - p)) break;
+        p += lc->cmdsize;
+        if (lc->cmd != LC_SEGMENT_64 || lc->cmdsize < sizeof(struct segment_command_64)) continue;
+        const struct segment_command_64 *sg = (const void *)lc;
+        if (!(sg->flags & SG_READ_ONLY) || !(sg->initprot & VM_PROT_WRITE) || !sg->vmsize) continue;
+        if (img->nsealed == HAO_MAX_RANGES) { ok = false; break; }
+        uint64_t lo = sg->vmaddr + img->slide, hi = lo + sg->vmsize;
+        if (mprotect((void *)(uintptr_t)lo, hi - lo, PROT_READ)) { ok = false; continue; }
+        img->sealed_lo[img->nsealed] = lo;
+        img->sealed_hi[img->nsealed] = hi;
+        img->nsealed++;
+    }
+    return ok;
+}
+
+hao_image *hao_image_sealed_at(uint64_t a, size_t n)
+{
+    hao_image *img = hao_image_for_addr(a);
+    for (int k = 0; img && k < img->nsealed; k++)
+        if (a >= img->sealed_lo[k] && a < img->sealed_hi[k] && n <= img->sealed_hi[k] - a) return img;
+    return NULL;
+}
+
+bool hao_image_sealed_cas(uint64_t a, uint64_t expected, uint64_t desired)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    uint64_t pg = a & ~(PAGE - 1), pe = (a + 8 + PAGE - 1) & ~(PAGE - 1);
+    pthread_mutex_lock(&lock);
+    bool ok = !mprotect((void *)(uintptr_t)pg, pe - pg, PROT_READ | PROT_WRITE);
+    if (ok) {
+        ok = __atomic_compare_exchange_n((uint64_t *)(uintptr_t)a, &expected, desired, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+        if (mprotect((void *)(uintptr_t)pg, pe - pg, PROT_READ)) {
+            fprintf(stderr, "hao: sealed guest data at %#llx cannot be made read-only again; stopping\n", (unsigned long long)a);
+            abort();
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    return ok;
+}
+
 bool hao_island_reserve;
 
 uint64_t hao_island_room(uint64_t n)
@@ -1527,7 +1579,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         if (sg->initprot & VM_PROT_READ) prot |= PROT_READ;
         if (sg->initprot & VM_PROT_WRITE) prot |= PROT_WRITE;
         if (sg->initprot & VM_PROT_EXECUTE) prot |= PROT_READ;  /* code is data for the translator */
-        /* __DATA_CONST is made read-only by dyld after binding; keep that behaviour */
+        /* SG_READ_ONLY segments (__DATA_CONST) stay writable for hao's adaptations of the image and
+         * are made read-only before its initializers run (hao_image_seal), as dyld does after binding */
         mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot);
     }
     hao_code_poison(img);   /* HAO_CODE_ALIAS */

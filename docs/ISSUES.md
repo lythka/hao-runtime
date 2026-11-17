@@ -1,5 +1,33 @@
 # Runtime issues and measured scope
 
+## Constant data of guest images stayed writable
+
+The loader gave every segment its initial protection, so the
+SG_READ_ONLY segments (`__DATA_CONST`, `__AUTH_CONST`: GOT entries,
+global blocks and their descriptors, ObjC and Swift constant metadata)
+stayed writable for the life of the process, where dyld makes them
+read-only once the image is bound. hao adapts some of that data itself
+(ObjC and Swift registration, block invokes and helpers, function
+slots), so the segments now stay writable through those steps and are
+made read-only (`hao_image_seal`) just before the image's initializers
+run. blocks.c, which may meet a guest block's descriptor or a global
+block long after, writes such a word with `hao_image_sealed_cas`: the
+page writable for that one store, then read-only again. The Swift
+Optional witnesses (swiftvalue.c) converted a value's nils in place
+before a native destroy; a static value in sealed data (an array a
+`let` initializes at compile time) is now destroyed as a converted
+copy, as destroy only reads it (`guest/optwitness` faulted there with
+the seal and without this).
+
+Test: `test_macho` (writable after the load, read-only after the seal, a
+sealed store leaves the page read-only), `guest/wx` (the program's
+`__DATA_CONST` reads back read-only in main, as natively; it was
+writable). Limits: shared-cache images (dsc.c) are not sealed, their
+data is fixed up page by page as it is used; the slots a sealed store
+writes are found only by blocks.c, and any other late writer into a
+sealed segment would fault (none other was seen in the 119 guest and
+host entries of tests/check.list).
+
 ## Calls hao could not place went through the register bridge
 
 A guest call of a native function or ObjC method whose signature hao had

@@ -53,6 +53,10 @@ struct hao_image {
     bool is_dylib, is_pie;
     uint64_t code_lo[HAO_MAX_RANGES], code_hi[HAO_MAX_RANGES];
     int ncode;
+    /* SG_READ_ONLY segments (__DATA_CONST, __AUTH_CONST) made read-only by hao_image_seal; hao's
+     * own later writes into them go through hao_image_sealed_write */
+    uint64_t sealed_lo[HAO_MAX_RANGES], sealed_hi[HAO_MAX_RANGES];
+    int nsealed;
     /* where hao reads the code ranges (hao/code.h): guest address + code_delta (0: the guest
      * mapping itself); code_alias/code_alias_size: an alias this image owns (on-disk images) */
     int64_t code_delta;
@@ -236,6 +240,16 @@ hao_image *hao_map_image_only(const char *path, char *err, size_t errlen);
  * listed image's struct and the arrays a lookup reaches stay allocated:
  * another thread may hold it from a lookup that raced the release. */
 void hao_unload_image(hao_image *img);
+/* After every adaptation of a loaded image (its registration, before its initializers), as dyld
+ * does: its SG_READ_ONLY segments become read-only. On-disk images only. False if a protection
+ * change failed (the segment stays as it was). */
+bool hao_image_seal(hao_image *img);
+/* The image whose sealed segments hold the n bytes at a, or NULL */
+hao_image *hao_image_sealed_at(uint64_t a, size_t n);
+/* Compare-and-swap of the 8 bytes at a in a sealed segment: writable for the store only (one such
+ * store at a time), read-only again after it; a page that cannot be made read-only again stops the
+ * process. */
+bool hao_image_sealed_cas(uint64_t a, uint64_t expected, uint64_t desired);
 /* Validate a load-command area (cmdsize, per-command sizes, nsects, string
  * offsets, at most one LC_CODE_SIGNATURE); 0 if every command is well
  * formed, else -1 with why filled. *nsegs gets the LC_SEGMENT_64 count.

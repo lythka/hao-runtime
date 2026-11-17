@@ -107,6 +107,8 @@ void hao_guest_image_init(hao_image *img)
         if (!prepared) hao_aot_load(img);
         if (hao_opt.diag_time) { snprintf(what, sizeof what, "aot %s", base); hao_phase(what); }
     }
+    /* every adaptation is made: constant data becomes read-only, as dyld leaves it for initializers */
+    if (!hao_image_seal(img)) HAO_LOG(0, "%s: constant data not made read-only\n", base);
     hao_thread *t = hao_current();
     g_progvars.mh = hao_main_image ? hao_main_image->base : img->base;
     g_progvars.argc = (uint64_t)(uintptr_t)_NSGetArgc();
