@@ -219,7 +219,7 @@ program requires library validation`):
 | Switch | What it does in an open-tier process | For a program that requires library validation |
 |---|---|---|
 | `HAO_NO_LIBVAL=1` | turns library validation off | ignored; library validation is on |
-| `HAO_CACHE=DIR` | reads AOT caches (native code) from DIR | ignored; system and the user's own cache directories only |
+| `HAO_CACHE=DIR` | reads AOT caches (native code) from DIR | ignored; the system cache directories only: the user's own is not read either (`-v` says so) |
 | `HAO_GUEST_ROOT=DIR` | takes guest OS libraries and the arm64e shared cache from under DIR | ignored |
 | `HAO_IF_DIR=DIR` | reads interface units and loads the `.thunks` libraries (native code, whose initializers run) from DIR | ignored; `/usr/lib/hao/if` |
 | `HAO_ASYNC_CONTRACT_LIBRARY=FILE` | loads FILE as the native async provider | ignored; the packaged provider |
@@ -305,8 +305,8 @@ uses one only if both of the following hold.
 | Directory | Read by | Must be owned by |
 |---|---|---|
 | `/usr/lib/hao/aot`, `/private/var/db/hao` | every process | root |
-| `~/Library/Caches/hao` (home from the user database, never `$HOME`) | that user's open-tier processes | root or the user |
-| `HAO_CACHE=/abs/dir` | an open-tier process that sets it | root or the user |
+| `~/Library/Caches/hao` (home from the user database, never `$HOME`) | that user's open-tier processes, for a program that does not require library validation | root or the user |
+| `HAO_CACHE=/abs/dir` | an open-tier process that sets it, for a program that does not require library validation | root or the user |
 | `hao --aot --cache DIR` | nothing: `hao --aot` writes there; a process reads it only as one of the rows above | root or the user |
 
 The file, its directory and every directory above must have that owner, no
@@ -563,4 +563,6 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   own check of that image.
 - An AOT cache in a user's own directory is trusted as far as that user: any
   process of the user can write one that the user's other open-tier programs
-  load.
+  load, unless the program requires library validation. Such a program
+  (most notarized applications are hardened) is translated afresh at each
+  launch unless root put a cache for it in a system directory.

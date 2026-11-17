@@ -462,6 +462,12 @@ static double now_us(void)
 void hao_guest_switches_for(const hao_codesig *s)
 {
     if (!s->cd || !hao_codesig_library_validated(s)) return;
+    /* nor AOT caches the user can write: the user's own directory is not searched either */
+    hao_aot_system_only = true;
+    if (hao_env_tier() == HAO_ENV_OPEN && hao_opt.verbose) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "AOT: the user's cache directory is not read: the program requires library validation\n");
+    }
     struct { const char *name; char *v; } sw[] = {
         {"HAO_CACHE", hao_opt.cache}, {"HAO_GUEST_ROOT", hao_opt.guest_root}, {"HAO_IF_DIR", hao_opt.if_dir},
         {"HAO_ASYNC_CONTRACT_LIBRARY", hao_opt.async_contract_library},

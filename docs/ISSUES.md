@@ -48,9 +48,18 @@ Limits: the stub's own link-time native dependencies still load, with
 `disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs
 `tools/hao-embed` to keep them to libraries only root can replace. A root
 process that remounts the root file system writable can still change a
-mapped file. Entitlement checks still search the XML and DER text. A
-user's own AOT cache directory is still read for a program that requires
-library validation, in that user's open-tier processes.
+mapped file. Entitlement checks still search the XML and DER text.
+
+A program that requires library validation no longer reads the user's own
+AOT cache directory either, only the system ones, and an embedded program's
+ARM slice is verified against its stub's record before anything the
+environment selects loads (`guest/lvswitches`: a replaced or corrupted
+slice with `HAO_IF_DIR` ran the thunk library's initializer before its
+status 126; now nothing loads). Cost: such programs run translated afresh
+unless a system cache exists. In `tests/`, only `guest/libval`'s `aot` mode
+for its library-validation variants loses its cache (it compares output,
+which is unchanged). The Command Line Tools' `git log` (library flag, 771
+blocks) ran in 0.26 s from its cache and 0.24 s under the JIT.
 
 ## Swift `dynamic` functions under the image's interface units
 
