@@ -2,6 +2,8 @@
  *   mid    a native C caller of a guest function returning 8 KB in memory, without a signature: the
  *          guest's result goes to hao's own area, not over the guest's live stack (the canary in this
  *          frame survives); the value is not the native one (no signature, known limit)
+ *   big    the same with a 96 KB result: more than hao's area (64 KB a level): the store faults in the
+ *          guard after it (native: runs)
  *   call   an ObjC method taking 70000 bytes by value: refused (native: runs)
  *   block  a native call of a guest block whose parameter is 70000 bytes: refused (native: runs) */
 #import <string.h>
@@ -11,6 +13,13 @@ static struct rf_mid make_mid(long k)
 {
     struct rf_mid r;
     for (int i = 0; i < 1024; i++) r.w[i] = k + i;
+    return r;
+}
+
+static struct rf_big make_big(long k)
+{
+    struct rf_big r;
+    for (int i = 0; i < 12288; i++) r.w[i] = k + i;
     return r;
 }
 
@@ -26,6 +35,10 @@ int main(int argc, char **argv)
         for (int i = 0; i < 256; i++) bad += canary[i] != 0x5a5a0000 + i;
         printf("mid: calls %ld canary %s\n", r, bad ? "overwritten" : "intact");
         return bad != 0;
+    }
+    if (!strcmp(c, "big")) {
+        printf("big: calls %ld\n", rf_call_big(make_big, 1));
+        return 0;
     }
     if (!strcmp(c, "call")) {
         static struct rf_huge v;

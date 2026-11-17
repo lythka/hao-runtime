@@ -1049,17 +1049,22 @@ static void island_close(hao_wx_win *win, size_t n)
     hao_crit_leave();
 }
 
+/* movabs r11, guest; r10 = HAO_CB_SWIFTCC (an entry for hao_callback: a Swift function, whose indirect
+ * result's buffer comes in rax) or 0 (a bridge of its own); jmp [rip+0]; .quad the bridge (ISLAND_BRIDGE) */
+#define ISLAND_BRIDGE 22
 static void emit_entry(uint8_t *e, uint64_t guest, uint64_t bridge)
 {
     static const uint8_t pre[2] = {0x49, 0xbb};                /* movabs r11, imm64 */
-    static const uint8_t mid[9] = {0x45, 0x31, 0xd2,           /* xor r10d, r10d */
-                                   0xff, 0x25, 0, 0, 0, 0};     /* jmp [rip+0] */
+    static const uint8_t swiftcc[6] = {0x41, 0xba, HAO_CB_SWIFTCC, 0, 0, 0};   /* mov r10d, HAO_CB_SWIFTCC */
+    static const uint8_t none[6] = {0x45, 0x31, 0xd2, 0x0f, 0x1f, 0x00};       /* xor r10d, r10d; nop */
+    static const uint8_t jmp[6] = {0xff, 0x25, 0, 0, 0, 0};     /* jmp [rip+0] */
     uint64_t cb = bridge ? bridge : (uint64_t)(uintptr_t)hao_callback_entry;
     memcpy(e, pre, 2);
     memcpy(e + 2, &guest, 8);
-    memcpy(e + 10, mid, 9);
-    memcpy(e + 19, &cb, 8);
-    memset(e + 27, 0xcc, ISLAND_SLOT - 27);                    /* int3 */
+    memcpy(e + 10, bridge ? none : swiftcc, 6);
+    memcpy(e + 16, jmp, 6);
+    memcpy(e + ISLAND_BRIDGE, &cb, 8);
+    memset(e + ISLAND_BRIDGE + 8, 0xcc, ISLAND_SLOT - ISLAND_BRIDGE - 8);   /* int3 */
 }
 
 /* Write e[0..n) (sorted by field, each field once) into the image: a rel32
@@ -1686,7 +1691,7 @@ static uint64_t dyn_entry(hao_image *img, uint64_t g, uint64_t field)
     }
     for (uint64_t e = islands[k].lo; e < islands[k].hi; e += ISLAND_SLOT) {
         uint64_t bridge;
-        memcpy(&bridge, (const void *)(uintptr_t)(e + 19), 8);
+        memcpy(&bridge, (const void *)(uintptr_t)(e + ISLAND_BRIDGE), 8);
         if (bridge == (uint64_t)(uintptr_t)hao_callback_entry && hao_swiftmeta_island_target(e) == g)
             return hao_near_range(e, field, field + 4, ISLAND_SLOT) ? e : 0;
     }

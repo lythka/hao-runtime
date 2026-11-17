@@ -11,6 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include <mach-o/getsect.h>
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
@@ -88,11 +89,11 @@ static void thread_key_dtor(void *v) { pthread_setspecific(thread_key, v); }
  * malloc: callbacks also run in signal handlers. */
 #define CPU_SAVES 4096
 #define CPU_SAVES_ON_STACK 4
-/* hao_thread.noret (callback_plain): 64 KB per nesting level, then a guard */
+/* hao_thread.noret (callback_plain): per nesting level 64 KB and a 64 KB guard after it */
 #define NORET_LEVEL (64u << 10)
 #define NORET_LEVELS 16
 #define NORET_GUARD (64u << 10)
-#define NORET_SIZE ((size_t)NORET_LEVEL * NORET_LEVELS + NORET_GUARD)
+#define NORET_SIZE ((size_t)(NORET_LEVEL + NORET_GUARD) * NORET_LEVELS)
 static hao_cpu *cpu_save_push(hao_thread *t, unsigned *mark)
 {
     unsigned n = t->cpu_saves_n;
@@ -410,6 +411,28 @@ __attribute__((noinline)) static bool native_call_stackpack(hao_cpu *c, uint64_t
     hao_native_call(pc, c, (uint64_t)n);
     c->x[31] = sp;
     return true;
+}
+
+/* Is the native code at pc Swift code: in an image with Swift metadata (libswiftCore, Swift frameworks;
+ * their Swift functions are mostly not exported, so the symbol cannot tell)? Guest functions it passes or
+ * calls are then taken for Swift functions: rax is the indirect result's buffer (callback_plain).
+ * Remembered per address (a direct-mapped table; a collision only asks again). */
+static bool native_swift(uint64_t pc)
+{
+    enum { N = 4096 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *e = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    Dl_info di;
+    bool sw = false;
+    if (dladdr((void *)(uintptr_t)pc, &di) && di.dli_fbase) {
+        const struct mach_header_64 *mh = di.dli_fbase;
+        unsigned long n = 0;
+        sw = mh->magic == MH_MAGIC_64 && (getsectiondata(mh, "__TEXT", "__swift5_typeref", &n) || getsectiondata(mh, "__TEXT", "__swift5_types", &n) ||
+                                          getsectiondata(mh, "__TEXT", "__swift5_proto", &n));
+    }
+    __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
+    return sw;
 }
 
 static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
@@ -1045,8 +1068,8 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
     t->cpu_saves_n = mark;
 }
 
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved);
-static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t);
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc);
+static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc);
 
 uint64_t hao_callback(hao_cb_frame *f)
 {
@@ -1066,6 +1089,11 @@ uint64_t hao_callback(hao_cb_frame *f)
     }
     /* arrived by an NX fault: a block whose helper this is gets thunks for next time */
     if (in == HAO_CB_FAULT) hao_blocks_heal(f->gpr[0], f->target);
+    /* a Swift function's entry, a call from native Swift code (an NX fault, a plain thunk), or a native
+     * function the guest called that jumped on to guest code (a dispatch thunk's tail call: it returns to
+     * hao_native_call, which passed the guest's own x8 in rax) */
+    bool swiftcc = in == HAO_CB_SWIFTCC || native_swift(f->ret) || f->ret == hao_native_call_ret;
+    if (in == HAO_CB_SWIFTCC) in = 0;
     /* a call without a signature thunk (NX fault, plain thunk) may still
      * have a signature noted for its target (abi.c) */
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
@@ -1073,9 +1101,9 @@ uint64_t hao_callback(hao_cb_frame *f)
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
-    if (!saved) return callback_plain_local(f, t);
+    if (!saved) return callback_plain_local(f, t, swiftcc);
     *saved = t->cpu;
-    uint64_t pop = callback_plain(f, t, saved);
+    uint64_t pop = callback_plain(f, t, saved, swiftcc);
     t->cpu_saves_n = mark;
     return pop;
 }
@@ -1100,32 +1128,38 @@ __attribute__((noinline, cold)) static void callback_trace_pop(const hao_cb_fram
 
 /* x8 for a callback without a signature whose native caller passed no
  * result buffer: the result is unknown, and so is its size. A guest
- * function that does return through x8 writes into this thread's own area,
- * one 64 KB part per nesting level (the deepest levels share the last), and
- * a larger result runs into the guard after it and faults. Never memory
- * that holds anything (the guest stack, hao's code); 0 when the area
- * cannot be made (then such a store faults at once). A mapping, not malloc:
- * callbacks also run in signal handlers. */
+ * function that does return through x8 writes into this thread's own area:
+ * 64 KB for each of the first NORET_LEVELS nesting levels, each followed by
+ * a 64 KB guard, so a larger result faults in its level's guard instead of
+ * reaching another's. A deeper level gets a guard itself (its store faults
+ * at once), as does a thread whose area cannot be made. Never memory that
+ * holds anything (the guest stack, hao's code). A mapping, not malloc:
+ * callbacks also run in signal handlers; a signal handler's callback that
+ * makes the area first wins and the interrupted one drops its own. */
 static uint64_t noret_area(hao_thread *t)
 {
-    if (!t->noret) {
-        uint8_t *m = mmap(NULL, NORET_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (m == MAP_FAILED) return 0;
-        if (mprotect(m + (size_t)NORET_LEVEL * NORET_LEVELS, NORET_GUARD, PROT_NONE)) { munmap(m, NORET_SIZE); return 0; }
-        t->noret = m;
+    uint8_t *m = __atomic_load_n(&t->noret, __ATOMIC_ACQUIRE);
+    if (!m) {
+        uint8_t *n = mmap(NULL, NORET_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (n == MAP_FAILED) return 0;
+        for (unsigned k = 0; k < NORET_LEVELS; k++)
+            if (mprotect(n + (size_t)(NORET_LEVEL + NORET_GUARD) * k, NORET_LEVEL, PROT_READ | PROT_WRITE)) { munmap(n, NORET_SIZE); return 0; }
+        uint8_t *none = NULL;
+        if (__atomic_compare_exchange_n(&t->noret, &none, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) m = n;
+        else { munmap(n, NORET_SIZE); m = none; }
     }
     unsigned level = t->depth > 0 ? (unsigned)t->depth : 0;
-    if (level >= NORET_LEVELS) level = NORET_LEVELS - 1;
-    return (uint64_t)(uintptr_t)(t->noret + (size_t)NORET_LEVEL * level);
+    if (level >= NORET_LEVELS) return (uint64_t)(uintptr_t)(m + NORET_LEVEL);   /* level 0's guard */
+    return (uint64_t)(uintptr_t)(m + (size_t)(NORET_LEVEL + NORET_GUARD) * level);
 }
 
-/* A native-to-guest call without a signature (NX fault, plain thunk). */
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
+/* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry). */
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc)
 {
     hao_cpu *c = &t->cpu;
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
     t->callbacks++;
-    if (hao_verbose > 1) callback_trace_entry(f, t);
+    if (hao_verbose > 1) { callback_trace_entry(f, t); if (swiftcc) fprintf(stderr, "hao:   (a Swift entry: rax %#llx)\n", (unsigned long long)f->swift[3]); }
     for (int k = 0; k < 6; k++) c->x[k] = f->gpr[k];
     /* SysV stack args 0,1 -> x6,x7; the rest are copied to the guest stack */
     c->x[6] = f->stack_args[0];
@@ -1146,12 +1180,13 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
     /* x8 is the indirect-result register: native swiftcc passes it in rax.
      * A C caller leaves anything there, often the function pointer it just
      * called (the thunk) or al = the vector-register count of a variadic
-     * call; a guest function returning a large struct would then write its
-     * result into hao's code. So only a value that can be a data pointer is
-     * passed through; otherwise x8 is noret_area's. */
+     * call, and a C caller's indirect result buffer is in rdi. So rax is
+     * passed through only to a Swift function (its entry says so, or its
+     * native caller is Swift code: hao_callback), and then only a value that
+     * can be a data pointer; otherwise x8 is noret_area's. */
     uint64_t r = f->swift[3];
-    bool data = r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) && !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) &&
-                !hao_is_trap(r);
+    bool data = swiftcc && r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) &&
+                !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) && !hao_is_trap(r);
     c->x[8] = data ? r : noret_area(t);
     c->x[31] = sp;
     c->x[30] = HAO_RETURN_MAGIC;
@@ -1172,10 +1207,10 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
     return pop;
 }
 
-__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t)
+__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc)
 {
     hao_cpu saved = t->cpu;
-    return callback_plain(f, t, &saved);
+    return callback_plain(f, t, &saved, swiftcc);
 }
 
 /* ---------------------------------------------------- fault handler */
