@@ -59,20 +59,25 @@ only when it loads the program's ARM slice. A native dependency the stub
 linked (a bundle's x86_64 framework through `@rpath`, a file under
 /Library) was loaded by dyld, initializers included, before that, so
 whoever could replace it ran code in the program's process with its
-identity and entitlements. `hao-embed` now links a native dependency from
-disk only when it, every path dyld would try before it, and its own
-non-lazy dependencies are in protected storage: the sealed system volume
-less its firmlinks (`usr/share/firmlinks` of the root), and the cryptexes
-under Preboot; the x86_64 shared cache counts as protected. Any other is not
+identity and entitlements. `hao-embed` now links a native dependency
+(from disk or the shared cache) only when every path dyld tries before it,
+every directory and symbolic link on the way, the file itself and, with the
+rpaths each image owns, its own non-lazy dependencies are in protected
+storage: the sealed system volume less its firmlinks (`usr/share/firmlinks`
+of the root), and the OS and App cryptexes; the x86_64 shared cache counts
+as protected. Names are compared case-insensitively in their on-disk
+spelling; a chain deeper than 16 libraries is not protected. Any other is not
 linked (manifest `not_linked`: "outside protected storage") and hao's binder
 loads it with the program's image, after library validation is set.
 Measured on 26B131: 963 embedded programs, 5 link a library from disk, all
 in protected storage, so no stub of that image changes.
 `stub_identity_gate.py` fails a stub that loads anything else at launch
-(`dylibs.protected`: libhao only from /usr/lib/hao). Test:
+(`dylibs.protected`: libhao only from /usr/lib/hao), and needs the x86_64
+cache to say so (without one it fails). Test:
 `tests/tools/stubdeps.sh` (linked from an image root's usr/bin; not from
-/Library, behind a /Library rpath or from a temporary folder, where the
-program still runs as natively; the gate on such a stub). Limits: when `CS_REQUIRE_LV` cannot be set,
+/Library, behind a /Library rpath, through /usr/LOCAL, through a link
+under /Library or from a temporary folder, where the program still runs as
+natively; the gate on such a stub). Limits: when `CS_REQUIRE_LV` cannot be set,
 the deferred library loads without library validation (the loader's
 fallback); dyld's handling of DYLD_* variables in a stub that is not
 hardened is unchanged.

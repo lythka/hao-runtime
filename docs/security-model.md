@@ -218,8 +218,9 @@ hao can set `CS_REQUIRE_LV`, and the stub's `disable-library-validation`
 admits any of them. `tools/hao-embed` therefore links a program's native
 dependency into its stub only from protected storage: the x86_64 shared
 cache, or a file on the sealed system volume (not behind one of its
-firmlinks to the data volume) or in a cryptex, when every path dyld would
-try first and every library that file loads at launch are such files too.
+firmlinks to the data volume) or in the OS or App cryptex, when every path
+dyld would try first, every directory and link on the way, and every
+library that file loads at launch are such files too.
 Any other native dependency (a bundle's framework, a file under /Library) is
 loaded by hao's binder with the program's image, after library validation is
 on.
