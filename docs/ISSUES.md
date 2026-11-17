@@ -1,5 +1,15 @@
 # Runtime issues and measured scope
 
+## Nesting depth in C++ mangled names
+
+The C++ name reader (`bridge.c`, used for `this`-returning constructors and
+`bool` parameters) bounded every nesting at 64 except template argument
+packs (`J...E`) and parameter declarations (`Ty`, `Tn`), which recursed
+once per character. A name of a million nested packs overflowed the stack.
+Packs now count toward the same bound and declarations are read in a loop;
+a deeper name is refused (no rewrite) as other over-deep names are. Test:
+`test_bridge` (`cxxbool`).
+
 ## On/off environment switches set to 0
 
 An on/off `HAO_*` switch was on whenever it was present, so `HAO_INTERP=0`
