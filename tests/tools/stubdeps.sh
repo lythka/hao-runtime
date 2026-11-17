@@ -165,9 +165,15 @@ open(sys.argv[1], "wb").write(b)
 PY
 rprog sroot/usr/bin/prog9 -Wl,-rpath,@executable_path/libh -Wl,-rpath,/Library/L2
 rprog sroot/usr/bin/prog10 -Wl,-rpath,@executable_path/libn -Wl,-rpath,/Library/L2
+# a name that reaches a shared-cache library only lexically: rpath /usr/local/redirect/../../lib, where dyld
+# goes through /usr/local/redirect (a link someone else could point anywhere)
+mkdir -p comp sroot/usr/local; ln -s ../../usr sroot/usr/local/redirect
+dl comp/libcompression.dylib arm64e @rpath/libcompression.dylib
+clang -arch arm64e -o sroot/usr/bin/prog12 m.c -Lcomp -lcompression -Wl,-rpath,/usr/local/redirect/../../lib \
+    && codesign -s - -f -o runtime sroot/usr/bin/prog12 2>/dev/null || exit 2
 python3 "$EMBED" --stub "$B/hao-stub" --stubs spay2 --root sroot --x86-cache "$X86" sroot/usr/bin/prog6 sroot/usr/bin/prog7 \
-    sroot/usr/bin/prog8 sroot/usr/bin/prog9 sroot/usr/bin/prog10 >spay2.log 2>&1 || bad "deps: --stubs (search): $(cat spay2.log)"
-python3 -I - spay2/manifest.json <<'PY' && pass "deps: a path with no x86_64 library, an x86_64h-only one or one for a newer macOS does not end dyld's search; a library is judged in every rpath context and for every x86_64 slice" || bad "deps: search and contexts: $(cat spay2.log)"
+    sroot/usr/bin/prog8 sroot/usr/bin/prog9 sroot/usr/bin/prog10 sroot/usr/bin/prog12 >spay2.log 2>&1 || bad "deps: --stubs (search): $(cat spay2.log)"
+python3 -I - spay2/manifest.json <<'PY' && pass "deps: a path with no x86_64 library, an x86_64h-only one or one for a newer macOS does not end dyld's search; no lexical .. reaches the cache; a library is judged in every rpath context and for every x86_64 slice" || bad "deps: search and contexts: $(cat spay2.log)"
 import json, sys
 m = {e["path"]: dict(e["not_linked"]) for e in json.load(open(sys.argv[1]))["files"]}
 assert m["usr/bin/prog6"]["@rpath/libfat.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog6"]
@@ -175,7 +181,17 @@ assert m["usr/bin/prog7"]["@rpath/libL.dylib"].startswith("outside protected sto
 assert m["usr/bin/prog8"]["@rpath/libU.dylib"].startswith("outside protected storage (/Library)"), m["usr/bin/prog8"]
 for p in ("usr/bin/prog9", "usr/bin/prog10"):
     assert m[p]["@rpath/libfat.dylib"].startswith("outside protected storage (/Library)"), (p, m[p])
+assert m["usr/bin/prog12"]["@rpath/libcompression.dylib"].startswith("outside protected storage (/usr/local)"), m["usr/bin/prog12"]
 PY
+# libhao and libhao_identity by installed path in a payload stub (no rpath searched for them); a --host-test
+# stub's @rpath names fail the gate's dylibs.protected when checked as a payload stub
+otool -L spay/stubs/*.stub | grep -E 'libhao(_identity)?\.dylib' | sort -u >hao.names
+python3 -I "$repo/tools/stub_identity_gate.py" --x86-cache "$X86" prog.emb >gate-rpath.log 2>&1; rr=$?
+if grep -q '^[[:space:]]*/usr/lib/hao/libhao\.dylib ' hao.names && grep -q '^[[:space:]]*/usr/lib/hao/libhao_identity\.dylib ' hao.names \
+    && ! grep -q '@rpath' hao.names && [ $rr = 1 ] \
+    && grep -q "dylibs.protected.*DIFF\|DIFF.*dylibs.protected" gate-rpath.log; then
+    pass "deps: payload stubs name libhao by /usr/lib/hao path; an @rpath libhao fails dylibs.protected"
+else bad "deps: libhao names [$(tr '\n' ' ' <hao.names)] gate rc $rr: $(grep protected gate-rpath.log)"; fi
 # the identity gate: these stubs pass; usr/bin/prog's stub (it links @rpath/libfat.dylib) checked as the stub of
 # the same program under /Library fails dylibs.protected
 python3 -I - "$repo/tools" spay sroot "$X86" <<'PY' && pass "deps: the identity gate passes the stubs and finds a linked library outside protected storage" || bad "deps: identity gate dylibs.protected"

@@ -528,7 +528,11 @@ def first_section_offset(mo):
     return low
 
 
-def apply_identity(path, arm, own_rpaths):
+HAO_LIBS = ("@rpath/libhao.dylib", "@rpath/libhao_identity.dylib")
+HAO_LIB_DIR = "/usr/lib/hao"
+
+
+def apply_identity(path, arm, own_rpaths, absolute_hao=False):
     """Give the relinked (unsigned) stub at PATH the arm slice ARM's load-time
     identity by tools/stub_identity_gate.py's RULES: the copied commands
     (LC_BUILD_VERSION whole, with its tools; LC_SOURCE_VERSION; the
@@ -538,7 +542,9 @@ def apply_identity(path, arm, own_rpaths):
     the stub's LC_BUILD_VERSION). The load commands are rewritten in the
     header padding (relink_stub reserves identity_room); the file's other
     bytes do not move. RuntimeError if they do not fit or LC_LOAD_DYLINKER
-    differs."""
+    differs. With ABSOLUTE_HAO (every stub but --host-test's) libhao and
+    libhao_identity are named by their installed paths (HAO_LIB_DIR), so
+    dyld loads them from there and searches no rpath for them."""
     mo = bytearray(open(path, "rb").read())
     stub_cmds = [(cmd, bytes(mo[off:off + size])) for cmd, off, size in load_commands(mo, path)]
     arm_cmds = [(cmd, bytes(arm[off:off + size])) for cmd, off, size in load_commands(arm)]
@@ -572,6 +578,10 @@ def apply_identity(path, arm, own_rpaths):
             b = bytearray(b)
             b[16:24] = arm_main[0][16:24]
             b = bytes(b)
+        elif cmd in (0xC, 0x80000018) and absolute_hao and identity_rules.lc_str(b) in HAO_LIBS:
+            name = (HAO_LIB_DIR + "/" + identity_rules.lc_str(b).split("/")[-1]).encode() + b"\0"
+            name += bytes(-(24 + len(name)) % 8)
+            b = struct.pack("<IIIIII", cmd, 24 + len(name), 24, *struct.unpack_from("<III", b, 12)) + name
         elif cmd in (0xC, 0x80000018) and arm_libsystem and identity_rules.lc_str(b) == LIBSYSTEM:
             b = bytearray(b)
             struct.pack_into("<II", b, 16, *arm_libsystem[0])
@@ -796,21 +806,24 @@ class X86Libraries:
         loadable (hao-embed cannot prove dyld will load a file: it may be unreadable to the process, or the
         wrong CPU, platform or OS), each directory and link on the way, and for every x86_64 library slice of
         each file there, that slice's non-lazy dependencies, with its own rpaths before the inherited ones. A
-        shared-cache install name or path ends the search (dyld takes the cache's image, which always loads).
+        shared-cache install name or path (the exact string dyld looks up, every component on the way
+        protected) ends the search (dyld takes the cache's image, which always loads).
         Otherwise why not: the first path that is not protected, or a chain deeper than MAX_DEP_DEPTH. Each
         (executable, file, slice, rpath context, restricted) is validated once (_closure); one already being
         validated further up is a cycle, judged there."""
         stack = set() if stack is None else stack
-        if name in self.ids:
-            return None    # an install name of the shared cache: dyld takes the cache's image
+        if name in self.ids:   # an install name of the shared cache: dyld takes the cache's image
+            return self.walk(name)[1]
         if depth > MAX_DEP_DEPTH:
             return "%s: a chain of more than %d dependencies" % (name, MAX_DEP_DEPTH)
         for op in self.search(name, loader, exe, rpaths, restricted):
-            if os.path.normpath(op) in self.ids:
-                return None
+            # walked exactly as dyld opens it (no lexical "..": a component before it may be a link), every
+            # component protected; a shared-cache hit only for the very string dyld looks up
             real, why = self.walk(op)
             if why:
                 return why
+            if op in self.ids:
+                return None
             host = os.path.join(self.root, real.lstrip("/"))
             if not os.path.isfile(host):
                 continue
@@ -1098,7 +1111,7 @@ def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_of=
     if uuid_of is not None:
         set_uuid(out, stub_uuid(uuid_of, open(out, "rb").read()))
     if arm is not None:
-        apply_identity(out, arm, own_rpaths)
+        apply_identity(out, arm, own_rpaths, absolute_hao=not host_test)
     return out
 
 

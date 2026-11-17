@@ -379,7 +379,7 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     add("slice.record", want is not None and have == want, show(want), show(have), note)
     # dylibs
     stub_deps = embed.dylib_commands(stub)
-    own_names = ("@rpath/libhao.dylib", "@rpath/libhao_identity.dylib")
+    own_names = embed.HAO_LIBS + tuple(embed.HAO_LIB_DIR + "/" + n.split("/")[-1] for n in embed.HAO_LIBS)
     sdeps = [d for d in stub_deps if d[1] not in own_names and not d[1].endswith("/libhao.dylib")
              and not d[1].endswith("/libhao_identity.dylib")]
     if x86 is not None and src_path:
@@ -398,10 +398,8 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     # what dyld loads into the stub before hao sets CS_REQUIRE_LV: libhao and libhao_identity through the stub's
     # own first rpath (/usr/lib/hao), and native libraries from protected storage only (hao-embed
     # X86Libraries.unprotected); anything else must be left to hao's binder
-    own_dirs = [r for r in sr if r not in ar] if stub_own_rpaths is None else stub_own_rpaths
-    if not host_test:
-        bad_own = [d[1] for d in stub_deps if d not in sdeps and not (
-            d[1] in own_names and own_dirs[:1] == ["/usr/lib/hao"] or d[1].startswith("/usr/lib/hao/"))]
+    if not host_test:   # by installed path: dyld searches no rpath for them (a later one could supply them)
+        bad_own = [d[1] for d in stub_deps if d not in sdeps and not d[1].startswith(embed.HAO_LIB_DIR + "/")]
     else:
         bad_own = []
     if x86 is not None and src_path:
