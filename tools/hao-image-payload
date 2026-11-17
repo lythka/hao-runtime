@@ -184,7 +184,7 @@ fi
 ditto "$KEXT" "$OUT/HaoExec.kext"
 cp "$H/kext/stamp_identity.py" "$H/tools/hao-install.py" "$H/tools/hao_fat.py" "$H/tools/hao_codesig.py" "$OUT/"
 EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"}
-       --save-skeletons "$OUT/embed/skeletons")
+       --save-skeletons "$OUT/embed/skeletons" --allow-dropped-constraints "$H/releases/dropped-constraints.txt")
 LOG=$OUT/embed/embed.log
 rc=0
 case $MODE in
@@ -228,7 +228,7 @@ EOF
 # Every stub against its program's arm slice by tools/stub_identity_gate.py's rules (fail closed: a DIFF stops
 # the build); OUT/embed/identity/{summary.md,diff.tsv,programs.tsv}, build.json stub_identity.
 if ! python3 "$H/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"} \
-        --out "$OUT/embed/identity" > "$OUT/embed/identity.log" 2>&1; then
+        --dropped-constraints "$H/releases/dropped-constraints.txt" --out "$OUT/embed/identity" > "$OUT/embed/identity.log" 2>&1; then
     grep -h '^| ' "$OUT/embed/identity/summary.md" 2>/dev/null | head -40 >&2 || cat "$OUT/embed/identity.log" >&2
     echo "hao-image-payload: a stub's load-time identity differs from its program's (see $OUT/embed/identity)" >&2
     exit 1

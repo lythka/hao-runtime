@@ -19,13 +19,15 @@ describe arm64 code. RULES is that table, one row per load command type:
 A load command type the table does not name is refused by hao-embed and a
 DIFF here: a new type must be decided, not carried or dropped by default.
 
-  stub_identity_gate.py [--x86-cache DIR] [--host-test] [--out DIR] FAT...
-  stub_identity_gate.py [--x86-cache DIR] --stubs DIR --root ROOT [--out DIR]
+  stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] [--host-test] [--out DIR] FAT...
+  stub_identity_gate.py [--x86-cache DIR] [--dropped-constraints FILE] --stubs DIR --root ROOT [--out DIR]
       FAT: an embedded file (its arm slice and its x86_64 stub); --stubs: a
       hao-embed --stubs payload, each manifest entry's stub against ROOT/path.
-      --x86-cache: also check the linked dylibs against hao-embed's
+      --x86-cache: the x86_64 shared cache the stubs run with (default as
+      hao-embed's: with --stubs the one under --root, else this host's; none
+      is an error): the linked dylibs are checked against hao-embed's
       native_deps (the dependencies that load natively, as src/runtime.c
-      binds them); without it they are checked for order, kind and version.
+      binds them) and must all be in protected storage (dylibs.protected).
       --host-test: stubs made with hao-embed --host-test (public
       entitlements only, the build directory's rpath).
 
@@ -37,6 +39,7 @@ input.
 """
 import argparse
 import collections
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -280,9 +283,11 @@ def load_embed():
 
 
 # --- the comparison -------------------------------------------------------------------------------------------------
-def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own_rpaths=None):
+def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own_rpaths=None, dropped=()):
     """[(field, verdict, arm value, stub value, note)] for the arm slice ARM and its stub STUB (bytes).
-    EMBED: the hao-embed module; SRC_PATH: the program's path (for dependency resolution with X86)."""
+    EMBED: the hao-embed module; SRC_PATH: the program's path (for dependency resolution with X86); DROPPED: the
+    constraints the release allows to be left out for this program ({(slot name, arm cdhash, blob sha256)},
+    hao-embed read_dropped), never what a manifest says."""
     rows = []
 
     def add(field, ok, a, s, note="", known=None):
@@ -374,9 +379,10 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     add("slice.record", want is not None and have == want, show(want), show(have), note)
     # dylibs
     stub_deps = embed.dylib_commands(stub)
-    own_names = ("@rpath/libhao.dylib", "@rpath/libhao_identity.dylib")
-    sdeps = [d for d in stub_deps if d[1] not in own_names and not d[1].endswith("/libhao.dylib")
-             and not d[1].endswith("/libhao_identity.dylib")]
+    # hao's own libraries: payload stubs name them exactly by their installed paths, --host-test stubs by @rpath
+    hao_names = embed.HAO_LIBS if host_test else tuple(embed.HAO_LIB_DIR + "/" + n.split("/")[-1] for n in embed.HAO_LIBS)
+    is_hao = lambda n: "libhao" in n.lower()
+    sdeps = [d for d in stub_deps if not is_hao(d[1])]
     if x86 is not None and src_path:
         own = {n for _, n, _, _ in stub_deps if n not in {d[1] for d in sdeps}}
         links, skipped, _ = embed.native_deps(src_path, arm, x86, own)
@@ -390,6 +396,22 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
         ok = all(any(d == x for x in it) for d in sdeps)
         add("dylibs", ok, f"{len(adeps)} in the arm slice", f"{len(sdeps)} linked",
             "a subsequence of the arm slice's, same kind and versions")
+    # what dyld loads into the stub before hao sets CS_REQUIRE_LV: libhao and libhao_identity through the stub's
+    # own first rpath (/usr/lib/hao), and native libraries from protected storage only (hao-embed
+    # X86Libraries.unprotected); anything else must be left to hao's binder
+    # exactly the two installed paths (dyld searches no rpath for them); any other name with libhao in it fails
+    bad_own = [d[1] for d in stub_deps if is_hao(d[1]) and d[1] not in hao_names]
+    bad_own += [n for n in hao_names if [d[1] for d in stub_deps].count(n) != 1]
+    if x86 is not None and src_path:
+        eo = x86.os_path(os.path.realpath(src_path))
+        rp = [(r, eo) for r in embed.macho_rpaths_mo(arm)]
+        restricted = bool(cd_fields(stub)[1] & CS_RUNTIME)   # the stub's hardened runtime: dyld's restricted fallbacks
+        bad_deps = [n for _, n, _, _ in sdeps if eo is None or x86.unprotected(n, eo, eo, rp, restricted)]
+    else:
+        bad_deps = ["(not checked: no x86_64 shared cache)"]
+    add("dylibs.protected", not bad_own and not bad_deps, f"{len(sdeps)} native",
+        ";".join(bad_own + bad_deps) or "all protected",
+        "load-time libraries: libhao from /usr/lib/hao, the rest from the sealed system volume or a cryptex")
     # signature
     ai, si = hao_codesig.info(arm), hao_codesig.info(stub)
     aid, aflags = cd_fields(arm)
@@ -399,13 +421,17 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     if host_test:
         aent = embed.public_only(aent)
     extra = {k: v for k, v in sent.items() if k not in aent}
-    lost = [k for k, v in aent.items() if sent.get(k) != v]
+    lv = hao_codesig.library_validated(ai)
+    lost = [k for k, v in aent.items() if sent.get(k) != v and not (lv and k == hao_codesig.DYLD_ENV)]
     add("sig.entitlements", not lost and all(embed.JIT_ENTITLEMENTS.get(k) == v for k, v in extra.items()),
         f"{len(aent)} keys", f"{len(sent)} keys", ("lost " + ",".join(lost) if lost else "") +
         (" extra " + ",".join(sorted(extra)) if extra else ""))
-    want_rt = hao_codesig.dyld_env_blocked(ai)
+    want_rt = hao_codesig.dyld_env_blocked(ai) or lv
     add("sig.runtime", bool(sflags & CS_RUNTIME) == bool(want_rt or aflags & CS_RUNTIME), hex(aflags), hex(sflags),
-        "hardened runtime when dyld ignores DYLD_* for the program natively")
+        "hardened runtime when dyld ignores DYLD_* for the program natively or it requires library validation")
+    add("sig.dyld_env", not (lv and sent.get(hao_codesig.DYLD_ENV)), "library validation" if lv else "-",
+        "allow-dyld-environment-variables" if sent.get(hao_codesig.DYLD_ENV) else "-",
+        "a library-validated program's stub has no allow-dyld-environment-variables")
     for bit, nm in CS_COPIED_FLAGS.items():
         add("sig." + nm, bool(aflags & bit) == bool(sflags & bit), hex(aflags), hex(sflags))
     add("sig.library", bool(aflags & CS_REQUIRE_LV) == bool(sflags & CS_REQUIRE_LV), hex(aflags), hex(sflags),
@@ -413,6 +439,14 @@ def compare(arm, stub, embed, src_path=None, x86=None, host_test=False, stub_own
     add("sig.team", ai["team"] == si["team"], ai["team"] or "-", si["team"] or "-", known=DENIED_FIELDS["sig.team"])
     add("sig.platform", ai["platform"] == si["platform"], str(ai["platform"]), str(si["platform"]),
         known=DENIED_FIELDS["sig.platform"])
+    # launch and library constraints: the kernel evaluates the stub's signature
+    ac, sc = hao_codesig.constraints(arm), hao_codesig.constraints(stub)
+    for slot, nm in sorted(hao_codesig.CONSTRAINT_SLOTS.items()):
+        a_, s_ = ac.get(slot), sc.get(slot)
+        show = lambda b: hashlib.sha256(b).hexdigest()[:16] if b else "-"
+        add("sig.constraint-" + nm, a_ == s_, show(a_), show(s_), "the program's constraint, sealed byte for byte",
+            known="left out: listed in --dropped-constraints (that blob of this build; codesign cannot express it)"
+            if a_ is not None and s_ is None and embed.constraint_pin(arm, slot, a_) in dropped else None)
     for slot, nm in ((1, "sig.slot-1"), (3, "sig.slot-3")):
         a_, s_ = hao_codesig.special_slots(arm, slot), hao_codesig.special_slots(stub, slot)
         common = set(a_) & set(s_)
@@ -451,6 +485,9 @@ def main():
     ap.add_argument("--root")
     ap.add_argument("--x86-cache")
     ap.add_argument("--host-test", action="store_true")
+    ap.add_argument("--dropped-constraints", metavar="FILE",
+                    help="the release's list of constraints a stub may lack (hao-embed --allow-dropped-constraints); "
+                         "any other missing constraint is a DIFF")
     ap.add_argument("--out")
     ap.add_argument("--rules", action="store_true", help="print the rule table as TSV and exit")
     ap.add_argument("files", nargs="*")
@@ -465,17 +502,23 @@ def main():
     if bool(a.stubs) != bool(a.root) or (not a.stubs and not a.files):
         ap.error("give FAT... or --stubs DIR --root ROOT")
     embed = load_embed()
-    x86 = embed.X86Libraries(a.x86_cache, a.root or "/") if a.x86_cache else None
     try:
         progs = pairs(a)
     except (OSError, ValueError, KeyError) as e:
         print(f"stub_identity_gate: {e}", file=sys.stderr)
         return 2
+    x86 = embed.X86Libraries(embed.x86_cache_dir(a), a.root or "/") if progs else None   # none: exit 2
     counts = collections.Counter()
     diffs, per = [], []
+    try:
+        allowed = embed.read_dropped(a.dropped_constraints) if a.dropped_constraints else {}
+    except (OSError, ValueError) as e:
+        print(f"stub_identity_gate: --dropped-constraints: {e}", file=sys.stderr)
+        return 2
     for label, src, arm, stub in progs:
         try:
-            rows = compare(arm, stub, embed, src, x86, a.host_test)
+            dropped = set().union(*(allowed.get(k, set()) for k in {label, os.path.realpath(label)}))
+            rows = compare(arm, stub, embed, src, x86, a.host_test, dropped=dropped)
         except (ValueError, struct.error, IndexError) as e:
             rows = [("parse", "DIFF", "-", "-", str(e))]
         nd = sum(r[1] == "DIFF" for r in rows)

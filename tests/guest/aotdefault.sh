@@ -1,9 +1,10 @@
 #!/bin/sh
 # hao --aot with no FILE: the default set from the image's lists (aot-list, else stub-identities' fourth field),
 # here from HAO_AOT_LIST_DIR (a TEST_SWITCHES build). A path with spaces and a universal file with an x86_64 slice
-# are cached, a listed missing file is counted, not failed; a list others can write is not used. A second run skips
-# the valid caches; --check reports valid, missing and stale and changes nothing. --auto (the LaunchDaemon) runs
-# once per libhao: a marker names its generation, and only with free space for the set (HAO_AOT_FREE_MB).
+# are cached, a listed missing file is counted, not failed; a list others can write (mode or ACL), or in a
+# directory others can write, is not used. A second run skips the valid caches; --check reports valid, missing and
+# stale and changes nothing. --auto (the LaunchDaemon) runs once per libhao: a marker names its generation, a run
+# where a program failed writes none, and it runs only with free space for the set (HAO_AOT_FREE_MB).
 #   OUT=dir HAO=/abs/build-ts/hao [T=120] tests/guest/aotdefault.sh
 set -u
 OUT=${OUT:-$(mktemp -d -t hao-aotdefault)}
@@ -75,6 +76,32 @@ if [ "$r1:$n1:$r2:$n2:$m2:$r3:$n3" = "0:0:0:1:none:0:2" ] && grep -q '6000 MB fr
     && grep -q '^libhao [0-9a-f]\{32\}$' "$W/l2/auto-aot.done"; then
     echo "PASS --auto free space: short at the start nothing runs; short midway the rest waits; no marker until done"
 else bad "--auto free space: $r1:$n1:$r2:$n2:$m2:$r3:$n3: $(tail -1 "$OUT/s1.log" "$OUT/s2.log" "$OUT/s3.log")"; fi
+# a run with a failure leaves no marker (the next start-up retries); a list with an ACL granting write is not used
+mkdir -p "$W/c4"; chmod 755 "$W/c4"; printf 'not a Mach-O\n' >"$W/junk"
+printf '%s\n%s\n' "$W/two" "$W/junk" >"$W/lists/aot-list"; rm -f "$W/lists/auto-aot.done"
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u4.log" 2>&1; r4=$?
+[ $r4 = 1 ] && [ ! -e "$W/lists/auto-aot.done" ] && grep -q 'not marked done' "$OUT/u4.log" && [ "$(ls "$W/c4" | grep -c '\.aot$')" = 1 ] \
+    && echo "PASS --auto with a failed program: rc 1, the others cached, no marker" || bad "--auto failure rc $r4: $(tail -2 "$OUT/u4.log"; ls "$W/lists")"
+printf '%s\n%s\n' "$W/two" "$W/absent" >"$W/lists/aot-list"
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u5.log" 2>&1; r5=$?
+[ $r5 = 1 ] && [ ! -e "$W/lists/auto-aot.done" ] && grep -q 'not marked done' "$OUT/u5.log" \
+    && echo "PASS --auto with a listed file not present: rc 1, no marker" || bad "--auto missing rc $r5: $(tail -2 "$OUT/u5.log")"
+printf '%s\n' "$W/two" >"$W/lists/aot-list"
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u6.log" 2>&1
+chmod 664 "$W/lists/auto-aot.done"; echo stale >"$W/lists/auto-aot.done.tmp"
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c4 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/u7.log" 2>&1; r7=$?
+[ $r7 = 0 ] && grep -q 'ignored' "$OUT/u7.log" && grep -q 'done for libhao' "$OUT/u7.log" && [ "$(stat -f %Lp "$W/lists/auto-aot.done")" = 644 ] \
+    && [ ! -e "$W/lists/auto-aot.done.tmp" ] \
+    && echo "PASS --auto: a marker others can write is ignored and replaced; a stale .tmp is not reused" || bad "--auto marker rc $r7: $(tail -3 "$OUT/u7.log")"
+chmod +a "everyone allow write" "$W/lists/aot-list" "$W/lists/stub-identities"
+HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/acl.log" 2>&1; ra=$?
+chmod -N "$W/lists/aot-list" "$W/lists/stub-identities"
+[ $ra = 1 ] && grep -q 'neither' "$OUT/acl.log" && echo "PASS lists whose ACL grants write are not used (rc 1)" || bad "ACL lists rc $ra: $(tail -2 "$OUT/acl.log")"
+chmod +a "everyone allow add_file" "$W/lists"
+HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/acld.log" 2>&1; rd=$?
+chmod -N "$W/lists"
+[ $rd = 1 ] && grep -q 'ACL grants write' "$OUT/acld.log" && echo "PASS a list directory whose ACL grants write is not used (rc 1)" \
+    || bad "ACL directory rc $rd: $(tail -2 "$OUT/acld.log")"
 chmod 666 "$W/lists/aot-list" "$W/lists/stub-identities"
 HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/c.log" 2>&1; rc=$?
 [ $rc = 1 ] && grep -q 'neither' "$OUT/c.log" && echo "PASS lists others can write are not used (rc 1)" || bad "writable lists rc $rc: $(tail -2 "$OUT/c.log")"

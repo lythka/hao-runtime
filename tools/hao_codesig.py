@@ -23,8 +23,12 @@ host):
     unless com.apple.security.cs.allow-dyld-environment-variables.
 """
 import hashlib
+import os
 import plistlib
+import shutil
+import stat
 import struct
+import tempfile
 
 import hao_fat
 
@@ -193,6 +197,7 @@ def parse(blob):
         sealed[slot] = b
     out["cd"] = cd
     out["cdhash"] = digest(out["hash_type"], cd)[:20]
+    out["sealed"] = sealed
     out["ents"], out["der_ents"] = sealed.get(CSSLOT_ENTITLEMENTS), sealed.get(CSSLOT_DER_ENTITLEMENTS)
     out["dlv"] = (_xml_true(out["ents"][8:], DLV) if out["ents"] is not None else
                   out["der_ents"] is not None and _der_true(out["der_ents"][8:], DLV))
@@ -245,6 +250,83 @@ def unsealed_use(mo, limit):
             if length and (start > limit or length > limit - start):
                 return what
     return None
+
+
+CONSTRAINT_SLOTS = {8: "self", 9: "parent", 10: "responsible", 11: "library"}
+
+
+def _der(b, i, end):
+    """(value, next offset) of the DER element at I in B (before END), as CoreEntitlements encodes entitlements
+    and launch constraints: INTEGER, BOOLEAN, UTF8String, a dictionary ([16] of SEQUENCE key, value) or an array
+    (SEQUENCE). ValueError for anything else or a length past END."""
+    if i + 2 > end:
+        raise ValueError("DER: truncated")
+    tag, n, j = b[i], b[i + 1], i + 2
+    if n & 0x80:
+        k = n & 0x7F
+        if not 1 <= k <= 4 or j + k > end:
+            raise ValueError("DER: bad length")
+        n, j = int.from_bytes(b[j:j + k], "big"), j + k
+    e = j + n
+    if e > end:
+        raise ValueError("DER: element past its container")
+    if tag == 0x02:
+        return int.from_bytes(b[j:e], "big", signed=True), e
+    if tag == 0x01:
+        return b[j:e] != b"\0", e
+    if tag == 0x0C:
+        return b[j:e].decode(), e
+    if tag in (0xB0, 0x31):
+        d, k = {}, j
+        while k < e:
+            if b[k] != 0x30:
+                raise ValueError("DER: dictionary entry is not a SEQUENCE")
+            _, q = _der_len(b, k, e)
+            key, v = _der(b, q, e)
+            if not isinstance(key, str):
+                raise ValueError("DER: dictionary key is not a string")
+            d[key], k = _der(b, v, e)
+        return d, e
+    if tag == 0x30:
+        a, k = [], j
+        while k < e:
+            v, k = _der(b, k, e)
+            a.append(v)
+        return a, e
+    raise ValueError("DER: tag %#x" % tag)
+
+
+def _der_len(b, i, end):
+    """(content length, content offset) of the DER element at I."""
+    n, j = b[i + 1], i + 2
+    if n & 0x80:
+        k = n & 0x7F
+        n, j = int.from_bytes(b[j:j + k], "big"), j + k
+    return n, j
+
+
+def constraint(blob):
+    """The dictionary a launch or library constraint blob (CSMAGIC_EMBEDDED_LAUNCH_CONSTRAINT, header included)
+    holds: {"ccat": category, "comp": 1, "reqs": {...} (category 0), "vers": 1}. ValueError if malformed."""
+    if len(blob) < 12 or struct.unpack_from(">I", blob)[0] != CSMAGIC_EMBEDDED_LAUNCH_CONSTRAINT or blob[8] != 0x70:
+        raise ValueError("not a launch constraint blob")
+    n, j = _der_len(blob, 8, len(blob))
+    version, k = _der(blob, j, j + n)
+    d, k = _der(blob, k, j + n)
+    if version != 1 or not isinstance(d, dict) or k != j + n:
+        raise ValueError("launch constraint: unexpected layout")
+    return d
+
+
+def constraints(mo):
+    """{slot: blob (header included)} of the launch and library constraints (CONSTRAINT_SLOTS) the signature of
+    the thin Mach-O MO seals; {} if unsigned. ValueError if the signature is malformed."""
+    sig = signature_range(mo)
+    if not sig or not sig[1]:
+        return {}
+    if sig[0] + sig[1] > len(mo):
+        raise ValueError("code signature outside the slice")
+    return {k: v for k, v in parse(mo[sig[0]:sig[0] + sig[1]])["sealed"].items() if k in CONSTRAINT_SLOTS}
 
 
 def check(mo):
@@ -402,3 +484,126 @@ def bind_special_slots(mo, data_by_slot):
             at = cd + hash_off - slot * hash_size
             out[at:at + hash_size] = bytes(hash_size) if data is None else digest(hash_type, data)
     return bytes(out)
+
+
+# --- private working directories for code signing (hao-embed, hao-trust-list) ----------------------------------------
+# codesign is given a path, so the directory holding what it signs or verifies must be one nobody else can change:
+# else a file could be replaced between hao's write (or hash) and codesign's open.
+ACL_WRITE_PERMS = {"write", "add_file", "add_subdirectory", "delete", "delete_child", "append", "writeattr",
+                   "writeextattr", "writesecurity", "chown"}
+
+
+def acl_grants_write(path):
+    """True if the extended ACL of PATH (a path, not following a link, or an open descriptor) has an allow entry
+    with a right that can change what it holds; an ACL that cannot be read counts as granting."""
+    import ctypes
+    import ctypes.util
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    libc.acl_get_link_np.restype = ctypes.c_void_p
+    libc.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_to_text.restype = ctypes.c_void_p
+    libc.acl_to_text.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(path, 0x100) if isinstance(path, int) else \
+        libc.acl_get_link_np(os.fsencode(path), 0x100)   # ACL_TYPE_EXTENDED
+    if not acl:
+        return ctypes.get_errno() != 2   # ENOENT: no ACL
+    text = libc.acl_to_text(acl, None)
+    try:
+        if not text:
+            return True
+        lines = ctypes.string_at(text).decode(errors="replace").splitlines()
+    finally:
+        if text:
+            libc.acl_free(text)
+        libc.acl_free(acl)
+    for line in lines[1:]:
+        # TAG:UUID:NAME:ID:KIND[,FLAG...]:PERM[,PERM...], e.g. "allow,inherited,directory_inherit:write"
+        f = line.split(":")
+        if len(f) < 6:
+            return True   # not understood: counts as granting
+        if f[4].split(",")[0] == "allow" and set(f[5].split(",")) & ACL_WRITE_PERMS:
+            return True
+    return False
+
+
+def unshared_dir(path):
+    """None if only this user or root can change the directory PATH (a canonical path): it and every directory
+    above it owned by this user or root, without an ACL granting a write-type right, PATH not writable by group
+    or others at all (a sticky shared directory such as /tmp is refused too), an ancestor only if sticky.
+    Otherwise why not."""
+    uid = os.geteuid()
+    parts = [p for p in path.split("/") if p]
+    for k in range(len(parts) + 1):
+        p = "/" + "/".join(parts[:k])
+        st = os.lstat(p)
+        last = k == len(parts)
+        if not stat.S_ISDIR(st.st_mode):
+            return "%s is not a directory" % p
+        if st.st_uid not in (0, uid):
+            return "%s is owned by uid %d" % (p, st.st_uid)
+        if st.st_mode & 0o022 and (last or not st.st_mode & stat.S_ISVTX):
+            return "%s is writable by group or others (mode %o)" % (p, st.st_mode & 0o7777)
+        if acl_grants_write(p):
+            return "%s has an ACL that grants write" % p
+    return None
+
+
+def dir_fd_unshared(fd, owners):
+    """None if the directory open at FD is owned by one of OWNERS, writable by neither group nor others, and
+    without an ACL granting a write-type right: nobody else can rename or replace its entries. Else why not."""
+    st = os.fstat(fd)
+    if not stat.S_ISDIR(st.st_mode):
+        return "not a directory"
+    if st.st_uid not in owners:
+        return "owned by uid %d" % st.st_uid
+    if st.st_mode & 0o022:
+        return "writable by group or others (mode %o)" % (st.st_mode & 0o7777)
+    if acl_grants_write(fd):
+        return "an ACL grants write"
+    return None
+
+
+class PrivateDir:
+    """A new directory (mode 0700) for files codesign will read, made only under a parent unshared_dir accepts
+    (TMPDIR, else the system temporary directory): ValueError otherwise (set TMPDIR to such a directory).
+    check() confirms, before each codesign, that the path still names that same directory (inode, owner,
+    mode), and that each given file under it is still the inode written there."""
+
+    def __init__(self, prefix):
+        parent = os.path.realpath(tempfile.gettempdir())
+        why = unshared_dir(parent)
+        if why:
+            raise ValueError("no private place for code-signing work: %s (set TMPDIR to a directory only you can "
+                             "change)" % why)
+        self.name = tempfile.mkdtemp(prefix=prefix, dir=parent)
+        st = os.lstat(self.name)
+        self.ident = (st.st_dev, st.st_ino)
+        self.files = {}
+
+    def created(self, path):
+        """Record the file PATH (just written under this directory) by inode, for check()."""
+        st = os.lstat(path)
+        self.files[path] = (st.st_dev, st.st_ino)
+
+    def check(self, *paths):
+        st = os.lstat(self.name)
+        if (st.st_dev, st.st_ino) != self.ident or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() \
+                or st.st_mode & 0o077:
+            raise ValueError("the code-signing work directory %s was replaced or opened up" % self.name)
+        for p in paths:
+            st = os.lstat(p)
+            if (st.st_dev, st.st_ino) != self.files.get(p) or not stat.S_ISREG(st.st_mode):
+                raise ValueError("%s was replaced before codesign read it" % p)
+
+    def cleanup(self):
+        shutil.rmtree(self.name, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.cleanup()

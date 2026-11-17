@@ -330,6 +330,177 @@ hardened program's cache in `HAO_CACHE` was "valid" and skipped before).
 `--check` checks the cache against the file it verified: a path repointed
 in between is refused (V, with `tests/aot/swapclose.c`).
 
+## hao --aot --auto marked failed runs done
+
+`hao --aot --auto` wrote its done marker even when programs failed, so
+they were not tried again until libhao changed, and `hao --aot` with no
+FILE took `aot-list` and `stub-identities` by owner and mode alone: an ACL
+granting write, or a directory above them others can write, was not
+noticed. A failed run now leaves no marker (the next start-up retries;
+valid caches are skipped; so does a listed file that is not there or a
+list that cannot be read to its end), the lists need every directory from /
+to pass the cache directories' rules (owner, mode, ACL; `hao_aot_dir_ok`)
+and no write-granting ACL of their own (one that cannot be read refuses the
+list), the marker's directory is held to the same rules, a marker others
+could write is ignored and replaced, and its temporary file is created
+exclusively. Test:
+`guest/aotdefault`. Limits: a program that always fails is retried at
+every start-up.
+
+## hao-trust-list hashed one read and verified another
+
+`hao-trust-list` computed a file's cdhash from one read and then ran
+`codesign --verify -R='anchor apple'` on the path, which codesign opened
+again. A file replaced between the two (an ad hoc program read, an Apple one
+verified) put the ad hoc program's cdhash in `trusted-cdhashes`. It now
+writes the bytes it hashed to a new file in a private directory (with the
+bundle's Info.plist beside it when the signature binds one: a bundle's
+Contents/Info.plist or a framework version's Resources/Info.plist) and
+verifies that copy, in a directory made only under a parent nobody else
+can change (TMPDIR; a shared one such as /tmp is refused) and checked by
+inode before codesign runs; `hao-embed` signs stubs the same way. The
+copy's layout is built from plain names (the file's,
+its bundle's and version's, each one path component, the path resolved
+once), so nothing is written outside that directory. Test: `tests/tools/test_trustlist.py` (the change is
+listed by the old tool, not by the new one). Measured on 26B131: the list
+is byte-identical to the one the old tool made (1,183 of 1,196 files).
+
+## Launch constraints were left out of stub signatures
+
+A program's launch and library constraints (code-signature slots 8-11:
+self, parent, responsible, library) are evaluated on the signature the
+kernel validates, the stub's, and `hao-embed` signed stubs without them,
+so an embedded program could be started by a parent its own constraint
+refuses. `hao-embed` now gives codesign each constraint's requirements and
+checks that the stub seals the program's blob byte for byte. codesign
+expresses only a constraint of requirements (category 0); a program with
+another kind is refused unless `releases/dropped-constraints.txt`
+(`--allow-dropped-constraints`) pins it: path, slot, the arm slice's cdhash
+and the constraint blob's sha256, so a new or changed constraint of the same
+program is refused. The manifest records what was carried and dropped;
+`stub_identity_gate.py --dropped-constraints` compares the slots against the
+same list (not the manifest) and fails a stub missing any other. Measured on 26B131: of 963 embedded programs, 29 carry
+constraints (25 self, 26 parent, none responsible or library); 49 blobs are
+carried byte for byte and one is dropped, the category self constraint of
+usr/libexec/xpcproxy. The App cryptex's 2 constrained programs are
+byte-identical copies of two of those 29. Test:
+`tests/tools/run.sh` (a parent constraint carried; a category one refused,
+then dropped when listed; the gate). Limits: the carried self constraints
+ask for a platform binary on the system volume, which an ad hoc stub is not,
+so where the kernel enforces launch constraints those programs will not
+start; not run on an Intel image yet. Constraints Apple attaches to platform
+programs through the trust cache are not in the signature and do not apply
+to a stub.
+
+## Stubs linked native libraries from storage others can change
+
+Every stub has `disable-library-validation`, and hao sets `CS_REQUIRE_LV`
+only when it loads the program's ARM slice. A native dependency the stub
+linked (a bundle's x86_64 framework through `@rpath`, a file under
+/Library) was loaded by dyld, initializers included, before that, so
+whoever could replace it ran code in the program's process with its
+identity and entitlements. `hao-embed` now links a native dependency
+(from disk or the shared cache) only when every path dyld tries before it,
+every directory and symbolic link on the way, the file itself and, with the
+rpaths each image owns, its own non-lazy dependencies are in protected
+storage: the sealed system volume less its firmlinks (`usr/share/firmlinks`
+of the root), and the OS and App cryptexes; the x86_64 shared cache counts
+as protected. Names are compared case-insensitively in their on-disk
+spelling; every path dyld could try for a dependency (each rpath
+expansion and the default fallback paths: /usr/lib and
+/System/Library/Frameworks for a hardened stub, also /usr/local/lib and
+/Library/Frameworks otherwise) must be protected, whether or not an earlier
+one looks loadable, since a build cannot prove what dyld will load; a
+path is walked as dyld opens it (no lexical "..") and is a shared-cache hit
+only as that exact string; a payload stub names libhao and libhao_identity
+by their /usr/lib/hao paths, so no rpath is searched for them; each x86_64 slice of a library, in each
+rpath context it is reached in, is judged on its own; a chain deeper than
+16 libraries is not protected. Any other is not
+linked (manifest `not_linked`: "outside protected storage") and hao's binder
+loads it with the program's image, after library validation is set.
+Measured on 26B131: 963 embedded programs, 5 link a library from disk, all
+in protected storage, so no stub of that image changes.
+A program whose signature requires library validation (the library flag,
+with or without the hardened runtime) now also gets a hardened-runtime stub,
+without allow-dyld-environment-variables, so dyld ignores
+DYLD_INSERT_LIBRARIES for it as natively (26B131: 2 more stubs, 956 of
+963 hardened; test: the insert reaches a plain program's stub, not this
+one, and hao still runs it).
+`stub_identity_gate.py` fails a stub that loads anything else at launch
+(`dylibs.protected`: libhao only from /usr/lib/hao), and needs the x86_64
+cache to say so (without one it fails). Test:
+`tests/tools/stubdeps.sh` (linked from an image root's usr/bin; not from
+/Library, behind a /Library rpath, through /usr/LOCAL, through a link
+under /Library or from a temporary folder, where the program still runs as
+natively; the gate on such a stub). Limits: when `CS_REQUIRE_LV` cannot be set,
+the deferred library loads without library validation (the loader's
+fallback); dyld's handling of DYLD_* variables in a stub that is not
+hardened is unchanged.
+
+## hao-embed -o wrote through a fixed temporary name
+
+`hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
+link there, truncating its target), set its owner and mode and renamed it
+over OUT. Run with privileges in a directory others can write, that let
+them choose which file was overwritten. It now writes through a descriptor
+of OUT's directory: a new file created exclusively there, renamed over OUT,
+which replaces a link instead of writing through it; a directory owned by
+someone else, writable by group or others, or with an ACL granting write is
+refused (also for hao-runtime-on-mac's outputs).
+`--stubs` and `--save-skeletons` write the same way; `--in-place` opens the
+file without following a link. Test:
+`tests/tools/run.sh` ("-o: a symlink at the output is replaced").
+
+## hao-runtime-on-mac checked only the files the manifest lists
+
+`tools/hao-runtime-on-mac` compared each file of `payload-manifest.json`
+with its sha256 but accepted any other file in the payload, wrote its
+stubs and the dyld fix with plain opens that follow a symbolic link at the
+output path, and ran as root if started so. It now refuses root, writes
+each output to a new file in its private work directory and renames it into
+place through descriptors of the payload's directories (a link there is
+replaced, not written through; a directory others could change is
+refused), makes `replace/dyld`
+only when the manifest lists it, and fails when the payload holds a file the
+manifest does not list, a link or special file, or a listed file that is
+missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
+(hao-runtime-on-mac cases). Limits: the image builder's own check of a
+payload (the contract checker the patcher vendors) still checks only listed
+files.
+
+## The installer took every file under the payload's root/
+
+`hao-install.py` copied every regular file under `PAYLOAD/root` into the
+System volume as root without reading `payload-manifest.json`, so a file
+added beside the listed ones (a LaunchDaemon and its program) was installed
+although the manifest check passed. It now refuses a payload that holds a
+file the manifest does not list, a link or special file, a missing listed
+file other than an AOT cache, a set-ID or sticky runtime file, a listed
+file whose sha256 differs, or two runtime names that are one file on a
+case-insensitive volume, before any write. Each file it reads is copied
+once into a private directory, used through a descriptor and checked by
+inode when read back; only the copies are installed or embedded. Runtime
+files are written to new files and renamed into place through directory
+descriptors (0755 or 0644; another hard link to an old file keeps its
+bytes); programs to embed and files to replace are opened through directory
+descriptors that follow no link, and a file to replace with another hard
+link is refused. Every directory written in must be root's (or the running
+user's), writable by nobody else and without an ACL granting write. Files
+already in the AOT directories (other than the payload's own caches just
+installed) are removed, not made root's: hao trusts a cache there because
+root owns it, and `hao --aot` makes them again. A hao stub without a `__hao_slice` record (a legacy
+stub) is no longer kept: a manifest program gets this payload's stub when
+that gives the recorded result, any other such stub in the System volume
+fails the install (`legacy_stubs` in install.json), and no payload stub
+without the record is embedded. Every x86 slice of a file is examined (a
+second x86_64 subtype does not hide a stub); a stub is any executable slice
+that names libhao (a library command of any kind, or the name as a string);
+the launcher's `__hao_cli` marker exempts only the payload's own
+usr/libexec/hao, and a file the scan cannot read fails it. Test: `tests/tools/test_install.py` (14
+of its cases fail with the old installer), `tests/tools/bundle.sh`. Limits:
+the manifest's hashes are not a signature; the scan reads the whole System
+volume once; copies outside it are not found.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

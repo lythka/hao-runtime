@@ -56,7 +56,15 @@ default with --stubs the one under --root, else this host's) or a file under
 ROOT with an x86_64 slice; an @rpath one resolves through the program's LC_RPATHs (which
 every stub carries). Not linked: arm64-only libraries (guest images), missing ones,
 lazy loads, and a fat file the program calls with C++ names (the runtime may
-run it as guest code, src/runtime.c guest_cxx_library). The stubs link
+run it as guest code, src/runtime.c guest_cxx_library). Nor is a file outside
+protected storage (the sealed system volume less its firmlinks, the
+cryptexes; PROTECTED_TREES), or one that dyld would look for first at such a
+path or that loads such a file: every stub has disable-library-validation,
+and what dyld loads at launch runs its initializers before hao sets
+CS_REQUIRE_LV, so a bundle's or /Library's x86_64 library would run unchecked
+in the program's process. hao's binder loads it with the program's image,
+after library validation is on (manifest "not_linked": "outside protected
+storage"). The stubs link
 against install-name-only text stubs (.tbd, the program's own versions),
 so no x86_64 library is read at link time.
 
@@ -114,6 +122,18 @@ cleared where it binds nothing (bound_data). The bundle's files are only read.
 The manifest's "bound" list names each bound file (relative to --root) and its
 SHA-256; hao-install.py embeds the stub only if the target's file matches.
 
+Launch and library constraints (code-signature slots 8-11: self, parent,
+responsible, library) are evaluated on the signature the kernel validates,
+the stub's. Each one the arm slice seals is given to codesign and must come
+out of it byte for byte. codesign can express only a constraint of
+requirements (category 0); a program with any other (a category constraint,
+such as a platform-only self constraint) is refused unless it is listed in
+--allow-dropped-constraints FILE ("PATH SLOT CDHASH SHA256": that slot of
+that program, with that arm slice cdhash and that constraint blob), and then
+embedded without it. The manifest's "constraints" records which slots were
+carried and which dropped (with their pins); tools/stub_identity_gate.py
+compares the slots against the same file, not the manifest.
+
 --in-place keeps the file's inode: every hard link to it is embedded too.
 A symlink is refused (embed the file it names).
 --host-test keeps only public entitlements and adds an rpath to that build
@@ -129,10 +149,12 @@ import json
 import os
 import plistlib
 import shutil
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -506,7 +528,11 @@ def first_section_offset(mo):
     return low
 
 
-def apply_identity(path, arm, own_rpaths):
+HAO_LIBS = ("@rpath/libhao.dylib", "@rpath/libhao_identity.dylib")
+HAO_LIB_DIR = "/usr/lib/hao"
+
+
+def apply_identity(path, arm, own_rpaths, absolute_hao=False):
     """Give the relinked (unsigned) stub at PATH the arm slice ARM's load-time
     identity by tools/stub_identity_gate.py's RULES: the copied commands
     (LC_BUILD_VERSION whole, with its tools; LC_SOURCE_VERSION; the
@@ -516,7 +542,9 @@ def apply_identity(path, arm, own_rpaths):
     the stub's LC_BUILD_VERSION). The load commands are rewritten in the
     header padding (relink_stub reserves identity_room); the file's other
     bytes do not move. RuntimeError if they do not fit or LC_LOAD_DYLINKER
-    differs."""
+    differs. With ABSOLUTE_HAO (every stub but --host-test's) libhao and
+    libhao_identity are named by their installed paths (HAO_LIB_DIR), so
+    dyld loads them from there and searches no rpath for them."""
     mo = bytearray(open(path, "rb").read())
     stub_cmds = [(cmd, bytes(mo[off:off + size])) for cmd, off, size in load_commands(mo, path)]
     arm_cmds = [(cmd, bytes(arm[off:off + size])) for cmd, off, size in load_commands(arm)]
@@ -550,6 +578,10 @@ def apply_identity(path, arm, own_rpaths):
             b = bytearray(b)
             b[16:24] = arm_main[0][16:24]
             b = bytes(b)
+        elif cmd in (0xC, 0x80000018) and absolute_hao and identity_rules.lc_str(b) in HAO_LIBS:
+            name = (HAO_LIB_DIR + "/" + identity_rules.lc_str(b).split("/")[-1]).encode() + b"\0"
+            name += bytes(-(24 + len(name)) % 8)
+            b = struct.pack("<IIIIII", cmd, 24 + len(name), 24, *struct.unpack_from("<III", b, 12)) + name
         elif cmd in (0xC, 0x80000018) and arm_libsystem and identity_rules.lc_str(b) == LIBSYSTEM:
             b = bytearray(b)
             struct.pack_into("<II", b, 16, *arm_libsystem[0])
@@ -592,6 +624,28 @@ LIBCXX = "/usr/lib/libc++.1.dylib"
 CF_PATH = "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
 
 
+# Protected storage: where every file and directory dyld goes through to load a library into a stub at launch,
+# before hao sets CS_REQUIRE_LV, must be. The sealed system volume (these trees, less its firmlinks to the data
+# volume, ROOT/usr/share/firmlinks) and the OS and App cryptexes (sealed disk images mounted at SEALED_MOUNTS; the
+# directories above them are the Preboot volume's, which only root can change); the x86_64 shared cache is one of
+# them. Anything else (a bundle in /Applications, /Library, a user's folder) can be changed by someone other than
+# the program's signer. Paths are compared case-insensitively (APFS as macOS formats it), on their on-disk spelling.
+PROTECTED_TREES = ("/System/", "/usr/", "/bin/", "/sbin/")
+PROTECTED_TOPS = ("/System", "/usr", "/bin", "/sbin")
+UNSEALED_TREES = ("/System/Volumes/",)
+SEALED_MOUNTS = ("/System/Volumes/Preboot/Cryptexes/OS/", "/System/Volumes/Preboot/Cryptexes/App/")
+FIRMLINKS = ("/AppleInternal", "/Applications", "/Library", "/System/Library/Caches", "/System/Library/Assets",
+             "/System/Library/PreinstalledAssets", "/System/Library/AssetsV2", "/System/Library/PreinstalledAssetsV2",
+             "/System/Library/CoreServices/CoreTypes.bundle/Contents/Library", "/System/Library/Speech", "/Users",
+             "/Volumes", "/cores", "/opt", "/pkg", "/private", "/usr/local", "/usr/libexec/cups", "/usr/share/snmp")
+MAX_DEP_DEPTH = 16
+
+
+def fold(p):
+    """P as a case-insensitive APFS volume compares names."""
+    return unicodedata.normalize("NFD", p).casefold()
+
+
 class X86Libraries:
     """The libraries a stub can load natively at launch, as src/runtime.c binds a
     dependency (try_candidate: native dlopen first, then a guest image): an
@@ -608,6 +662,189 @@ class X86Libraries:
         self.ids = self.cache.ids()
         self.uuid = self.cache.uuid
         self._disk = {}
+        self._dirs = {}
+        self._closure = {}
+        try:   # the image's OS version as LC_BUILD_VERSION encodes it (X.Y.Z: X<<16 | Y<<8 | Z); None if unknown
+            with open(os.path.join(self.root, "System/Library/CoreServices/SystemVersion.plist"), "rb") as f:
+                v = [int(x) for x in plistlib.load(f)["ProductVersion"].split(".")] + [0, 0]
+            self.os_version = v[0] << 16 | v[1] << 8 | v[2]
+        except (OSError, KeyError, ValueError, plistlib.InvalidFileException):
+            self.os_version = None
+        try:
+            with open(os.path.join(self.root, "usr/share/firmlinks")) as f:
+                self.firmlinks = tuple(l.split("\t")[0] for l in f if l.startswith("/")) or FIRMLINKS
+        except OSError:
+            self.firmlinks = FIRMLINKS
+
+    def _spelling(self, parent, name):
+        """NAME as the directory PARENT (a host path) spells it on disk (a case-insensitive volume finds "LOCAL" as
+        "local"), or NAME if PARENT has no such entry."""
+        if parent not in self._dirs:
+            try:
+                self._dirs[parent] = {fold(n): n for n in os.listdir(parent)}
+            except OSError:
+                self._dirs[parent] = {}
+        names = self._dirs[parent]
+        return name if name in names.values() else names.get(fold(name), name)
+
+    def protected_os(self, op):
+        """True if OP (an OS path as spelled on disk, links resolved up to it) is in protected storage, or is a
+        directory dyld passes on the way to a sealed mount."""
+        f = fold(op)
+        if f in (fold(t) for t in PROTECTED_TOPS) or any(fold(m).startswith(f + "/") for m in SEALED_MOUNTS):
+            return True
+        if any(f.startswith(fold(m)) or f == fold(m[:-1]) for m in SEALED_MOUNTS):
+            return True
+        if not f.startswith(tuple(fold(t) for t in PROTECTED_TREES)) or f.startswith(tuple(fold(t) for t in UNSEALED_TREES)):
+            return False
+        return not any(f == fold(fl) or f.startswith(fold(fl) + "/") for fl in self.firmlinks)
+
+    def walk(self, op):
+        """(OP resolved as the running system resolves it: every symbolic link followed, an absolute target under
+        ROOT, each name in its on-disk spelling; None) when every path dyld goes through on the way (each
+        directory, each link and its target, the file) is in protected storage; (None, the first one that is not)
+        otherwise. A file that does not exist is judged by its path."""
+        todo, done, hops = [c for c in op.split("/") if c], [], 0
+        while todo:
+            c = todo.pop(0)
+            if c == ".":
+                continue
+            if c == "..":
+                done = done[:-1]
+                continue
+            parent = os.path.join(self.root, *done)
+            c = self._spelling(parent, c)
+            cur = "/" + "/".join(done + [c])
+            if not self.protected_os(cur):
+                return None, cur
+            host = os.path.join(parent, c)
+            if os.path.islink(host):
+                hops += 1
+                if hops > 32:
+                    return None, cur + " (too many links)"
+                t = os.readlink(host)
+                todo = [x for x in t.split("/") if x] + todo
+                if t.startswith("/"):
+                    done = []
+                continue
+            done.append(c)
+        return "/" + "/".join(done), None
+
+    def protected(self, f):
+        """True if the file F (a path under ROOT) and every path on the way to it are in protected storage."""
+        op = self.os_path(f)
+        return op is not None and self.walk(op)[1] is None
+
+    def search(self, name, loader, exe, rpaths, restricted=False):
+        """The OS paths dyld tries, in order, for NAME loaded by LOADER (an OS path) in a process whose main
+        executable is EXE, with the rpath stack RPATHS [(LC_RPATH, OS path of the image that has it)]: the
+        loader's own rpaths, then those of the images that loaded it. @executable_path is always EXE's directory,
+        @loader_path the directory of the image the name or rpath belongs to."""
+        def expand(p, owner):
+            if p == "@executable_path" or p.startswith("@executable_path/"):
+                return os.path.dirname(exe) + p[len("@executable_path"):]
+            if p == "@loader_path" or p.startswith("@loader_path/"):
+                return os.path.dirname(owner) + p[len("@loader_path"):]
+            return p if p.startswith("/") else None
+        if name.startswith("@rpath/"):
+            out = [b + "/" + name[len("@rpath/"):] for b in (expand(rp, o) for rp, o in rpaths) if b is not None]
+        else:
+            p = expand(name, loader)
+            out = [p] if p is not None else []
+        return out + self.fallback(name, restricted)
+
+    @staticmethod
+    def fallback(name, restricted):
+        """The paths dyld tries when NAME is not loaded from its own: DYLD_FALLBACK_FRAMEWORK_PATH's default for a
+        framework (~/Library/Frameworks, /Library/Frameworks, /System/Library/Frameworks), else
+        DYLD_FALLBACK_LIBRARY_PATH's (/usr/local/lib, /usr/lib); in a RESTRICTED process (the stub has the
+        hardened runtime) only the system one. ~ is a user's folder, written /Users here."""
+        parts = name.split("/")
+        fw = next((k for k, c in enumerate(parts) if c.endswith(".framework")), None)
+        if fw is not None:
+            tail = "/".join(parts[fw:])
+            dirs = ["/System/Library/Frameworks"] if restricted else \
+                ["/Users/Library/Frameworks", "/Library/Frameworks", "/System/Library/Frameworks"]
+        else:
+            tail = parts[-1]
+            dirs = ["/usr/lib"] if restricted else ["/usr/local/lib", "/usr/lib"]
+        return [d + "/" + tail for d in dirs] if tail else []
+
+    def x86_dylibs(self, host):
+        """[(cpu subtype, slice, loadable)] for the x86_64 library slices (MH_DYLIB, every subtype: dyld picks
+        x86_64h on some CPUs) of the file HOST; [] if none, or not readable. loadable: dyld would load the slice
+        into a stub as far as hao-embed can tell: plain x86_64 or x86_64h, built for macOS (a build version or
+        version-min for it) at a minos no newer than the image's OS (ROOT's SystemVersion.plist). Anything else
+        is uncertain, so not loadable."""
+        try:
+            with open(host, "rb") as fh:
+                sl = hao_fat.slices(fh.read()) or []
+        except OSError:
+            return []
+        out = []
+        for c, sub, p in sl:
+            if c != hao_fat.CPU_X86_64 or len(p) < 16 or p[:4] != b"\xcf\xfa\xed\xfe" or \
+                    int.from_bytes(p[12:16], "little") != 6:
+                continue
+            ok = sub & 0xFFFFFF in (3, 8) and self.os_version is not None
+            if ok:
+                try:
+                    vs = [(pl, minos) for cmd, off, size in load_commands(p) for pl, minos in (
+                        [struct.unpack_from("<II", p, off + 8)] if cmd == LC_BUILD_VERSION and size >= 24 else
+                        [(PLATFORM_MACOS, struct.unpack_from("<I", p, off + 8)[0])] if cmd == LC_VERSION_MIN_MACOSX
+                        and size >= 16 else [])]
+                except (ValueError, struct.error):
+                    vs = []
+                ok = any(pl == PLATFORM_MACOS and minos <= self.os_version for pl, minos in vs)
+            out.append((sub, p, ok))
+        return out
+
+    def unprotected(self, name, loader, exe, rpaths, restricted=False, depth=0, stack=None):
+        """None if every path dyld could try for NAME, loaded by LOADER in a process whose main executable is EXE
+        (OS paths; RPATHS as search takes them; RESTRICTED: the stub has the hardened runtime), is in protected
+        storage: all of search's paths, the fallback paths included, whether or not an earlier one looks
+        loadable (hao-embed cannot prove dyld will load a file: it may be unreadable to the process, or the
+        wrong CPU, platform or OS), each directory and link on the way, and for every x86_64 library slice of
+        each file there, that slice's non-lazy dependencies, with its own rpaths before the inherited ones. A
+        shared-cache install name or path (the exact string dyld looks up, every component on the way
+        protected) ends the search (dyld takes the cache's image, which always loads).
+        Otherwise why not: the first path that is not protected, or a chain deeper than MAX_DEP_DEPTH. Each
+        (executable, file, slice, rpath context, restricted) is validated once (_closure); one already being
+        validated further up is a cycle, judged there."""
+        stack = set() if stack is None else stack
+        if name in self.ids:   # an install name of the shared cache: dyld takes the cache's image
+            return self.walk(name)[1]
+        if depth > MAX_DEP_DEPTH:
+            return "%s: a chain of more than %d dependencies" % (name, MAX_DEP_DEPTH)
+        for op in self.search(name, loader, exe, rpaths, restricted):
+            # walked exactly as dyld opens it (no lexical "..": a component before it may be a link), every
+            # component protected; a shared-cache hit only for the very string dyld looks up
+            real, why = self.walk(op)
+            if why:
+                return why
+            if op in self.ids:
+                return None
+            host = os.path.join(self.root, real.lstrip("/"))
+            if not os.path.isfile(host):
+                continue
+            for sub, mo, _ in self.x86_dylibs(host):
+                key = (exe, real, sub, hashlib.sha256(mo).digest(), tuple(rpaths), restricted)
+                if key in stack:
+                    continue
+                if key not in self._closure:
+                    stack.add(key)
+                    own = [(r, real) for r in macho_rpaths_mo(mo)] + list(rpaths)
+                    res = None
+                    for kind, dep, _, _ in dylib_commands(mo):
+                        if kind != "lazy":
+                            res = self.unprotected(dep, real, exe, own, restricted, depth + 1, stack)
+                            if res:
+                                break
+                    stack.discard(key)
+                    self._closure[key] = res
+                if self._closure[key]:
+                    return self._closure[key]
+        return None
 
     def _file(self, path):
         """'x86', 'arm' or None for the file at PATH (a real path under ROOT)."""
@@ -652,7 +889,7 @@ class X86Libraries:
             if op is not None and op in self.ids:
                 return "cache", op
             kind = self._file(f)
-            if kind == "x86":
+            if kind == "x86" and any(ok for _, _, ok in self.x86_dylibs(f)):
                 return "disk", f
             if kind == "arm":
                 return "guest", f
@@ -683,9 +920,13 @@ def native_deps(path, data, x86, stub_deps=()):
     when a linked dependency is an @rpath name (else []). A dependency is linked
     when it resolves natively (X86Libraries.resolve). Not linked: libraries the
     stub links itself (STUB_DEPS), lazy loads (not loaded at launch natively
-    either), libraries that load as guest images or are missing, and a file
+    either), libraries that load as guest images or are missing, a file
     with an arm64 slice the program imports C++ names from (src/runtime.c
-    guest_cxx_library may run it as guest code, but not once it is loaded)."""
+    guest_cxx_library may run it as guest code, but not once it is loaded),
+    and a file outside protected storage (X86Libraries.unprotected): dyld
+    would load it, and run its initializers, before hao sets CS_REQUIRE_LV,
+    so hao's binder dlopens it with the program's image instead, under
+    library validation."""
     mo = arm_slice(data)
     exe = os.path.realpath(path)
     rpaths = macho_rpaths_mo(mo)
@@ -707,6 +948,14 @@ def native_deps(path, data, x86, stub_deps=()):
             continue
         if where == "disk" and k + 1 in cxx and x86._file(f) == "x86" and has_arm_slice(f) and name != LIBCXX:
             skipped.append((name, "C++ interface with an arm64 slice (guest_cxx_library)"))
+            continue
+        if x86.os_path(exe) is not None:
+            eo = x86.os_path(exe)
+            why = x86.unprotected(name, eo, eo, [(r, eo) for r in rpaths], hardened(data))
+        else:
+            why = exe + " (not under the root)"
+        if why:
+            skipped.append((name, "outside protected storage (%s): hao loads it after library validation" % why))
             continue
         links.append(("weak" if kind == "weak" else "load", name, cur, compat))
         need_rpaths |= name.startswith("@rpath/")
@@ -791,11 +1040,10 @@ def save_skeleton(linked, sections, key):
         if cmd == 0x1B and size >= 24:
             mo[off + 8:off + 24] = bytes(16)
     d = SKELETONS["save"]
-    with open(os.path.join(d, key + ".skel"), "wb") as f:
-        f.write(mo)
-    with open(os.path.join(d, key + ".json"), "w") as f:
-        json.dump({"sections": sorted([seg, name, off, size] for (seg, name), (off, size) in ranges.items())},
-                  f, sort_keys=True)
+    d.publish(key + ".skel", bytes(mo))
+    d.publish(key + ".json", json.dumps(
+        {"sections": sorted([seg, name, off, size] for (seg, name), (off, size) in ranges.items())},
+        sort_keys=True).encode())
 
 
 def fill_skeleton(sections, key, out):
@@ -863,7 +1111,7 @@ def relink_stub(sections, work, build, stub, host_test=False, links=(), uuid_of=
     if uuid_of is not None:
         set_uuid(out, stub_uuid(uuid_of, open(out, "rb").read()))
     if arm is not None:
-        apply_identity(out, arm, own_rpaths)
+        apply_identity(out, arm, own_rpaths, absolute_hao=not host_test)
     return out
 
 
@@ -888,10 +1136,14 @@ def slice_record(arm):
 
 
 def hardened(data):
-    """True if the program's own signature makes dyld ignore DYLD_* variables (tools/hao_codesig.py)."""
+    """True if the stub gets the hardened runtime: the program's own signature makes dyld ignore DYLD_* variables,
+    or requires library validation (library flag, runtime or platform, without disable-library-validation;
+    tools/hao_codesig.py). Natively nothing such a program has not validated loads into it; a stub without the
+    hardened runtime would let dyld insert DYLD_INSERT_LIBRARIES before hao restores library validation."""
     if data is None:
         return False
-    return hao_codesig.dyld_env_blocked(hao_codesig.info(arm_slice(data) or b""))
+    i = hao_codesig.info(arm_slice(data) or b"")
+    return hao_codesig.dyld_env_blocked(i) or hao_codesig.library_validated(i)
 
 
 BOUND_SLOTS = ((hao_codesig.CSSLOT_INFOSLOT, "Info.plist"), (hao_codesig.CSSLOT_RESOURCEDIR, "_CodeSignature/CodeResources"))
@@ -947,10 +1199,66 @@ def cs_copied_flags(mo):
     return [nm for bit, nm in sorted(identity_rules.CS_COPIED_FLAGS.items()) if flags & bit]
 
 
-def signed_stub(src, stub, work, host_test, data=None, x86=None):
+CONSTRAINT_OPTIONS = {8: "--launch-constraint-self", 9: "--launch-constraint-parent",
+                      10: "--launch-constraint-responsible", 11: "--library-constraint"}
+
+
+def constraint_options(arm, work):
+    """(codesign options, {slot: blob}, carried slots, dropped slots) for the launch and library constraints the
+    arm slice's signature seals (code-signature slots 8-11). codesign takes a constraint as the plist of its
+    requirements and seals {"ccat": 0, "comp": 1, "reqs": ..., "vers": 1}, so it can carry exactly those; a
+    category constraint (ccat other than 0, an Apple-defined set) or another layout cannot be: dropped."""
+    have = hao_codesig.constraints(arm) if arm is not None else {}
+    opts, carried, dropped = [], [], []
+    for slot, blob in sorted(have.items()):
+        try:
+            d = hao_codesig.constraint(blob)
+        except ValueError:
+            d = None
+        if d and set(d) == {"ccat", "comp", "reqs", "vers"} and (d["ccat"], d["comp"], d["vers"]) == (0, 1, 1) \
+                and isinstance(d["reqs"], dict):
+            f = os.path.join(work, "constraint-%d.plist" % slot)
+            with open(f, "wb") as fh:
+                plistlib.dump(d["reqs"], fh)
+            opts += [CONSTRAINT_OPTIONS[slot], f]
+            carried.append(slot)
+        else:
+            dropped.append(slot)
+    return opts, have, carried, dropped
+
+
+def read_dropped(path):
+    """{program path: {(slot name, arm cdhash hex, constraint sha256)}} from a --allow-dropped-constraints file:
+    one constraint per line, "PATH SLOT CDHASH SHA256" (# comments). A line names exactly one blob of one build
+    of one program; nothing else may be left out. ValueError for a malformed line."""
+    out = {}
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            w = line.split()
+            if len(w) != 4 or w[1] not in hao_codesig.CONSTRAINT_SLOTS.values() or len(w[2]) != 40 or len(w[3]) != 64 \
+                    or (w[2] + w[3]).strip("0123456789abcdef"):
+                raise ValueError(f"{path}:{n}: not PATH SLOT CDHASH SHA256")
+            out.setdefault(w[0], set()).add((w[1], w[2], w[3]))
+    return out
+
+
+def constraint_pin(arm, slot, blob):
+    """(slot name, the arm slice's cdhash, the constraint blob's sha256): what a dropped-constraints line names."""
+    return hao_codesig.CONSTRAINT_SLOTS[slot], hao_codesig.check(bytes(arm))["cdhash"].hex(), hashlib.sha256(blob).hexdigest()
+
+
+def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset(), pdir=None):
     """Sign a copy of the stub as SRC's identity; returns (path, identifier,
-    entitlement keys, bound, deps) with bound from bound_data (the slots set)
-    and deps (links, skipped) from native_deps. With DATA the stub is always
+    entitlement keys, bound, deps, constraints) with bound from bound_data (the
+    slots set), deps (links, skipped) from native_deps and constraints
+    (carried, dropped) the launch and library constraint slots: the arm
+    slice's constraints are sealed into the stub byte for byte (checked after
+    signing); one codesign cannot express is refused unless DROP_OK (the
+    program's lines of --allow-dropped-constraints) names it (constraint_pin),
+    then left out; dropped holds those pins. With DATA the stub is always
     relinked: it links the program's native dependencies (X86, an
     X86Libraries), gets its own LC_UUID (stub_uuid) and the arm slice's
     load-time identity (apply_identity; a load command no rule names is
@@ -972,6 +1280,8 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None):
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test)
     ident, ents = identity(src)
     ents = public_only(ents) if host_test else dict(ents)
+    if data is not None and hao_codesig.library_validated(hao_codesig.info(arm_slice(data) or b"")):
+        ents.pop(hao_codesig.DYLD_ENV, None)   # a library-validated program's stub honours no DYLD_* variable
     ents.update(JIT_ENTITLEMENTS)
     entfile = os.path.join(work, "ents.plist")
     with open(entfile, "wb") as f:
@@ -979,6 +1289,9 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None):
     copy = os.path.join(work, "stub")
     shutil.copyfile(stub, copy)
     os.chmod(copy, 0o755)
+    if pdir is not None:
+        pdir.created(entfile)
+        pdir.created(copy)
     # dyld ignores DYLD_* variables for the program natively (platform or
     # hardened runtime): the stub gets the hardened runtime, which does the
     # same for it. Otherwise an injected library would run with the
@@ -986,16 +1299,40 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None):
     # The kernel's treatment of invalid pages (CS_KILL, CS_HARD, CS_ENFORCEMENT)
     # is the program's (tools/stub_identity_gate.py CS_COPIED_FLAGS).
     opts = (["runtime"] if hardened(data) else []) + cs_copied_flags(arm)
+    # Launch and library constraints: the kernel evaluates the stub's signature, not the arm slice's, so the
+    # program's constraints go into the stub's (or the program is refused).
+    lc, have, carried, dropped = constraint_options(arm, work)
+    dropped = [constraint_pin(arm, k, have[k]) for k in dropped]
+    if any(d not in drop_ok for d in dropped):
+        raise RuntimeError("its signature has a %s constraint codesign cannot carry into the stub, and "
+                           "--allow-dropped-constraints does not name that blob of this build" % ", ".join(
+                               d[0] for d in dropped if d not in drop_ok))
+    if pdir is not None:   # what codesign is about to read is still what was written here (PDIR, private)
+        for f in lc[1::2]:
+            pdir.created(f)
+        try:
+            pdir.check(copy, entfile, *lc[1::2])
+        except (OSError, ValueError) as e:
+            raise RuntimeError(str(e))
     r = subprocess.run(["codesign", "-s", "-", "-f", "-i", ident] + (["-o", ",".join(opts)] if opts else []) +
-                       ["--entitlements", entfile, copy], capture_output=True, text=True)
+                       lc + ["--entitlements", entfile, copy], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError("codesign: " + r.stderr.strip())
+    if pdir is not None:
+        try:
+            pdir.check()
+        except (OSError, ValueError) as e:
+            raise RuntimeError(str(e))
+    got = hao_codesig.constraints(open(copy, "rb").read())
+    if got != {k: have[k] for k in carried}:
+        raise RuntimeError("codesign did not seal the program's %s constraint byte for byte" % ", ".join(
+            hao_codesig.CONSTRAINT_SLOTS[k] for k in sorted(set(got) | set(carried)) if got.get(k) != have.get(k)))
     bound = bound_data(src, data) if data is not None else []
     if bound:
         signed = hao_codesig.bind_special_slots(open(copy, "rb").read(), {slot: blob for slot, _, blob in bound})
         with open(copy, "wb") as f:
             f.write(signed)
-    return copy, ident, sorted(ents), [(slot, s, b) for slot, s, b in bound if s], (links, skipped)
+    return copy, ident, sorted(ents), [(slot, s, b) for slot, s, b in bound if s], (links, skipped), (carried, dropped)
 
 
 def x86_cache_dir(a):
@@ -1009,27 +1346,90 @@ def x86_cache_dir(a):
              ("" if a.x86_cache else " (give --x86-cache DIR: the release's RosettaOS or OS cryptex dyld directory)"))
 
 
-def write_like(dst, data, like, in_place=False):
+class OutDir:
+    """An output directory used only through a descriptor (opened without following a link at its last
+    component; made if missing): files go in through publish, so renaming or replacing the directory's path
+    changes nothing written. Refused (RuntimeError) if someone else could rename or replace its entries: owned
+    by neither this user nor root, writable by group or others, or with an ACL granting write."""
+
+    def __init__(self, path, parent=None):
+        if parent is None:
+            os.makedirs(path, exist_ok=True)
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        else:
+            try:
+                os.mkdir(path, 0o755, dir_fd=parent.fd)
+            except FileExistsError:
+                pass
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+        why = hao_codesig.dir_fd_unshared(fd, {0, os.geteuid()})
+        if why:
+            os.close(fd)
+            raise RuntimeError(f"{path}: {why}: others could replace what is written there")
+        self.fd, self.path = fd, path
+
+    def publish(self, name, data, mode=0o644, owner=None):
+        """DATA as NAME: a new file created exclusively here (no link followed) with MODE (and OWNER, a
+        (uid, gid), when root), renamed over NAME, which is replaced, never written through."""
+        if not name or "/" in name or name in (".", ".."):
+            raise RuntimeError(f"bad output name {name!r}")
+        while True:
+            tmp = ".hao-embed.%s" % os.urandom(6).hex()
+            try:
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd)
+                break
+            except FileExistsError:
+                continue
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                if owner is not None and os.geteuid() == 0:
+                    os.fchown(f.fileno(), *owner)
+                os.fchmod(f.fileno(), mode)
+            os.rename(tmp, name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=self.fd)
+            except OSError:
+                pass
+            raise
+
+
+def write_like(dst, data, like, in_place=False, target=None):
     """Write DATA to DST with LIKE's owner and mode. In place (DST is LIKE)
     the inode is kept, so other hard links see the embedded file too; a
-    symlink is refused rather than replaced by a copy."""
+    symlink is refused rather than replaced by a copy, and the file is
+    opened without following one; with TARGET (the file object the program
+    was read through) DATA goes through that same descriptor, so a path
+    changed in between cannot redirect the write. Otherwise DATA is published into DST's
+    directory (OutDir: through a descriptor, a new file created exclusively
+    and renamed over DST, which is replaced, never written through; a
+    directory others could rename entries in is refused)."""
     if in_place and os.path.islink(dst):
         raise RuntimeError("is a symlink; embed the file it names")
     st = os.stat(like)
+    if in_place and target is not None:   # the descriptor the program was read through
+        target.seek(0)
+        target.write(data)
+        target.truncate()
+        target.flush()
+        os.fsync(target.fileno())
+        return
     if in_place:
-        with open(dst, "r+b") as f:
+        fd = os.open(dst, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r+b") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise RuntimeError("is not a regular file")
             f.write(data)
             f.truncate()
             f.flush()
             os.fsync(f.fileno())
         return
-    tmp = dst + ".hao-embed"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    if os.geteuid() == 0:
-        os.chown(tmp, st.st_uid, st.st_gid)
-    os.chmod(tmp, st.st_mode & 0o7777)
-    os.rename(tmp, dst)
+    out = OutDir(os.path.dirname(os.path.abspath(dst)))
+    try:
+        out.publish(os.path.basename(dst), data, st.st_mode & 0o7777, (st.st_uid, st.st_gid))
+    finally:
+        os.close(out.fd)
 
 
 def main():
@@ -1054,6 +1454,9 @@ def main():
                     help="with --stubs: hao-install.py fails unless REL (relative to --root) is embedded")
     ap.add_argument("--require-embedded", action="store_true",
                     help="with --stubs: every manifest entry is required")
+    ap.add_argument("--allow-dropped-constraints", metavar="FILE",
+                    help="constraints codesign cannot carry that may be left out: one per line, PATH (relative "
+                         "to --root, or as given) SLOT CDHASH (the arm slice's) SHA256 (the constraint blob's)")
     ap.add_argument("--x86-cache", metavar="DIR",
                     help="directory of the dyld_shared_cache_x86_64 the stubs run with (default: with --stubs, "
                          "the one under --root; otherwise this host's)")
@@ -1064,14 +1467,19 @@ def main():
                     help="fill the skeletons in DIR from each program instead of running ld")
     ap.add_argument("programs", nargs="*")
     a = ap.parse_args()
-    if a.save_skeletons:
-        os.makedirs(a.save_skeletons, exist_ok=True)
-    SKELETONS["save"], SKELETONS["use"] = a.save_skeletons, a.skeletons
+    try:
+        SKELETONS["save"], SKELETONS["use"] = OutDir(a.save_skeletons) if a.save_skeletons else None, a.skeletons
+    except (OSError, RuntimeError) as e:
+        sys.exit(f"hao-embed: --save-skeletons: {e}")
     if not os.path.exists(a.stub):
         sys.exit(f"hao-embed: no stub at {a.stub} (run make)")
     if a.scan and not a.root:
         sys.exit("hao-embed: --scan needs --root")
     _, inputs = build_inputs(a.stub)
+    try:
+        drop_ok = read_dropped(a.allow_dropped_constraints) if a.allow_dropped_constraints else {}
+    except (OSError, ValueError) as e:
+        sys.exit(f"hao-embed: --allow-dropped-constraints: {e}")
     progs = list(a.programs)
     if a.list:
         progs += [l.strip() for l in open(a.list) if l.strip()]
@@ -1082,7 +1490,11 @@ def main():
     if a.stubs:
         if not a.root:
             sys.exit("hao-embed: --stubs needs --root")
-        os.makedirs(os.path.join(a.stubs, "stubs"), exist_ok=True)
+        try:
+            stubs_out = OutDir(a.stubs)
+            stubs_sub = OutDir("stubs", stubs_out)
+        except (OSError, RuntimeError) as e:
+            sys.exit(f"hao-embed: --stubs: {e}")
     x86 = X86Libraries(x86_cache_dir(a), a.root if a.stubs else "/") if progs else None
     manifest, bad, seen = [], 0, {}
     for p in progs:
@@ -1096,15 +1508,32 @@ def main():
             print(f"skip\t{p}\tsame file as {seen[real]}")
             continue
         seen[real] = p
-        with tempfile.TemporaryDirectory(prefix="hao-embed.") as work:
+        try:
+            pdir = hao_codesig.PrivateDir("hao-embed.")
+        except (OSError, ValueError) as e:
+            sys.exit(f"hao-embed: {e}")
+        with pdir:
+            work = pdir.name
+            target = None
             try:
-                data = open(p, "rb").read()
+                if a.in_place:
+                    # the file read is the file written: one descriptor, opened without following a link
+                    fd = os.open(p, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    target = os.fdopen(fd, "r+b")
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise RuntimeError("is not a regular file")
+                    data = target.read()
+                else:
+                    data = open(p, "rb").read()
                 why = eligible(data, a.translate)
                 if why:
                     print(f"skip\t{p}\t{why}")
                     continue
                 translate = hao_fat.has_cpu(data, hao_fat.CPU_X86_64)
-                stub, ident, keys, bound, (links, skipped) = signed_stub(p, a.stub, work, a.host_test, data, x86)
+                rel = os.path.relpath(os.path.realpath(p), os.path.realpath(a.root)) if a.root else None
+                may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, os.path.realpath(p), rel}))
+                stub, ident, keys, bound, (links, skipped), (carried, dropped) = signed_stub(
+                    p, a.stub, work, a.host_test, data, x86, may_drop, pdir)
                 stub_bytes = open(stub, "rb").read()
                 merged = hao_fat.combine(data, stub_bytes, drop_x86_64=translate)
                 if a.stubs:
@@ -1112,8 +1541,7 @@ def main():
                     if rel.startswith(".."):
                         raise RuntimeError(f"not under {a.root}")
                     name = hashlib.sha256(rel.encode()).hexdigest()[:24] + ".stub"
-                    with open(os.path.join(a.stubs, "stubs", name), "wb") as f:
-                        f.write(stub_bytes)
+                    stubs_sub.publish(name, stub_bytes)
                     entry = {"path": rel, "identifier": ident, "stub": "stubs/" + name,
                              "stub_sha256": hashlib.sha256(stub_bytes).hexdigest(),
                              "source_sha256": hashlib.sha256(data).hexdigest(),
@@ -1133,6 +1561,9 @@ def main():
                             if b["file"].startswith(".."):
                                 raise RuntimeError(f"{bsrc} is not under {a.root}")
                         entry["bound"].append(b)
+                    if carried or dropped:
+                        entry["constraints"] = {"carried": [hao_codesig.CONSTRAINT_SLOTS[k] for k in carried],
+                                                "dropped": [{"slot": n, "cdhash": c, "sha256": h} for n, c, h in dropped]}
                     if translate:
                         entry["mode"] = "translate"
                     manifest.append(entry)
@@ -1143,21 +1574,26 @@ def main():
                         dst = os.path.join(a.out, os.path.basename(p))
                     else:
                         dst = a.out
-                    write_like(dst, merged, p, in_place=a.in_place)
+                    write_like(dst, merged, p, in_place=a.in_place, target=target)
                 print(f"{'translated' if translate else 'ok'}\t{p}\t{ident}\tlinks {len(links)}" +
                       (f" (not {len(skipped)})" if skipped else "") +
-                      "".join(f"\tbound -{slot} {os.path.basename(bsrc)}" for slot, bsrc, _ in bound))
+                      "".join(f"\tbound -{slot} {os.path.basename(bsrc)}" for slot, bsrc, _ in bound) +
+                      (f"\tconstraints {','.join(hao_codesig.CONSTRAINT_SLOTS[k] for k in carried) or '-'}" +
+                       (f" (dropped {','.join(d[0] for d in dropped)})" if dropped else "")
+                       if carried or dropped else ""))
             except (OSError, RuntimeError, ValueError) as e:
                 print(f"fail\t{p}\t{e}")
                 bad += 1
+            finally:
+                if target is not None:
+                    target.close()
     if a.stubs:
         required = a.require + ([e["path"] for e in manifest] if a.require_embedded else [])
         required = list(dict.fromkeys(required))
-        with open(os.path.join(a.stubs, "manifest.json"), "w") as f:
-            json.dump({"stub_sha256": sha256_file(a.stub), "x86_cache_uuid": x86.uuid if x86 else None,
-                       "inputs_sha256": {k: sha256_file(v) for k, v in inputs.items()},
-                       "required": required, "files": manifest}, f, indent=1)
-            f.write("\n")
+        stubs_out.publish("manifest.json", (json.dumps(
+            {"stub_sha256": sha256_file(a.stub), "x86_cache_uuid": x86.uuid if x86 else None,
+             "inputs_sha256": {k: sha256_file(v) for k, v in inputs.items()},
+             "required": required, "files": manifest}, indent=1) + "\n").encode())
     return 1 if bad else 0
 
 

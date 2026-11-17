@@ -40,6 +40,7 @@ static void usage(void)
 #include <dlfcn.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <sys/acl.h>
 static void watchdog(int sig)
 {
     (void)sig;
@@ -236,13 +237,29 @@ static void dyld_abs_path(const char *path, char *out, size_t n)
 /* The default set of `hao --aot` with no FILE: the image's list of programs
  * (/usr/lib/hao/aot-list, absolute paths, one per line), else the paths of
  * its embedded programs (the fourth field of /usr/lib/hao/stub-identities).
- * Either file must be root's and writable by no one else. */
+ * Either file must be root's and writable by no one else, by its mode or an
+ * ACL (one that cannot be read counts as granting); its directories are
+ * checked by the caller (aot_dir_ok). */
+/* fd is a regular file of uid owner that no one else can write: by its mode
+ * or an ACL (one that cannot be read counts as granting). */
+static bool aot_file_ok(int fd, uid_t owner)
+{
+    struct stat st;
+    acl_t acl = NULL;
+    bool ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == owner && !(st.st_mode & 022);
+    if (ok && !(acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) && errno != ENOENT) ok = false;
+    if (acl) {
+        ok = ok && !hao_aot_acl_allows(acl);
+        acl_free(acl);
+    }
+    return ok;
+}
+
 static FILE *aot_open_list(const char *path, uid_t owner)
 {
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != owner || (st.st_mode & 022)) {
+    if (!aot_file_ok(fd, owner)) {
         fprintf(stderr, "hao-aot: %s is not a file of uid %u writable only by it: not used\n", path, (unsigned)owner);
         close(fd);
         return NULL;
@@ -319,17 +336,35 @@ static bool aot_space_stop(const char *cache)
     return true;
 }
 
-static int aot_default(const char *cache, bool check, const char *cpu_spec, uint64_t cpu)
+/* DIR (the lists' or the marker's directory) as a canonical path whose every
+ * directory from / is owned by root (or, under HAO_AOT_LIST_DIR, the user)
+ * and writable by no one else (hao_aot_dir_ok: modes and ACLs); false and a
+ * message otherwise. */
+static bool aot_dir_ok(const char *dir, char *canon)
+{
+    char w[512];
+    bool test = hao_opt.aot_list_dir[0] != 0;
+    if (!realpath(dir, canon)) snprintf(w, sizeof w, "%s: %s", dir, strerror(errno));
+    else if (hao_aot_dir_ok(canon, test ? HAO_AOT_EXPLICIT : HAO_AOT_SYS, geteuid(), w, sizeof w)) return true;
+    fprintf(stderr, "hao-aot: %s: not used\n", w);
+    return false;
+}
+
+/* strict (--auto): a list that cannot be read to its end, or a listed file
+ * that is not there, fails the run as a failed program does. */
+static int aot_default(const char *cache, bool check, bool strict, const char *cpu_spec, uint64_t cpu)
 {
     hao_opts_init(NULL);
-    const char *dir = hao_opt.aot_list_dir[0] ? hao_opt.aot_list_dir : "/usr/lib/hao";
+    const char *given = hao_opt.aot_list_dir[0] ? hao_opt.aot_list_dir : "/usr/lib/hao";
+    char dir[PATH_MAX];
+    bool dir_ok = aot_dir_ok(given, dir);
     uid_t owner = hao_opt.aot_list_dir[0] ? geteuid() : 0;
     char lpath[1100], spath[1100];
-    snprintf(lpath, sizeof lpath, "%s/aot-list", dir);
-    snprintf(spath, sizeof spath, "%s/stub-identities", dir);
+    snprintf(lpath, sizeof lpath, "%s/aot-list", dir_ok ? dir : given);
+    snprintf(spath, sizeof spath, "%s/stub-identities", dir_ok ? dir : given);
     bool stubs = false;
-    FILE *f = aot_open_list(lpath, owner);
-    if (!f && (f = aot_open_list(spath, owner))) stubs = true;
+    FILE *f = dir_ok ? aot_open_list(lpath, owner) : NULL;
+    if (dir_ok && !f && (f = aot_open_list(spath, owner))) stubs = true;
     if (!f) { fprintf(stderr, "hao-aot: no FILE given and neither %s nor %s is usable\n", lpath, spath); return 1; }
     char self[1100];
     if (self_path(self, sizeof self) != 0) { fprintf(stderr, "hao-aot: cannot find this program's path\n"); fclose(f); return 1; }
@@ -361,6 +396,8 @@ static int aot_default(const char *cache, bool check, const char *cpu_spec, uint
         np++;
     }
     free(line);
+    bool unread = ferror(f);
+    if (unread) fprintf(stderr, "hao-aot: %s: read error\n", stubs ? spath : lpath);
     fclose(f);
     int jobs = 1;
     size_t jl = sizeof jobs;
@@ -411,7 +448,7 @@ static int aot_default(const char *cache, bool check, const char *cpu_spec, uint
         return (absent || stale || failed) ? 1 : 0;
     }
     fprintf(stderr, "hao-aot: %d programs cached, %d already valid, %d failed, %d listed but not present\n", ok, valid, failed, missing);
-    return failed ? 1 : 0;
+    return failed || unread || (strict && missing) ? 1 : 0;
 }
 
 /* hao --aot --auto (the hao.aot LaunchDaemon, root): once a user is logged in, the default set, then a marker
@@ -424,11 +461,18 @@ static int aot_auto(void)
     if (!test && geteuid() != 0) { fprintf(stderr, "hao-aot: --auto runs as root\n"); return 1; }
     uint8_t g[16];
     if (!hao_aot_generation(g)) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return 1; }
-    char want[64], have[64] = "", marker[1100], tmp[1200];
+    char want[64], have[64] = "", marker[PATH_MAX + 16], tmp[PATH_MAX + 32], mdir[PATH_MAX];
     int l = snprintf(want, sizeof want, "libhao ");
     for (int k = 0; k < 16; k++) l += snprintf(want + l, sizeof want - (size_t)l, "%02x", g[k]);
-    snprintf(marker, sizeof marker, "%s/auto-aot.done", test ? hao_opt.aot_list_dir : HAO_AOT_SYS_DIR);
+    if (!aot_dir_ok(test ? hao_opt.aot_list_dir : HAO_AOT_SYS_DIR, mdir)) return 1;
+    snprintf(marker, sizeof marker, "%s/auto-aot.done", mdir);
+    uid_t owner = test ? geteuid() : 0;
     int fd = open(marker, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd >= 0 && !aot_file_ok(fd, owner)) {   /* a marker others could have written says nothing */
+        fprintf(stderr, "hao-aot: --auto: %s is not a file of uid %u writable only by it: ignored\n", marker, (unsigned)owner);
+        close(fd);
+        fd = -1;
+    }
     if (fd >= 0) {
         ssize_t n = read(fd, have, sizeof have - 1);
         close(fd);
@@ -444,20 +488,26 @@ static int aot_auto(void)
     }
     if (!aot_space_start()) return 0;
     fprintf(stderr, "hao-aot: --auto: start for %s\n", want);
-    int rc = aot_default(NULL, false, NULL, hao_cpu_features());
+    int rc = aot_default(NULL, false, true, NULL, hao_cpu_features());
     if (aot_space_left) {
         fprintf(stderr, "hao-aot: --auto: %u programs not started for lack of space: tried again at the next start-up\n", aot_space_left);
         return rc;
     }
+    if (rc) {   /* no marker: the next start-up tries again (valid caches are skipped) */
+        fprintf(stderr, "hao-aot: --auto: some programs failed or were not found (see above): not marked done for %s\n", want);
+        return rc;
+    }
     snprintf(tmp, sizeof tmp, "%s.tmp", marker);
-    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0 && errno == EEXIST && unlink(tmp) == 0)   /* left by a run that stopped; the directory is checked */
+        fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (fd < 0) { fprintf(stderr, "hao-aot: --auto: %s: %s\n", tmp, strerror(errno)); return 1; }
     char line[96];
     int m = snprintf(line, sizeof line, "%s\n", want);
     bool ok = write(fd, line, (size_t)m) == m;
     if (close(fd) != 0 || !ok || rename(tmp, marker) != 0) { fprintf(stderr, "hao-aot: --auto: cannot write %s\n", marker); unlink(tmp); return 1; }
-    fprintf(stderr, "hao-aot: --auto: done for %s%s\n", want, rc ? " (some programs failed; see above)" : "");
-    return rc;
+    fprintf(stderr, "hao-aot: --auto: done for %s\n", want);
+    return 0;
 }
 
 static int aot_main(int argc, char **argv)
@@ -499,7 +549,8 @@ static int aot_main(int argc, char **argv)
         if (!hao_cpu_profile_parse(cpu_spec, cpu, &cpu, why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return 64; }
     }
     if (k < argc && !strcmp(argv[k], "--")) k++;
-    if (k >= argc) return aot_default(cache, check, cpu_spec, cpu);
+    if (k >= argc) return aot_default(cache, check, false, cpu_spec, cpu);
+    hao_opts_init(NULL);
     hao_verbose = 1;
     if (check) {
         int worst = 0;
