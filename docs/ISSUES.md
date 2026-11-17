@@ -7,10 +7,13 @@ they were not tried again until libhao changed, and `hao --aot` with no
 FILE took `aot-list` and `stub-identities` by owner and mode alone: an ACL
 granting write, or a directory above them others can write, was not
 noticed. A failed run now leaves no marker (the next start-up retries;
-valid caches are skipped), the lists need every directory from / to pass
-the cache directories' rules (owner, mode, ACL; `hao_aot_dir_ok`) and no
-write-granting ACL of their own (one that cannot be read refuses the list),
-and the marker's directory is held to the same rules. Test:
+valid caches are skipped; so does a listed file that is not there or a
+list that cannot be read to its end), the lists need every directory from /
+to pass the cache directories' rules (owner, mode, ACL; `hao_aot_dir_ok`)
+and no write-granting ACL of their own (one that cannot be read refuses the
+list), the marker's directory is held to the same rules, a marker others
+could write is ignored and replaced, and its temporary file is created
+exclusively. Test:
 `guest/aotdefault`. Limits: a program that always fails is retried at
 every start-up.
 
@@ -23,7 +26,9 @@ verified) put the ad hoc program's cdhash in `trusted-cdhashes`. It now
 writes the bytes it hashed to a new file in a private directory (with the
 bundle's Info.plist beside it when the signature binds one: a bundle's
 Contents/Info.plist or a framework version's Resources/Info.plist) and
-verifies that copy. Test: `tests/tools/test_trustlist.py` (the change is
+verifies that copy. The copy's layout is built from plain names (the file's,
+its bundle's and version's, each one path component, the path resolved
+once), so nothing is written outside that directory. Test: `tests/tools/test_trustlist.py` (the change is
 listed by the old tool, not by the new one). Measured on 26B131: the list
 is byte-identical to the one the old tool made (1,183 of 1,196 files).
 
@@ -36,10 +41,12 @@ so an embedded program could be started by a parent its own constraint
 refuses. `hao-embed` now gives codesign each constraint's requirements and
 checks that the stub seals the program's blob byte for byte. codesign
 expresses only a constraint of requirements (category 0); a program with
-another kind is refused unless it is listed in
-`releases/dropped-constraints.txt` (`--allow-dropped-constraints`), and the
-manifest records what was carried and dropped; `stub_identity_gate.py`
-compares the slots. Measured on 26B131: of 963 embedded programs, 29 carry
+another kind is refused unless `releases/dropped-constraints.txt`
+(`--allow-dropped-constraints`) pins it: path, slot, the arm slice's cdhash
+and the constraint blob's sha256, so a new or changed constraint of the same
+program is refused. The manifest records what was carried and dropped;
+`stub_identity_gate.py --dropped-constraints` compares the slots against the
+same list (not the manifest) and fails a stub missing any other. Measured on 26B131: of 963 embedded programs, 29 carry
 constraints (25 self, 26 parent, none responsible or library); 49 blobs are
 carried byte for byte and one is dropped, the category self constraint of
 usr/libexec/xpcproxy. The App cryptex's 2 constrained programs are
@@ -87,10 +94,12 @@ hardened is unchanged.
 `hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
 link there, truncating its target), set its owner and mode and renamed it
 over OUT. Run with privileges in a directory others can write, that let
-them choose which file was overwritten. It now creates the output in a new
-private directory beside OUT (an unpredictable name, mode 0700, exclusive
-creation) and renames it over OUT, which replaces a link instead of writing
-through it; `--in-place` opens the file without following a link. Test:
+them choose which file was overwritten. It now writes through a descriptor
+of OUT's directory: a new file created exclusively there, renamed over OUT,
+which replaces a link instead of writing through it; a directory owned by
+someone else, or writable by others without the sticky bit, is refused.
+`--stubs` and `--save-skeletons` write the same way; `--in-place` opens the
+file without following a link. Test:
 `tests/tools/run.sh` ("-o: a symlink at the output is replaced").
 
 ## hao-runtime-on-mac checked only the files the manifest lists
@@ -100,7 +109,9 @@ with its sha256 but accepted any other file in the payload, wrote its
 stubs and the dyld fix with plain opens that follow a symbolic link at the
 output path, and ran as root if started so. It now refuses root, writes
 each output to a new file in its private work directory and renames it into
-place (a link there is replaced, not written through), makes `replace/dyld`
+place through descriptors of the payload's directories (a link there is
+replaced, not written through; a directory others could change is
+refused), makes `replace/dyld`
 only when the manifest lists it, and fails when the payload holds a file the
 manifest does not list, a link or special file, or a listed file that is
 missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
@@ -115,10 +126,16 @@ System volume as root without reading `payload-manifest.json`, so a file
 added beside the listed ones (a LaunchDaemon and its program) was installed
 although the manifest check passed. It now refuses a payload that holds a
 file the manifest does not list, a link or special file, a missing listed
-file other than an AOT cache, or a set-ID or sticky runtime file, before
-any write. Each file it reads is copied once into a private directory and
-checked against its sha256; only the copies are installed or embedded, with
-modes 0755 or 0644. A hao stub without a `__hao_slice` record (a legacy
+file other than an AOT cache, a set-ID or sticky runtime file, a listed
+file whose sha256 differs, or two runtime names that are one file on a
+case-insensitive volume, before any write. Each file it reads is copied
+once into a private directory, used through a descriptor and checked by
+inode when read back; only the copies are installed or embedded. Runtime
+files are written to new files and renamed into place through directory
+descriptors (0755 or 0644; another hard link to an old file keeps its
+bytes); programs to embed and files to replace are opened through directory
+descriptors that follow no link, and a file to replace with another hard
+link is refused. A hao stub without a `__hao_slice` record (a legacy
 stub) is no longer kept: a manifest program gets this payload's stub when
 that gives the recorded result, any other such stub in the System volume
 fails the install (`legacy_stubs` in install.json), and no payload stub
