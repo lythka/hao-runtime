@@ -30,6 +30,8 @@
 #   OUT=dir HAO=/abs/build/hao [T=60] [MODES="state trap ..."] [VARIANTS="jit interp aot"] [EXPECT="alarm .."] tests/guest/uresume.sh
 # Exit status: 0 when the results match EXPECT.
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-uresume)}

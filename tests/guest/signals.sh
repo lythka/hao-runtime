@@ -15,6 +15,8 @@
 # add up (native + helper = guest_insns), which locating must not change.
 #   OUT=dir HAO=build/hao [T=30] [MODES="disp uctx ..."] tests/guest/signals.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-signals)}

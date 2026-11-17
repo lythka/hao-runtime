@@ -27,6 +27,7 @@ typedef struct {
          no_varsniff, no_libval, bridge_stats, no_ifunits, no_swift_thunks, no_thunks, no_swift_values,
          diag_time,              /* HAO_DIAG_TIME: diagnostics lines stamped with the mach clock, and startup phase
                                     lines (runtime.c hao_phase) */
+         native_app_libs,        /* HAO_NATIVE_APP_LIBS: try app libraries natively first (open tier only) */
          native_libcxx,          /* HAO_NATIVE_LIBCXX: libc++ stays native (no guest libc++ from the arm64e cache) */
          sigreturn_kernel,       /* HAO_SIGRETURN_KERNEL: hao's signal handlers return through __sigreturn (signals.c) */
          sigreturn_user,         /* HAO_SIGRETURN_USER: resume in user space under Rosetta too (tests; signals.c) */

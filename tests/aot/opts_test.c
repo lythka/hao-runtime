@@ -123,18 +123,20 @@ int main(void)
     }
     /* switches that make a correct program incorrect or take a signal are not "off switches": open tier only */
     {
-        char *eb[] = {"HAO_NO_VARSNIFF=1", "HAO_NO_THUNKS=1", "HAO_NATIVE_LIBCXX=1", "HAO_SIGRETURN_KERNEL=1", "HAO_NO_PROBE=1",
+        char *eb[] = {"HAO_NO_VARSNIFF=1", "HAO_NO_THUNKS=1", "HAO_NATIVE_LIBCXX=1", "HAO_NATIVE_APP_LIBS=1", "HAO_SIGRETURN_KERNEL=1", "HAO_NO_PROBE=1",
                       "HAO_WATCHDOG=5", "HAO_NO_IFUNITS=1", "HAO_BRIDGE_CHECK=1", NULL};
         hao_opts_parse(&o, eb, NULL, NULL, false, HAO_ENV_OPEN);
-        CHECK(o.no_varsniff && o.no_thunks && o.native_libcxx && o.sigreturn_kernel && o.no_probe && o.watchdog == 5 &&
+        CHECK(o.no_varsniff && o.no_thunks && o.native_libcxx && o.native_app_libs && o.sigreturn_kernel && o.no_probe && o.watchdog == 5 &&
               o.no_ifunits && o.bridge_check, "bridging, signal and watchdog switches, open");
         for (int t = HAO_ENV_GUARDED; t <= HAO_ENV_SETUGID; t++) {
             hao_opts_parse(&o, eb, NULL, NULL, false, t);
-            CHECK(!o.no_varsniff && !o.no_thunks && !o.native_libcxx && !o.sigreturn_kernel && !o.no_probe && !o.watchdog &&
+            CHECK(!o.no_varsniff && !o.no_thunks && !o.native_libcxx && !o.native_app_libs && !o.sigreturn_kernel && !o.no_probe && !o.watchdog &&
                   !o.no_ifunits && !o.bridge_check && strstr(o.ignored, "HAO_WATCHDOG") && strstr(o.ignored, "HAO_NO_VARSNIFF"),
                   "bridging, signal and watchdog switches ignored at tier %d (%s)", t, o.ignored);
         }
     }
+    hao_opts_parse(&o, none, NULL, "hao_native_app_libs=1", true, HAO_ENV_OPEN);
+    CHECK(!o.native_app_libs, "native app libraries cannot be selected by a boot argument");
     /* the typed boundary (hao/bridge.h): stats prints; check binds more, no_ifunits changes how calls are made and
      * HAO_IF_DIR chooses code (an interface unit decides how native calls are made) */
     char *e11[] = {"HAO_BRIDGE_STATS=1", "HAO_BRIDGE_CHECK=1", "HAO_NO_IFUNITS=1", "HAO_IF_DIR=/u", NULL};

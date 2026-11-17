@@ -21,6 +21,8 @@
 # Runs sandboxed CLI programs on this host (container com.example.hao.stubdeps).
 # Exit 1 if any case failed.
 set -u
+# Preserve the native-helper behavior this fixture measures.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-pkgtest-stubdeps)}

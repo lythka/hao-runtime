@@ -16,6 +16,8 @@
 # fnslots summary.
 #   OUT=dir HAO=build/hao [HAO_BASE=/path/to/old/hao] [T=60] [PROGS="cbstructs fnslots swiftgen"] tests/guest/callbacks.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-callbacks)}

@@ -2,6 +2,9 @@
 """Authored Foundation-only native NSBundle caller; no GUI app/framework target."""
 from pathlib import Path
 import os,plistlib,subprocess
+# Keep the authored helper native to exercise the bridge.
+os.environ["HAO_NATIVE_APP_LIBS"] = "1"
+
 ROOT=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).resolve().parent
 OUT=Path(os.environ.get('OUT',ROOT/'build/native-bundle')).resolve()

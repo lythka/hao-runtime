@@ -710,6 +710,49 @@ across a page boundary, an unmapped page refused). Limits: guest
 a guest can make its code writable and change it before it is
 translated, as a native process without hardened runtime can.
 
+## App libraries share the guest ARM representation domain
+
+`guest/xinhab` linked a universal Swift helper whose x86_64 slice hao opened
+natively. ARM Swift stores pointer extra inhabitant i as i; x86_64 Swift
+stores it as i << 1. Passing the address of `[Int]??` or `Three` through
+`UnsafeRawPointer` loses the type at the crossing, so the helper and program
+read different enum cases. Rewriting words based on their location cannot
+supply the missing type.
+
+Dependency candidates outside OS locations now load their usable ARM slice
+as guest code, even if an x86_64 slice exists. The rule uses resolved paths
+and the existing candidate expansion, without app or library names. System,
+/usr/lib, /Library/Apple, cryptex and shared-cache libraries retain the
+existing policy (including guest libc++). Guest run-time `dlopen` follows
+the same rule. Normal guest signature and library-validation checks still
+apply; a rejected ARM image cannot fall back to native loading. Native-only
+app libraries retain native binding. `HAO_NATIVE_APP_LIBS=1`, OPEN tier only,
+restores the earlier native-first policy for diagnosis unless the guest signature
+requires library validation; that case clears the option before dependency
+loading and reports it once, with the other switches such a program ignores
+(`hao_guest_switches_for`, security-model.md). OS classification uses only canonical disk paths,
+excludes writable `/System/Volumes` aliases (Preboot retains OS policy), and
+checks cache-only names separately. Native callers try dyld before ARM-only
+fallback. An already loaded native app library retains its single native
+instance, with one verbose diagnostic.
+
+`sh tests/guest/appdomain.sh` covers Data-volume aliases, native caller search
+overrides, native instance reuse and the runtime/library-validation signature
+flags. These review regressions await coordinator execution.
+
+The regression requires all 14 lines to equal native arm64 under JIT,
+`--interp` and AOT; measured 2026-11-17: all three match. Its diagnostic runs
+with `HAO_NATIVE_APP_LIBS=1` assert that the untyped-pointer mismatch remains
+(`guest wrote [Int]?? case 0, native read 2`, and output differing from
+native). `guest/dlrpath` also distinguishes the ARM and x86_64 slices of a
+universal run-time helper. Bridge fixtures that use a universal helper as a
+stand-in for a native library set `HAO_NATIVE_APP_LIBS=1`. Remaining limit:
+values shared through untyped pointers with native OS libraries still cannot
+be converted.
+
+This change does not supply type information or load OS Swift frameworks
+as guest images.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

@@ -162,7 +162,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/threads | PASS | 2 | |
 | guest/uresume | PASS | 26 | |
 | guest/varsniff | PASS | 2 | |
-| guest/xinhab | XFAIL | 2 | see known failures |
+| guest/xinhab | BLOCKED | — | local sandbox denies the Rosetta CPU query; regression requires the universal app helper to run as guest ARM code; every line matches native arm64 in JIT, interpreter and AOT; native-app-library override asserts the untyped-pointer mismatch |
 | guest/xpac | PASS | 1 | |
 | guest/ymmupper | PASS | 1 | upper ymm halves a native callee leaves dirty are clear after the call and on a native-to-guest callback, JIT and `--interp`, with and without ROSETTA_ADVERTISE_AVX=1 |
 | guest/wx | PASS | 4 | no memory writable and executable at once, and no writable mapping of executable memory, after translated code, chained branches, thunks and Swift island entries have run (Rosetta's own memory aside); the program's `__DATA_CONST` read-only |
@@ -248,23 +248,14 @@ process.
 
 ## Known failures
 
-`guest/xinhab` is marked `xfail`:
+No tests are currently marked `xfail`.
 
-- `guest/xinhab`: its header calls it an open class. Enum cases stored in a
-  pointer payload's extra inhabitants cross the boundary with the wrong
-  index on every hao route (JIT, `--interp`, AOT):
-  `guest wrote [Int]?? case 0, native read 2`,
-  `guest wrote Three case 2, native read 0`,
-  `native wrote Three case 2, guest read 2` where native arm64 reads 0, 2
-  and 3 respectively. The two compilers encode the cases differently
-  (inhabitant i of a pointer is the value i on arm64 and i << 1 on x86_64,
-  whose bit 0 is the ObjC tagged-pointer bit) and each side tests for its
-  own constants inline: arm64 `caseOfDouble` compares the word with 1,
-  x86_64 with 2. The test passes the value's address as `UnsafeRawPointer`,
-  so no signature, metadata or witness names the type where it crosses, and
-  there is nothing for a bridge to convert by; `src/swiftvalue.c` converts
-  only where a typed result is published. It stays open until it is decided
-  where such types may be shared between guest and native code.
+`guest/xinhab` keeps the program and its universal Swift helper in the ARM
+representation domain. With `HAO_NATIVE_APP_LIBS=1`, a second run in each
+mode checks the known mismatches from passing Swift enums through untyped
+pointers to the native x86_64 helper. Bridge-specific helper tests explicitly
+set this switch to preserve their native-call coverage. `guest/dlrpath`
+checks both policies for a universal library opened at run time.
 
 Fixed: `guest/oslog` failed for the Swift program only (every `oslogswift`
 record `<compose failure [UUID]>` under JIT, `--interp` and AOT), and only

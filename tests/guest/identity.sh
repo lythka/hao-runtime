@@ -52,6 +52,13 @@ clang -arch arm64 -arch arm64e -O1 -fobjc-arc -Wno-deprecated-declarations -fram
     -o plain/identity "$here/identity.m" libidenthelper.dylib \
     -Wl,-sectcreate,__TEXT,__info_plist,info.plist -Wl,-sectcreate,__HAOID,__haoid,haoid -Wl,-segprot,__HAOID,r,r \
     -Wl,-sectcreate,__HAOMARK,__haomark,empty || exit 2
+# The helper must inspect the executable as native code even in guarded runs,
+# where HAO_NATIVE_APP_LIBS is ignored. Give only the guest slice a native-only dependency.
+lipo libidenthelper.dylib -thin x86_64 -output libidenthelper-native.dylib &&
+    codesign -s - -f libidenthelper-native.dylib 2>/dev/null || exit 2
+lipo plain/identity -thin arm64e -output identity.arm64e &&
+    install_name_tool -change "$OUT/libidenthelper.dylib" "$OUT/libidenthelper-native.dylib" identity.arm64e &&
+    lipo plain/identity -replace arm64e identity.arm64e -output plain/identity || exit 2
 codesign -s - -f -i com.example.hao.identity --entitlements ents.plist plain/identity 2>/dev/null || exit 2
 python3 "$repo/tools/hao-embed" --stub "$B/hao-stub" --host-test -o emb/identity plain/identity >/dev/null || exit 2
 ln -s ../emb/identity lnk/alias

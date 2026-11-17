@@ -263,6 +263,7 @@ program requires library validation`):
 | `HAO_IF_DIR=DIR` | reads interface units and loads the `.thunks` libraries (native code, whose initializers run) from DIR | ignored; `/usr/lib/hao/if` |
 | `HAO_ASYNC_CONTRACT_LIBRARY=FILE` | loads FILE as the native async provider | ignored; the packaged provider |
 | `HAO_TRUST_LIST=FILE` | takes the cdhashes in FILE as Apple's | ignored; `/usr/lib/hao/trusted-cdhashes` only |
+| `HAO_NATIVE_APP_LIBS=1` | loads the app's own libraries natively first, outside library validation | ignored; they load as guest code |
 
 The CLI route decides this on the slice its signature check takes, the
 embedded route on the slice the loader then builds the image from, so the
@@ -336,6 +337,13 @@ included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
 `hao_jit_helpers_only=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
 `hao_verbose=N`. No boot argument turns library validation or the signature
 check off.
+
+`HAO_NATIVE_APP_LIBS=1` is an OPEN-tier diagnostic switch, read once at
+startup. It restores native-first loading of app libraries, including guest
+`dlopen`, even when they contain an ARM slice. The default keeps such
+libraries in the guest ARM representation domain; OS libraries retain their
+existing native binding policy. Guarded and set-ID processes ignore this
+switch, and no boot argument enables it.
 
 A build with `HAO_TEST_SWITCHES` defined is for hao's own tests and bring-up,
 never for a release image. It also reads the test switches
