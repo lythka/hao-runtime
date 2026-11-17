@@ -164,7 +164,7 @@ static int oslog_immutable(const void *p, size_t n)
     return 0;
 }
 
-static int run_guest(const char *path, int fd, int argc, char **argv, char **envp);
+static int run_guest(const char *path, int fd, int entry, int argc, char **argv, char **envp);
 
 /*
  * The file this process runs, from the kernel: the device and inode of the
@@ -525,7 +525,7 @@ int hao_cli_main(int argc, char **argv, char **envp)
     base = strrchr(base, '/') ? strrchr(base, '/') + 1 : base;
     int procname[2] = {CTL_KERN, KERN_PROCNAME};
     sysctl(procname, 2, NULL, NULL, (void *)base, strlen(base));
-    return run_guest(guest_path, fd, argc, argv, envp);
+    return run_guest(guest_path, fd, HAO_ENTRY_CLI, argc, argv, envp);
 }
 
 /*
@@ -666,10 +666,11 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
         fprintf(HAO_DIAG, "%s no longer names the file this process runs; refusing to load its ARM code from another file\n", exe);
         return 126;
     }
-    return run_guest(exe, fd, argc, argv, envp);
+    return run_guest(exe, fd, HAO_ENTRY_EMBEDDED, argc, argv, envp);
 }
 
-/* fd: the open main executable, checked by the caller; the loader takes it. */
+/* fd: the open main executable, checked by the caller; the loader takes it.
+ * entry: which front end started the process (HAO_ENTRY_CLI, HAO_ENTRY_EMBEDDED). */
 /* The CPU profile (docs/releases.md): libhao and translated code use SSSE3, SSE4.1, SSE4.2, POPCNT
  * and CMPXCHG16B (x86-64-v2), and 128-bit atomics rely on movdqa being single-copy atomic, which
  * Intel guarantees on CPUs that enumerate AVX. Rosetta enumerates no AVX; it runs the x86-64-v2
@@ -692,7 +693,7 @@ static const char *cpu_profile_missing(void)
     return NULL;
 }
 
-static int run_guest(const char *path, int fd, int argc, char **argv, char **envp)
+static int run_guest(const char *path, int fd, int entry, int argc, char **argv, char **envp)
 {
     const char *missing = cpu_profile_missing();
     if (missing) {
@@ -732,7 +733,7 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
      * descriptor, not a second resolution of PATH (the loader closes fd) */
     char err[512], real[MAXPATHLEN];
     if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
-    hao_image *img = hao_load_main_image(path, fd, err, sizeof err);
+    hao_image *img = hao_load_main_image(path, fd, entry, err, sizeof err);
     if (!img) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "%s\n", err); return 126; }
     hao_phase("load");
     /* PATH is absolute and unresolved, as dyld presents the main executable */
@@ -753,9 +754,9 @@ static int run_guest(const char *path, int fd, int argc, char **argv, char **env
                 path, (unsigned long long)img->base, (unsigned long long)img->slide, (unsigned long long)img->n_rebase,
                 (unsigned long long)img->n_bind, (unsigned long long)img->n_auth, (unsigned long long)img->n_unresolved);
     if (hao_verbose) {
-        static const char *const lv[] = {"undecided", "off", "on (kernel)", "on (guest images platform only)"};
+        static const char *const lv[] = {"undecided", "off", "on (kernel)"};
         int m = hao_libval_mode();
-        fprintf(stderr, "hao: library validation %s (%s)\n", lv[m >= 0 && m <= 3 ? m : 0], hao_libval_reason());
+        fprintf(stderr, "hao: library validation %s (%s)\n", lv[m >= 0 && m <= 2 ? m : 0], hao_libval_reason());
     }
     if (!img->entry) { fprintf(stderr, "hao: %s has no LC_MAIN entry point\n", path); return 126; }
 

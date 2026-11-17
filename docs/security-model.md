@@ -179,7 +179,9 @@ hardened-runtime or library-flag binary without its own
 `disable-library-validation`, hao:
 
 - sets `CS_REQUIRE_LV` on the process once `libhao` is mapped, so the kernel
-  refuses non-platform native libraries of another Team ID;
+  refuses non-platform native libraries of another Team ID. If the kernel
+  does not take the flag, the program is not run (status 126): it would
+  otherwise load native libraries that it cannot load natively;
 - checks every guest library with `F_CHECK_LV`, and where the kernel cannot
   hold the 16 KiB-page signature, applies the same rule itself: a platform
   file (trusted list, else `anchor apple`), or a file of the main executable's
@@ -376,7 +378,11 @@ it (structure, CodeDirectory, every page hash) and requires its cdhash to be
 the one the stub names; otherwise it exits with status 126. A copy of an
 embedded program with another ARM slice in it, even one with a valid
 signature of its own, does not run under the program's identity and
-entitlements. `tools/stub_identity_gate.py` checks the record of every stub
+entitlements. A stub without the record (made before `tools/hao-embed`
+wrote it) names no slice and runs none: hao exits with status 126, and
+the program must be embedded again. Whether the process's main executable
+is a stub is said by the front end the kernel started (`hao-stub` or
+`hao`), never by the record's absence. `tools/stub_identity_gate.py` checks the record of every stub
 of a payload. The check hashes the program's ARM slice once per launch.
 
 A stub whose program uses ObjC re-executes itself once to turn off libobjc's
@@ -494,12 +500,11 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
   load commands are read once into memory (at most 4 MiB of them), and a
   segment whose carried sections span more than 64 MiB is not answered
   for. A file that fails the check never runs.
-- A stub made before `tools/hao-embed` wrote the `__hao_slice` record does
-  not name its ARM slice. hao verifies such a program's ARM slice by the
-  slice's own signature only, so a copy with another validly signed slice
-  still runs under the stub's identity and entitlements. Embed such
-  programs again; `hao-install.py` does not replace a stub that is already
-  in a file.
+- An embedded program's stub carries `disable-library-validation`, and dyld
+  loads the native libraries the stub links, and runs their initializers,
+  before hao sets `CS_REQUIRE_LV`. Library validation holds for what the
+  program loads from then on, not for the stub's own link-time
+  dependencies.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests
