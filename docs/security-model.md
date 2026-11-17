@@ -333,10 +333,16 @@ ignored.
 
 Boot arguments reach every process of a boot, set-ID programs and PID 1
 included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
-`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_diag_time=1`, `hao_swift_value_survey=1`, `hao_no_aot=1`, `hao_no_chain=1`,
+`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_diag_time=1`, `hao_no_aot=1`, `hao_no_chain=1`,
 `hao_jit_helpers_only=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
 `hao_verbose=N`. No boot argument turns library validation or the signature
-check off.
+check off. One relaxes a check, and only a survey build (`make SURVEY=1`,
+never shipped) or a test build reads it: `hao_swift_value_audit=1` lets a
+Swift value hao cannot certify go on to native code in every process
+(accepting the memory corruption that refusal prevents) and records each such
+type (`swiftvalue.c` `audit_record`); from the environment
+(`HAO_SWIFT_VALUE_AUDIT`) only an open process takes it. A release build
+ignores both, says so once, and refuses.
 
 `HAO_NATIVE_APP_LIBS=1` is an OPEN-tier diagnostic switch, read once at
 startup. It restores native-first loading of app libraries, including guest
@@ -350,7 +356,7 @@ never for a release image. It also reads the test switches
 (`HAO_LIBVAL_USER`, which also keeps `HAO_TRUST_LIST` for a program that
 requires library validation, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
 `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`,
-`HAO_AOT_FREE_MB`, `HAO_CRASH`, `HAO_CPU_FEATURES`) from an open
+`HAO_AOT_FREE_MB`, `HAO_CRASH`, `HAO_CPU_FEATURES`, `HAO_SWIFT_WALK_FACTS`) from an open
 process's environment, and the bridging and signal bring-up knobs as boot
 arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a
 process to the guarded or set-ID rules.

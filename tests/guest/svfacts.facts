@@ -1,0 +1,8 @@
+# Fixture rows of the Swift value walk's facts table (src/swiftvalue/Facts.c), for tests/guest/svfacts.sh:
+#   type MANGLED-KEY VERDICT [XI-CLASS XI-OFFSET]
+#   image MANGLED-KEY CASE ARM64-IMAGE ARM64-MASK X86_64-IMAGE X86_64-MASK
+type s11InlineArrayVy$1_SiG SAME
+type SiSg REFUSE
+type 7svfacts1CCSgSg CONVERT
+image 7svfacts1CCSgSg 0 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+image 7svfacts1CCSgSg 1 0100000000000000 ffffffffffffffff 0200000000000000 ffffffffffffffff

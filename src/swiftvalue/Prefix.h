@@ -9,6 +9,11 @@
 #define collect_survey_patches hao_sv_collect_survey_patches
 #define discover_witness_plan hao_sv_discover_witness_plan
 #define collect_witness_patches hao_sv_collect_witness_patches
+#define collect_value_patches hao_sv_collect_value_patches
+#define collect_partial_patches hao_sv_collect_partial_patches
+#define settled_node hao_sv_settled_node
+#define guest_owned_type hao_sv_guest_owned_type
+#define xi_native_owned hao_sv_xi_native_owned
 #define collect_inline_patches hao_sv_collect_inline_patches
 #define discover_enum_case hao_sv_discover_enum_case
 #define discover_fixed_enum_case hao_sv_discover_fixed_enum_case
@@ -33,4 +38,14 @@
 #define holds_archdiff_memo hao_sv_holds_archdiff_memo
 #define holds_archdiff_remember hao_sv_holds_archdiff_remember
 #define native_frozen_type hao_sv_native_frozen_type
+#define native_resilient_type hao_sv_native_resilient_type
+#define native_type_place hao_sv_native_type_place
+#define walk_fact_of hao_sv_walk_fact_of
+#define walk_fact_mangled hao_sv_walk_fact_mangled
+#define walk_fact_key hao_sv_walk_fact_key
+#define walk_fact_image hao_sv_walk_fact_image
+#define walk_facts_fork_child hao_sv_walk_facts_fork_child
+#define recipe_fork_child hao_sv_recipe_fork_child
+#define walk_facts_load hao_sv_walk_facts_load
+#define collect_audit_patches hao_sv_collect_audit_patches
 #endif

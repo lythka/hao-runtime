@@ -146,6 +146,15 @@
       "sdk_build": "26B118"
     },
     {
+      "path": "src/swiftwalk_gen.inc",
+      "sha256": "30fc99c308597a88f2b69cd24f5154723072beabaf934bd728134ab6f6a28d33",
+      "format": 1,
+      "input_kind": "cache",
+      "export_id": "87c3b46f40e7ac41",
+      "os_build": "26B131",
+      "cache_uuid": "954AA5DE1C5D3D479921AF7AF681D333"
+    },
+    {
       "path": "src/varargs_gen.inc",
       "sha256": "f5f40f8773a6e422ac17ec4ac8115f16802df5089be76684ea06adb6badd1004",
       "format": 1,

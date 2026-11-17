@@ -78,10 +78,13 @@ while read -r p c want; do
     [ $nrc = 0 ] || { echo "$p $c: native rc=$nrc"; fail=1; }
     line=$(printf '%-10s %-7s %-7s' "$p" "$c" "$want")
     for mode in jit interp aot; do
+        # The programs build arrays of tuples holding an Optional of the helper's own struct, which no
+        # frozen-struct table covers: hao refuses their storage by default (swiftvalue.c storage_element).
+        # Packed stack arguments are the subject here, so the experimental pass-through lets them go on.
         case $mode in
-        jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
-        interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
-        aot) set -- env HAO_CACHE="$OUT/aot-$p" "$HAO" ;;
+        jit) set -- env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" ;;
+        interp) set -- env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" --interp ;;
+        aot) set -- env HAO_CACHE="$OUT/aot-$p" HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" ;;
         esac
         o=$OUT/$p-$c.$mode
         (HAO_NO_IFUNITS=1 HAO_BRIDGE_CHECK=1 timeout -s KILL "$T" "$@" "$OUT/$p.arm64e" "$c" </dev/null >"$o.out" 2>"$o.err"

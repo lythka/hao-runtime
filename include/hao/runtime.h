@@ -511,6 +511,9 @@ void hao_objc_late_stats(uint64_t *deferred, uint64_t *attached, uint64_t *class
 /* swiftcc.c: x86_64 swifttailcc argument area (callee pop) of a guest async
  * function from its own code, or -1 when it cannot be analysed */
 int64_t hao_swift_async_arg_area(uint64_t fn, const char **why);
+/* Whether hao gave TYPE's native metadata the arm64 layout and verified it
+ * (swift.c: Swift.Float16's 2-byte POD witnesses). */
+bool hao_swift_relaid_type(const void *type);
 /* its x86_64 stack-slot count (-1: not analysable), whether the arm64 pop at
  * an exit set it, and the instruction that did (offline checks) */
 int hao_swift_async_slots(uint64_t fn, int *from_pop, uint64_t *at);
