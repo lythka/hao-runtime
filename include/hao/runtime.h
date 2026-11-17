@@ -81,6 +81,9 @@ typedef struct hao_thread {
      * cpu_save_push), reset by each segment to its entry count. */
     hao_cpu *cpu_saves;
     unsigned cpu_saves_n;
+    /* where a callback without a signature lets the guest store an indirect result the
+     * native caller gave no buffer for (runtime.c callback_plain): made at first use */
+    uint8_t *noret;
     hao_seg *seg;              /* innermost running segment */
     void *eh_landed;           /* exception that stopped at this segment's native-call guard */
     void *eh_resume;           /* exception to resume natively after the current native step */

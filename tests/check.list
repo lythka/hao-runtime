@@ -83,6 +83,7 @@ guest/varsniff	300	par	tests/guest/varsniff.sh
 guest/xinhab	300	xfail	tests/guest/xinhab.sh
 guest/xpac	300	par	tests/guest/xpac.sh
 guest/wx	300	par	tests/guest/wx.sh
+guest/refuse	300	par	tests/guest/refuse.sh
 guest/run-async	300	par	tests/guest/run-async.sh -k
 guest/keypath-identity	300	par	python3.14 -I tests/guest/keypath-identity/run.py
 guest/late-method-signatures	300	par	python3.14 -I tests/guest/late-method-signatures/run.py

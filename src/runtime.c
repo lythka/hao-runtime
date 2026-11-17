@@ -88,6 +88,11 @@ static void thread_key_dtor(void *v) { pthread_setspecific(thread_key, v); }
  * malloc: callbacks also run in signal handlers. */
 #define CPU_SAVES 4096
 #define CPU_SAVES_ON_STACK 4
+/* hao_thread.noret (callback_plain): 64 KB per nesting level, then a guard */
+#define NORET_LEVEL (64u << 10)
+#define NORET_LEVELS 16
+#define NORET_GUARD (64u << 10)
+#define NORET_SIZE ((size_t)NORET_LEVEL * NORET_LEVELS + NORET_GUARD)
 static hao_cpu *cpu_save_push(hao_thread *t, unsigned *mark)
 {
     unsigned n = t->cpu_saves_n;
@@ -114,6 +119,7 @@ static void thread_hook(unsigned int ev, pthread_t th, void *addr, size_t size)
     __atomic_fetch_sub(&hao_threads_live, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&hao_threads_freed, 1, __ATOMIC_RELAXED);
     if (t->cpu_saves) munmap(t->cpu_saves, CPU_SAVES * sizeof(hao_cpu));
+    if (t->noret) munmap(t->noret, NORET_SIZE);
     /* Safe with guest frames still on this stack (pthread_exit from guest
      * code): Darwin's pthread_exit never returns into them. The mapping
      * holds t itself, so nothing reads t after this. */
@@ -1091,6 +1097,27 @@ __attribute__((noinline, cold)) static void callback_trace_pop(const hao_cb_fram
             (long long)native_pop);
 }
 
+/* x8 for a callback without a signature whose native caller passed no
+ * result buffer: the result is unknown, and so is its size. A guest
+ * function that does return through x8 writes into this thread's own area,
+ * one 64 KB part per nesting level (the deepest levels share the last), and
+ * a larger result runs into the guard after it and faults. Never memory
+ * that holds anything (the guest stack, hao's code); 0 when the area
+ * cannot be made (then such a store faults at once). A mapping, not malloc:
+ * callbacks also run in signal handlers. */
+static uint64_t noret_area(hao_thread *t)
+{
+    if (!t->noret) {
+        uint8_t *m = mmap(NULL, NORET_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED) return 0;
+        if (mprotect(m + (size_t)NORET_LEVEL * NORET_LEVELS, NORET_GUARD, PROT_NONE)) { munmap(m, NORET_SIZE); return 0; }
+        t->noret = m;
+    }
+    unsigned level = t->depth > 0 ? (unsigned)t->depth : 0;
+    if (level >= NORET_LEVELS) level = NORET_LEVELS - 1;
+    return (uint64_t)(uintptr_t)(t->noret + (size_t)NORET_LEVEL * level);
+}
+
 /* A native-to-guest call without a signature (NX fault, plain thunk). */
 static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
 {
@@ -1107,22 +1134,24 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
     c->x[20] = f->swift[1];
     c->x[22] = f->swift[2];
     c->x[0] = hao_swift_async_extend_result(f->target, c->x[0]);
-    /* Guest stack: the SysV stack arguments from slot 2 at sp, above them a
-     * scratch area for an indirect result x8 must not point at (below). */
-    enum { SCRATCH = 1024 };
+    /* Guest stack: the SysV stack arguments from slot 2 at sp, 1 KB below
+     * the caller's frames (the room x8 used to point at). Kept: without it
+     * tests/guest/uresume's alarm cases see stack arguments overwritten
+     * while signals arrive during the call. */
+    enum { GAP = 1024 };
     uint64_t top = (saved->x[31] - 256) & ~15ull;
-    uint64_t sp = (top - SCRATCH - CB_STACK_AREA) & ~15ull;
+    uint64_t sp = (top - GAP - CB_STACK_AREA) & ~15ull;
     memcpy((void *)(uintptr_t)sp, &f->stack_args[2], 8 * CB_STACK_COPY);
     /* x8 is the indirect-result register: native swiftcc passes it in rax.
      * A C caller leaves anything there, often the function pointer it just
      * called (the thunk) or al = the vector-register count of a variadic
      * call; a guest function returning a large struct would then write its
      * result into hao's code. So only a value that can be a data pointer is
-     * passed through; otherwise x8 points at the scratch area. */
+     * passed through; otherwise x8 is noret_area's. */
     uint64_t r = f->swift[3];
     bool data = r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) && !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) &&
                 !hao_is_trap(r);
-    c->x[8] = data ? r : sp + CB_STACK_AREA;
+    c->x[8] = data ? r : noret_area(t);
     c->x[31] = sp;
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
