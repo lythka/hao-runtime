@@ -7,7 +7,10 @@ DIR/payload/embed/stubs/ (each program's stub, filled from embed/skeletons) and 
 every file payload-manifest.json lists (AOT caches may be absent: they are made after the first boot).
 Needs Python 3.12 or later and codesign; no compiler, linker or Xcode. Exit 0 only when every sha256 matches.
 """
-import hashlib, json, os, shutil, subprocess, sys, tempfile
+import hashlib, json, os, shutil, struct, subprocess, sys, tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hao_fat
 
 
 def sha256(path):
@@ -16,6 +19,82 @@ def sha256(path):
         for b in iter(lambda: f.read(1 << 20), b''):
             h.update(b)
     return h.hexdigest()
+
+
+HASHES = {1: 'sha1', 2: 'sha256', 3: 'sha256', 4: 'sha384'}
+
+
+def trim_signature(data, want):
+    """A thin Mach-O DATA, signed ad hoc, with its signature's reserved space cut to WANT bytes and its code-page hashes
+    refreshed (codesign reserves more on some macOS versions; the signature itself is the same). None if not possible."""
+    d = bytearray(data)
+    if d[:4] != b'\xcf\xfa\xed\xfe':
+        return None
+    count, at, sig, linkedit = struct.unpack_from('<I', d, 16)[0], 32, None, None
+    for _ in range(count):
+        cmd, size = struct.unpack_from('<II', d, at)
+        if cmd == 0x1d:
+            sig = at
+        elif cmd == 0x19 and d[at + 8:at + 24].rstrip(b'\0') == b'__LINKEDIT':
+            linkedit = at
+        at += size
+    if sig is None or linkedit is None:
+        return None
+    off, size = struct.unpack_from('<II', d, sig + 8)
+    magic, length, n = struct.unpack_from('>III', d, off)
+    if magic != 0xfade0cc0 or off + size != len(d) or want < length or want > size:
+        return None
+    fileoff = struct.unpack_from('<Q', d, linkedit + 40)[0]
+    filesize = off + want - fileoff
+    struct.pack_into('<Q', d, linkedit + 32, (filesize + 0x3fff) & ~0x3fff)
+    struct.pack_into('<Q', d, linkedit + 48, filesize)
+    struct.pack_into('<I', d, sig + 12, want)
+    del d[off + want:]
+    for i in range(n):
+        slot, blob = struct.unpack_from('>II', d, off + 12 + i * 8)
+        if slot != 0 and not 0x1000 <= slot < 0x1005:
+            continue
+        cd = off + blob
+        if struct.unpack_from('>I', d, cd)[0] != 0xfade0c02:
+            return None
+        hashes, _, _, pages, limit = struct.unpack_from('>5I', d, cd + 16)
+        hsize, kind, _, exponent = d[cd + 36:cd + 40]
+        if limit != off or kind not in HASHES or not exponent:
+            return None
+        page = 1 << exponent
+        for q in range(pages):
+            d[cd + hashes + q * hsize:cd + hashes + (q + 1) * hsize] = \
+                hashlib.new(HASHES[kind], d[q * page:min((q + 1) * page, limit)]).digest()[:hsize]
+    return bytes(d)
+
+
+def pin(data, want_sha):
+    """DATA, or the same file with the x86_64 slice's signature reservation at the size whose bytes have WANT_SHA."""
+    if hashlib.sha256(data).hexdigest() == want_sha:
+        return data
+    parts = hao_fat.slices(data)
+    x86 = [p for c, _, p in parts or [] if c == hao_fat.CPU_X86_64]
+    if len(x86) != 1:
+        return data
+    mo = x86[0]
+    ncmds = struct.unpack_from('<I', mo, 16)[0]
+    at, off = 32, None
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from('<II', mo, at)
+        if cmd == 0x1d:
+            off = struct.unpack_from('<I', mo, at + 8)[0]
+        at += size
+    if off is None:
+        return data
+    length = struct.unpack_from('>I', mo, off + 4)[0]
+    for want in ((length + 15) & ~15, ((length + 15) & ~15) + 16, ((length + 15) & ~15) + 32):
+        t = trim_signature(mo, want)
+        if t is None:
+            continue
+        out = t if len(parts) == 1 else hao_fat.replace_slice(data, hao_fat.CPU_X86_64, t)
+        if hashlib.sha256(out).hexdigest() == want_sha:
+            return out
+    return data
 
 
 def main(argv):
@@ -48,13 +127,31 @@ def main(argv):
             sys.exit('hao-runtime-on-mac: hao-embed failed (exit %d, %d programs)' % (rc, len(fails)))
         stubs = os.path.join(pay, 'embed', 'stubs')
         os.makedirs(stubs, exist_ok=True)
+        pinned = 0
         for n in os.listdir(os.path.join(out, 'stubs')):
-            shutil.copy2(os.path.join(out, 'stubs', n), os.path.join(stubs, n))
+            src, dst = os.path.join(out, 'stubs', n), os.path.join(stubs, n)
+            want = manifest['files'].get('embed/stubs/' + n)
+            data = open(src, 'rb').read()
+            fixed = pin(data, want) if want else data
+            pinned += fixed is not data
+            with open(dst, 'wb') as f:
+                f.write(fixed)
+            os.chmod(dst, os.stat(src).st_mode & 0o7777)
         os.makedirs(os.path.join(pay, 'replace'), exist_ok=True)
         rc = subprocess.run([sys.executable, '-I', os.path.join(top, 'tools', 'dyld-ignition-fix.py'),
                              os.path.join(root, 'usr/lib/dyld'), os.path.join(pay, 'replace', 'dyld')]).returncode
         if rc != 0:
             sys.exit('hao-runtime-on-mac: dyld-ignition-fix.py failed (exit %d)' % rc)
+        dyld = os.path.join(pay, 'replace', 'dyld')
+        want = manifest['files'].get('replace/dyld')
+        data = open(dyld, 'rb').read()
+        fixed = pin(data, want) if want else data
+        if fixed is not data:
+            pinned += 1
+            with open(dyld, 'wb') as f:
+                f.write(fixed)
+        if pinned:
+            print('hao-runtime-on-mac: %d files signed with a larger reservation than the pinned one, trimmed to it' % pinned)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     bad, ok, later = [], 0, 0
