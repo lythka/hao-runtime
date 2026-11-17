@@ -17,7 +17,17 @@ existing policy (including guest libc++). Guest run-time `dlopen` follows
 the same rule. Normal guest signature and library-validation checks still
 apply; a rejected ARM image cannot fall back to native loading. Native-only
 app libraries retain native binding. `HAO_NATIVE_APP_LIBS=1`, OPEN tier only,
-restores the earlier native-first policy for diagnosis.
+restores the earlier native-first policy for diagnosis unless the guest signature
+requires library validation; that case clears the option before dependency
+loading and reports it once. OS classification uses only canonical disk paths,
+excludes writable `/System/Volumes` aliases (Preboot retains OS policy), and
+checks cache-only names separately. Native callers try dyld before ARM-only
+fallback. An already loaded native app library retains its single native
+instance, with one verbose diagnostic.
+
+`sh tests/guest/appdomain.sh` covers Data-volume aliases, native caller search
+overrides, native instance reuse and the runtime/library-validation signature
+flags. These review regressions await coordinator execution.
 
 The regression requires all 14 lines to equal native arm64 under JIT,
 `--interp` and AOT; measured 2026-11-17: all three match. Its diagnostic runs

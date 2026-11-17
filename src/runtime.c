@@ -3081,6 +3081,18 @@ static hao_image *guest_libcxx(hao_image *loader, const char *cand, bool os)
     return g;
 }
 
+static bool native_library_loaded(const char *path)
+{
+    void *h = runtime_dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
+    if (!h) return false;
+    dlclose(h);
+    static bool reported;
+    if (hao_verbose && !__atomic_exchange_n(&reported, true, __ATOMIC_RELAXED)) {
+        fprintf(stderr, "hao: %s stays native: its native slice is loaded already\n", path);
+    }
+    return true;
+}
+
 /*
  * A library guest code calls with C++ names (an import named __Z...) whose
  * file also has an arm64 slice runs as guest code too: its interface has the
@@ -3096,11 +3108,7 @@ static hao_image *guest_cxx_library(hao_image *loader, const char *cand, bool os
     char rp[PATH_MAX], why[400];
     if (access(cand, R_OK) != 0 || !realpath(cand, rp)) return NULL;   /* a cache library: native, as before */
     if (glib_known(rp)) return glib_find(rp);
-    void *h = runtime_dlopen(rp, RTLD_LAZY | RTLD_NOLOAD);
-    if (h) {
-        if (hao_verbose) fprintf(stderr, "hao: %s stays native: its native slice is loaded already\n", rp);
-        return NULL;
-    }
+    if (native_library_loaded(rp)) return NULL;
     if (!hao_macho_guest_cxx_eligible(rp, why, sizeof why)) {
         if (hao_verbose) fprintf(stderr, "hao: C++ library stays native: %s\n", why);
         return NULL;
@@ -3110,24 +3118,37 @@ static hao_image *guest_cxx_library(hao_image *loader, const char *cand, bool os
     return g;
 }
 
-/* `os` above describes absolute-path provenance for HAO_GUEST_ROOT, not
- * ownership: an absolute app path is still app code. Classify the resolved
- * location too, so aliases of OS libraries keep the native policy. */
-static bool os_library_path(const char *path)
+/* `os` above describes absolute-path provenance for HAO_GUEST_ROOT, not ownership.
+ * Disk ownership is decided only from realpath's result. */
+static bool path_under(const char *path, const char *root)
 {
+    size_t n = strlen(root);
+    return !strncmp(path, root, n) && (!path[n] || path[n] == '/');
+}
+static bool os_library_path(const char *real)
+{
+    if (path_under(real, "/System/Volumes"))
+        return path_under(real, "/System/Volumes/Preboot");
     static const char *roots[] = {"/System", "/usr/lib", "/Library/Apple", "/private/preboot", "/private/var/db/Cryptexes"};
-    for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++) {
-        size_t n = strlen(roots[i]);
-        if (!strncmp(path, roots[i], n) && (!path[n] || path[n] == '/')) return true;
-    }
+    for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++)
+        if (path_under(real, roots[i])) return true;
+    return false;
+}
+static bool cache_only_library(const char *path)
+{
     return path[0] == '/' && hao_dsc_has(path);
+}
+enum library_location { LIBRARY_MISSING, LIBRARY_OS, LIBRARY_APP };
+static enum library_location library_location(const char *path, char real[PATH_MAX])
+{
+    if (realpath(path, real)) return os_library_path(real) ? LIBRARY_OS : LIBRARY_APP;
+    return errno == ENOENT && cache_only_library(path) ? LIBRARY_OS : LIBRARY_MISSING;
 }
 static bool guest_app_library(const char *path)
 {
     char real[PATH_MAX];
-    if (hao_opt.native_app_libs || os_library_path(path)) return false;
-    if (!realpath(path, real) || os_library_path(real)) return false;
-    return hao_is_arm_loadable(real, true);
+    if (hao_opt.native_app_libs || library_location(path, real) != LIBRARY_APP) return false;
+    return hao_is_arm_loadable(real, true) && !native_library_loaded(real);
 }
 
 static bool try_candidate(const char *cand, bool os, void *c)
@@ -3550,8 +3571,9 @@ static void *native_bundle_open(const char *path, int flags, char *why, size_t n
  * A native caller still gets no untyped guest function address from dlsym. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
-    bool app = path && guest_caller_image(ra) && guest_app_library(path);
-    return bundle_open(path, flags, true, app, why, n);
+    if (!ra) return bundle_open(path, flags, true, false, why, n);
+    if (!path || !guest_caller_image(ra) || !guest_app_library(path)) return NULL;
+    return bundle_open(path, flags, true, true, why, n);
 }
 static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n)
 {

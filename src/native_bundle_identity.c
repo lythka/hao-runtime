@@ -69,7 +69,7 @@ static void *bundle_dlopen(const char *path, int mode)
     const char *native = dlerror();
     char original[1024], why[1024] = "";
     snprintf(original, sizeof original, "%s", native ? native : "dlopen failed");
-    h = guest_open2 ? guest_open2(path, mode, __builtin_return_address(0), why, sizeof why) : guest_open(path, mode, why, sizeof why);
+    h = guest_open2 ? guest_open2(path, mode, NULL, why, sizeof why) : guest_open(path, mode, why, sizeof why);
     if (!h) set_error(why[0] ? why : original);
     else (void)dlerror();
     return h;
