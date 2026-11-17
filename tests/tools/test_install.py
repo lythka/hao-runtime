@@ -1,5 +1,7 @@
 """hao-install.py path rules: manifest names stay under SYSTEM and PAYLOAD, and
-nothing is written or read through a symbolic link.
+nothing is written or read through a symbolic link; the payload holds exactly
+what payload-manifest.json lists and only those bytes are installed; hao stubs
+that do not name their arm slice (legacy stubs) are replaced or refused.
 
   python3 -I tests/tools/test_install.py        (tests/tools/run.sh runs it)
 
@@ -33,6 +35,32 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def hao_stub(uuid, cli=False, lib=b'/usr/lib/hao/libhao.dylib'):
+    """A thin x86_64 executable that links libhao.dylib (a hao stub; with CLI, hao's launcher: __TEXT,__hao_cli),
+    without a __TEXT,__hao_slice record."""
+    name = lib + b'\0' * (8 - len(lib) % 8)
+    cmds = struct.pack('<II', 0x1b, 24) + bytes.fromhex(uuid)
+    cmds += struct.pack('<IIIIII', 0xc, 24 + len(name), 24, 0, 0, 0) + name
+    n = 2
+    if cli:
+        cmds += struct.pack('<II16s4Q4I', 0x19, 152, b'__TEXT', 0, 0, 0, 0, 5, 5, 1, 0)
+        cmds += struct.pack('<16s16sQQ8I', b'__hao_cli', b'__TEXT', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+        n = 3
+    return struct.pack('<IIIIIIII', 0xfeedfacf, hao_fat.CPU_X86_64, 3, 2, n, len(cmds), 0, 0) + cmds + b'stub'
+
+
+def write_payload_manifest(payload):
+    """payload-manifest.json as tools/hao-image-payload writes it: the sha256 of every other file (no link followed)"""
+    files = {}
+    for base, _, names in os.walk(payload):
+        for n in names:
+            f = os.path.join(base, n)
+            rel = os.path.relpath(f, payload)
+            if rel != 'payload-manifest.json' and not os.path.islink(f):
+                files[rel] = digest(Path(f).read_bytes())
+    Path(payload, 'payload-manifest.json').write_text(json.dumps(dict(files=files)))
+
+
 class InstallPaths(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -54,18 +82,22 @@ class InstallPaths(unittest.TestCase):
         self.victim = self.outside / 'victim'
         self.victim.write_bytes(b'not the installer\'s to write')
 
-    def run_install(self, replace=None):
+    def run_install(self, replace=None, after=None):
+        """the installer on SYSTEM and PAYLOAD; AFTER changes the payload once its manifest is written"""
         (self.payload / 'embed/manifest.json').write_text(json.dumps(self.manifest))
         if replace is not None:
             (self.payload / 'replace').mkdir(exist_ok=True)
             (self.payload / 'replace/manifest.json').write_text(json.dumps(replace))
+        write_payload_manifest(self.payload)
+        if after is not None:
+            after()
         p = subprocess.run([sys.executable, '-I', str(INSTALL), str(self.system), str(self.payload)],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
         return p.returncode, p.stdout
 
-    def refused(self, needle, replace=None):
+    def refused(self, needle, replace=None, after=None):
         """the install fails with NEEDLE in a hao: error line, not a traceback, and the outside file is intact"""
-        rc, out = self.run_install(replace)
+        rc, out = self.run_install(replace, after)
         self.assertEqual(rc, 1, out)
         self.assertNotIn('Traceback', out)
         self.assertTrue(any(line.startswith('hao: error:') and needle in line for line in out.splitlines()), out)
@@ -165,6 +197,97 @@ class InstallPaths(unittest.TestCase):
         (self.payload / 'root/usr/lib/hao/extra').symlink_to(self.victim)
         self.refused('root/usr/lib/hao/extra is a symbolic link')
         self.assertFalse((self.system / 'usr/lib/hao/extra').exists())
+
+    def test_unlisted_payload_file(self):
+        """a file payload-manifest.json does not list (a LaunchDaemon and its program; any file outside root/ too)"""
+        def daemon():
+            d = self.payload / 'root/System/Library/LaunchDaemons'
+            d.mkdir(parents=True)
+            (d / 'evil.plist').write_bytes(b'<plist/>')
+        for name, after in (('root/System/Library/LaunchDaemons/evil.plist', daemon),
+                            ('root/usr/libexec/evil', lambda: (self.payload / 'root/usr/libexec/evil').write_bytes(b'x')),
+                            ('embed/stubs/extra.stub', lambda: (self.payload / 'embed/stubs/extra.stub').write_bytes(b'x'))):
+            with self.subTest(name=name):
+                self.refused('payload %s is not in payload-manifest.json' % name, after=after)
+                self.untouched()
+                self.assertFalse((self.system / 'System').exists())
+                self.assertFalse((self.system / 'usr/libexec').exists())
+                (self.payload / name).unlink()
+
+    def test_changed_payload_file(self):
+        """a listed file whose bytes differ from its sha256 (a runtime file, a stub)"""
+        for rel in ('root/usr/libexec/hao', 'embed/stubs/prog.stub'):
+            with self.subTest(rel=rel):
+                self.refused('payload %s does not match its sha256' % rel,
+                             after=lambda: (self.payload / rel).write_bytes(b'changed'))
+                self.untouched()
+                self.assertFalse((self.system / 'usr/libexec').exists())
+                (self.payload / rel).write_bytes(b'launcher' if rel.startswith('root') else self.stub)
+
+    def test_listed_file_missing(self):
+        """a listed file that is missing is refused; a listed AOT cache may be (made after the first boot)"""
+        self.refused('payload root/usr/libexec/hao is listed in payload-manifest.json but missing',
+                     after=lambda: (self.payload / 'root/usr/libexec/hao').unlink())
+        self.untouched()
+        (self.payload / 'root/usr/libexec/hao').write_bytes(b'launcher')
+        cache = self.payload / 'root/usr/lib/hao/aot'
+        cache.mkdir()
+        (cache / ('a' * 32 + '.aot')).write_bytes(b'cache')
+        rc, out = self.run_install(after=lambda: (cache / ('a' * 32 + '.aot')).unlink())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((self.system / 'usr/bin/prog').read_bytes(), self.result)
+
+    def test_payload_modes(self):
+        """a set-ID or sticky runtime file is refused; installed modes are 0755 (an execute bit) or 0644"""
+        hao = self.payload / 'root/usr/libexec/hao'
+        for mode in (0o4755, 0o2755, 0o1755):
+            with self.subTest(mode=oct(mode)):
+                self.refused('set-ID or sticky', after=lambda: hao.chmod(mode))
+                self.untouched()
+        hao.chmod(0o775)
+        (self.payload / 'root/usr/lib/hao/libhao.dylib').chmod(0o600)
+        rc, out = self.run_install()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(((self.system / 'usr/libexec/hao').stat().st_mode & 0o7777,
+                          (self.system / 'usr/lib/hao/libhao.dylib').stat().st_mode & 0o7777), (0o755, 0o644))
+
+    def test_no_payload_manifest(self):
+        self.refused('payload-manifest.json: missing or malformed',
+                     after=lambda: (self.payload / 'payload-manifest.json').unlink())
+        self.untouched()
+
+    def test_legacy_stub_elsewhere(self):
+        """a hao stub without a __hao_slice record anywhere in SYSTEM is an error; hao's launcher is not a stub"""
+        legacy = hao_fat.combine(executable(hao_fat.CPU_ARM64, '3' * 32, b'old'), hao_stub('6' * 32))
+        launcher = hao_fat.combine(executable(hao_fat.CPU_ARM64, '4' * 32, b'cli'), hao_stub('7' * 32, cli=True))
+        (self.system / 'usr/bin/old').write_bytes(legacy)
+        (self.system / 'usr/bin/cli').write_bytes(launcher)
+        out = self.refused('usr/bin/old (a hao stub without a __hao_slice record')
+        self.assertNotIn('usr/bin/cli', out)
+        record = json.loads((self.system / 'usr/lib/hao/install.json').read_text())
+        self.assertEqual((record['legacy_stubs'], record['embedded']), (['usr/bin/old'], 1))
+        self.assertEqual((self.system / 'usr/bin/old').read_bytes(), legacy)
+
+    def test_legacy_stub_restubbed(self):
+        """a manifest program embedded with a legacy stub gets this payload's stub; one of another program is an error"""
+        (self.system / 'usr/bin/prog').write_bytes(hao_fat.combine(self.guest, hao_stub('6' * 32)))
+        rc, out = self.run_install()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((self.system / 'usr/bin/prog').read_bytes(), self.result)
+        record = json.loads((self.system / 'usr/lib/hao/install.json').read_text())
+        self.assertEqual((record['restubbed'], record['kept_native'], record['legacy_stubs']), (['usr/bin/prog'], [], []))
+        other = hao_fat.combine(executable(hao_fat.CPU_ARM64, '3' * 32, b'old'), hao_stub('6' * 32))
+        (self.system / 'usr/bin/prog').write_bytes(other)
+        out = self.refused('usr/bin/prog (a hao stub without a __hao_slice record')
+        self.assertEqual((self.system / 'usr/bin/prog').read_bytes(), other)
+
+    def test_payload_legacy_stub_not_embedded(self):
+        """the payload's own stub must name the arm slice when it is a hao stub"""
+        self.stub = hao_stub('6' * 32)
+        (self.payload / 'embed/stubs/prog.stub').write_bytes(self.stub)
+        self.entry.update(stub_sha256=digest(self.stub), result_sha256=digest(hao_fat.combine(self.guest, self.stub)))
+        self.refused("usr/bin/prog (the payload's stub is a hao stub without a __hao_slice record")
+        self.assertEqual((self.system / 'usr/bin/prog').read_bytes(), self.guest)
 
     def test_record_symlink(self):
         (self.system / 'usr/lib/hao/install.json').symlink_to(self.victim)

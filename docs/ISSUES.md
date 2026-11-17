@@ -1,5 +1,24 @@
 # Runtime issues and measured scope
 
+## The installer took every file under the payload's root/
+
+`hao-install.py` copied every regular file under `PAYLOAD/root` into the
+System volume as root without reading `payload-manifest.json`, so a file
+added beside the listed ones (a LaunchDaemon and its program) was installed
+although the manifest check passed. It now refuses a payload that holds a
+file the manifest does not list, a link or special file, a missing listed
+file other than an AOT cache, or a set-ID or sticky runtime file, before
+any write. Each file it reads is copied once into a private directory and
+checked against its sha256; only the copies are installed or embedded, with
+modes 0755 or 0644. A hao stub without a `__hao_slice` record (a legacy
+stub) is no longer kept: a manifest program gets this payload's stub when
+that gives the recorded result, any other such stub in the System volume
+fails the install (`legacy_stubs` in install.json), and no payload stub
+without the record is embedded. Test: `tests/tools/test_install.py` (14
+of its cases fail with the old installer), `tests/tools/bundle.sh`. Limits:
+the manifest's hashes are not a signature; the scan reads the whole System
+volume once; copies outside it are not found.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,

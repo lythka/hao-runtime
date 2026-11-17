@@ -27,6 +27,15 @@ for c in /System/Volumes/Preboot/Cryptexes/Rosetta/System/Library/dyld /System/L
 done
 pass() { echo "PASS $*"; }
 bad() { echo "FAIL $*"; fails=$((fails + 1)); }
+# payman PAYLOAD: its payload-manifest.json as tools/hao-image-payload writes it (hao-install.py installs only what
+# that lists)
+payman() {
+    python3 -I -c 'import hashlib, json, os, sys
+p = sys.argv[1]
+f = {os.path.relpath(os.path.join(b, n), p): hashlib.sha256(open(os.path.join(b, n), "rb").read()).hexdigest()
+     for b, _, ns in os.walk(p) for n in ns if n != "payload-manifest.json" or b != p}
+json.dump({"files": f}, open(os.path.join(p, "payload-manifest.json"), "w"))' "$1"
+}
 mkdir -p "$OUT"
 G=$OUT/prog
 clang -arch arm64e -O1 -o "$G" "$repo/tests/guest/hello.c" && codesign -s - -f "$G" 2>/dev/null || exit 2
@@ -75,6 +84,7 @@ grep -q "^fail.*code signature is not valid" "$OUT/badpage.log" && [ ! -e "$OUT/
 d=$OUT/install; mkdir -p "$d/src/usr/bin" "$d/sys/usr/bin" "$d/sys/usr/lib/hao" "$d/pay/root/usr/lib/hao"
 cp "$G" "$d/src/usr/bin/prog"; cp "$G" "$d/sys/usr/bin/prog"
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/pay/embed" --root "$d/src" --x86-cache "$X86" --require usr/bin/prog "$d/src/usr/bin/prog" >/dev/null
+payman "$d/pay"
 python3 -I "$repo/tools/hao-install.py" "$d/sys" "$d/pay" >"$d/1.log" 2>&1; r1=$?
 python3 -I "$repo/tools/hao-install.py" "$d/sys" "$d/pay" >"$d/2.log" 2>&1; r2=$?
 if [ $r1 = 0 ] && [ $r2 = 0 ] && grep -q '"already_embedded": 1' "$d/sys/usr/lib/hao/install.json"; then
@@ -145,6 +155,7 @@ else bad "hao-runtime-on-mac: rc $r1 $r2 $r3: $(tail -3 "$d/run.log" "$d/bad.log
 d=$OUT/hardlink; rm -rf "$d"; mkdir -p "$d/src/usr/libexec" "$d/src/usr/sbin" "$d/pay/root/usr/lib/hao"
 cp "$G" "$d/src/usr/libexec/prog"; ln -f "$d/src/usr/libexec/prog" "$d/src/usr/sbin/prog"
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/pay/embed" --root "$d/src" --x86-cache "$X86" --scan >/dev/null
+payman "$d/pay"
 for kind in linked unlinked; do
     s=$d/sys-$kind; mkdir -p "$s/usr/libexec" "$s/usr/sbin" "$s/usr/lib/hao"
     cp "$G" "$s/usr/libexec/prog"

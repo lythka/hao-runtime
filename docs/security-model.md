@@ -47,6 +47,26 @@ target, or where a file is to be written fails the install.
 `tools/hao_release.py` applies the same rule when it checks and materialises
 a bundle.
 
+The payload must hold exactly the files its `payload-manifest.json` lists,
+each with its sha256: a file it does not list (a LaunchDaemon added under
+`root/`, for example), a symbolic link or special file, a missing file other
+than an AOT cache (made after the first boot), or a set-ID or sticky file
+under `root/` fails the install before the first write. The installer then
+copies every payload file it will read into a private directory, checks the
+copy's sha256 against the manifest and reads only the copy, so a payload that
+changes during the install changes nothing that is installed. It installs
+only the listed `root/` files, root:wheel, 0755 or 0644. The manifest's
+hashes give consistency, not authenticity: whoever can rewrite the payload
+can rewrite its manifest too, so the image builder must take both from an
+authenticated source.
+
+A hao stub (an x86_64 executable that links `libhao.dylib`, other than hao's
+launcher with its `__TEXT,__hao_cli` marker) must name its file's ARM slice
+in `__TEXT,__hao_slice`. The installer embeds no stub that does not, gives a
+manifest program that still carries an older hao stub this payload's stub
+when that yields the recorded result, and fails if any other file in the
+System volume carries a stub without that record.
+
 The packaging tools read Mach-O files, code signatures and interface units
 from the image being built. Their readers share one bounded load-command walk
 (`hao_fat.load_commands`) and refuse malformed or truncated input with an
@@ -495,9 +515,10 @@ entitlements (`tools/hao.entitlements`: `allow-jit`,
 - A stub made before `tools/hao-embed` wrote the `__hao_slice` record does
   not name its ARM slice. hao verifies such a program's ARM slice by the
   slice's own signature only, so a copy with another validly signed slice
-  still runs under the stub's identity and entitlements. Embed such
-  programs again; `hao-install.py` does not replace a stub that is already
-  in a file.
+  still runs under the stub's identity and entitlements. `hao-install.py`
+  restubs such a program when the payload embeds it and otherwise fails the
+  install while one is left in the System volume; a copy kept elsewhere (a
+  user's folder) is not found.
 - A set-ID embedded program that uses ObjC runs with libobjc's tagged-pointer
   obfuscation on: the stub does not re-execute there, and where `issetugid()`
   is set libobjc would ignore the switch anyway. Translated code that tests
