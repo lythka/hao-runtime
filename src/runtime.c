@@ -237,6 +237,7 @@ static void fork_child(void)
     traps_fork_child();
     loads_fork_child();
     hao_jit_fork_child();
+    hao_code_fork_child();   /* after hao_jit_fork_child's executable memory; guest pages hao was writing */
     hao_abi_fork_child();
     hao_blocks_fork_child();
     hao_bridge_fork_child();

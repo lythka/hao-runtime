@@ -64,6 +64,7 @@
  * HAO_TEST_SWITCHES build); no thunks without JIT memory.
  */
 #include "hao/runtime.h"
+#include "hao/code.h"
 #include "hao/bridge.h"
 #include "hao/swift_reverse.h"
 #include "hao/swiftvalue.h"
@@ -1096,9 +1097,9 @@ static size_t rewrite(hao_image *img, const struct ent *e, size_t n)
         if (j == k) { st_unplaced++, k++; continue; }
         uint64_t lo = e[k].field & ~(pg - 1), hi = align_up(e[j - 1].field + 8, pg);
         if (hi > ra + rs) hi = ra + rs;
-        int prot = (info.protection & VM_PROT_READ ? PROT_READ : 0) | (info.protection & VM_PROT_WRITE ? PROT_WRITE : 0);
-        bool ro = !(prot & PROT_WRITE);
-        if (ro && mprotect((void *)(uintptr_t)lo, hi - lo, prot | PROT_WRITE)) { st_unplaced += j - k; k = j; continue; }
+        /* through code.c's guest writer: one at a time with sealed-data stores, the protection read under its lock */
+        int prot = hao_guest_write_begin(lo, hi);
+        if (prot < 0) { st_unplaced += j - k; k = j; continue; }
         for (; k < j; k++) {
             int32_t rel = (int32_t)(int64_t)(e[k].target - e[k].field);
             if (e[k].abs) memcpy((void *)(uintptr_t)e[k].field, &e[k].target, 8);
@@ -1107,7 +1108,7 @@ static size_t rewrite(hao_image *img, const struct ent *e, size_t n)
             if (e[k].bridge) st_reverse++;
             done++;
         }
-        if (ro) mprotect((void *)(uintptr_t)lo, hi - lo, prot);
+        hao_guest_write_end(prot);
     }
     return done;
 }

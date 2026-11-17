@@ -665,6 +665,14 @@ static void code_write_tests(const uint8_t *seed, size_t n)
     /* a page that cannot be made writable (not mapped): refused, nothing written */
     if (m != MAP_FAILED) munmap(m + 0x1000, 0x1000);
     note(m != MAP_FAILED && !hao_code_write((uint64_t)(uintptr_t)m + 0x1000, 0, w8, 8), "patch of an unmapped page: refused");
+    /* a fork while a write is open: the child's hook gives the range its protection back and frees the lock
+     * (here the writer is this thread, as if it had not been copied) */
+    bool fk = m != MAP_FAILED && hao_guest_write_begin((uint64_t)(uintptr_t)m, (uint64_t)(uintptr_t)m + 0x1000) == VM_PROT_READ &&
+              prot_at((uint64_t)(uintptr_t)m) == (VM_PROT_READ | VM_PROT_WRITE);
+    hao_code_fork_child();
+    fk = fk && prot_at((uint64_t)(uintptr_t)m) == VM_PROT_READ && hao_guest_write_begin((uint64_t)(uintptr_t)m, (uint64_t)(uintptr_t)m + 0x1000) >= 0;
+    hao_guest_write_end(PROT_READ);
+    note(fk && prot_at((uint64_t)(uintptr_t)m) == VM_PROT_READ, "fork during a guest write: the child restores the page and the lock");
     if (m != MAP_FAILED) munmap(m, 0x1000);
 }
 

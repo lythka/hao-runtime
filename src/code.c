@@ -89,24 +89,79 @@ static int page_prot(uint64_t p)
     return info.protection & (PROT_READ | PROT_WRITE | PROT_EXEC);
 }
 
+/* Guest memory hao changes where the guest may not write it: its code
+ * (hao_code_write), an image's sealed constant data (hao_guest_cas_ro) and
+ * Swift metadata fields (swiftmeta.c). One such write at a time (gw_lock):
+ * a writer that gives a page its protection back must not catch another
+ * still writing it, and one that reads a page's protection must not take
+ * another's temporary write access for the page's own. The interval made
+ * writable is recorded: a fork child gives it its protection back
+ * (hao_code_fork_child), as the writer was not copied. */
+static pthread_mutex_t gw_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t gw_lo, gw_hi;          /* made writable by the open write, or 0 */
+static int gw_prot;                    /* what it had */
+
+int hao_guest_write_begin(uint64_t lo, uint64_t hi)
+{
+    pthread_mutex_lock(&gw_lock);
+    int prot = page_prot(lo);
+    if (prot < 0 || hi <= lo) { pthread_mutex_unlock(&gw_lock); return -1; }
+    if (!(prot & PROT_WRITE)) {
+        gw_prot = prot;
+        gw_lo = lo;
+        gw_hi = hi;
+        if (mprotect((void *)(uintptr_t)lo, hi - lo, (prot & ~PROT_EXEC) | PROT_READ | PROT_WRITE)) {
+            gw_lo = gw_hi = 0;
+            pthread_mutex_unlock(&gw_lock);
+            return -1;
+        }
+    }
+    return prot;
+}
+
+void hao_guest_write_end(int prot)
+{
+    if (gw_hi && mprotect((void *)(uintptr_t)gw_lo, gw_hi - gw_lo, prot)) {
+        static const char m[] = "hao: guest memory hao wrote cannot get its protection back; stopping\n";
+        write(2, m, sizeof m - 1);
+        abort();
+    }
+    gw_lo = gw_hi = 0;
+    pthread_mutex_unlock(&gw_lock);
+}
+
+bool hao_guest_cas_ro(uint64_t a, uint64_t expected, uint64_t desired)
+{
+    uint64_t lo = a & ~(PG - 1), hi = (a + 8 + PG - 1) & ~(PG - 1);
+    int prot = hao_guest_write_begin(lo, hi);
+    if (prot < 0) return false;
+    bool ok = __atomic_compare_exchange_n((uint64_t *)(uintptr_t)a, &expected, desired, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    hao_guest_write_end(prot);
+    return ok;
+}
+
+void hao_code_fork_child(void)
+{
+    if (gw_hi) mprotect((void *)(uintptr_t)gw_lo, gw_hi - gw_lo, gw_prot);
+    gw_lo = gw_hi = 0;
+    gw_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
+
 /* n bytes at a, page by page: writable for the copy, then the protection
  * the page had (HAO_CODE_ALIAS: PROT_NONE while poisoned, readable once a
  * guest load opened it). False when a page could not be made writable: the
- * pages before it are written. A page that cannot be made read-only again
- * stops the process: guest code must not stay writable. */
+ * pages before it are written. A page that cannot be given its protection
+ * back stops the process: guest code must not stay writable. */
 static bool write_pages(uint64_t a, const void *src, size_t n, bool poisoned)
 {
     for (uint64_t at = a, end = a + n; at < end;) {
         uint64_t p = at & ~(PG - 1), k = end - at < p + PG - at ? end - at : p + PG - at;
-        int prot = page_prot(p);
-        if (prot < 0 || mprotect((void *)(uintptr_t)p, PG, PROT_READ | PROT_WRITE)) return false;
+        int prot = hao_guest_write_begin(p, p + PG);
+        if (prot < 0) return false;
         memcpy((void *)(uintptr_t)at, (const uint8_t *)src + (at - a), k);
         poison_t *e = poisoned ? poison_of(p) : NULL;
         if (e) prot = __atomic_load_n(&e->open[(p - e->lo) / PG], __ATOMIC_ACQUIRE) ? PROT_READ : PROT_NONE;
-        if (mprotect((void *)(uintptr_t)p, PG, prot)) {
-            fprintf(stderr, "hao: guest code page %#llx cannot be made read-only again; stopping\n", (unsigned long long)p);
-            abort();
-        }
+        hao_guest_write_end(prot);
         at += k;
     }
     return true;
@@ -114,12 +169,9 @@ static bool write_pages(uint64_t a, const void *src, size_t n, bool poisoned)
 
 bool hao_code_write(uint64_t a, int64_t delta, const void *src, size_t n)
 {
-    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;   /* two writers of one page */
     if (!n) return true;
     if (a + n < a || (delta && a + (uint64_t)delta + n < a + (uint64_t)delta)) return false;
-    pthread_mutex_lock(&lock);
     bool ok = write_pages(a, src, n, true) && (!delta || write_pages(a + (uint64_t)delta, src, n, false));
-    pthread_mutex_unlock(&lock);
     if (ok) __atomic_fetch_add(&st_writes, 1, __ATOMIC_RELAXED);
     return ok;
 }
