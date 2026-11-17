@@ -640,6 +640,7 @@ tests/tools/codeid_test.c
 tests/tools/identity.sh
 tests/tools/identity_helper.c
 tests/tools/identity_main.c
+tests/tools/onmac_pin_check.py
 tests/tools/platform.c
 tests/tools/platform.sh
 tests/tools/run.sh
@@ -654,7 +655,6 @@ tests/tools/test_catalog_gate.py
 tests/tools/test_contract.py
 tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
-tests/tools/test_onmac_pin.py
 tests/tools/test_release.py
 tests/tools/test_trustlist.py
 tests/translate/run.sh
