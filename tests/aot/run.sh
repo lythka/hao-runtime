@@ -405,6 +405,25 @@ clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/loadtime" "$here/loadtime.c" -
 l=$(HAO_CACHE=$C timeout -s KILL "$T" "$OUT/loadtime" "$G" 5 2>/dev/null | tail -1)
 case $l in *": 5/5 loaded, min "*) pass "L loadtime: ${l#*: }" ;; *) bad "L loadtime: $l" ;; esac
 
+# --- V: a program that requires library validation reads caches from the system directories only, so
+# `hao --aot --check` and `hao --aot` answer with those: a cache in HAO_CACHE is missing for it, and nothing
+# is skipped for it or written there. The ad hoc program is the control.
+fresh "$OUT/v"; fresh "$OUT/vp"
+VH=$OUT/hardened.arm64e
+cp "$G" "$VH" && codesign -s - -f -o runtime "$VH" 2>/dev/null || exit 1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/v" "$VH" >/dev/null 2>&1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/vp" "$G" >/dev/null 2>&1
+HAO_CACHE="$OUT/vp" timeout -s KILL 60 "$HAO" --aot --check "$G" >"$OUT/v0.out" 2>&1; r0=$?
+HAO_CACHE="$OUT/v" timeout -s KILL 60 "$HAO" --aot --check "$VH" >"$OUT/v1.out" 2>&1; r1=$?
+[ $r0 = 0 ] && grep -q ": valid (" "$OUT/v0.out" && [ $r1 = 3 ] && grep -q ": missing" "$OUT/v1.out" &&
+    pass "V --check: HAO_CACHE's cache valid for the ad hoc program, missing for the hardened one" ||
+    bad "V --check: ad hoc rc $r0 ($(head -c 200 "$OUT/v0.out")), hardened rc $r1 ($(head -c 200 "$OUT/v1.out"))"
+n=$(ls "$OUT/v" | wc -l)
+HAO_CACHE="$OUT/v" timeout -s KILL 120 "$HAO" --aot "$VH" >"$OUT/v2.out" 2>&1; r2=$?
+[ $r2 != 0 ] && ! grep -q "skipped" "$OUT/v2.out" && grep -q "requires library validation" "$OUT/v2.out" && [ "$(ls "$OUT/v" | wc -l)" = "$n" ] &&
+    pass "V hao --aot, hardened program, HAO_CACHE: not skipped as valid, nothing written there" ||
+    bad "V hao --aot hardened: rc $r2: $(head -c 300 "$OUT/v2.out")"
+
 # --- F: the policy unit test
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/policy" "$here/policy.c" "$B/libhaocore.a" && codesign -s - -f "$OUT/policy" 2>/dev/null
 mkdir -p "$OUT/ut" && chmod 755 "$OUT/ut"

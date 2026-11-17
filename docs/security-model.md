@@ -361,7 +361,10 @@ image with that cdhash ever loads the cache.
 `/usr/lib/hao/stub-identities`, each as `hao --aot FILE` above. A list that is
 not a root-owned regular file writable only by root is not used. A program whose cache in a directory this process reads already passes the
 loader's checks is skipped; `hao --aot --check` runs those checks and writes
-nothing.
+nothing. Both first verify the program's signature and, for a program that
+requires library validation, look in the system directories only, as a run
+of it does; without `--cache`, `hao --aot` writes no cache for such a
+program into a directory a run of it does not read.
 
 System directories hold caches for signed code only. `hao --aot` writes none
 for an unsigned guest there (as root without `--cache`, or with `--cache` or
