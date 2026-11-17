@@ -478,6 +478,12 @@ void hao_guest_switches_for(const hao_codesig *s)
             hao_diag_prefix(HAO_DIAG);
             fprintf(HAO_DIAG, "%s ignored: the program requires library validation\n", sw[k].name);
         }
+    /* app libraries load as guest code, under library validation, not natively first */
+    if (hao_opt.native_app_libs) {
+        hao_opt.native_app_libs = false;
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "HAO_NATIVE_APP_LIBS ignored: the program requires library validation\n");
+    }
 }
 
 /* The policy for the file open on fd, which the caller then hands to the

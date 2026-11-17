@@ -217,7 +217,7 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *  - change how native calls are made, so a correct program stops being one: HAO_NO_VARSNIFF (variadic natives
  *    read their arguments from the wrong registers, varsniff.c), HAO_NO_IFUNITS and HAO_NO_THUNKS (calls fall to
  *    the untyped bridge or are refused, bridge.c), HAO_NATIVE_LIBCXX (guest code meets a libc++ with another
- *    std::string layout, runtime.c), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
+ *    std::string layout, runtime.c), HAO_NATIVE_APP_LIBS (app values cross representation domains), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
  *    swiftresult.c);
  *  - print guest data and addresses to wherever the caller's stderr goes: HAO_SWIFT_VALUE_SURVEY (a root

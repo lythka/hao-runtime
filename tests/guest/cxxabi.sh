@@ -10,7 +10,7 @@
 # libc++ and the helper libcxxabihelper.dylib (x86_64 + arm64 + arm64e; under
 # hao it loads as guest code, as an on-disk C++ library with an arm64 slice and
 # no ObjC/Swift sections, and libc++ is the arm64e cache's, run as guest code;
-# HAO_NATIVE_LIBCXX=1 keeps both native), then runs every section on its own:
+# HAO_NATIVE_LIBCXX=1 HAO_NATIVE_APP_LIBS=1 keeps both native), then runs every section on its own:
 # natively, and under hao with the JIT, --interp and an AOT cache. A run
 # passes when stdout and the exit status match native arm64.
 # Expected failures are listed in EXPECT (the W4 gate; empty since guest libc++,

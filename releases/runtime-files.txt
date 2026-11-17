@@ -749,3 +749,5 @@ src/ids.c
 src/ioreg.c
 tests/guest/ioreg.c
 tests/host/ioreg.c
+tests/guest/appdomain.c
+tests/guest/appdomain.sh

@@ -83,7 +83,8 @@ guest/swiftthunks	300	par	tests/guest/swiftthunks.sh
 guest/threads	300	par	tests/guest/threads.sh
 guest/uresume	300	par	tests/guest/uresume.sh
 guest/varsniff	300	par	tests/guest/varsniff.sh
-guest/xinhab	300	xfail	tests/guest/xinhab.sh
+guest/appdomain	300	par	tests/guest/appdomain.sh
+guest/xinhab	300	par	tests/guest/xinhab.sh
 guest/xpac	300	par	tests/guest/xpac.sh
 guest/wx	300	par	tests/guest/wx.sh
 guest/wxguard	120	par	tests/guest/wxguard.sh

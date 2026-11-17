@@ -24,6 +24,8 @@
 # the hao part is skipped: there a plain x86_64 program under such a profile
 # hangs in Rosetta's exception server at its first SIGSEGV (no hao involved).
 set -eu
+# Preserve the native-helper behavior this fixture measures.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-sigpolicy)}
 T=${T:-10}
