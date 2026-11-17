@@ -9,7 +9,9 @@
 # returning such a value to guest code, "boxed" an Any whose boxed value holds a C?? nil, destroyed in a tuple,
 # "task" a child task with a C?? result (refused when created), "array" an array of C?? and "box" a captured C??
 # variable (refused when their storage is made: native code destroys it), "unreflected" a struct built without
-# reflection metadata (tests/guest/svpolicy_lib.swift) beside a C?? (its fields are not known). "frozen": a native frozen enum the guest built is
+# reflection metadata (tests/guest/svpolicy_lib.swift) beside a C?? (its fields are not known). "anyarray",
+# "anycopy", "anyassign", "anybox": [Any] storage and a box of Any holding guest-written C?? nils, destroyed by the
+# runtime (dropped, after a copy of the array value, assigned over): equal native arm64, converted at destruction. "frozen": a native frozen enum the guest built is
 # examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/svpolicy.sh
 set -u
@@ -31,7 +33,7 @@ done
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/svpolicy.arm64e" >"$OUT/aot.gen" 2>&1 || echo "svpolicy: aot generation failed"
 fail=0
-for part in pass refuse gate wide result frozen boxed task array box unreflected; do
+for part in pass refuse gate wide result frozen boxed task array box unreflected anyarray anycopy anyassign anybox; do
     timeout -s KILL "$T" "$OUT/svpolicy.arm64" $part >"$OUT/native.$part.out" 2>/dev/null; nrc=$?
     [ $nrc = 0 ] || { echo "$part native rc=$nrc"; fail=1; }
 done
@@ -73,6 +75,16 @@ for c in "owner-opaque .*NSObject" "identical-representation .*Int) -> Swift.Int
     grep -q "Swift value passed as found: $c" "$OUT/check.err" && r=NAMED || { r=NOT-NAMED; fail=1; }
     echo "class $c: $r"
 done
+# Storage holding guest-written nils inside Any, destroyed by the runtime: converted at that destruction.
+for part in anyarray anycopy anyassign anybox; do
+    timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" "$OUT/svpolicy.arm64e" $part >"$OUT/jit.$part.out" 2>"$OUT/jit.$part.err"; rc=$?
+    if [ $rc = 0 ] && cmp -s "$OUT/native.$part.out" "$OUT/jit.$part.out"; then r=SAME; else r=DIFF; fail=1; fi
+    printf '%-9s jit rc=%s %s\n' $part "$rc" "$r"
+    [ $r = SAME ] || grep -v hao-schema "$OUT/jit.$part.err" | tail -3 | sed 's/^/    /'
+done
+timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" anyarray >/dev/null 2>"$OUT/anyarray.check"
+grep -q 'Swift storage destroyed by the runtime: [1-9][0-9]* nils converted' "$OUT/anyarray.check" && r=CONVERTED || { r=NOT-CONVERTED; fail=1; }
+echo "anyarray destruction $r"
 # A native frozen enum is examined, not taken as native-made.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" frozen >"$OUT/frozen.out" 2>"$OUT/frozen.err"; rc=$?
 if [ $rc = 0 ] && cmp -s "$OUT/native.frozen.out" "$OUT/frozen.out" &&

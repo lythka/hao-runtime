@@ -56,9 +56,19 @@ generic box from `swift_allocBox`) is refused when it is made if its
 element type has a nil whose encoding differs, or is past the walk's
 bounds. Nils inside a positively resilient native type are written by its
 native witnesses and do not count. An element type that is only not settled
-(an enum, an existential) is not refused: refusing every `[Any]` would stop
-nearly every program, and such contents are not certified when the runtime
-destroys them. A struct or tuple whose reflection reports no fields but
+(an enum, an existential) is not refused there: its storage is certified at
+its final destruction instead. Once guest code makes array storage or a
+generic box of such a type, hao takes over that metadata's destroy function
+(one per instantiated element type, so storage native code made is covered
+too) and, before the runtime destroys the contents, walks each live element
+and rewrites its nils in place to the native encoding (the destruction is
+exclusive and final). A shared existential box is never rewritten; an
+element the walk cannot certify is refused in storage guest code made and
+left as found in other storage. This hook replaces symbol interposition of
+`swift_arrayDestroy`: the array storage's deinit calls it directly inside
+libswiftCore (measured), where no interposition reaches. Guest calls of an
+opaque existential's own witnesses (`Any`, `any P`) are intercepted like an
+Optional's. A struct or tuple whose reflection reports no fields but
 has bytes (built without reflection metadata) has unknown fields: refused,
 not taken as empty.
 
@@ -87,7 +97,10 @@ built (`_PlaygroundQuickLook`) is examined (taken as native-made before).
 default, equal to native with the switch. Also refused: an array of `C??`
 filled with a nil and released by guest code (faulted before), a generic
 captured `C??` variable (its box), and a struct built without reflection
-metadata holding an `Any.Type??` (passed as scalars before).
+metadata holding an `Any.Type??` (passed as scalars before). An `[Any]` holding guest-written `C??` nils
+dropped, its value copied and dropped, or assigned over, and a generic
+captured `Any` holding one, equal native arm64 (all four faulted before);
+`HAO_BRIDGE_CHECK` names the conversion at destruction.
 `guest/optwitness` keeps its values in arrays of nested Optionals and
 `guest/sitepack` in arrays holding an Optional of a native struct no table
 covers: both are refused by default (checked for `optwitness`), and their
@@ -109,10 +122,13 @@ and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
 measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
 Limits: `InlineArray` of anything but scalars has no rule and is refused;
 task results of any type that needs certification are refused, not
-converted; storage is refused only for element types with a differing
-nil, so an enum's or an existential's contents are not certified when the
-runtime destroys them; Dictionary and Set storage, and storage native
-generic code allocates, are not checked; the tag witnesses of an enclosing
+converted; copies and assignments of stored elements inside native code
+(an array's copy on write, `swift_arrayInitWithCopy` and the witnesses it
+calls) are not intercepted, so a guest-written nil there can still be read
+natively; Dictionary and Set storage and boxes made by native code are not
+covered; storage of an element type guest code never made storage of is not
+hooked; an uncertifiable element in storage native code made is destroyed
+as found; the tag witnesses of an enclosing
 enum with more than one empty case are not intercepted. More
 values are walked at each intercepted call than before. The classes are
 host-tested only; an image run is needed to see which programs stop.
