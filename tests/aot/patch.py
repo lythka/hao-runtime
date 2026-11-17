@@ -1,9 +1,9 @@
-"""patch.py IN OUT EDIT...: copy an AOT v7 cache (include/hao/aot.h) with edits.
+"""patch.py IN OUT EDIT...: copy an AOT v8 cache (include/hao/aot.h) with edits.
 
 After the edits the payload hash is recomputed (unless an edit says
 nohash), so each loader check can be tested on its own. Edits:
   hdr.FIELD=V        version, hdr_size, nblocks, nlinks, code_size, file_size,
-                     vmsize, guest_id, payload_hash, id_kind, id_hash
+                     vmsize, guest_id, payload_hash, id_kind, id_hash, cpu_profile
   ent.FIELD=K:V      guest_off or code_off of entry K (V may be +N or -N)
   link.FIELD=K:V     site or target of link K
   flip.uuid  flip.gen  flip.code    flip one byte of that field / the first block
@@ -17,9 +17,9 @@ nohash), so each loader check can be tested on its own. Edits:
 import struct
 import sys
 
-HDR = struct.Struct("<8sII16s16sQQIIQQQII32s")
+HDR = struct.Struct("<8sII16s16sQQIIQQQII32sQ")
 FIELDS = ["magic", "version", "hdr_size", "uuid", "gen", "vmsize", "guest_id", "nblocks", "nlinks",
-          "code_size", "file_size", "payload_hash", "id_kind", "id_hash", "code_id"]
+          "code_size", "file_size", "payload_hash", "id_kind", "id_hash", "code_id", "cpu_profile"]
 M = (1 << 64) - 1
 
 
@@ -90,8 +90,9 @@ def main():
                     data[code_at + i] = 0xCC
         else:
             sys.exit("patch.py: unknown edit " + e)
-    if rehash:
-        h["payload_hash"] = hash64(data[HDR.size:])
+    if rehash:   # the header with payload_hash zero, then the rest (include/hao/aot.h hao_aot_file_hash)
+        h["payload_hash"] = 0
+        h["payload_hash"] = hash64(data[HDR.size:], hash64(HDR.pack(*[h[f] for f in FIELDS])))
     HDR.pack_into(data, 0, *[h[f] for f in FIELDS])
     if truncate is not None:
         data = data[:truncate]

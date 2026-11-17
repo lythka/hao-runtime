@@ -30,16 +30,18 @@ void hao_idlist_use_dir_for_test(const char *d)
 }
 #endif
 
-/* st is owned by `owner` (or root), not writable by group or others, and path has no extended ACL. */
+/* st is owned by `owner` (or root), not writable by group or others, and path has no extended ACL:
+ * the lookup says ENOENT. An ACL that cannot be read (any other error) is not known to be absent. */
 static bool safe(const char *path, const struct stat *st)
 {
     if ((st->st_uid != owner && st->st_uid != 0) || (st->st_mode & (S_IWGRP | S_IWOTH))) return false;
-    acl_t a = acl_get_link_np(path, ACL_TYPE_EXTENDED);   /* NULL: none */
+    errno = 0;
+    acl_t a = acl_get_link_np(path, ACL_TYPE_EXTENDED);
     if (a) {
         acl_free(a);
         return false;
     }
-    return true;
+    return errno == ENOENT;
 }
 
 /* Every directory from / to dir (the test hook: dir only): a real directory, safe. */

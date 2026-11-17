@@ -11,6 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include <mach-o/nlist.h>
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
@@ -88,6 +89,11 @@ static void thread_key_dtor(void *v) { pthread_setspecific(thread_key, v); }
  * malloc: callbacks also run in signal handlers. */
 #define CPU_SAVES 4096
 #define CPU_SAVES_ON_STACK 4
+/* hao_thread.noret (callback_plain): per nesting level 64 KB and a 64 KB guard after it */
+#define NORET_LEVEL (64u << 10)
+#define NORET_LEVELS 16
+#define NORET_GUARD (64u << 10)
+#define NORET_SIZE ((size_t)(NORET_LEVEL + NORET_GUARD) * NORET_LEVELS)
 static hao_cpu *cpu_save_push(hao_thread *t, unsigned *mark)
 {
     unsigned n = t->cpu_saves_n;
@@ -114,6 +120,7 @@ static void thread_hook(unsigned int ev, pthread_t th, void *addr, size_t size)
     __atomic_fetch_sub(&hao_threads_live, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&hao_threads_freed, 1, __ATOMIC_RELAXED);
     if (t->cpu_saves) munmap(t->cpu_saves, CPU_SAVES * sizeof(hao_cpu));
+    if (t->noret) munmap(t->noret, NORET_SIZE);
     /* Safe with guest frames still on this stack (pthread_exit from guest
      * code): Darwin's pthread_exit never returns into them. The mapping
      * holds t itself, so nothing reads t after this. */
@@ -175,7 +182,11 @@ static hao_thread *thread_new(void)
         write(2, msg, sizeof msg - 1);
         abort();
     }
-    mprotect(m, GUEST_STACK_GUARD, PROT_NONE);
+    if (mprotect(m, GUEST_STACK_GUARD, PROT_NONE) != 0) {
+        static const char msg[] = "hao: guest stack: cannot protect its guard page\n";
+        write(2, msg, sizeof msg - 1);
+        abort();
+    }
     hao_thread *t = (hao_thread *)(m + GUEST_STACK_GUARD + ss);   /* zero-filled */
     t->stack = m + GUEST_STACK_GUARD;
     t->stack_size = ss;
@@ -231,6 +242,7 @@ static void fork_child(void)
     traps_fork_child();
     loads_fork_child();
     hao_jit_fork_child();
+    hao_code_fork_child();   /* after hao_jit_fork_child's executable memory; guest pages hao was writing */
     hao_abi_fork_child();
     hao_blocks_fork_child();
     hao_bridge_fork_child();
@@ -245,6 +257,8 @@ static void fork_child(void)
     hao_swift_value_fork_child();
     hao_async_contract_fork_child();
     hao_varsniff_fork_child();
+    hao_signals_fork_child();
+    hao_vafmt_fork_child();
 }
 
 static pthread_once_t fork_once = PTHREAD_ONCE_INIT;
@@ -403,6 +417,67 @@ __attribute__((noinline)) static bool native_call_stackpack(hao_cpu *c, uint64_t
     hao_native_call(pc, c, (uint64_t)n);
     c->x[31] = sp;
     return true;
+}
+
+/* Is the guest function at pc a Swift function by its own symbol: a defined symbol at exactly pc whose
+ * name is a Swift mangled name (_$s, _$S)? Its convention then passes an indirect result's buffer in rax
+ * (callback_plain). Read from the image's symbol table as mapped (no lock, no allocation, no dladdr:
+ * callbacks run in signal handlers too); remembered per address in a direct-mapped table. A stripped
+ * local symbol (a closure of a release build) is not found: such a function gets hao's own area. */
+static bool guest_swift_symbol(uint64_t pc)
+{
+    enum { N = 2048 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *m = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(m, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    bool sw = false;
+    hao_image *im = hao_image_for_code(pc);
+    const struct mach_header_64 *mh = im && !im->dsc ? (const void *)(uintptr_t)im->base : NULL;
+    const struct symtab_command *st = NULL;
+    const struct segment_command_64 *le = NULL;
+    if (mh && mh->magic == MH_MAGIC_64 && mh->sizeofcmds < (1u << 20)) {
+        const uint8_t *p = (const uint8_t *)(mh + 1), *end = p + mh->sizeofcmds;
+        for (uint32_t k = 0; k < mh->ncmds && p + sizeof(struct load_command) <= end; k++) {
+            const struct load_command *lc = (const void *)p;
+            if (lc->cmdsize < sizeof *lc || lc->cmdsize > (size_t)(end - p)) break;
+            if (lc->cmd == LC_SYMTAB && lc->cmdsize >= sizeof *st) st = (const void *)lc;
+            if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof *le && !strncmp(((const struct segment_command_64 *)lc)->segname, "__LINKEDIT", 16))
+                le = (const void *)lc;
+            p += lc->cmdsize;
+        }
+    }
+    if (st && le && st->symoff >= le->fileoff && st->stroff >= le->fileoff) {
+        uint64_t lo = le->vmaddr + im->slide, n = le->filesize;
+        uint64_t so = st->symoff - le->fileoff, to = st->stroff - le->fileoff;
+        if (so <= n && (uint64_t)st->nsyms * sizeof(struct nlist_64) <= n - so && to <= n && st->strsize <= n - to) {
+            const struct nlist_64 *sym = (const void *)(uintptr_t)(lo + so);
+            const char *str = (const char *)(uintptr_t)(lo + to);
+            for (uint32_t k = 0; k < st->nsyms && !sw; k++) {
+                if ((sym[k].n_type & (N_STAB | N_TYPE)) != N_SECT || sym[k].n_value + im->slide != pc) continue;
+                uint32_t x = sym[k].n_un.n_strx;
+                sw = x + 3 < st->strsize && str[x] == '_' && str[x + 1] == '$' && (str[x + 2] == 's' || str[x + 2] == 'S');
+            }
+        }
+    }
+    __atomic_store_n(m, pc << 1 | sw, __ATOMIC_RELAXED);
+    return sw;
+}
+
+/* Is the native function at pc a Swift function by its own symbol (an exported Swift mangled name at
+ * exactly pc)? Guest functions passed to it are Swift function values: their entries are marked
+ * (hao_swift_thunk_for). Asked when the guest calls it, never on a callback's path; remembered per
+ * address in a direct-mapped table. */
+static bool native_swift_symbol(uint64_t pc)
+{
+    enum { N = 4096 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *e = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    Dl_info di;
+    const char *n = dladdr((void *)(uintptr_t)pc, &di) && di.dli_sname && di.dli_saddr == (void *)(uintptr_t)pc ? di.dli_sname : "";
+    bool sw = n[0] == '$' && (n[1] == 's' || n[1] == 'S');
+    __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
+    return sw;
 }
 
 static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
@@ -582,7 +657,7 @@ static void native_step(void *arg)
         if (hao_opt.bridge_check && p && (p->flags & HAO_PLAN_MASKED)) hao_bridge_check_mask(t, p);
     }
     if (t->swift_values && hao_swift_value_native(t,pc)) return;
-    if (pc >= __atomic_load_n(&hao_swift_witness_lo,__ATOMIC_ACQUIRE) && pc <= hao_swift_witness_hi &&
+    if (pc >= __atomic_load_n(&hao_swift_witness_lo,__ATOMIC_ACQUIRE) && pc <= __atomic_load_n(&hao_swift_witness_hi,__ATOMIC_RELAXED) &&
         hao_swift_witness_native(t,pc)) return;
     if (p && p->thunk_guest) {
         hao_swift_objects_args(t);   /* swiftself need not appear in the pair's code-argument mask */
@@ -594,7 +669,7 @@ static void native_step(void *arg)
     }
     /* guest function pointers and blocks passed to native code get thunks:
      * in the argument slots the plan names, or in all of them */
-    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL);
+    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL, native_swift_symbol(pc));
     t->native_calls++;
     unsigned objc_enum_result = p && p->src == HAO_BRS_OBJCIMP ? hao_objc_enum_args(c, pc, false) : 0;
     unsigned swift_enum = p ? __atomic_load_n(&p->swift_enum, __ATOMIC_RELAXED) : 0;   /* NSTextAlignment in a Swift signature (swiftcc.c) */
@@ -1038,8 +1113,8 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
     t->cpu_saves_n = mark;
 }
 
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved);
-static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t);
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc);
+static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc);
 
 uint64_t hao_callback(hao_cb_frame *f)
 {
@@ -1059,16 +1134,22 @@ uint64_t hao_callback(hao_cb_frame *f)
     }
     /* arrived by an NX fault: a block whose helper this is gets thunks for next time */
     if (in == HAO_CB_FAULT) hao_blocks_heal(f->gpr[0], f->target);
+    bool marked = in == HAO_CB_SWIFTCC;
+    if (marked) in = 0;
     /* a call without a signature thunk (NX fault, plain thunk) may still
      * have a signature noted for its target (abi.c) */
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
     if (sig) { hao_callback_with_sig(f, sig); return 0; }
+    /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry), its
+     * own symbol does, or a native function the guest called jumped on to it (a dispatch thunk's tail
+     * call returns to hao_native_call, which put the guest's own x8 in rax) */
+    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target);
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
-    if (!saved) return callback_plain_local(f, t);
+    if (!saved) return callback_plain_local(f, t, swiftcc);
     *saved = t->cpu;
-    uint64_t pop = callback_plain(f, t, saved);
+    uint64_t pop = callback_plain(f, t, saved, swiftcc);
     t->cpu_saves_n = mark;
     return pop;
 }
@@ -1091,13 +1172,40 @@ __attribute__((noinline, cold)) static void callback_trace_pop(const hao_cb_fram
             (long long)native_pop);
 }
 
-/* A native-to-guest call without a signature (NX fault, plain thunk). */
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
+/* x8 for a callback without a signature whose native caller passed no
+ * result buffer: the result is unknown, and so is its size. A guest
+ * function that does return through x8 writes into this thread's own area:
+ * 64 KB for each of the first NORET_LEVELS nesting levels, each followed by
+ * a 64 KB guard, so a larger result faults in its level's guard instead of
+ * reaching another's. A deeper level gets a guard itself (its store faults
+ * at once), as does a thread whose area cannot be made. Never memory that
+ * holds anything (the guest stack, hao's code). A mapping, not malloc:
+ * callbacks also run in signal handlers; a signal handler's callback that
+ * makes the area first wins and the interrupted one drops its own. */
+static uint64_t noret_area(hao_thread *t)
+{
+    uint8_t *m = __atomic_load_n(&t->noret, __ATOMIC_ACQUIRE);
+    if (!m) {
+        uint8_t *n = mmap(NULL, NORET_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (n == MAP_FAILED) return 0;
+        for (unsigned k = 0; k < NORET_LEVELS; k++)
+            if (mprotect(n + (size_t)(NORET_LEVEL + NORET_GUARD) * k, NORET_LEVEL, PROT_READ | PROT_WRITE)) { munmap(n, NORET_SIZE); return 0; }
+        uint8_t *none = NULL;
+        if (__atomic_compare_exchange_n(&t->noret, &none, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) m = n;
+        else { munmap(n, NORET_SIZE); m = none; }
+    }
+    unsigned level = t->depth > 0 ? (unsigned)t->depth : 0;
+    if (level >= NORET_LEVELS) return (uint64_t)(uintptr_t)(m + NORET_LEVEL);   /* level 0's guard */
+    return (uint64_t)(uintptr_t)(m + (size_t)(NORET_LEVEL + NORET_GUARD) * level);
+}
+
+/* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry). */
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc)
 {
     hao_cpu *c = &t->cpu;
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
     t->callbacks++;
-    if (hao_verbose > 1) callback_trace_entry(f, t);
+    if (hao_verbose > 1) { callback_trace_entry(f, t); if (swiftcc) fprintf(stderr, "hao:   (a Swift entry: rax %#llx)\n", (unsigned long long)f->swift[3]); }
     for (int k = 0; k < 6; k++) c->x[k] = f->gpr[k];
     /* SysV stack args 0,1 -> x6,x7; the rest are copied to the guest stack */
     c->x[6] = f->stack_args[0];
@@ -1107,22 +1215,25 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
     c->x[20] = f->swift[1];
     c->x[22] = f->swift[2];
     c->x[0] = hao_swift_async_extend_result(f->target, c->x[0]);
-    /* Guest stack: the SysV stack arguments from slot 2 at sp, above them a
-     * scratch area for an indirect result x8 must not point at (below). */
-    enum { SCRATCH = 1024 };
+    /* Guest stack: the SysV stack arguments from slot 2 at sp, 1 KB below
+     * the caller's frames (the room x8 used to point at). Kept: without it
+     * tests/guest/uresume's alarm cases see stack arguments overwritten
+     * while signals arrive during the call. */
+    enum { GAP = 1024 };
     uint64_t top = (saved->x[31] - 256) & ~15ull;
-    uint64_t sp = (top - SCRATCH - CB_STACK_AREA) & ~15ull;
+    uint64_t sp = (top - GAP - CB_STACK_AREA) & ~15ull;
     memcpy((void *)(uintptr_t)sp, &f->stack_args[2], 8 * CB_STACK_COPY);
     /* x8 is the indirect-result register: native swiftcc passes it in rax.
      * A C caller leaves anything there, often the function pointer it just
      * called (the thunk) or al = the vector-register count of a variadic
-     * call; a guest function returning a large struct would then write its
-     * result into hao's code. So only a value that can be a data pointer is
-     * passed through; otherwise x8 points at the scratch area. */
+     * call, and a C caller's indirect result buffer is in rdi. So rax is
+     * passed through only to a Swift function (its entry says so, or its
+     * native caller is Swift code: hao_callback), and then only a value that
+     * can be a data pointer; otherwise x8 is noret_area's. */
     uint64_t r = f->swift[3];
-    bool data = r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) && !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) &&
-                !hao_is_trap(r);
-    c->x[8] = data ? r : sp + CB_STACK_AREA;
+    bool data = swiftcc && r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) &&
+                !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) && !hao_is_trap(r);
+    c->x[8] = data ? r : noret_area(t);
     c->x[31] = sp;
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
@@ -1142,10 +1253,10 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved)
     return pop;
 }
 
-__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t)
+__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc)
 {
     hao_cpu saved = t->cpu;
-    return callback_plain(f, t, &saved);
+    return callback_plain(f, t, &saved, swiftcc);
 }
 
 /* ---------------------------------------------------- fault handler */
@@ -1155,7 +1266,10 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * hao's diagnostics go to the console and, when one is configured, to a log
  * file, each line (or report, hao_diag_block) with one write(2):
  *   console  stderr; with boot argument hao_crash=1, /dev/console on a high
- *            close-on-exec descriptor (PID 1's stderr is the console);
+ *            close-on-exec descriptor (PID 1's stderr is the console), which
+ *            gets only one line per process and destination naming where the
+ *            lines went (con_notice): they hold register values, addresses
+ *            and guest data;
  *   log      with hao_crash=1, /private/var/log/hao/console.log; HAO_DIAG_DIR
  *            (an absolute directory, ordinary processes) names another.
  * On hardware nothing records /dev/console; the file is read afterwards over
@@ -1174,8 +1288,10 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * can write it, and DIR/user only when it is sticky and DIR's owner's.
  * PID 1 starts before launchd's boot tasks mount the Data volume: an open
  * that finds no directory yet (or the System volume's own /private/var) is
- * retried at the next write. Writes stop at hao_diag_log_cap bytes (64 MB a
- * boot; console.log.0 keeps the boot before), after one line that says so.
+ * retried at the next write. Each write to the file is made under DIR/.lock
+ * and cut at hao_diag_log_cap bytes (64 MB a boot, for all the processes
+ * that share the file; console.log.0 keeps the boot before), after one line
+ * that says so.
  * The write path makes system calls on descriptors opened here and formats
  * into stack buffers, nothing else (crash diagnostics come from signal
  * handlers); a log descriptor the program closed and reused is dropped.
@@ -1185,10 +1301,14 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
  * sandbox before hao starts), and its stderr goes nowhere. When a log is
  * configured, every write the file does not take (no file could be opened,
  * the write failed, the program closed the descriptor) goes to the unified
- * log instead, subsystem "com.hao", category "diag": one public record per
- * line, a line longer than UNI_PIECE bytes cut into pieces, each but the last
- * ending in "\x1f" (log show --predicate 'subsystem == "com.hao"';
- * the bridge worklist tool, not part of this repository, reads them). Lines the file took are not repeated
+ * log instead, subsystem "com.hao", category "diag": one record per line (a
+ * Swift value audit record among them), a
+ * line longer than UNI_PIECE bytes cut into pieces, each but the last ending
+ * in "\x1f" (log show --predicate 'subsystem == "com.hao"'; the bridge
+ * worklist tool, not part of this repository, reads them). The line is a
+ * private argument: it holds register values, addresses and guest data, which
+ * any user may read from a public record, so log show prints <private> unless
+ * the Mac logs private data (a configuration profile). Lines the file took are not repeated
  * there. Not while PID 1 waits for the Data volume (diag_retry), and not past
  * the file's cap. os_log is not async-signal-safe (its first use allocates; a
  * full buffer or a preference refresh takes libtrace's locks), so no writer
@@ -1205,7 +1325,13 @@ __attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, 
 FILE *hao_diag_file;
 size_t hao_diag_log_cap = (size_t)64 << 20;
 static int diag_con = 2;          /* the console */
+static bool diag_con_notice;      /* hao_crash: the console gets only where the lines went (con_notice) */
+static int diag_noticed;          /* the notices given (con_notice) */
 static int diag_log = -1;         /* the log, -1: none (yet) */
+static int diag_lock = -1;        /* DIR/.lock, held over each write to the log (diag_file_put) */
+static pthread_t diag_put_owner;  /* the thread in diag_file_put: flock does not exclude this process's own threads */
+static dev_t diag_lock_dev;
+static ino_t diag_lock_ino;
 static int diag_retry;            /* 1: open the log at the next write */
 static dev_t diag_log_dev;        /* the log's identity: a program that closes descriptors it did not open may */
 static ino_t diag_log_ino;        /* reuse the number for a file of its own, which hao must not write to */
@@ -1239,6 +1365,41 @@ static size_t diag_stamp_fmt(char *out, uint64_t ns)
     return n;
 }
 
+/* v in BASE (10 or 16, no prefix) at out (at least 21 bytes); its length.
+ * Async-signal-safe, for lines hao_diag_write sends. */
+size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base)
+{
+    char d[24];
+    size_t k = 0, n = 0;
+    do { d[k++] = "0123456789abcdef"[v % base]; v /= base; } while (v);
+    while (k) out[n++] = d[--k];
+    return n;
+}
+
+/* s at out + *o, within cap (signal-safe line building). */
+static void diag_put(char *out, size_t *o, size_t cap, const char *s)
+{
+    while (*s && *o < cap) out[(*o)++] = *s++;
+}
+
+/* v in decimal at out + *o, within cap. */
+static void diag_put_u64(char *out, size_t *o, size_t cap, uint64_t v)
+{
+    char num[24];
+    num[hao_diag_fmt_u64(num, v, 10)] = 0;
+    diag_put(out, o, cap, num);
+}
+
+/* "hao[prog:pid]: " at out + *o, within cap. */
+static void diag_put_prefix(char *out, size_t *o, size_t cap)
+{
+    diag_put(out, o, cap, "hao[");
+    diag_put(out, o, cap, getprogname());
+    diag_put(out, o, cap, ":");
+    diag_put_u64(out, o, cap, (uint64_t)getpid());
+    diag_put(out, o, cap, "]: ");
+}
+
 /* Lines written while PID 1 (or another root process started by a boot task)
  * waits for the Data volume, which the file lives on: the console has no
  * recorder on hardware, so they are kept here and written to the file first
@@ -1246,13 +1407,16 @@ static size_t diag_stamp_fmt(char *out, uint64_t ns)
  * does not fit ends the kept bytes (pend_full), later ones are counted lost. */
 #define DIAG_PEND (256u << 10)
 static char diag_pend[DIAG_PEND];
+#define PEND_CLOSED (1ull << 63)   /* in pend_res: the file opened and took the kept bytes */
 static uint64_t pend_res, pend_done, pend_full = DIAG_PEND, pend_lost;
-static int pend_closed;
 
-static void pend_put(const char *b, size_t n)
+/* False: the file has opened since the caller looked (its descriptor is
+ * published first), so the caller writes there instead. The reservation and
+ * the close are one word, so no line falls between them. */
+static bool pend_put(const char *b, size_t n)
 {
-    if (__atomic_load_n(&pend_closed, __ATOMIC_ACQUIRE)) { __atomic_fetch_add(&pend_lost, n, __ATOMIC_RELAXED); return; }
     uint64_t at = __atomic_fetch_add(&pend_res, n, __ATOMIC_ACQ_REL);
+    if (at & PEND_CLOSED) return false;
     if (at + n <= DIAG_PEND) memcpy(diag_pend + at, b, n);
     else {
         uint64_t f = __atomic_load_n(&pend_full, __ATOMIC_RELAXED);
@@ -1260,6 +1424,7 @@ static void pend_put(const char *b, size_t n)
         __atomic_fetch_add(&pend_lost, n, __ATOMIC_RELAXED);
     }
     __atomic_fetch_add(&pend_done, n, __ATOMIC_RELEASE);
+    return true;
 }
 
 void hao_diag_prefix(FILE *f) { fprintf(f, "hao[%s:%d]: ", getprogname(), (int)getpid()); }
@@ -1425,10 +1590,11 @@ static void *uni_drain(void *arg)
             }
             if (!end && t < h && uni_ring[t % UNI_RING] == '\n') { end = true; t++; }   /* UNI_PIECE bytes, then the newline */
             l[n] = 0;
+            /* every piece private, a Swift value audit record's (swiftvalue.c audit_record) too */
             if (end || t >= h) {
-                if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{public}s", l);
+                if (n) os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s", l);
             } else
-                os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{public}s\x1f", l);
+                os_log_with_type(uni_log, OS_LOG_TYPE_DEFAULT, "%{private}s\x1f", l);
             __atomic_store_n(&uni_tail, t, __ATOMIC_RELEASE);
             __atomic_store_n(&uni_wedged, 0, __ATOMIC_RELAXED);
             if (t >= h) h = __atomic_load_n(&uni_head, __ATOMIC_ACQUIRE);
@@ -1543,11 +1709,20 @@ static int diag_boot_header(char *out, size_t n)
         size_t tl = sizeof tv;
         int mib[2] = {CTL_KERN, KERN_BOOTTIME};
         sysctl(mib, 2, &tv, &tl, NULL, 0);
-        snprintf(id, sizeof id, "time %ld.%06d", (long)tv.tv_sec, (int)tv.tv_usec);
+        size_t k = 0;   /* "time SEC.USEC", usec in six digits */
+        diag_put(id, &k, sizeof id - 8, "time ");
+        diag_put_u64(id, &k, sizeof id - 8, (uint64_t)tv.tv_sec);
+        id[k++] = '.';
+        for (uint64_t p = 100000, us = (uint64_t)tv.tv_usec % 1000000; p; p /= 10) id[k++] = (char)('0' + us / p % 10);
+        id[k] = 0;
     }
     id[sizeof id - 1] = 0;
-    int r = snprintf(out, n, "hao: console.log of boot %s\n", id);
-    return r < 0 || (size_t)r >= n ? 0 : r;
+    /* no stdio: a fatal report may be opening the log */
+    size_t k = 0;
+    diag_put(out, &k, n, "hao: console.log of boot ");
+    diag_put(out, &k, n, id);
+    diag_put(out, &k, n, "\n");
+    return k < n && out[k - 1] == '\n' ? (int)k : 0;
 }
 
 /* The directory lies on the root volume while /System/Volumes/Data is an
@@ -1563,7 +1738,7 @@ static bool diag_before_data_volume(int dfd)
 }
 
 /* DIR/.lock open, or -1 with errno: the file whose flock serialises the
- * check-rotate-create below. Only the log's writer can open it (0600, and
+ * check-rotate-create below and each write to the log (diag_file_put). Only the log's writer can open it (0600, and
  * it must be this process's own), so no other user can hold the lock: a
  * lock on DIR itself (0755) could be taken by anyone, which delayed every
  * process's start and lost its log. A process that may not write DIR gets
@@ -1585,13 +1760,21 @@ static int diag_lock_open(int dfd)
     return fd;
 }
 
-/* DIR/console.log open for appending, this boot's; -1 with errno. mk: create the directory if absent. */
-static int diag_log_open(const char *dir, bool mk)
+/* DIR/console.log open for appending, this boot's; -1 with errno. mk: create the directory if absent. *lock:
+ * DIR/.lock, open while the log is. */
+static int diag_log_open(const char *dir, bool mk, int *lock)
 {
     struct stat ds;
     if (mk && stat(dir, &ds) != 0 && errno == ENOENT) mkdir(dir, 0755);   /* no write check (a sandbox report) when present */
     int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dfd < 0) return -1;
+    /* another user who may write DIR could replace the log with a file of their own: DIR is this process's or root's,
+     * and only its owner writes it */
+    if (fstat(dfd, &ds) != 0 || (ds.st_uid != geteuid() && ds.st_uid != 0) || (ds.st_mode & (S_IWGRP | S_IWOTH))) {
+        close(dfd);
+        errno = EACCES;
+        return -1;
+    }
     if (diag_before_data_volume(dfd)) { close(dfd); errno = ENOENT; return -1; }
     char hdr[160], got[160];
     int hl = diag_boot_header(hdr, sizeof hdr);
@@ -1605,8 +1788,10 @@ static int diag_log_open(const char *dir, bool mk)
     int fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_NOFOLLOW | O_CLOEXEC), e = errno;
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))) { close(fd); fd = -1; e = EINVAL; }
-    /* register dumps and image bases: the owner's alone (a file an earlier hao made 0644 too, before it rotates) */
-    if (fd >= 0 && st.st_uid == geteuid() && (st.st_mode & 077)) fchmod(fd, 0600);
+    if (fd >= 0 && st.st_uid != geteuid()) { close(fd); fd = -1; e = EACCES; }   /* another user's file */
+    /* register dumps and image bases: the owner's alone (a file an earlier hao made 0644 too, before it rotates);
+     * a file that cannot be made so is not used */
+    if (fd >= 0 && (st.st_mode & 077) && fchmod(fd, 0600) != 0) { close(fd); fd = -1; e = EACCES; }
     if (fd >= 0 && (pread(fd, got, (size_t)hl, 0) != hl || memcmp(got, hdr, (size_t)hl))) {
         /* another boot's file */
         close(fd);
@@ -1616,7 +1801,8 @@ static int diag_log_open(const char *dir, bool mk)
     if (fd < 0 && e == ENOENT) {
         fd = openat(dfd, "console.log", O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         e = errno;
-        if (fd >= 0) { fchmod(fd, 0600); diag_write_all(fd, hdr, (size_t)hl); }
+        if (fd >= 0 && fchmod(fd, 0600) != 0) { close(fd); fd = -1; e = EACCES; }
+        if (fd >= 0) diag_write_all(fd, hdr, (size_t)hl);
     }
     if (fd >= 0 && fstat(fd, &st) == 0) { diag_log_dev = st.st_dev; diag_log_ino = st.st_ino; }
     if (fd >= 0 && mk && mkdirat(dfd, "user", 0700) == 0) {
@@ -1624,89 +1810,213 @@ static int diag_log_open(const char *dir, bool mk)
         int ufd = openat(dfd, "user", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (ufd >= 0) { fchmod(ufd, 01777); close(ufd); }
     }
-    close(lfd);   /* releases the lock */
+    flock(lfd, LOCK_UN);
+    if (fd >= 0) *lock = lfd;
+    else close(lfd);
     close(dfd);
     errno = e;
     return fd;
 }
 
-/* The kept lines, once, to the file just opened: writers that still see the
- * retry state finish their copies first (at most 2 s). */
-static void pend_flush(int fd)
+/* The log's lock from now on (lfd, already a high descriptor). */
+static void diag_lock_set(int lfd)
 {
-    int no = 0;
-    if (!__atomic_compare_exchange_n(&pend_closed, &no, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return;
-    for (int k = 0; k < 20000 && __atomic_load_n(&pend_done, __ATOMIC_ACQUIRE) != __atomic_load_n(&pend_res, __ATOMIC_ACQUIRE); k++)
-        nanosleep(&(struct timespec){0, 100000}, NULL);
-    uint64_t r = __atomic_load_n(&pend_res, __ATOMIC_ACQUIRE), f = __atomic_load_n(&pend_full, __ATOMIC_ACQUIRE);
-    uint64_t n = r < f ? r : f, lost = __atomic_load_n(&pend_lost, __ATOMIC_ACQUIRE);
-    if (!n && !lost) return;
-    char m[240];
-    int k = snprintf(m, sizeof m, "hao[%s:%d]: %llu bytes of lines kept from before the Data volume was mounted follow%s",
-                     getprogname(), (int)getpid(), (unsigned long long)n, lost ? "" : "\n");
-    if (lost && k > 0 && (size_t)k < sizeof m)
-        k += snprintf(m + k, sizeof m - (size_t)k, " (%llu bytes did not fit and are lost)\n", (unsigned long long)lost);
-    if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
-    if (n) diag_write_all(fd, diag_pend, (size_t)n);
+    struct stat st;
+    if (fstat(lfd, &st) == 0) { diag_lock_dev = st.st_dev; diag_lock_ino = st.st_ino; }
+    __atomic_store_n(&diag_lock, lfd, __ATOMIC_RELEASE);
 }
 
-static int diag_log_fd(void)
+/* Room under the cap kept for the line that says the cap was reached. */
+#define DIAG_CAP_LINE 200
+
+/* Append b to the log fd under DIR/.lock, so that the cap holds for all the
+ * processes that share the file: a write is cut at the cap, and the writer
+ * that reaches it adds one line saying so. Past the cap bytes are dropped.
+ * 1: written; 2: cut or dropped at the cap; 0: not written (the lock not
+ * taken, a write failed, a signal handler on top of this thread's own
+ * write): the caller sends them to the unified log. Async-signal-safe. */
+static int diag_file_put(int fd, const char *b, size_t n)
+{
+    int lfd = __atomic_load_n(&diag_lock, __ATOMIC_ACQUIRE);
+    struct stat ls, st;
+    if (lfd < 0 || fstat(lfd, &ls) != 0 || ls.st_dev != diag_lock_dev || ls.st_ino != diag_lock_ino) return 0;
+    /* this process's threads one at a time (they share the lock's descriptor, so its flock does not exclude them),
+     * then the other processes; 200 ms each at most */
+    pthread_t self = pthread_self(), none = NULL;
+    for (int k = 0; !__atomic_compare_exchange_n(&diag_put_owner, &none, self, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE); k++) {
+        if (pthread_equal(none, self) || k >= 2000) return 0;   /* a handler must not take or release its thread's lock */
+        none = NULL;
+        nanosleep(&(struct timespec){0, 100000}, NULL);
+    }
+    bool locked = false;
+    for (int k = 0; k < 200 && !(locked = flock(lfd, LOCK_EX | LOCK_NB) == 0); k++) nanosleep(&(struct timespec){0, 1000000}, NULL);
+    if (!locked) { __atomic_store_n(&diag_put_owner, NULL, __ATOMIC_RELEASE); return 0; }
+    uint64_t lim = hao_diag_log_cap > DIAG_CAP_LINE ? hao_diag_log_cap - DIAG_CAP_LINE : 0;
+    bool ok = fstat(fd, &st) == 0, full = ok && (uint64_t)st.st_size + n >= lim;
+    if (ok && (uint64_t)st.st_size < lim) {
+        size_t k = full ? (size_t)(lim - (uint64_t)st.st_size) : n;
+        ok = diag_write_all(fd, b, k);
+        if (ok && full) {
+            char m[DIAG_CAP_LINE];   /* no stdio: a signal handler may be writing */
+            size_t l = 0;
+            if (k && b[k - 1] != '\n') m[l++] = '\n';
+            diag_put_prefix(m, &l, sizeof m - 1);
+            diag_put(m, &l, sizeof m - 1, "console.log reached its cap of ");
+            diag_put_u64(m, &l, sizeof m - 1, hao_diag_log_cap >> 10);
+            diag_put(m, &l, sizeof m - 1, " KB: later lines are not kept");
+            m[l++] = '\n';
+            diag_write_all(fd, m, l);
+        }
+    }
+    flock(lfd, LOCK_UN);
+    __atomic_store_n(&diag_put_owner, NULL, __ATOMIC_RELEASE);
+    return !ok ? 0 : full ? 2 : 1;
+}
+
+/* With hao_crash the console (/dev/console, PID 1's stderr) gets no
+ * diagnostics, which hold register values, addresses and guest data: once
+ * per process and destination, one line naming where they went. */
+enum { NOTE_LOG = 1, NOTE_UNI = 2, NOTE_CAP = 4 };
+static void con_notice(int what)
+{
+    if (!diag_con_notice || (__atomic_fetch_or(&diag_noticed, what, __ATOMIC_ACQ_REL) & what)) return;
+    /* no path but the system log's: another directory may be a user's own */
+    bool sys = !strcmp(diag_dir, "/private/var/log/hao");
+    char m[240];   /* no stdio: hao_diag_write's callers include signal handlers */
+    size_t k = 0;
+    diag_put_prefix(m, &k, sizeof m - 1);
+    diag_put(m, &k, sizeof m - 1, "diagnostics ");
+    diag_put(m, &k, sizeof m - 1, what == NOTE_UNI ? "written to the unified log (subsystem com.hao)"
+                                  : what == NOTE_CAP ? "not kept: hao's log is at its cap"
+                                  : sys ? "written to /private/var/log/hao/console.log" : "written to this user's hao log");
+    m[k++] = '\n';
+    diag_write_all(diag_con, m, k);
+}
+
+/* A fork child shares its parent's open lock, so the parent's flock would
+ * not keep it out: it opens its own on the same descriptor number. */
+static void diag_fork_child(void)
+{
+    uni_fork_child();
+    diag_noticed = 0;
+    diag_put_owner = NULL;   /* a thread of the parent's that does not exist here */
+    int lfd = diag_lock;
+    if (lfd < 0) return;
+    char p[1100];
+    snprintf(p, sizeof p, "%s/.lock", diag_dir);
+    int fd = open(p, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    if (fd >= 0 && fstat(fd, &st) == 0 && st.st_dev == diag_lock_dev && st.st_ino == diag_lock_ino && dup2(fd, lfd) == lfd) {
+        fcntl(lfd, F_SETFD, FD_CLOEXEC);
+    } else
+        diag_lock = -1;   /* no lock: the unified log */
+    if (fd >= 0 && fd != lfd) close(fd);
+}
+
+/* The kept lines, once, to the file just opened: writers that still see the
+ * retry state finish their copies first (at most 2 s). */
+static void pend_flush(int fd, bool may_start)
+{
+    uint64_t r = __atomic_fetch_or(&pend_res, PEND_CLOSED, __ATOMIC_ACQ_REL);
+    if (r & PEND_CLOSED) return;
+    uint64_t done = 0;
+    for (int k = 0; k < 20000 && (done = __atomic_load_n(&pend_done, __ATOMIC_ACQUIRE)) != r; k++)
+        nanosleep(&(struct timespec){0, 100000}, NULL);
+    uint64_t f = __atomic_load_n(&pend_full, __ATOMIC_ACQUIRE);
+    uint64_t n = r < f ? r : f, lost = __atomic_load_n(&pend_lost, __ATOMIC_ACQUIRE);
+    if (!n && !lost) return;
+    char m[320];   /* no stdio: a fatal report may be opening the log */
+    size_t k = 0;
+    diag_put_prefix(m, &k, sizeof m);
+    diag_put_u64(m, &k, sizeof m, n);
+    diag_put(m, &k, sizeof m, " bytes of lines kept from before the Data volume was mounted follow");
+    if (lost) {
+        diag_put(m, &k, sizeof m, " (");
+        diag_put_u64(m, &k, sizeof m, lost);
+        diag_put(m, &k, sizeof m, " bytes did not fit and are lost)");
+    }
+    if (done != r) {   /* a writer stopped mid-copy (2 s): its bytes may be incomplete */
+        diag_put(m, &k, sizeof m, " (");
+        diag_put_u64(m, &k, sizeof m, r - done);
+        diag_put(m, &k, sizeof m, " bytes still being written may be incomplete)");
+    }
+    diag_put(m, &k, sizeof m, "\n");
+    /* what the file does not take goes to the unified log, as any write's would */
+    if (!diag_file_put(fd, m, k)) uni_put(m, k, may_start);
+    if (n && !diag_file_put(fd, diag_pend, (size_t)n)) uni_put(diag_pend, (size_t)n, may_start);
+}
+
+/* The log's descriptor; while it waits for the Data volume, opened again
+ * only when may_open (the open formats its header and flushes the kept
+ * lines: not from a signal handler, whose lines are kept meanwhile).
+ * may_start: as diag_emit's, for the kept lines the file does not take. */
+static int diag_log_fd(bool may_open, bool may_start)
 {
     int fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
-    if (fd >= 0 || !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) return fd;
-    fd = diag_log_open(diag_dir, true);
+    if (fd >= 0 || !may_open || !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) return fd;
+    int lfd = -1;
+    fd = diag_log_open(diag_dir, true, &lfd);
     if (fd < 0) {
         if (errno != ENOENT && errno != EROFS) __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
         return -1;
     }
     fd = diag_high_fd(fd);
+    lfd = diag_high_fd(lfd);
     int none = -1;
-    if (!__atomic_compare_exchange_n(&diag_log, &none, fd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        close(fd);   /* another thread opened it first */
-        fd = none;
-    } else
-        pend_flush(fd);
+    if (!__atomic_compare_exchange_n(&diag_lock, &none, lfd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        /* another opener claimed it; retry ends only when that opener publishes (it may be this
+         * thread, interrupted by a fatal report): the caller then falls back to the unified log */
+        close(fd);
+        close(lfd);
+        return __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
+    }
+    diag_lock_set(lfd);
+    __atomic_store_n(&diag_log, fd, __ATOMIC_RELEASE);
     __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
+    pend_flush(fd, may_start);
     return fd;
 }
 
+/* How a writer may reach the log: DIAG_START, it may create the drain
+ * thread (not a signal handler); DIAG_OPEN, it may open a log that waits for
+ * the Data volume (stdio, report blocks, and the fatal reports: the process
+ * dies next, and their lines would otherwise stay kept). */
+enum { DIAG_START = 1, DIAG_OPEN = 2, DIAG_FATAL = 4 };   /* DIAG_FATAL: the process dies next */
+
 /* The console, then the log (one write(2) for the whole buffer), else the
- * unified log. may_start: the caller may create the drain thread (it is not
- * a signal handler). While the log waits for the Data volume the bytes are
+ * unified log; how: DIAG_* above. While the log waits for the Data volume the bytes are
  * kept (pend_put); with HAO_DIAG_TIME a process other than PID 1 also sends
  * them to the unified log, which keeps a boot task's lines (it exits before
  * the volume mounts) with the kernel's timestamps. */
-static void diag_emit(const char *b, size_t n, bool may_start)
+static void diag_emit(const char *b, size_t n, int how)
 {
+    bool may_start = how & DIAG_START;
     if (!n) return;
     int e = errno;
-    diag_write_all(diag_con, b, n);
-    int fd = diag_log_fd();
+    if (!diag_con_notice) diag_write_all(diag_con, b, n);
+    int fd = diag_log_fd(how & DIAG_OPEN, may_start);
     if (fd < 0 && __atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) {
-        pend_put(b, n);
-        if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
-        errno = e;
-        return;
-    }
+        if (!(how & DIAG_FATAL) && pend_put(b, n)) {   /* a fatal report is not kept: nothing would flush it */
+            con_notice(NOTE_LOG);
+            if (diag_stamp && getpid() != 1) uni_put(b, n, may_start);
+            errno = e;
+            return;
+        }
+        fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);   /* opened meanwhile: kept bytes are closed */
+    } else if (fd < 0)
+        fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);   /* the wait may have ended since: the log is published first */
     struct stat st;
     if (fd >= 0 && (fstat(fd, &st) != 0 || st.st_dev != diag_log_dev || st.st_ino != diag_log_ino)) {
         __atomic_store_n(&diag_log, -1, __ATOMIC_RELEASE);   /* closed by the program: no file from now on */
         fd = -1;
     }
-    if (fd < 0) {
-        if (diag_dir[0] && !__atomic_load_n(&diag_retry, __ATOMIC_ACQUIRE)) uni_put(b, n, may_start);
-    } else if ((uint64_t)st.st_size < hao_diag_log_cap) {   /* past the cap: dropped on purpose */
-        if (!diag_write_all(fd, b, n)) {
-            uni_put(b, n, may_start);   /* a sandbox's write check, a full volume, an I/O error */
-            errno = e;
-            return;
-        }
-        if ((uint64_t)st.st_size + n >= hao_diag_log_cap) {
-            char m[200];
-            int k = snprintf(m, sizeof m, "hao[%s:%d]: console.log reached its cap of %zu KB: later lines go to the console only\n",
-                             getprogname(), (int)getpid(), hao_diag_log_cap >> 10);
-            if (k > 0) diag_write_all(fd, m, (size_t)k < sizeof m ? (size_t)k : sizeof m - 1);
-        }
+    int put = fd >= 0 ? diag_file_put(fd, b, n) : 0;   /* past the cap: dropped on purpose */
+    if (put) con_notice(put == 1 ? NOTE_LOG : NOTE_CAP);
+    else if (diag_dir[0]) {
+        /* not written and not kept: no file, a sandbox's write check, a full volume, an I/O error, or
+         * an open still being published by an interrupted writer */
+        uni_put(b, n, may_start);
+        con_notice(NOTE_UNI);
     }
     errno = e;
 }
@@ -1714,31 +2024,66 @@ static void diag_emit(const char *b, size_t n, bool may_start)
 /* diag_emit, each line starting with its time stamp under HAO_DIAG_TIME. A
  * write is taken to start a line (stdio's line buffer and the report blocks
  * write whole lines); a long one goes out in pieces that end at a newline. */
-static void diag_write(const char *b, size_t n, bool may_start)
+static void diag_write(const char *b, size_t n, int how)
 {
-    if (!diag_stamp) { diag_emit(b, n, may_start); return; }
+    if (!diag_stamp) { diag_emit(b, n, how); return; }
     char out[4096], st[32];
     size_t sl = diag_stamp_fmt(st, diag_now_ns()), o = 0;
     bool at_start = true;
     for (size_t i = 0; i < n; i++) {
         if (at_start) {
-            if (o + sl + 1 > sizeof out) { diag_emit(out, o, may_start); o = 0; }
+            if (o + sl + 1 > sizeof out) { diag_emit(out, o, how); o = 0; }
             memcpy(out + o, st, sl);
             o += sl;
             at_start = false;
         }
-        if (o == sizeof out) { diag_emit(out, o, may_start); o = 0; }
+        if (o == sizeof out) { diag_emit(out, o, how); o = 0; }
         out[o++] = b[i];
         if (b[i] == '\n') {
             at_start = true;
-            if (o > sizeof out - 256) { diag_emit(out, o, may_start); o = 0; }
+            if (o > sizeof out - 256) { diag_emit(out, o, how); o = 0; }
         }
     }
-    diag_emit(out, o, may_start);
+    diag_emit(out, o, how);
 }
 
-/* Async-signal-safe. */
-void hao_diag_write(const char *b, size_t n) { diag_write(b, n, false); }
+/* Async-signal-safe: system calls on descriptors already open, stack
+ * buffers and atomics only (a log still waiting for the Data volume is not
+ * opened from here; its lines are kept, as before it opens). */
+void hao_diag_write(const char *b, size_t n) { diag_write(b, n, 0); }
+/* A fatal report's lines (fault_diag, hao_on_abort, sigreturn_report): may
+ * open the log, still async-signal-safe (its header and the kept-lines note
+ * are built without stdio). */
+void hao_diag_write_fatal(const char *b, size_t n) { diag_write(b, n, DIAG_OPEN | DIAG_FATAL); }
+
+static size_t safe_put(char *b, size_t at, size_t cap, const char *s)
+{
+    while (*s && at + 1 < cap) b[at++] = *s++;
+    return at;
+}
+
+void hao_fatal_safe(const char *what, const uint64_t *v, int n)
+{
+    char b[512];
+    size_t at = safe_put(b, 0, sizeof b, "hao[");
+    at = safe_put(b, at, sizeof b, getprogname());
+    at = safe_put(b, at, sizeof b, ":");
+    char num[24];
+    int k = 0;
+    for (unsigned p = (unsigned)getpid(); k == 0 || p; p /= 10) num[k++] = (char)('0' + p % 10);
+    while (k && at + 1 < sizeof b) b[at++] = num[--k];
+    at = safe_put(b, at, sizeof b, "]: ");
+    at = safe_put(b, at, sizeof b, what);
+    for (int i = 0; i < n; i++) {
+        at = safe_put(b, at, sizeof b, " 0x");
+        k = 0;
+        for (uint64_t x = v[i]; k == 0 || x; x >>= 4) num[k++] = "0123456789abcdef"[x & 15];
+        while (k && at + 1 < sizeof b) b[at++] = num[--k];
+    }
+    at = safe_put(b, at, sizeof b, "\n");
+    hao_diag_write(b, at);
+    abort();
+}
 
 /* After a crash report: the process dies next (PID 1: the kernel panics). */
 static void diag_sync(void)
@@ -1750,7 +2095,7 @@ static void diag_sync(void)
 static int diag_fwrite(void *cookie, const char *b, int n)
 {
     (void)cookie;
-    if (n > 0) diag_write(b, (size_t)n, true);
+    if (n > 0) diag_write(b, (size_t)n, DIAG_START | DIAG_OPEN);
     return n;
 }
 
@@ -1768,7 +2113,7 @@ void hao_diag_block_end(hao_diag_blk *b)
     fclose(b->f);
     if (b->buf) {
         fflush(HAO_DIAG);
-        diag_write(b->buf, b->len, true);
+        diag_write(b->buf, b->len, DIAG_START | DIAG_OPEN);
         free(b->buf);
     }
 }
@@ -1802,7 +2147,7 @@ void hao_diag_init(void)
 {
     static int done;
     if (done++) return;
-    bool crash = hao_bootarg_flag("hao_crash"), mk = false;
+    bool crash = hao_opt.crash, mk = false;
     diag_stamp = hao_opt.diag_time;
     if (diag_stamp) diag_now_ns();   /* the timebase, read outside any signal handler */
     if (crash && getpid() != 1) {
@@ -1811,19 +2156,20 @@ void hao_diag_init(void)
     }
     if (hao_opt.diag_dir[0] == '/') { snprintf(diag_dir, sizeof diag_dir, "%s", hao_opt.diag_dir); mk = true; }
     else if (crash) { snprintf(diag_dir, sizeof diag_dir, "/private/var/log/hao"); mk = geteuid() == 0; }
+    diag_con_notice = crash && diag_dir[0];
     if (diag_dir[0]) {
-        int fd = diag_log_open(diag_dir, mk), e = errno;
+        int lfd = -1, fd = diag_log_open(diag_dir, mk, &lfd), e = errno;
         char ud[sizeof diag_dir];
         if (fd < 0 && (e == EACCES || e == EPERM) && geteuid() != 0 && diag_user_dir(diag_dir, ud, sizeof ud)) {
             memcpy(diag_dir, ud, sizeof diag_dir);   /* retries (diag_log_fd) open the same */
             mk = false;
-            fd = diag_log_open(diag_dir, false);
+            fd = diag_log_open(diag_dir, false, &lfd);
             e = errno;
         }
         /* e, not errno: diag_user_dir's failed lookups (ENOENT) are no reason to retry */
-        if (fd >= 0) diag_log = diag_high_fd(fd);
+        if (fd >= 0) { diag_lock_set(diag_high_fd(lfd)); diag_log = diag_high_fd(fd); }
         else if (mk && (e == ENOENT || e == EROFS)) diag_retry = 1;
-        pthread_atfork(NULL, NULL, uni_fork_child);
+        pthread_atfork(NULL, NULL, diag_fork_child);
         if (diag_log < 0 && !diag_retry) uni_start();   /* a sandboxed process: the unified log from the start */
     }
     if (diag_con == 2 && !diag_dir[0] && !diag_stamp) return;   /* stderr alone, as before */
@@ -1831,20 +2177,6 @@ void hao_diag_init(void)
     if (!f) return;
     setvbuf(f, diag_buf, _IOLBF, sizeof diag_buf);
     hao_diag_file = f;
-}
-
-/* Exact, space-delimited "key=1" in the kernel's boot arguments. Lets a
- * whole boot (PID 1 has no environment) switch hao features without an
- * image rebuild. kern.bootargs is readable without privileges. */
-bool hao_bootarg_flag(const char *key)
-{
-    char ba[1024];
-    size_t n = sizeof ba - 1, k = strlen(key);
-    if (sysctlbyname("kern.bootargs", ba, &n, NULL, 0) != 0) return false;
-    ba[n] = 0;
-    for (char *p = ba; (p = strstr(p, key)); p += k)
-        if ((p == ba || p[-1] == ' ') && p[k] == '=' && p[k + 1] == '1') return true;
-    return false;
 }
 
 /* Native -> guest calls that arrived by faulting on a non-executable guest
@@ -1996,7 +2328,7 @@ static void dl_guest_addr(dline *l, uint64_t a)
 
 static void dl_flush(dline *l)
 {
-    hao_diag_write(l->b, l->n);
+    hao_diag_write_fatal(l->b, l->n);
     l->n = 0;
 }
 
@@ -2560,7 +2892,7 @@ static void sigreturn_report(int sig, int err, ucontext_t *uc, uint64_t tok, uin
     rep_add(rep, sizeof rep, &rn, &l);
     if (rn) {
         if (rep[rn - 1] != '\n') rep[rn - 1] = '\n';
-        hao_diag_write(rep, rn);
+        hao_diag_write_fatal(rep, rn);
     }
 }
 
@@ -2674,7 +3006,7 @@ void hao_on_abort(int sig, siginfo_t *si, void *ctx, uint64_t tok)
     if (hao_opt.stats || hao_opt.nx_stats) {
         char rb[512];
         size_t rn = hao_sig_resume_line(rb, sizeof rb);
-        if (rn) hao_diag_write(rb, rn);
+        if (rn) hao_diag_write_fatal(rb, rn);
     }
     diag_sync();
     hao_signal_die(failed ? SIGTRAP : sig);
@@ -2709,8 +3041,11 @@ void hao_install_fault_handler(void)
     sa.sa_sigaction = hao_fault_entry;
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
-    hao_sys_sigaction(SIGSEGV, &sa, NULL);
-    hao_sys_sigaction(SIGBUS, &sa, NULL);
+    if (hao_sys_sigaction(SIGSEGV, &sa, NULL) != 0 || hao_sys_sigaction(SIGBUS, &sa, NULL) != 0) {
+        /* every native-to-guest call and guest fault goes through this handler */
+        fprintf(stderr, "hao: cannot install the fault handler (errno %d)\n", errno);
+        abort();
+    }
     hao_signals_hook();   /* native installs of SIGSEGV/SIGBUS go to the shadow from now on */
 }
 
@@ -2723,9 +3058,9 @@ void hao_install_fault_handler(void)
  *    image that names it, @rpath every LC_RPATH of that image and of the
  *    images that loaded it, down to the main executable; in a set-ID
  *    process, with dyld's restrictions for one (for_each_candidate);
- *  - each candidate path is tried as a native x86_64 library (dlopen), then,
- *    if it has no x86_64 slice, as a guest image (absolute OS paths under
- *    HAO_GUEST_ROOT when set);
+ *  - app libraries with an ARM slice stay in the guest representation domain;
+ *    OS libraries and native-only app libraries try native dlopen first, then
+ *    a guest image (absolute paths under HAO_GUEST_ROOT when set);
  *  - a guest image is recorded before its own imports are bound, so cyclic
  *    dependencies find it instead of recursing;
  *  - two-level namespace: a symbol imported from a guest library comes from
@@ -2775,11 +3110,11 @@ static void libval_report(const char *line)
     fflush(HAO_DIAG);
 }
 
-hao_image *hao_load_main_image(const char *path, int fd, char *err, size_t errlen)
+hao_image *hao_load_main_image(const char *path, int fd, int entry, char *err, size_t errlen)
 {
     lock_loads();
     hao_libval_set_verifier(hao_guest_sig_image, hao_opt.libval_user, libval_report);
-    hao_libval_expect_main(!hao_opt.no_libval);   /* its signature sets library validation before any dependency loads */
+    hao_libval_expect_main(!hao_opt.no_libval, entry);   /* its signature sets library validation before any dependency loads */
     hao_image *img = hao_load_image_fd_cb(path, fd, hao_resolve_import, set_main_mapped, NULL, err, errlen);
     if (!img) hao_main_image = NULL;
     unlock_loads();
@@ -2841,14 +3176,15 @@ static bool expand_prefix(hao_image *im, const char *in, char *out, size_t n)
 typedef bool (*cand_fn)(const char *cand, bool os, void *ctx);
 
 /* Call fn for each path dyld would try for `name` as a dependency of `loader`.
- * In a set-ID process dyld expands no @executable_path, no @loader_path
- * from the main executable's LC_RPATHs and no relative path
- * (hao_dep_path_allowed, hao/aot.h): such a path is not tried, and *refused
- * is dyld's reason for the last one. */
+ * In a restricted process (set-ID, or a __RESTRICT segment: hao_env_restricted)
+ * dyld expands no @executable_path, no @loader_path from the main
+ * executable's LC_RPATHs and no relative path (hao_dep_path_allowed,
+ * hao/aot.h): such a path is not tried, and *refused is dyld's reason for
+ * the last one. */
 static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, void *ctx, const char **refused)
 {
     char buf[2048];
-    int tier = hao_env_tier();
+    int tier = hao_env_restricted() ? HAO_ENV_SETUGID : hao_env_tier();
     const char *why;
     *refused = NULL;
     if (!strncmp(name, "@rpath/", 7)) {
@@ -3006,7 +3342,7 @@ static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
     intptr_t slot = glib_slot(rp, loader);
     char err[512];
     hao_image *im = hao_load_image_cb(rp, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
-    if (!im) {   /* native dlopen already failed: a rejected guest dylib is worth saying */
+    if (!im) {   /* report guest signature, validation and loading failures */
         note_load_err(rp, err);
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG, "guest dylib not loaded: %s\n", err);
@@ -3081,6 +3417,18 @@ static hao_image *guest_libcxx(hao_image *loader, const char *cand, bool os)
     return g;
 }
 
+static bool native_library_loaded(const char *path)
+{
+    void *h = runtime_dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
+    if (!h) return false;
+    dlclose(h);
+    static bool reported;
+    if (hao_verbose && !__atomic_exchange_n(&reported, true, __ATOMIC_RELAXED)) {
+        fprintf(stderr, "hao: %s stays native: its native slice is loaded already\n", path);
+    }
+    return true;
+}
+
 /*
  * A library guest code calls with C++ names (an import named __Z...) whose
  * file also has an arm64 slice runs as guest code too: its interface has the
@@ -3096,11 +3444,7 @@ static hao_image *guest_cxx_library(hao_image *loader, const char *cand, bool os
     char rp[PATH_MAX], why[400];
     if (access(cand, R_OK) != 0 || !realpath(cand, rp)) return NULL;   /* a cache library: native, as before */
     if (glib_known(rp)) return glib_find(rp);
-    void *h = runtime_dlopen(rp, RTLD_LAZY | RTLD_NOLOAD);
-    if (h) {
-        if (hao_verbose) fprintf(stderr, "hao: %s stays native: its native slice is loaded already\n", rp);
-        return NULL;
-    }
+    if (native_library_loaded(rp)) return NULL;
     if (!hao_macho_guest_cxx_eligible(rp, why, sizeof why)) {
         if (hao_verbose) fprintf(stderr, "hao: C++ library stays native: %s\n", why);
         return NULL;
@@ -3110,9 +3454,47 @@ static hao_image *guest_cxx_library(hao_image *loader, const char *cand, bool os
     return g;
 }
 
+/* `os` above describes absolute-path provenance for HAO_GUEST_ROOT, not ownership.
+ * Disk ownership is decided only from realpath's result. */
+static bool path_under(const char *path, const char *root)
+{
+    size_t n = strlen(root);
+    return !strncmp(path, root, n) && (!path[n] || path[n] == '/');
+}
+static bool os_library_path(const char *real)
+{
+    if (path_under(real, "/System/Volumes"))
+        return path_under(real, "/System/Volumes/Preboot");
+    static const char *roots[] = {"/System", "/usr/lib", "/Library/Apple", "/private/preboot", "/private/var/db/Cryptexes"};
+    for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++)
+        if (path_under(real, roots[i])) return true;
+    return false;
+}
+/* A path with no file (an OS library that exists only in the shared cache) is never an app library;
+ * the shared cache is not consulted here, so classification maps nothing. */
+enum library_location { LIBRARY_MISSING, LIBRARY_OS, LIBRARY_APP };
+static enum library_location library_location(const char *path, char real[PATH_MAX])
+{
+    if (realpath(path, real)) return os_library_path(real) ? LIBRARY_OS : LIBRARY_APP;
+    return LIBRARY_MISSING;
+}
+static bool guest_app_library(const char *path)
+{
+    char real[PATH_MAX];
+    if (hao_opt.native_app_libs || library_location(path, real) != LIBRARY_APP) return false;
+    return hao_is_arm_loadable(real, true) && !native_library_loaded(real);
+}
+
 static bool try_candidate(const char *cand, bool os, void *c)
 {
     struct try_ctx *x = c;
+    bool app = guest_app_library(cand);
+    if (app) {
+        last_load_err[0] = 0;
+        x->guest = load_guest_file(x->loader, cand, false);
+        if (x->guest) return true;
+        goto failed;   /* never bypass guest signature/library validation with a native fallback */
+    }
     hao_image *gl = guest_libcxx(x->loader, cand, os);
     if (!gl && x->cxx) gl = guest_cxx_library(x->loader, cand, os);
     if (gl) { x->guest = gl; return true; }
@@ -3122,6 +3504,7 @@ static bool try_candidate(const char *cand, bool os, void *c)
     last_load_err[0] = 0;
     hao_image *g = load_guest_file(x->loader, cand, os);
     if (g) { x->guest = g; return true; }
+failed:
     if (x->tried) {   /* dyld's "tried:" entry for this path */
         size_t l = strlen(x->tried);
         snprintf(x->tried + l, x->tn - l, "%s'%s' (%s)", l ? ", " : "", cand, last_load_err[0] ? last_load_err : "not loaded");
@@ -3514,19 +3897,21 @@ static int native_bundle_expand(const char *path, const void *ra, char *out, siz
     unlock_loads();
     return ff.found;
 }
-static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n);
-static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, why, n); }
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n);
+static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, why, n); }
 /* An ARM-only dylib dyld cannot open loads as a guest image for any caller: guest code's dlopen, and native code
  * loading the program's own frameworks and plug-ins (NSBundle/CFBundle loading a framework's MH_DYLIB, as Xcode
- * does for its plug-ins). A native caller still gets no untyped guest function address from dlsym. */
+ * does for its plug-ins). Guest callers also keep universal app libraries in the ARM domain.
+ * A native caller still gets no untyped guest function address from dlsym. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
-    (void)ra;
-    return bundle_open(path, flags, true, why, n);
+    if (!ra) return bundle_open(path, flags, true, false, why, n);
+    if (!path || !guest_caller_image(ra) || !guest_app_library(path)) return NULL;
+    return bundle_open(path, flags, true, true, why, n);
 }
-static void *bundle_open(const char *path, int flags, bool dylib, char *why, size_t n)
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n)
 {
-    if (!path || path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)) return NULL;
+    if (!path || (!app && (path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)))) return NULL;
     const int supported = RTLD_LAZY | RTLD_NOW | RTLD_LOCAL | RTLD_GLOBAL | RTLD_NOLOAD | RTLD_NODELETE | RTLD_FIRST;
     if (flags & ~supported) { snprintf(why, n, "unsupported guest bundle dlopen flags"); return NULL; }
     char real[PATH_MAX];
@@ -3535,12 +3920,12 @@ static void *bundle_open(const char *path, int flags, bool dylib, char *why, siz
     hao_image *im = glib_find(real);
     if (!im && !(flags & RTLD_NOLOAD)) {
         intptr_t slot = glib_slot(real, hao_main_image);
-        im = dylib ? hao_load_dlopen_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
+        im = dylib ? hao_load_dlopen_cb(real, app, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
                    : hao_load_bundle_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
         if (!im) { free(glibs[slot].path); glibs[slot].path = NULL; glibs[slot].img = NULL; }
     }
     if (!im) {
-        if (!(flags & RTLD_NOLOAD)) snprintf(why, n, "%s", last_load_err);
+        snprintf(why, n, "%s", flags & RTLD_NOLOAD ? "guest library not loaded" : last_load_err);
         unlock_loads(); return NULL;
     }
     struct bundle_handle *h;

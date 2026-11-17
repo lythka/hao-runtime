@@ -12,17 +12,26 @@ and a SHA-256-pinned manifest; the assembly pins the complete selection.
 | AOT recipe | runtime-bound AOT caches and how to generate them | runtime, compatibility |
 | build record | the original build record and logs | |
 
-The runtime consumes interface v2 and AOT v7. An AOT v7 cache names the
-runtime that generated it and the cdhash of the guest it was translated from
-(`include/hao/aot.h`); the AOT recipe's `format_version` is 7 and each guest
-binding records the header's `id_kind`, `id_hash` and `code_id`. Caches install
-into a system cache directory, which serves signed code only, so `check`
-rejects a binding whose identity is not a cdhash. AOT v5 caches and recipes are
-not accepted: regenerate them with the selected runtime. Native library UUIDs,
+The runtime consumes interface v2 and AOT v8. An AOT v8 cache names the
+runtime that generated it (its plain LC_UUID), the cdhash of the guest it was
+translated from and the optional CPU features its code may use
+(`include/hao/aot.h`, `include/hao/cpufeat.h`); the AOT recipe's
+`format_version` is 8 and each guest binding records the header's `id_kind`,
+`id_hash`, `code_id` and `cpu_features`. Caches install into a system cache
+directory, which serves signed code only, so `check` rejects a binding whose
+identity is not a cdhash. Release caches are generated with
+`hao --aot --cpu=baseline`: they may use only the features every supported Mac
+has (the Ivy Bridge set: AES-NI, PCLMULQDQ, AVX, F16C, RDRAND), whatever the
+build machine has, so they load on every Mac the image boots and their bytes
+do not depend on the build machine. `check`, `hao-install.py` and
+`hao-image-payload` refuse a cache needing any other feature. AOT v5 to v7
+caches and recipes are not accepted: regenerate them with the selected
+runtime. Native library UUIDs,
 the native-cache identity, OS build, kernel input hash, ARM64e guest and x86_64
 host are explicit. The initial CPU profile requires SSE2, CMPXCHG16B and
 AVX-capable hardware; the runtime and translated code use at most x86-64-v2
-(SSSE3, SSE4.1, SSE4.2, POPCNT), and `hao` refuses to start on a CPU without
+(SSSE3, SSE4.1, SSE4.2, POPCNT), plus `vzeroupper` only where CPUID and XCR0
+report AVX state, and `hao` refuses to start on a CPU without
 the profile (AVX is not required under Rosetta, where the tests run). The target JSON passed to the tool is a declaration by
 the builder, not a hardware probe.
 
@@ -54,6 +63,10 @@ contract between hao-runtime and the image builder, checked by the hao-contract
   name;
 - `units_sha256`: the interface-unit set, as in `build.json`;
 - `layout_version`: the install layout `hao-install.py` reads, now 1;
+- `aot`: for a payload with AOT caches, their `format_version` (8), the `cpu`
+  they were generated for (`baseline`), the union of the CPU profiles their
+  headers record (`cpu_profile`, `include/hao/cpufeat.h` bits) and the number
+  of `caches`; null without caches;
 - `files`: the sha256 of every other file under `OUT`.
 
 The builder declares the OS build and layout version it expects, and refuses

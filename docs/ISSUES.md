@@ -1,5 +1,1007 @@
 # Runtime issues and measured scope
 
+## CPU profiles for translation and AOT caches
+
+The JIT knew one optional CPU feature, AES-NI, from a global flag, and an AOT
+cache named it by XORing the last byte of the libhao UUID. A second feature
+would have needed 2^n identities, a cache could not say which feature was
+missing, and fault recovery re-emitted an AOT block with the process's
+features rather than the ones it was made with. Now `hao_cpu_host()`
+(`src/cpufeat.c`) computes one feature word from CPUID leaves 1, 7.0 and
+0x80000001, with OSXSAVE and XCR0 for the VEX and EVEX forms. Each
+translation takes its profile from its context: the process's for the JIT,
+the file's for an AOT block. AOT format 8 records `cpu_profile` in the header
+and keeps the plain libhao UUID as `gen`. A cache loads only if the host has
+every recorded feature; the rejection names the missing ones. The integrity
+hash covers the header too, so an edited profile is rejected. A cache's
+profile is published before any of its blocks can run.
+`hao --aot --cpu=baseline|host|HEX` can only drop features the host has.
+Release payloads use `baseline`, the Ivy Bridge set. `HAO_CPU_FEATURES=HEX`
+(test-switch builds only) can only clear features. New lowerings: CRC32C to
+SSE4.2 `crc32` (no gate) and PMULL/PMULL2 .1Q to `pclmulqdq` (gated on
+PCLMULQDQ). The interpreter's CRC32 and CRC32C use a table per byte position
+instead of a bit loop. Measured on the development host (Rosetta), 20 million
+iterations per guest loop, wall time including about 0.05 s of start-up:
+CRC32CX 1.6 s to 0.10 s, CRC32X 1.6 s to 0.28 s, CRC32B 0.32 s to 0.26 s,
+PMULL .1Q 1.47 s to 0.29 s. Tests: the oracle's dp records now include every
+CRC32/CRC32C form. Before this change, a field filter skipped CRC32W
+natively. `make oracle` runs simd again with the JIT under profile 0.
+`aot/cpu-profile`, `aot/crypto-mutations`, the policy test and `aot` P1-P5
+cover the rest. `aot/cpu-haswell` uses `ROSETTA_ADVERTISE_AVX=1` for a
+Haswell-class host. Limits: PMULL .8H and CRC32 (IEEE) still run in the
+helper. SHA, FMA, BMI and AVX lowerings are not written. They need VEX
+encoders and their own oracle modes. Every existing AOT cache (format 7) is
+rejected and must be generated again. Caches keep the `<LC_UUID>.aot` name,
+one per guest, so a user cache made for a newer Mac replaces a shipped
+baseline one in its own directory only. Nothing here ran on AVX-512
+hardware.
+
+## Guest signals on several threads at once in translated code
+
+A guest handler's context gets the exact pc by re-emitting the interrupted
+block (`hao_jit_locate`). The re-emission used one shared buffer behind a
+try-flag, so when two threads took a signal at the same time one of them
+got `cpu.pc` instead: the last block exit, possibly many blocks back, and
+NZCV from memory while the live flags were in RFLAGS. The re-emission now
+only measures (`xb_init_count`) at the block's own address and keeps its
+records on the stack, so it shares nothing and its RIP displacements are the
+first emission's; it counts no statistics and leaves the image-lookup hint
+alone. Test: `guest/signals` mode `locate` (8 threads spinning in
+one loop, a signal to each, 400 rounds): before the fix 140-380 contexts per
+run had a pc outside the loop; after it none, under JIT and AOT. Mode
+`locatefp` does the same in a loop of FADD, FMAX and FCVTNS, whose blocks
+carry an interpreter fallback; with `--stats` its JIT leg must count native + helper
+= guest_insns (before, each locate there took one off `helper`, which
+wrapped below zero). Limits:
+in the interpreter (`--interp`, no JIT memory, the JIT's helper) an
+asynchronous signal can see a register written at the instruction's own pc,
+or the next pc before the write (the mode counts 300-400 such contexts a
+run; it compares only its first line there). Resumption is not affected: a handler that does not
+move the pc resumes where the thread stood.
+
+## Fork child: disposition and name-index locks, half-made cache slots
+
+A fork while another thread held `disp_lock` (guest `sigaction`, signals.c)
+or `ix_lock` (interposer name indexes, interpose.c) left the child's first
+use waiting forever: neither was re-made in the fork child. Both are now,
+and the child drops the disposition records' page cursor (a fork between
+its two updates left a count past the page's end) and maps a new page.
+A built name index is linked after it is published, so a child whose parent
+was building one rebuilds it without linking it twice. The lock-free caches
+of constant formats (vafmt.c), BOOL type strings (objc.c) and async function
+records (swiftmeta.c) free, in the child, a slot another thread had claimed
+but not filled; a lookup of it waited forever. Tests: `test_fork` modes
+`sigaction` and `names` (in `all`, so in `make test`); before the fix 23 of
+60 children hung in `sigaction` and 60 of 60 in `names`, after it none.
+`tests/host/fork_locks.py` (in `make test`) fails when a `static
+pthread_mutex_t` in src/ is in no `*_fork_child` function of its file and
+not on its list of exceptions (the recursive `load_lock`, re-made through
+its init function; the oracle-only `scratch_lock`), or when a hook is called
+from no other hook's body and not registered with `pthread_atfork`; it first
+checks that four mutations of the tree are reported. Limits: the half-made
+slots and the cursor have no failing test (the windows are a few
+instructions; `sigaction` children now take 400 new records each);
+guest initializers still run with `load_lock` held.
+
+## Diagnostic writes from signal handlers
+
+`hao_diag_write`, which signal handlers use, was said to be
+async-signal-safe but formatted the log's cap line with `snprintf`, and
+while the log waited for its volume (PID 1 before the Data volume) it
+opened it, formatting the boot header and the kept-lines note the same way;
+the fault, abort and sigreturn reports open it too. All three lines are now
+built from fixed strings and hand-converted numbers. A plain
+`hao_diag_write` no longer opens a waiting log (its lines are kept); stdio,
+report blocks and the fatal reports (`hao_diag_write_fatal`) do. A writer
+that found the log waiting and paused before keeping its line lost it once
+the log opened: the reservation and the close are now one atomic word, and
+such a writer writes to the opened log. A writer stopped for over 2 s
+mid-copy is reported in the note ("bytes still being written may be
+incomplete"). Test: `host/diagsig` inserts a library that counts formatting
+and allocation calls made inside the handler (none allowed); with the old
+boot header it fails. Limits: the unified-log ring (`uni_put`, sandboxed
+processes) has one writer at a time; a writer whose owner is suspended
+waits up to 2 s, then drops its line (counted). A fatal report that
+interrupts the log being opened on the same thread, before the open is
+published, is sent to the unified-log ring; if no drain thread was started
+yet (the log was waiting for its volume and nothing had fallen back before),
+the process ends before the ring is drained and that report is lost. With
+`hao_crash` the console then has only its one-line notice.
+
+## Signature parsing on the native-call path
+
+A native function an interface unit types by aggregate signature kept the
+encoding unparsed in its plan; its first call parsed it (`abi.c` `hao_sig`:
+`malloc`, `strdup`), against the rule that the call path does not allocate
+(a guest signal handler may interrupt a thread inside malloc). The plan now
+parses it when it is made, at bind time; plans typed from ObjC methods and
+blocks were already parsed then. Limits: a native IMP called with another
+selector, or an invoke called by another block, is still retyped per call
+(`hao_bridge_objc_recheck`, `class_copyMethodList`; a new encoding parsed),
+also in a guest signal handler.
+
+## Shared-cache header bounds
+
+`dsc.c` took the arm64e cache header's mapping table on trust: a range
+check that could wrap, file offsets not checked against the file's size (a
+truncated subcache mapped pages that fault with SIGBUS on first read), an
+unbounded subcache count, and mappings past hao's 512 and image segments
+past `HAO_MAX_RANGES` dropped silently. Every mapping is now checked against
+the shared region and its file before anything is reserved or mapped, at
+most 1024 subcaches are read, and a cache or image over a limit is refused
+with the reason. Only `HAO_GUEST_ROOT` (open tier) points hao at a cache
+other than the system's. The main file must also map its own header, which
+hao reads. Test: `guest/dsc` refuses a header whose mapping lies past the
+end of its file and one with no mappings (before: SIGBUS in `dsc_open`).
+
+## Unchecked protection changes
+
+Five protection and handler changes ignored failure: the guest stack's
+guard page, the final segment protections of a loaded image (a failure
+left `__TEXT` and `__DATA_CONST` writable), the read-only copy of a slice,
+the emulated commpage, and the SIGSEGV/SIGBUS handler every native-to-guest
+call goes through. A failed segment or slice protection now fails the load
+with the reason; a commpage page that cannot be made read-only is released
+and treated as not mapped; a guard page or fault handler that cannot be set
+ends the process with a message. No test makes these calls fail.
+
+## Long demangled Swift names
+
+The bind-time rules that read a native Swift function's demangled name
+(narrow async results, async parameters, NSTextAlignment, generic Optional
+results, View self) demangled into stack buffers of 1 to 4 KB, and
+`swift_demangle` cuts a longer name there. The result type is at the end,
+so a narrow async result with a long name was not extended. A name that
+does not fit is now demangled again on the heap. Test: `test_bridge`
+(`demangle`, a 3000-character module).
+
+## Swift value witness table and nil ring capacity
+
+The native value witnesses whose guest calls convert Optional nils were a
+fixed table of 160 (pc, slot) pairs; set-up takes 44 on the host, and each
+native frozen struct a guest lends adds up to six. Past 160 a witness was
+not intercepted, silently. The table is now a growable map keyed by pc
+(lock-free reads), up to about 49 000 functions; past that hao says so once.
+The per-thread ring of nils a witness made for a callback's result held 16
+and was shared by nested callbacks, so an inner one could overwrite an outer
+one's entries unseen. It holds 64, each entry keeps its index, and a lost
+entry is counted, with one fixed line through the async-signal-safe
+diagnostic write (a callback may return inside a guest signal handler; the
+`HAO_BRIDGE_CHECK` line there is built on the stack the same way).
+`--stats` prints both (`hao-swift-witness: entries dropped nils_lost`). Limits: an entry lost past
+64 is still lost (its value keeps the guest's nil); no test reaches either
+bound in a guest; `test_bridge` (`nilring`) drives the ring directly.
+
+## Nesting depth in C++ mangled names
+
+The C++ name reader (`bridge.c`, used for `this`-returning constructors and
+`bool` parameters) bounded every nesting at 64 except template argument
+packs (`J...E`) and parameter declarations (`Ty`, `Tn`), which recursed
+once per character. A name of a million nested packs overflowed the stack.
+Packs now count toward the same bound and declarations are read in a loop;
+a deeper name is refused (no rewrite) as other over-deep names are. Test:
+`test_bridge` (`cxxbool`).
+
+## On/off environment switches set to 0
+
+An on/off `HAO_*` switch was on whenever it was present, so `HAO_INTERP=0`
+or `HAO_NO_AOT=0` turned it on. An empty value and `0` now count as absent;
+any other value turns the switch on. Numeric switches (`HAO_VERBOSE`,
+`HAO_WATCHDOG`, ...) and boot arguments (`hao_<knob>=1` only) are unchanged.
+Test: `tests/aot/opts_test.c`.
+
+## Diagnostics of `hao_crash=1` in the unified log, and their cost
+
+The boot argument `hao_crash=1` sends hao's diagnostics (crash reports with
+register dumps, guest and host addresses, verbose lines) to `/dev/console`
+and `/private/var/log/hao`. A process that cannot write a log there (an App
+Sandbox one) starts a drain thread at startup and sent each line to the unified log as a public record, which any
+user can read with `log show`. The records are now private: `log show`
+prints `<private>` unless the Mac logs private data (a configuration
+profile). A log directory that a user other than its owner may write, a
+`console.log` owned by another user, or one whose mode cannot be made 0600 is
+no longer used. The console (`/dev/console`, PID 1's stderr) no longer gets
+the lines themselves, only one line per process and destination naming where
+they went (the system log by path, a user's log or the unified log without
+one, or a log at its cap). Each write to the log is made under the log's
+lock (and, within a process, one thread at a time; a signal handler on the
+writing thread sends its lines to the unified log) and cut at the 64 MB cap,
+which now holds
+for all the processes that share the file, kept lines flushed after the Data
+volume mounts included; one line says the cap was reached. That line, the
+console notice and the kept-lines note are built without stdio, as the
+other lines `hao_diag_write` sends ("Diagnostic writes from signal handlers").
+`hao_crash=1` is now
+read with the other switches (`hao/opts.h`); `HAO_CRASH=1` sets it in a test
+build. Test: `tests/aot/run.sh` case M (a 0777 and a 0555 log directory:
+no log in the first, every record private; before the change the first got a
+log and the second a public record; a log just under the cap gets one cap
+line and stays under it, where before a process wrote past it and no cap
+line). Not tested on the host: the console notice (nothing here captures
+`/dev/console`) and a failed `fchmod`. Known: a user can create
+`DIR/user/<uid>` for another uid first, which leaves that uid without a log
+file (its lines then go to the private unified log; nothing is disclosed).
+
+Measured on the 27.2 host under Rosetta (load about 30 on 16 CPUs), test
+build, 40 interleaved runs per cell, medians, with switch off / with a log
+file / with the unified-log fallback (the drain thread):
+- C `hello`: 26.1 / 26.2 / 26.1 ms wall, 19.9 / 19.8 / 20.0 ms CPU, maximum
+  RSS 5.71 / 5.71 / 5.81 MB;
+- Objective-C (Foundation): 33.1 / 33.3 / 33.4 ms, 26.0 / 26.2 / 26.4 ms CPU,
+  9.12 / 9.11 / 9.26 MB;
+- Swift (Foundation): 39.6 / 39.2 / 39.8 ms, 32.3 / 32.2 / 32.5 ms CPU,
+  9.78 / 9.79 / 9.86 MB.
+Start time is within the noise (under 0.5 ms); the drain thread adds about
+0.1 MB of RSS. A process that reports nothing writes 0 bytes (the first one
+of a boot writes the 62-byte header); a crash report of a small guest is
+about 1.1 KB. The log is capped at 64 MB per boot and directory. Not
+measured: the target Mac, and how many programs report lines there.
+
+## The Swift value survey is opt-in
+
+The `Swift value survey:` lines for a Swift value hao passes to native code
+unpatched (see "Refusal policy" below) were printed in every process, and
+with `hao_crash=1` reached the console, the log and the unified log. They
+are now printed only with `HAO_SWIFT_VALUE_SURVEY=1` (ordinary processes:
+the lines carry guest data and addresses to the caller's stderr) or boot
+argument `hao_swift_value_survey=1` (every process). The
+pass-through itself is unchanged. Without the switch a declined value costs
+no lock, walk or output. With it, each first (type, reason) pair costs the
+survey walk and the schema dump: for a three-field value with two refusing
+fields (`swiftlayout` section S's), 26 us and 1.43 ms on the host, and
+about 8 KB of output; a process reports up to 1024 pairs. No guest test
+reaches a declined value, so the switch is tested only by `opts_test`.
+Superseded by "Swift values hao cannot certify are refused again": the
+pass-through is no longer the default and `HAO_SWIFT_VALUE_SURVEY` is gone.
+A refused value prints its survey lines with the abort report; listing
+without refusing is the audit of a survey build (`hao_swift_value_audit=1`).
+
+## `hao --aot --auto` and free space
+
+`hao --aot --auto` (the `hao.aot` LaunchDaemon, at every start-up until done)
+wrote caches with no regard for free space; a full default set is about
+3.5 GB. It now starts only with 6 GB free on the cache directory's volume
+(4 GB for the set and 2 GB kept), and starts no further program once less
+than 2 GB is free; the up to four running ones finish. In both cases it
+writes no marker and logs one line, so the next start-up tries again and
+skips the caches already valid. The space is the volume's available blocks
+(`statfs`; purgeable space is not counted) for the directory the caches go
+to, or its nearest existing ancestor. `HAO_AOT_FREE_MB=N[,N...]` (test
+builds) replaces each measurement in turn. Test: `guest/aotdefault` (short at
+the start: nothing runs; short after one program: the second waits; then the
+rest and the marker). Limits: the 4 GB is the payload's list measured once,
+not an estimate from the programs left to cache; a single cache larger than
+the 2 GB kept is not foreseen.
+
+## Guest files read before or around the signature check
+
+Five checks of guest files and their metadata were weaker than their
+documented rule. Each now refuses or copies; tests run on the 27.2
+development Mac under Rosetta, none on an Intel kernel yet.
+
+- libhao_identity reads the main executable's carried sections (CLI route)
+  before hao checks the file. Carried `__TEXT` sections more than 64 MiB
+  apart got a one-byte buffer, and the first section was copied into it
+  (ASan: heap-buffer-overflow, a 4096-byte write). The header and load
+  commands are now read once into memory, a span over 64 MiB or an address
+  that wraps is not carried, and each section is read only into its
+  allocation. Test: `tests/loader/test_identity.c` (12 crafted files, ASan).
+- An embedded stub without a `__hao_slice` record ran its ARM slice
+  checked by that slice's own signature only, and an unsigned slice with
+  library validation off. The front end now says how the process started
+  (`hao-stub` or `hao`), and a stub without a record exits with status 126.
+  Test: `tests/guest/stubself.sh`, such a stub with A's signed and with an
+  unsigned slice: status 7 (the program ran) before, 126 after; and
+  `test_macho` gate_entry.
+- A program that requires library validation, in a process where
+  `CS_REQUIRE_LV` could not be set, ran with library validation for guest
+  images only; it is now refused. The kernel took the flag in every run on
+  this host; the refusal is tested with a test hook (`test_macho` gate_setlv).
+- A root-owned file without write bits or ACL on any local volume was
+  mapped, not copied. Only the read-only volume the system booted from is
+  mapped now. Measured: the Command Line Tools' `clang --version` (124 MB
+  slice, data volume) 51 MB to 142 MB peak footprint, 1.00 s either way;
+  `git --version` (3.8 MB) 7.4 MB to 10.2 MB, 0.06 s.
+- An ACL that could not be read counted as no ACL for AOT caches, their
+  directories and the identity lists; only ENOENT does now
+  (`tests/aot/policy.c`). A segment other than a read-only `__LINKEDIT`, a
+  section of any segment (initializer offsets), or linkedit data reaching
+  past the hashed range into the signature is invalid in `src/libval.c` and
+  `tools/hao_codesig.py` alike (`test_macho`; `tests/tools/test_codesig.py`,
+  8204 cases agree).
+- `HAO_NO_LIBVAL` in an open-tier process turned library validation off
+  for any program; it is now ignored, with a diagnostic, for a program that
+  requires it (`test_macho` gate_nolv_hardened). So are `HAO_CACHE`,
+  `HAO_GUEST_ROOT`, `HAO_IF_DIR`, `HAO_ASYNC_CONTRACT_LIBRARY` and
+  `HAO_TRUST_LIST`, before anything they name loads: a `.thunks` library in
+  `HAO_IF_DIR` ran its initializer in a hardened program
+  (`guest/lvswitches`, the marker before, none after).
+
+Limits: the stub's own link-time native dependencies still load, with
+`disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs
+`tools/hao-embed` to keep them to libraries only root can replace. A root
+process that remounts the root file system writable can still change a
+mapped file. Entitlement checks still search the XML and DER text.
+
+A program that requires library validation no longer reads the user's own
+AOT cache directory either, only the system ones, and an embedded program's
+ARM slice is verified against its stub's record before anything the
+environment selects loads (`guest/lvswitches`: a replaced or corrupted
+slice with `HAO_IF_DIR` ran the thunk library's initializer before its
+status 126; now nothing loads). Cost: such programs run translated afresh
+unless a system cache exists. In `tests/`, only `guest/libval`'s `aot` mode
+for its library-validation variants loses its cache (it compares output,
+which is unchanged). The Command Line Tools' `git log` (library flag, 771
+blocks) ran in 0.26 s from its cache and 0.24 s under the JIT.
+`hao --aot --check` and `hao --aot` decide valid or skipped with the same
+directories, after verifying the signature (`tests/aot/run.sh` V: a
+hardened program's cache in `HAO_CACHE` was "valid" and skipped before).
+`--check` checks the cache against the file it verified: a path repointed
+in between is refused (V, with `tests/aot/swapclose.c`).
+
+## hao --aot --auto marked failed runs done
+
+`hao --aot --auto` wrote its done marker even when programs failed, so
+they were not tried again until libhao changed, and `hao --aot` with no
+FILE took `aot-list` and `stub-identities` by owner and mode alone: an ACL
+granting write, or a directory above them others can write, was not
+noticed. A failed run now leaves no marker (the next start-up retries;
+valid caches are skipped; so does a listed file that is not there or a
+list that cannot be read to its end), the lists need every directory from /
+to pass the cache directories' rules (owner, mode, ACL; `hao_aot_dir_ok`)
+and no write-granting ACL of their own (one that cannot be read refuses the
+list), the marker's directory is held to the same rules, a marker others
+could write is ignored and replaced, and its temporary file is created
+exclusively. Test:
+`guest/aotdefault`. Limits: a program that always fails is retried at
+every start-up.
+
+## hao-trust-list hashed one read and verified another
+
+`hao-trust-list` computed a file's cdhash from one read and then ran
+`codesign --verify -R='anchor apple'` on the path, which codesign opened
+again. A file replaced between the two (an ad hoc program read, an Apple one
+verified) put the ad hoc program's cdhash in `trusted-cdhashes`. It now
+writes the bytes it hashed to a new file in a private directory (with the
+bundle's Info.plist beside it when the signature binds one: a bundle's
+Contents/Info.plist or a framework version's Resources/Info.plist) and
+verifies that copy, in a directory made only under a parent nobody else
+can change (TMPDIR; a shared one such as /tmp is refused) and checked by
+inode before codesign runs; `hao-embed` signs stubs the same way. The
+copy's layout is built from plain names (the file's,
+its bundle's and version's, each one path component, the path resolved
+once), so nothing is written outside that directory. Test: `tests/tools/test_trustlist.py` (the change is
+listed by the old tool, not by the new one). Measured on 26B131: the list
+is byte-identical to the one the old tool made (1,183 of 1,196 files).
+
+## Launch constraints were left out of stub signatures
+
+A program's launch and library constraints (code-signature slots 8-11:
+self, parent, responsible, library) are evaluated on the signature the
+kernel validates, the stub's, and `hao-embed` signed stubs without them,
+so an embedded program could be started by a parent its own constraint
+refuses. `hao-embed` now gives codesign each constraint's requirements and
+checks that the stub seals the program's blob byte for byte. codesign
+expresses only a constraint of requirements (category 0); a program with
+another kind is refused unless `releases/dropped-constraints.txt`
+(`--allow-dropped-constraints`) pins it: path, slot, the arm slice's cdhash
+and the constraint blob's sha256, so a new or changed constraint of the same
+program is refused. The manifest records what was carried and dropped;
+`stub_identity_gate.py --dropped-constraints` compares the slots against the
+same list (not the manifest) and fails a stub missing any other. Measured on 26B131: of 963 embedded programs, 29 carry
+constraints (25 self, 26 parent, none responsible or library); 49 blobs are
+carried byte for byte and one is dropped, the category self constraint of
+usr/libexec/xpcproxy. The App cryptex's 2 constrained programs are
+byte-identical copies of two of those 29. Test:
+`tests/tools/run.sh` (a parent constraint carried; a category one refused,
+then dropped when listed; the gate). Limits: the carried self constraints
+ask for a platform binary on the system volume, which an ad hoc stub is not,
+so where the kernel enforces launch constraints those programs will not
+start; not run on an Intel image yet. Constraints Apple attaches to platform
+programs through the trust cache are not in the signature and do not apply
+to a stub.
+
+## Stubs linked native libraries from storage others can change
+
+Every stub has `disable-library-validation`, and hao sets `CS_REQUIRE_LV`
+only when it loads the program's ARM slice. A native dependency the stub
+linked (a bundle's x86_64 framework through `@rpath`, a file under
+/Library) was loaded by dyld, initializers included, before that, so
+whoever could replace it ran code in the program's process with its
+identity and entitlements. `hao-embed` now links a native dependency
+(from disk or the shared cache) only when every path dyld tries before it,
+every directory and symbolic link on the way, the file itself and, with the
+rpaths each image owns, its own non-lazy dependencies are in protected
+storage: the sealed system volume less its firmlinks (`usr/share/firmlinks`
+of the root), and the OS and App cryptexes; the x86_64 shared cache counts
+as protected. Names are compared case-insensitively in their on-disk
+spelling; every path dyld could try for a dependency (each rpath
+expansion and the default fallback paths: /usr/lib and
+/System/Library/Frameworks for a hardened stub, also /usr/local/lib and
+/Library/Frameworks otherwise) must be protected, whether or not an earlier
+one looks loadable, since a build cannot prove what dyld will load; a
+path is walked as dyld opens it (no lexical "..") and is a shared-cache hit
+only as that exact string; a payload stub names libhao and libhao_identity
+by their /usr/lib/hao paths, so no rpath is searched for them; each x86_64 slice of a library, in each
+rpath context it is reached in, is judged on its own; a chain deeper than
+16 libraries is not protected. Any other is not
+linked (manifest `not_linked`: "outside protected storage") and hao's binder
+loads it with the program's image, after library validation is set.
+Measured on 26B131: 963 embedded programs, 5 link a library from disk, all
+in protected storage, so no stub of that image changes.
+A program whose signature requires library validation (the library flag,
+with or without the hardened runtime) now also gets a hardened-runtime stub,
+without allow-dyld-environment-variables, so dyld ignores
+DYLD_INSERT_LIBRARIES for it as natively (26B131: 2 more stubs, 956 of
+963 hardened; test: the insert reaches a plain program's stub, not this
+one, and hao still runs it).
+`stub_identity_gate.py` fails a stub that loads anything else at launch
+(`dylibs.protected`: libhao only from /usr/lib/hao), and needs the x86_64
+cache to say so (without one it fails). Test:
+`tests/tools/stubdeps.sh` (linked from an image root's usr/bin; not from
+/Library, behind a /Library rpath, through /usr/LOCAL, through a link
+under /Library or from a temporary folder, where the program still runs as
+natively; the gate on such a stub). Limits: when `CS_REQUIRE_LV` cannot be set,
+the deferred library loads without library validation (the loader's
+fallback); dyld's handling of DYLD_* variables in a stub that is not
+hardened is unchanged.
+
+## hao-embed -o wrote through a fixed temporary name
+
+`hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
+link there, truncating its target), set its owner and mode and renamed it
+over OUT. Run with privileges in a directory others can write, that let
+them choose which file was overwritten. It now writes through a descriptor
+of OUT's directory: a new file created exclusively there, renamed over OUT,
+which replaces a link instead of writing through it; a directory owned by
+someone else, writable by group or others, or with an ACL granting write is
+refused (also for hao-runtime-on-mac's outputs).
+`--stubs` and `--save-skeletons` write the same way; `--in-place` opens the
+file without following a link. Test:
+`tests/tools/run.sh` ("-o: a symlink at the output is replaced").
+
+## hao-runtime-on-mac checked only the files the manifest lists
+
+`tools/hao-runtime-on-mac` compared each file of `payload-manifest.json`
+with its sha256 but accepted any other file in the payload, wrote its
+stubs and the dyld fix with plain opens that follow a symbolic link at the
+output path, and ran as root if started so. It now refuses root, writes
+each output to a new file in its private work directory and renames it into
+place through descriptors of the payload's directories (a link there is
+replaced, not written through; a directory others could change is
+refused), makes `replace/dyld`
+only when the manifest lists it, and fails when the payload holds a file the
+manifest does not list, a link or special file, or a listed file that is
+missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
+(hao-runtime-on-mac cases). Limits: the image builder's own check of a
+payload (the contract checker the patcher vendors) still checks only listed
+files.
+
+## The installer took every file under the payload's root/
+
+`hao-install.py` copied every regular file under `PAYLOAD/root` into the
+System volume as root without reading `payload-manifest.json`, so a file
+added beside the listed ones (a LaunchDaemon and its program) was installed
+although the manifest check passed. It now refuses a payload that holds a
+file the manifest does not list, a link or special file, a missing listed
+file other than an AOT cache, a set-ID or sticky runtime file, a listed
+file whose sha256 differs, or two runtime names that are one file on a
+case-insensitive volume, before any write. Each file it reads is copied
+once into a private directory, used through a descriptor and checked by
+inode when read back; only the copies are installed or embedded. Runtime
+files are written to new files and renamed into place through directory
+descriptors (0755 or 0644; another hard link to an old file keeps its
+bytes); programs to embed and files to replace are opened through directory
+descriptors that follow no link, and a file to replace with another hard
+link is refused. Every directory written in must be root's (or the running
+user's), writable by nobody else and without an ACL granting write. Files
+already in the AOT directories (other than the payload's own caches just
+installed) are removed, not made root's: hao trusts a cache there because
+root owns it, and `hao --aot` makes them again. A hao stub without a `__hao_slice` record (a legacy
+stub) is no longer kept: a manifest program gets this payload's stub when
+that gives the recorded result, any other such stub in the System volume
+fails the install (`legacy_stubs` in install.json), and no payload stub
+without the record is embedded. Every x86 slice of a file is examined (a
+second x86_64 subtype does not hide a stub); a stub is any executable slice
+that names libhao (a library command of any kind, or the name as a string);
+the launcher's `__hao_cli` marker exempts only the payload's own
+usr/libexec/hao, and a file the scan cannot read fails it. Test: `tests/tools/test_install.py` (14
+of its cases fail with the old installer), `tests/tools/bundle.sh`. Limits:
+the manifest's hashes are not a signature; the scan reads the whole System
+volume once; copies outside it are not found.
+
+## Constant data of guest images stayed writable
+
+The loader gave every segment its initial protection, so the
+SG_READ_ONLY segments (`__DATA_CONST`, `__AUTH_CONST`: GOT entries,
+global blocks and their descriptors, ObjC and Swift constant metadata)
+stayed writable for the life of the process, where dyld makes them
+read-only once the image is bound. hao adapts some of that data itself
+(ObjC and Swift registration, block invokes and helpers, function
+slots), so the segments now stay writable through those steps and are
+made read-only (`hao_image_seal`) just before the image's initializers
+run. blocks.c, which may meet a guest block's descriptor or a global
+block long after, writes such a word with `hao_image_sealed_cas`: the
+page writable for that one store, then read-only again. The Swift
+Optional witnesses (swiftvalue.c) converted a value's nils in place
+before a native destroy; a static value in sealed data (an array a
+`let` initializes at compile time) is now destroyed as a converted
+copy (`guest/optwitness` faulted there with the seal and without this);
+only for a bitwise-takable type (value witness flag IsNonBitwiseTakable
+clear): weak references and the C++ values that may not move need
+run-time registration and cannot be static constants, so those stay in
+place. An image whose constant data cannot be sealed now stops the
+process before its initializers run; sealing again seals only what is
+left. The late Swift field rewrites of swiftmeta.c use the same guest
+writer as these stores (code.c, see the guest code entry).
+
+Test: `test_macho` (writable after the load, read-only after the seal, a
+sealed store leaves the page read-only), `guest/wx` (the program's
+`__DATA_CONST` reads back read-only in main, as natively; it was
+writable). Limits: shared-cache images (dsc.c) are not sealed, their
+data is fixed up page by page as it is used; the slots a sealed store
+writes are found only by blocks.c, and any other late writer into a
+sealed segment would fault (none other was seen in the 119 guest and
+host entries of tests/check.list).
+
+## Calls hao could not place went through the register bridge
+
+A guest call of a native function or ObjC method whose signature hao had
+read but could not place (more arguments than it handles, an aggregate
+over 64 KB, more stack arguments than its buffer, a malformed encoding)
+was made through the register bridge all the same, which put the
+arguments in the wrong places. A native call of a guest function or
+block with such a signature got a plain thunk. Both now stop the process
+with `bridge: REFUSED call to NAME ...` or `bridge: REFUSED callback into
+guest ...`, as a REFUSED binding does. The refusal and the W^X
+failures write their line with `hao_fatal_safe` (no stdio, no dladdr),
+as they may happen in a callback a signal interrupted; the log's cap
+line is written without snprintf, and the guest writer's lock (code.c)
+is taken only inside a hao critical section, so a guest signal handler
+cannot wait on it while it interrupts its holder. A fork child that
+cannot restore an open write's protection stops. An encoding hao cannot read at all
+still takes the register bridge, as any call without a signature.
+
+A callback without a signature whose native caller gave no result buffer
+(a C caller's rax is not one) let the guest write an indirect result 1 KB
+below the guest's live stack; a larger result overwrote the caller's
+frames. x8 is now the caller's rax only for a Swift callee by its own
+symbol or entry: an island entry (r10 = HAO_CB_SWIFTCC), a guest function
+whose defined symbol is a Swift mangled name (read from the image's
+symbol table, no dladdr), one handed to a native function whose own
+exported symbol is a Swift mangled name (its entry is marked the same
+way: `hao_swift_thunk_for`), or a native function the guest called that
+jumped on to guest code (its return address is hao_native_call's, which
+put the guest's own x8 in rax); a value that cannot be a data pointer is
+never taken. A caller's image with Swift metadata no longer counts.
+Otherwise x8 points into the thread's own area: 64 KB for each of the
+first 16 nesting levels, each followed by a 64 KB guard, so a larger
+result faults in its level's guard; a deeper level gets a guard itself.
+The area is made without a lock (a signal handler's callback that makes
+it first wins). The value the native caller reads is still not the
+guest's result: that needs the signature.
+
+An unsupported signature that cannot get its refusing signature thunk
+(HAO_NO_CLOSURES, the area full) is refused when it is registered,
+never given a plain thunk or a signature noted for its address before.
+
+Test: `guest/refuse` (JIT and --interp). An 8 KB result: the guest's
+stack canary was overwritten, now intact. A 96 KB result: it ran over
+another level's part, now it faults in the guard. A 70000-byte ObjC
+argument: SIGSEGV, now refused. A guest block with a 70000-byte
+parameter: printed 0 (native 11), now refused; with HAO_NO_CLOSURES at
+registration. A release-style build (local symbols stripped) of
+`guest/swiftthunks`, whose closures native Swift generics call: same
+output as native (it relies on the native callee's symbol).
+`guest/indirect-x8` and the guest and host entries of tests/check.list
+pass. Limits: a stripped guest Swift function reached by a path none of
+these covers (a native C caller, an NX fault from code that is not a
+Swift export) gets hao's area: a result it returns in memory is lost.
+
+## Translated code, thunks and Swift island entries were writable and executable
+
+The code cache (translated blocks, the dispatcher stubs, plain and
+signature thunks) and the Swift island rooms were mapped
+read/write/execute for the life of the process: any write primitive in
+a guest process could place x86 code there. Each such region is now
+MAP_JIT memory mapped read/write, never executable, until
+`hao_wx_region` (src/jit.c) takes a memory entry of it and makes it
+read/execute only (on an Intel Mac its maximum protection too). hao
+writes it through a read/write mapping of just the pages a write
+changes, made from the memory entry at a random page of a free 8 MB slot
+of a 256 MB window reserved at a random address (no access; a guest may
+not map there), and put back to the reservation when the write ends: a
+burst of up to 8 translated blocks (the block asked for and the blocks
+its direct branches reach in the same image, chained to each other and
+entered in the translation table only once the mapping is gone), one
+chain patch, a page of thunk code, one island fill. Thunk code no longer
+holds its guest function: a slot loads it (and a signature thunk its
+hsig) from a table of its own read/write mapping, so a thunk only fills
+its table entries, and the code is made a page at a time. A region whose
+memory entry cannot be had is refused: the code cache runs interpreted,
+an island leaves its entries on the NX-fault path; nothing is written
+through the executable mapping.
+
+Measured on the development host: `mach_vm_remap` of MAP_JIT memory is
+refused (KERN_PROTECTION_FAILURE); `pthread_jit_write_protect_np` does
+nothing on x86_64; toggling MAP_JIT pages between read/execute and
+read/write/execute around each write faults under Rosetta (SIGBUS on
+the store whenever another thread runs the page); a memory entry of an
+executable mapping (read/execute) is refused, so the region is made from
+read/write memory; a mapping of a named memory entry cannot be MAP_JIT
+(KERN_INVALID_ARGUMENT), and executing a plain one kills a hardened
+process with only allow-jit. Under Rosetta a write through another
+mapping is not seen by code Rosetta already translated (999 of 1000
+rewrites ran the old code) until the page is made writable: after each
+write hao makes the written pages read/write/execute and read/execute
+again, writing nothing through them, and the maximum protection stays
+read/write/execute there. That is a weakening of the development host
+only. A new random address for every write mapping left 19 MB of page
+tables (`guest/footprint` spread); the 256 MB window keeps them bounded.
+
+A guest could still change these mappings itself: mprotect, munmap or
+mmap MAP_FIXED of a code cache page reached the kernel unchanged (and
+under JIT unmapping one ended the process with SIGBUS). Guest calls of
+mprotect, munmap, mmap with MAP_FIXED, mach_vm_/vm_protect, _deallocate,
+_allocate, _map and _remap with VM_FLAGS_OVERWRITE, a remap of hao's
+memory, and the raw system calls and Mach traps behind them are now
+refused (EACCES, KERN_PROTECTION_FAILURE) where they overlap hao's
+executable memory or the thunks' table, and where they would make an
+image's sealed constant data writable or executable or remap it
+(natively a program may make its own `__DATA_CONST` writable). Test:
+`guest/wxguard` (9 of 9 refused; before, 0 of 9 and JIT died). A remap
+of sealed constant data (a second, shared view the guest could make
+writable) is refused too. The address argument of allocate, map and
+remap (libsystem calls and raw traps) is read once into hao's storage,
+checked and passed from there, and the result written back: another
+guest thread changing it meanwhile does not move an allowed overwrite
+onto protected memory. Sealed segments keep their maximum protection:
+hao still writes them after the seal (block descriptors, Swift fields).
+
+A lazily installed AOT block is marked filled only once its links to
+blocks not yet copied are cut and its write mapping is gone (before, a
+fork in between left a child a filled block jumping into unfilled code).
+The threat model these defend is in docs/security-model.md (Executable
+memory), with what it leaves out.
+
+A fork child has no memory entries (they are not inherited). Under
+Rosetta it takes them again (the region briefly read/write, not
+executable, while the child's only thread is in hao). On an Intel Mac
+the maximum protection does not allow that: the child's executable
+memory is frozen; new guest code there is interpreted and new callbacks
+take the NX-fault path.
+
+Test: `guest/wx` (C and Swift, native/JIT/--interp/AOT): no region of
+the process is writable and executable, and no writable mapping of
+executable memory stays, after translated code, chained branches,
+thunks and island entries have run (before: 3 to 6 regions; with the
+persistent write view of the previous version, 1). `test_jitlock sigs`
+reads the thunk tables. Measured on the development host (Rosetta, load
+14 to 29), clang compiling one file, interleaved, fastest of 7: before
+1.21 s, after 0.91 s (13,000 W^X writes for 28,000 blocks, 32,000 links
+and 56,000 thunks); a steady loop 1.68 to 1.71 s both. No Intel run yet.
+
+Not verified on Intel hardware: block chaining rewrites a 4-aligned
+rel32 in code other threads may be running, with one store and no
+serializing instruction on the threads that run it. That keeps the
+store whole (it never crosses 8 bytes or a cache line), and both the
+old and the new target are complete translations, but it is not the
+cross-modifying-code protocol Intel documents (the executing processor
+synchronizes). Rosetta runs on the development host say nothing about
+Intel processors; this needs a stress run on one.
+
+## Patched guest code pages stayed writable
+
+`hao_code_write` (the one writer of guest instructions: the shared-cache
+selector and GOT-load rewrites, and the compatibility patch of one
+image) made each page it touched readable and writable and never made it
+read-only again, so those guest code pages stayed writable for the life
+of the process, and no protection call was checked. It now writes page
+by page: the page's protection is read, the page is writable for the
+copy only and gets that protection back (a poisoned `HAO_CODE_ALIAS`
+page stays `PROT_NONE`). A page that cannot be made writable is reported
+and the write refused; one that cannot be made read-only again stops the
+process. These writes, the sealed-data stores of blocks.c and the Swift
+metadata field rewrites of swiftmeta.c go through one writer in code.c
+(`hao_guest_write_begin`/`_end`), one at a time, which reads a page's
+protection under its lock and records the interval it made writable: a
+fork child gives that interval its protection back and frees the lock
+(`hao_code_fork_child`; before, a fork during such a write left the
+page writable and the lock held in the child). A fork during
+`hao_wx_region` leaves at most a region that is read/write and not
+executable, or read/execute with no memory entry, which nothing in the
+child writes. The fork-lock audit script of another branch
+(tests/host/fork_locks.py) is not in this tree. The patches are applied before any of the image's code runs
+and an image patched this way gets no AOT cache. Test: `test_macho`
+(page read-only again at the guest address and in the alias, a patch
+across a page boundary, an unmapped page refused). Limits: guest
+`mprotect` of its own code pages still reaches the kernel unchanged, so
+a guest can make its code writable and change it before it is
+translated, as a native process without hardened runtime can.
+
+## @ paths in a restricted process, now that app libraries are guest code
+
+dyld expands no `@executable_path`, no `@loader_path` from the main
+executable's LC_RPATHs and no relative path in a restricted process: set-ID,
+or one with a `__RESTRICT` segment (which an embedded stub carries over).
+hao's own loader applied that rule to set-ID processes only. While an app
+library ran natively, dyld refused such a path for it; since app libraries
+with an ARM slice load as guest code (below), hao's loader resolved
+`@rpath/` through the main executable's `@executable_path` rpath in a
+`__RESTRICT` program, where native arm64 fails. The loader now takes
+`dyld_process_is_restricted` as dyld does (`hao_env_restricted`). Test:
+`tests/tools/identity.sh` case `restrict` (`dlopen @rpath/libidplug.dylib`
+failed natively, succeeded under JIT and `--interp`; now fails in all three).
+Limits: AMFI restrictions that dyld reads besides these are covered only as
+far as `dyld_process_is_restricted` reports them.
+
+## App libraries share the guest ARM representation domain
+
+`guest/xinhab` linked a universal Swift helper whose x86_64 slice hao opened
+natively. ARM Swift stores pointer extra inhabitant i as i; x86_64 Swift
+stores it as i << 1. Passing the address of `[Int]??` or `Three` through
+`UnsafeRawPointer` loses the type at the crossing, so the helper and program
+read different enum cases. Rewriting words based on their location cannot
+supply the missing type.
+
+Dependency candidates outside OS locations now load their usable ARM slice
+as guest code, even if an x86_64 slice exists. The rule uses resolved paths
+and the existing candidate expansion, without app or library names. System,
+/usr/lib, /Library/Apple, cryptex and shared-cache libraries retain the
+existing policy (including guest libc++). Guest run-time `dlopen` follows
+the same rule. Normal guest signature and library-validation checks still
+apply; a rejected ARM image cannot fall back to native loading. Native-only
+app libraries retain native binding. `HAO_NATIVE_APP_LIBS=1`, OPEN tier only,
+restores the earlier native-first policy for diagnosis unless the guest signature
+requires library validation; that case clears the option before dependency
+loading and reports it once, with the other switches such a program ignores
+(`hao_guest_switches_for`, security-model.md). OS classification uses only canonical disk paths,
+excludes writable `/System/Volumes` aliases (Preboot retains OS policy), and
+checks cache-only names separately. Native callers try dyld before ARM-only
+fallback. An already loaded native app library retains its single native
+instance, with one verbose diagnostic.
+
+`sh tests/guest/appdomain.sh` covers Data-volume aliases, native caller search
+overrides, native instance reuse and the runtime/library-validation signature
+flags. These review regressions await coordinator execution.
+
+The regression requires all 14 lines to equal native arm64 under JIT,
+`--interp` and AOT; measured 2026-11-17: all three match. Its diagnostic runs
+with `HAO_NATIVE_APP_LIBS=1` assert that the untyped-pointer mismatch remains
+(`guest wrote [Int]?? case 0, native read 2`, and output differing from
+native). `guest/dlrpath` also distinguishes the ARM and x86_64 slices of a
+universal run-time helper. Bridge fixtures that use a universal helper as a
+stand-in for a native library set `HAO_NATIVE_APP_LIBS=1`. Remaining limit:
+values shared through untyped pointers with native OS libraries still cannot
+be converted.
+
+This change does not supply type information or load OS Swift frameworks
+as guest images.
+
+## Open (high): guest-written Swift values copied by native code in storage
+
+hao certifies a Swift value where it crosses a boundary it intercepts, and
+the contents of array storage and generic boxes at their final destruction
+(entry below). Before that, native code can still copy, assign or destroy
+an element itself: an array's copy on write and `swift_arrayInitWithCopy`
+or `swift_arrayAssignWith*` called inside libswiftCore, and the element
+witnesses those call. A nil guest code wrote there in the arm64 encoding
+(an `Any` holding a `C??` nil in an `[Any]`, for example) then reaches a
+native witness unconverted, which can retain or release an invalid
+reference. Also not covered: Dictionary and Set storage, boxes whose
+metadata no guest-made box hooked, and storage of an element type guest
+code never made storage of. In storage native code made, a value the walk
+cannot read is destroyed as found; one it finds in the guest's encoding
+but cannot convert (in a shared existential box) is refused. Hooking a
+storage type and registering guest-made storage are conditions of
+admitting it: when either fails, the storage is refused. Coverage of
+native copies and assignments (initialized-storage tracking and the
+runtime's array operations) is the next step.
+
+## Swift value walk: per-type facts, carrier rules, the survey image's audit
+
+The walk (`src/swiftvalue/Recipe.c`) consults a per-type facts table before
+its own rules: `src/swiftwalk_gen.inc` (generated for one OS build, keyed by
+mangled type name with private contexts' addresses removed, applied only in
+a process whose x86_64 shared cache is the table's and only while the live
+value witness table has the row's size, stride, flags and XI count;
+`src/swiftvalue/Facts.h`). A row decides before any rule, the small-POD one
+included: SAME passes the type as found and settles its node at the gate;
+DYNAMIC walks it by the rules (an existential's contained value as its
+dynamic type); REFUSE refuses; CONVERT (Optionals) lists every case with
+each architecture's image and defined-bit mask, and a value whose bits
+under an empty case's mask are its image is patched, only those bits
+rewritten, each patched word inside the value (any size). An empty case
+whose mask is empty, or whose x86_64 image or mask is not what the type's
+own witness writes over zeros and ones, is refused. An Optional the table
+does not list (a guest's instantiation) over a listed type of XI class
+POINTER has its nil translated by the pointer rule at the row's word (q on
+arm64, 2q on x86_64, any depth; the offset checked against the Optional's
+own witness). A type with no row (every guest type, and native types not
+listed) keeps the rules, which refuse what they cannot certify.
+
+Source encoding: from three Optional levels a pointer word's encodings
+overlap (arm64's 2 is x86_64's first inhabitant). The walk is told who wrote
+the bytes (`Recipe.h` `HAO_SV_SOURCE_*`): guest storage (results of guest
+callbacks, guest calls of native witnesses) is read in the guest's encoding,
+a value native code made (`witness_to_guest`: nils native witnesses make,
+native generic results) in the native one, and a word two readings of a
+value of unknown source give different meanings is refused. So native
+`T???.some(.none)` (word 2) becomes guest 1, not guest `.none`. CONVERT
+images take the same reading.
+
+ABI rules added to the walk, needing no table: an existential metatype with
+witness tables (`any P.Type`, metadata word then tables) has a thick
+metatype's inhabitants at its first word (k against 2k; the carrier of
+`Optional<BoundInputsView>`); an Optional whose inhabitants are a one-byte
+carrier's values (Bool, an enum with no payload case) has the same nil on
+both, when arm64's choice of most-inhabited field is the same (the carrier
+of `Optional<ToolbarItemGroup<V>>`, its `isEmpty` Bool).
+
+The survey image's audit: boot argument `hao_swift_value_audit=1` (every
+process, every tier; `HAO_SWIFT_VALUE_AUDIT=1` in an open process), read
+only by a survey build (`make SURVEY=1`) or a test build; a release build
+ignores it, says so once and refuses. It lets a value hao would refuse go
+on, as `HAO_SWIFT_VALUE_PASSTHROUGH=1` does, and writes one
+`hao-swift-audit {JSON}` line per (refused type, reason) with the type's
+table key, kind, size, flags, XI count, offset and depth, the keys from the
+root, the boundary and the guest caller and native witness by image UUID and
+offset: no address, no path; private records in the unified log
+(`swiftvalue.c` `audit_record`; CONTRIBUTING.md, Debugging).
+
+Measured on the host (27.2, whose caches are not the table's):
+`host/swiftlayout` sections M (both carriers on arm64 and x86_64, walked;
+refused before), K (table keys, table order) and F (fixture rows in a test
+build: `FBox???`'s word 2 is `.some(.none)` read as native, `.none` read as
+guest, refused unknown; a 9-byte CONVERT row by its masks; an empty mask and
+a stale x86_64 mask refused; a REFUSE row on `Int8` unsettled);
+`guest/svcarriers` (the carriers through native tuple witnesses, equal to
+native under JIT, `--interp`, AOT; refused before); `guest/svfacts`
+(fixture rows SAME, CONVERT, REFUSE; the audit record; a release build
+ignoring the audit); `guest/overlaynil` with a fixture row for its
+placeholder (POINTER at word 16) equals native by default. Not measured: the
+generated rows themselves (their cache is 26B131's), the native-source path
+through a real native generic result, and a whole image under the audit.
+
+## Swift values hao cannot certify are refused again
+
+A Swift value crossing to native code that the walk could not certify
+passed through unpatched by default. That is not "at worst a low-address
+crash": an arm64 nil can be another valid value of the x86_64 type (a third
+pointer extra inhabitant: arm64's 2 is x86_64's `.some(.none)`), spare-bit
+enum tags select another case, and a wrong case releases what its owner
+releases again. Now (`swiftvalue.c` `decline`) such a value is refused: the
+survey lines and schema, then `Swift value boundary refused: REASON (...)`
+and abort. Refused: an active representation with no rule (including
+metadata kinds the walk has no rule for: extended existentials, fixed-size
+arrays, functions other than the measured closures and blocks), layout,
+spare-bit and extra-inhabitant counts that differ by architecture, an
+ambiguous witness ABI or ownership, an unresolved assignment destination,
+null or overlapping storage, and a failed allocation a needed conversion
+depends on. A value is passed as found only when the walk proves each part
+of it is a patched nil or in one of three classes (`Recipe.h`
+`HAO_SV_PASS_*`; named under `HAO_BRIDGE_CHECK` as `Swift value passed as
+found: CLASS`): identical representation and ownership, an inactive payload
+behind a discriminator both sides read alike, or opaque storage only its
+owner touches (a live object of the shared native domain, an existential a
+native witness only copies, an out-of-line box, and an `Optional` of a
+guest struct or enum whose tag witnesses are guest code, read by the code
+that wrote it).
+
+Which values are examined: every value whose type graph has a node not
+settled from metadata alone (`Recipe.c` `settled_node`: a POD under 8
+bytes with no extra inhabitants, a type of integers and floats only,
+structs and tuples by their fields, an `Optional` whose nil reads alike,
+functions, objects, metatypes, Builtins, and a native struct positively
+resilient with no generic argument: the frozen-struct table covers its
+image's build and does not list it; an uncovered image or an enum is no
+evidence). A type declared differently on arm64 is settled only where hao
+installed and read back its arm64 layout (`Swift.Float16`). So
+an enum or existential, or a kind with no rule, is examined even with no
+nil to convert. A type graph past the walk's bounds (depth 32, 1024 nodes,
+64 fields, 4096 bytes) and a failed allocation of the type walk are
+refused, never cached as unaffected. A live existential is certified by
+walking its inline value as the dynamic type (native copies call that
+type's witnesses on it); an out-of-line value is walked in its box and must
+need no conversion (a box is shared, and its last release destroys the
+value natively); a class-bound object and an Error box pass as owner-opaque, and so does a guest type, inside an
+existential or at a guest call of a native witness, whose witnesses are
+all guest code. Nils native witnesses make for guest code (`witness_to_guest`)
+and native generic results take the same decision on the way back. A child
+task's result is written by guest code and copied by the concurrency
+runtime before any boundary hao sees, so `swift_task_create` and
+`swift_asyncLet_begin` refuse a result type that needs certification
+(converting the result where the guest writes it is not done). Storage
+guest code fills and the runtime destroys with native witnesses wherever
+its last reference goes (array storage from `swift_allocObject` of
+`_ContiguousArrayStorage<E>` or `_allocateUninitializedArray<E>`, a
+generic box from `swift_allocBox`) is refused when it is made if its
+element type has a nil whose encoding differs, or is past the walk's
+bounds. Nils inside a positively resilient native type are written by its
+native witnesses and do not count. An element type that is only not settled
+(an enum, an existential) is not refused there: its storage is certified at
+its final destruction instead. Once guest code makes array storage or a
+generic box of such a type, hao takes over that metadata's destroy function
+(one per instantiated element type, so storage native code made is covered
+too) and, before the runtime destroys the contents, walks each live element
+and rewrites its nils in place to the native encoding (the destruction is
+exclusive and final). A shared existential box is never rewritten; an
+element the walk cannot certify is refused in storage guest code made; in
+other storage one in the guest's encoding that cannot be converted is
+refused and anything else left as found (the open entry above). Registered
+storage is kept in a set whose removed slots are reused and compacted
+(`svpolicy` anymany: 200000 arrays); a rebuild publishes the new table
+before freeing the old one, and a fork child recounts the table it holds.
+A box hao may not rewrite passes when every nil in it is already in its
+reader's encoding (`host/swiftvalue`: an `Any` boxing a native `C??` nil). This hook replaces symbol interposition of
+`swift_arrayDestroy`: the array storage's deinit calls it directly inside
+libswiftCore (measured), where no interposition reaches. Guest calls of an
+opaque existential's own witnesses (`Any`, `any P`) are intercepted like an
+Optional's. A struct or tuple whose reflection reports no fields but
+has bytes (built without reflection metadata) has unknown fields: refused,
+not taken as empty.
+
+Closed gaps: guest calls of native Optional, tuple and array witnesses
+handed an uncertified value over unchanged without any decision; a lent
+view that needed conversion but was not bitwise-takable went unchanged; a
+failed scratch allocation left an assignment destination or array elements
+half converted. All are refused now. `HAO_SWIFT_VALUE_PASSTHROUGH=1` (open
+tier, no boot argument; it replaces `HAO_SWIFT_VALUE_STRICT`) is an
+experimental triage switch that accepts memory corruption: such a value goes
+on, reported once per (type, reason). It no longer drops the patches of the
+parts the walk certified (a refusing field's siblings).
+
+Measured: `guest/svpolicy` copies tuples of a `C??` outer nil through the
+native tuple witnesses. Beside an ObjC object, a closure and a nil `Int?`,
+and as an `Any` holding a `C??` nil, each is converted and the output equals
+native arm64 under JIT, `--interp` and AOT (the `Any` faulted before the
+payload walk). Refused: beside an `InlineArray` (no rule for its kind; with
+the switch it equals native, its sibling nil converted), an `InlineArray`
+beside a class reference only (passed unexamined before), a 65-element tuple
+(faulted before), an AsyncStream's `next()` returning such a value, an `Any`
+whose boxed value holds a `C??` nil destroyed in a tuple (passed before) and
+a task group of `C??` (faulted before). A native frozen enum the guest
+built (`_PlaygroundQuickLook`) is examined (taken as native-made before).
+`guest/asyncnil` runs its `Task<Node??>` case on its own: refused by
+default, equal to native with the switch. Also refused: an array of `C??`
+filled with a nil and released by guest code (faulted before), a generic
+captured `C??` variable (its box), and a struct built without reflection
+metadata holding an `Any.Type??` (passed as scalars before). An `[Any]` holding guest-written `C??` nils
+dropped, its value copied and dropped, or assigned over, and a generic
+captured `Any` holding one, equal native arm64 (all four faulted before);
+`HAO_BRIDGE_CHECK` names the conversion at destruction.
+`guest/optwitness` keeps its values in arrays of nested Optionals and
+`guest/sitepack` in arrays holding an Optional of a native struct no table
+covers: both are refused by default (checked for `optwitness`), and their
+engines run with the switch. `guest/overlaynil` now stops by default at an
+`Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
+engines run with the switch.
+
+Impact, from the survey lines of 26B131 runs (types seen, all of the
+"unresolved active representation" reason, in calls and in published
+results): refused now: a published `SwiftUI.DropDelegate` existential (a
+native protocol, guest conformance), `Optional<SwiftUI.BoundInputsView>`
+(88 bytes, no `Optional` rule), `Optional<SwiftUI.ToolbarItemGroup<G>>`
+(42 bytes, xi 0xfd; refused on the host too), `SwiftUI._Glass.Variant.Role`
+(an 8-byte native enum whose case the walk cannot read) and a published
+guest-protocol existential of 40 bytes that the guest-protocol rule did not
+admit. Each of those programs now stops at that boundary. Certified since
+their survey (no refusal): `Optional<(Swift.Bool) -> ()>` (function rule)
+and `Optional<SwiftUI.Binding<Swift.Bool>>` (measured on the host). Not
+measured again: `Optional<SwiftUI.Binding<Optional<SwiftUI.SwipeActionResultToken>>>`.
+Limits: `InlineArray` of anything but scalars has no rule and is refused;
+task results of any type that needs certification are refused, not
+converted; copies and assignments of stored elements inside native code
+(an array's copy on write, `swift_arrayInitWithCopy` and the witnesses it
+calls) are not intercepted, so a guest-written nil there can still be read
+natively; Dictionary and Set storage and boxes made by native code are not
+covered; storage of an element type guest code never made storage of is not
+hooked; an uncertifiable element in storage native code made is destroyed
+as found; the tag witnesses of an enclosing
+enum with more than one empty case are not intercepted. More
+values are walked at each intercepted call than before. The classes are
+host-tested only; an image run is needed to see which programs stop.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
@@ -1334,7 +2336,8 @@ runtime accepts only the current CPU's exact profile. `hao-image-payload`,
 `hao-install.py`, `hao-aot-extend` and `hao_release.py` accept exactly these
 two derived identities, and package dependencies still name the unmodified
 runtime UUID. Version 6 caches are rejected before execution. The installer
-removes them as stale.
+removes them as stale. (Format 8 replaced the XOR with a CPU profile field; see CPU profiles
+for translation and AOT caches.)
 
 **Validation.** About 934,000 complete-state cases pass, covering all
 RMode/FZ/DN settings, aliases and sticky FPSR. The native instruction
@@ -2370,26 +3373,12 @@ Rules as implemented:
   from native metadata) was refused. `swiftlayout` section G: 5 walks
   refused before.
 
-Refusal policy (`swiftvalue.c` `decline`): a value the walk cannot certify,
-and the ownership cases it cannot carry out, pass through unpatched by
-default. The native witness runs on the guest's bytes, and a published result
-stays as the guest wrote it. The first time a (type, reason) pair occurs in a
-process, hao prints three things under the stable prefix `Swift value
-survey:`: the value's innermost refusing types (`refused at offset N depth D:
-... type=...`, from a second walk in survey mode), the schema of the value,
-and one `passed through unpatched: REASON (... type=...) root=... guest lr=...
-pc=...` line. Up to 1024 pairs are reported per process. This is a
-deliberate choice: refusing by default hides what ARM apps send.
-
-The cost is that a nil in the guest's encoding inside such a value can make
-native code misbehave or crash later, away from the boundary. Read a crash
-after a survey line with that in mind. `HAO_SWIFT_VALUE_STRICT=1` (open tier
-only, no boot argument; for tests) restores the refusal: the same lines, then
-the `Swift value boundary refused:` line and abort. An activation lifetime
-mismatch, an internal invariant, still aborts. Not covered by a guest test:
-the publication and witness paths are reached from SwiftUI/AttributeGraph on
-the target. `swiftlayout` section S checks the survey walk itself (a value
-with two refusing fields prints both).
+Refusal policy (`swiftvalue.c` `decline`): see "Swift values hao cannot
+certify are refused again". From 2026-11-12 until that entry a value the walk
+could not certify passed through unpatched by default, with `Swift value
+survey:` lines the first time per (type, reason); `HAO_SWIFT_VALUE_STRICT=1`
+restored the refusal. `swiftlayout` section S checks the survey walk itself
+(a value with two refusing fields prints both).
 
 On Intel hardware (26B131), Weather, which aborted at
 `Swift.Optional<(Swift.Bool) -> ()>` under the refusing default, now passes
@@ -2871,13 +3860,7 @@ Remaining limitations:
 - A vector with a subnormal, infinite or NaN lane, or a tiny or zero
   result in a lane, is computed lane by lane. (`.4S` with one zero
   multiplicand lane and nonzero results is admitted whole: 159 to 23 ns.)
-- Double precision stays in the software path: there is no wider host type
-  to hold the product. It would need error-free transformations in
-  binary64 itself (Dekker's product with Veltkamp splitting, TwoSum, and
-  the Boldo-Melquiond three-addition scheme with an emulated round-to-odd
-  addition), with guards for splitting overflow, an inexact low product
-  part near the subnormal range, and separate handling of the directed
-  modes.
+- Double precision: see "Double-precision fused multiply-add" below.
 - Half precision vectors keep `fp_vec16_muladd`, which admits a lane only
   when the exact sum fits binary64. The round-to-odd step would remove
   that bound (53 >= 11 + 2); the final rounding would stay in `fp_cvt`,
@@ -2885,6 +3868,89 @@ Remaining limitations:
   half fused operations are always computed in software.
 - Not measured on Intel hardware or in an application.
 
+
+## Double-precision fused multiply-add
+
+FMADD, FMSUB, FNMADD and FNMSUB on doubles, FMLA/FMLS `.2D` and their
+by-element and scalar by-element forms always ran in the exact software
+path, and in translated code as a helper call. They now take the
+Boldo-Melquiond emulated FMA in binary64, SSE2 only (no FMA3 instruction):
+Dekker's exact product of Veltkamp halves (uh + ul = a * b), TwoSum of the
+addend and uh (th + tl), tl + ul rounded to odd (TwoSum and the
+one-unit step of the single path), and one round-to-nearest addition
+th + v. When tl is zero, v = ul exactly; otherwise |tl + ul| <= 1.5 ulp(th)
+and every rounding boundary of the result near th is a multiple of
+ulp(th) / 4 with at most four significant bits, which the odd v never
+crosses or lands on.
+
+- `fma64` (`src/a64_fp.c`), first in `fp_muladd` for the interpreter and
+  the helper: round to nearest without FTZ/DAZ, FPCR as for singles, a and
+  b normal with exponents in [-970, 994] and a sum in [-918, 1021], c zero
+  or normal with an exponent in [-970, 1021]. Every value formed is then a
+  multiple of 2^-1022 below 2^1024, so nothing is denormal, tiny or
+  infinite and only PE can be raised; when PE was clear, MXCSR is rewritten
+  with PE from the TwoSum errors.
+- `t_vfp_fma64` (`src/jit.c`) emits the same arithmetic on both lanes
+  inline, with a narrower window (a and b exponents in [-459, 510]) checked
+  on the bits of every active lane, and only while MXCSR already has PE set:
+  the intermediate PE is then not observable and MXCSR is never written.
+  With PE clear, another mode, FZ or an operand outside the window it calls
+  the helper.
+
+Directed rounding modes, FZ and other operands keep the software path.
+
+Checks: a native arm64 run of the algorithm against `fmadd` (2 x 10^9
+cases, 96% admitted, equal results and inexact flags); `make oracle` has an
+`fmad` mode (`fma64_case`: ordinary, arbitrary, near-tie by i^2 2^-104,
+gaps, 50-60 binade spans, overflow, tiny and window-edge exponents, exact
+cancellation, specials; half the records round to nearest without FZ, IXC
+preset in half) whose FPSR flags must match: 800,000 records (three seeds)
+matched in the interpreter and the JIT. Removing the odd step (JIT 5,536,
+C 9,348 mismatches), admitting with PE clear (681) or widening either window
+(1,033; 25,316) is detected. `guest/fma64` compares 21 forms (567,000
+instructions) with native under JIT, `--interp`, helpers-only and AOT;
+`test_jit_vector` requires ordinary operands to stay inline once IXC is
+set (fails on the previous translator).
+
+Development host under Rosetta, seconds per guest loop of 20M iterations
+(scalar: `s = fma(s, 0.999, x)`, a dependent chain; `fp`:
+`s += x*x - 0.5*s/(1+x)`, contracted by clang; `.2D`: two FMLA per
+iteration over 1024 doubles); native arm64 0.018 / 0.099 / 0.010.
+
+| Loop | Before | `fma64` only | Inline JIT |
+|---|---:|---:|---:|
+| scalar FMADD chain | 1.01 | 0.58 | 0.35 |
+| `fp` | 1.08 | 0.65 | 0.53 |
+| FMLA `.2D` + by element | 1.65 | - | 0.235 |
+
+Remaining limitations: about 40 SSE instructions per pair of lanes and a
+dependent chain of about 25; a CPU with FMA3 could use `vfmadd231sd/pd`
+behind the same admission (needs VEX encoding and an AOT profile bit).
+While IXC is clear (a new thread, or after software clears it) translated
+code calls the helper, until an inexact result sets it; code whose fused
+results are all exact stays there. Not measured on Intel hardware.
+
+## Upper ymm state at the native boundary
+
+Translated code and libhao are legacy SSE. A native function that returns
+with dirty upper ymm halves (hand-written AVX without `vzeroupper`), or a
+native caller that has them when it calls into guest code, would leave
+every SSE instruction of the guest with a false dependency from Skylake on.
+Where CPUID reports AVX and OSXSAVE and XCR0 enables SSE and AVX state
+(the host word's `HAO_CPU_AVX`, `src/cpufeat.c`; under Rosetta only with
+ROSETTA_ADVERTISE_AVX=1), the JIT entry stub,
+`hao_native_call` after its call and `hao_callback_entry` execute
+`vzeroupper`; SysV treats the uppers as dead at each point. Without AVX
+state nothing is emitted or executed. The flag is set when the JIT stubs
+are built, so a process without executable memory for the JIT does not
+clear them. `guest/ymmupper` checks both edges with and without
+ROSETTA_ADVERTISE_AVX=1 (before: `ff` in both with it set). The
+signal-resume path is unchanged. The performance effect has not been
+measured: Rosetta has no such penalty.
+
+`-ffp-contract=off` is now in CFLAGS so that plain C arithmetic in the FP
+reference code cannot be fused if the target level is ever raised; at
+`-march=x86-64-v2` the built `libhao.dylib` is byte-identical.
 
 ## Guest calls of private-library functions that take a `va_list`
 

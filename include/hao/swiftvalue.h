@@ -28,6 +28,10 @@ void hao_swift_witness_probe(struct hao_thread *, uint64_t pc);
  * there since MARK (t->swift_made_n at the callback's entry) get the native
  * encoding back; the ring is then reset to MARK. */
 void hao_swift_witness_result(struct hao_thread *, unsigned mark, uint64_t indirect);
+/* --stats: intercepted witnesses, those a full table dropped, nils not tracked */
+void hao_swift_witness_stats(void);
+/* nils hao_swift_witness_result could not restore: their ring entries were overwritten */
+uint64_t hao_swift_witness_lost(void);
 /* VALUE of TYPE, which native code made in guest storage (a native generic
  * function's result): its outer nils in the guest's encoding where guest code
  * reads them inline. True if a word changed. */
@@ -41,6 +45,17 @@ void *hao_swift_borrow_to_native(const void *type, const void *value);
  * inhabitant count set to arm64's, which the guest's compiled witnesses
  * for it select a field by. */
 void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const *fields, const uint8_t *tags);
+/* swift_task_create / swift_asyncLet_begin with result type FUTURE: refused
+ * when its values need certification (swiftvalue.c). */
+void hao_swift_task_result(const void *future, uint64_t lr);
+/* swift_allocObject of METADATA (array storage), or storage of ELEMENT
+ * (swift_allocBox, _allocateUninitializedArray): refused when native code
+ * would destroy a nil of the element type in the guest's encoding. */
+void hao_swift_storage_alloc(const void *metadata, uint64_t lr);
+void hao_swift_storage_element(const void *element, uint64_t lr);
+/* OBJECT, array storage or a generic box guest code just made: its element
+ * type's storage gets hao's final-destruction conversion (swiftvalue.c). */
+void hao_swift_storage_made(void *object);
 void hao_swift_value_fork_child(void);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif

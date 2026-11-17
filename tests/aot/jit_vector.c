@@ -571,6 +571,31 @@ int main(void)
         }
 
 
+    /* Double fused forms (FMADD family, FMLA/FMLS .2D, by element, scalar by
+     * element; both indices): all controls, aliases, FPSR clear, IXC alone
+     * or all flags preset, on fma64_case operands. Ordinary operands under
+     * round to nearest without FZ stay native once IXC is set and take the
+     * helper while it is clear. */
+    static const uint32_t fused64[] = {0x1f400000, 0x1f408000, 0x1f600000, 0x1f608000, 0x4e60cc00, 0x4ee0cc00,
+        0x4fc01000, 0x4fc05000, 0x4fc01800, 0x4fc05800, 0x5fc01000, 0x5fc05000, 0x5fc01800, 0x5fc05800};
+    for (unsigned ctl = 0; ctl < 16; ctl++) for (unsigned f = 0; f < sizeof fused64 / sizeof *fused64; f++)
+        for (unsigned k = 0; k < 144; k++) {
+            unsigned rd = reg(), rn = reg(), rm = reg(), ra = reg();
+            hao_cpu in; state(&in, rn, rm); in.fpcr = (k & 1 ? ctl & 8 : ctl) << 22;   /* odd k: the inline mode */
+            in.fpsr = k % 3 == 0 ? 0 : k % 3 == 1 ? 0x10 : 0x0800009f;
+            for (int lane = 0; lane < 2; lane++) {
+                fma64_ops o = fma64_case(&seed, k % FC_N);
+                in.v[f < 4 ? ra : rd].d[lane] = o.c; in.v[rn].d[lane] = o.a; in.v[rm].d[lane] = o.b;
+            }
+            if (k < 2) for (unsigned r = 0; r < 32; r++) { in.v[r].d[0] = 0x3ff0000000000001ull; in.v[r].d[1] = 0xbfe8000000000000ull; }
+            uint32_t i = fused64[f] | rn << 5 | rm << 16 | rd | (f < 4 ? ra << 10 : 0);
+            for (int live = 0; live < 2; live++) {
+                vector_helper_calls = 0; check(i, 0, &in, live);
+                if (k < 2 && (in.fpcr >> 22 & 7) == 0 && vector_helper_calls != (k == 0) && fails++ < 20)
+                    printf("MISMATCH double fused admission %08x fpcr %x fpsr %x: %u helper calls\n", i, in.fpcr, in.fpsr, vector_helper_calls);
+            }
+        }
+
     fpcr_pending_exception();
 
     estimate_tail();
@@ -868,6 +893,31 @@ int main(void)
             for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 16; e++) in.v[r].b[e] = (uint8_t)rnd();
             uint32_t i = 0x4e280800u | op << 12 | size << 22 | rn << 5 | rd;
             check(i, 0, &in, false); check(i, 0, &in, true);
+        }
+    /* CRC32B/H/W/X and CRC32CB/H/W/X with every sf, the unallocated sf/size
+     * pairs and the zero register in each field. CRC32C must not reach the
+     * helper (SSE4.2 crc32); CRC32 (IEEE) is the helper's table. */
+    for (unsigned sf = 0; sf < 2; sf++) for (unsigned c = 0; c < 2; c++) for (unsigned sz = 0; sz < 4; sz++)
+        for (unsigned k = 0; k < 256; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, 0, 0);
+            if (k & 4) in.x[rn] = ~0ull;
+            uint32_t i = sf << 31 | 0x1AC04000u | rm << 16 | c << 12 | sz << 10 | rn << 5 | rd;
+            vector_helper_calls = 0;
+            check(i, 0, &in, k & 8);
+            if (c && (sz == 3) == sf && vector_helper_calls && fails++ < 20)
+                printf("MISMATCH CRC32C %08x used the helper\n", i);
+        }
+    /* PMULL/PMULL2 in every size and Q, the unsigned and 16/32-bit
+     * neighbours undefined, aliased and high registers. .1Q is pclmulqdq
+     * under a profile with PCLMULQDQ, else the helper; .8H is the helper. */
+    for (unsigned q = 0; q < 2; q++) for (unsigned u = 0; u < 2; u++) for (unsigned size = 0; size < 4; size++)
+        for (unsigned k = 0; k < 128; k++) {
+            unsigned rd = reg(), rn = k & 1 ? rd : reg(), rm = k & 2 ? rn : reg();
+            hao_cpu in; state(&in, rn, rm);
+            for (unsigned r = 0; r < 32; r++) for (unsigned e = 0; e < 2; e++) in.v[r].d[e] = rnd();
+            uint32_t i = q << 30 | u << 29 | 0x0E20E000u | size << 22 | rm << 16 | rn << 5 | rd;
+            check(i, 0, &in, k & 4);
         }
     /* Every allocated permute, byte-distinct random states and aliases. */
     for (unsigned q = 0; q < 2; q++) for (unsigned size = 0; size < 4; size++)

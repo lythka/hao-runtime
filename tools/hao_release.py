@@ -26,8 +26,14 @@ ASYNC_DESCRIPTOR = 'root/usr/lib/hao/async-contract.json'
 HELPERS = {'hao-install.py', 'hao_fat.py', 'hao_codesig.py', 'stamp_identity.py'}
 HEX = re.compile(r'[0-9a-f]{64}')
 UUID = re.compile(r'[0-9a-f]{32}')
-AOT = struct.Struct('<8sII16s16sQQIIQQQII32s')   # include/hao/aot.h hao_aot_hdr, format v7 (136 bytes)
+AOT = struct.Struct('<8sII16s16sQQIIQQQII32sQ')  # include/hao/aot.h hao_aot_hdr, format v8 (144 bytes)
+AOT_VERSION = 8
 AOT_ID_CDHASH = 1
+# include/hao/cpufeat.h: the optional CPU features a cache may record, by bit, and the baseline every
+# supported Mac has (HAO_CPU_BASELINE), the most a shipped cache may need
+CPU_FEATURES = ('aes', 'pclmul', 'avx', 'f16c', 'rdrand', 'fma', 'movbe', 'avx2', 'bmi1', 'bmi2', 'lzcnt', 'adx', 'sha',
+                'gfni', 'vaes', 'vpclmulqdq', 'avx512f', 'avx512dq', 'avx512bw', 'avx512vl')
+CPU_BASELINE = 0x1f
 FEATURES = {'sse2', 'cx16', 'avx', 'sse3', 'ssse3', 'sse4.1', 'sse4.2', 'avx2'}
 
 
@@ -136,13 +142,14 @@ def macho(data, cpu=hao_fat.CPU_X86_64):
 def aot_identity(path):
     with open(path, 'rb') as f: header = f.read(AOT.size)
     require(len(header) == AOT.size, 'truncated AOT header')
-    magic, version, hs, uuid, gen, vm, gid, nb, nl, cs, fs, ph, kind, hash_type, code_id = AOT.unpack(header)
-    require(magic == b'HAOAOT2\0' and version == 7 and hs == AOT.size, 'unsupported AOT format')
+    magic, version, hs, uuid, gen, vm, gid, nb, nl, cs, fs, ph, kind, hash_type, code_id, cpu = AOT.unpack(header)
+    require(magic == b'HAOAOT2\0' and version == AOT_VERSION and hs == AOT.size, 'unsupported AOT format')
     require(fs == path.stat().st_size and fs == hs + nb * 8 + nl * 8 + cs and cs >= 16, 'AOT size mismatch')
     # The code identity the runtime checks: for a signed guest (kind 1) the 20-byte cdhash of the slice.
     require(kind != AOT_ID_CDHASH or not any(code_id[20:]), 'AOT cdhash padding is not zero')
     return dict(uuid=uuid.hex(), runtime_uuid=gen.hex(), guest_id=gid, blocks=nb,
-                id_kind=kind, id_hash=hash_type, code_id=(code_id[:20] if kind == AOT_ID_CDHASH else code_id).hex())
+                id_kind=kind, id_hash=hash_type, code_id=(code_id[:20] if kind == AOT_ID_CDHASH else code_id).hex(),
+                cpu_features=[f for k, f in enumerate(CPU_FEATURES) if cpu >> k & 1] + ['bit%d' % k for k in range(len(CPU_FEATURES), 64) if cpu >> k & 1])
 
 
 def async_identity(descriptor, library, target):
@@ -257,7 +264,7 @@ def validate(bundle, target=None):
     require(set(packages['runtime']['files']) == RUNTIME_FILES, 'runtime file set mismatch')
     runtime_uuid = macho(files['root/usr/lib/hao/libhao.dylib']['object'].read_bytes())['uuid']
     require(packages['runtime']['runtime_uuid'] == runtime_uuid, 'runtime UUID mismatch')
-    require(packages['compatibility']['interface_version'] == 2 and packages['aot']['format_version'] == 7, 'unsupported execution format')
+    require(packages['compatibility']['interface_version'] == 2 and packages['aot']['format_version'] == AOT_VERSION, 'unsupported execution format')
     units = records = 0
     for name in packages['compatibility']['files']:
         leaf = PurePosixPath(name).name
@@ -276,17 +283,17 @@ def validate(bundle, target=None):
         async_provider = async_identity(read_json(files[ASYNC_DESCRIPTOR]['object']), files[ASYNC_LIBRARY]['object'], t)
     require(packages['compatibility'].get('async_provider') == async_provider, 'async provider component identity mismatch')
     require(packages['aot']['runtime_uuid'] == runtime_uuid, 'AOT runtime dependency mismatch')
-    # Cache headers bind one of jit.c's two exact CPU profiles; the package
-    # dependency above still names the unmodified runtime UUID.
-    aes_uuid = bytearray.fromhex(runtime_uuid); aes_uuid[15] ^= 1
-    aot_generators = {runtime_uuid, aes_uuid.hex()}
+    baseline = [f for k, f in enumerate(CPU_FEATURES) if CPU_BASELINE >> k & 1]
     bindings = packages['aot']['guests']
     require(set(bindings) == set(packages['aot']['files']), 'AOT guest inventory mismatch')
     for name, binding in bindings.items():
         identity = binding['header']
         require(PurePosixPath(name).name == identity['uuid'] + '.aot', 'AOT filename/UUID mismatch')
-        require(identity['runtime_uuid'] in aot_generators and identity['uuid'] == binding['uuid']
+        require(identity['runtime_uuid'] == runtime_uuid and identity['uuid'] == binding['uuid']
                 and identity['guest_id'] == binding['guest_id'], 'AOT guest/runtime identity mismatch')
+        # every Mac the image boots must be able to load it (hao --aot --cpu=baseline)
+        require(isinstance(identity.get('cpu_features'), list) and set(identity['cpu_features']) <= set(baseline),
+                'AOT cache needs CPU features beyond the baseline')
         # usr/lib/hao/aot is a system cache directory: the runtime serves only caches bound to a signed guest's cdhash from it
         require(identity.get('id_kind') == AOT_ID_CDHASH and isinstance(identity.get('code_id'), str)
                 and re.fullmatch(r'[0-9a-f]{40}', identity['code_id']) and identity.get('id_hash') in (1, 2, 3, 4),
@@ -435,6 +442,7 @@ def generate(bundle, system, native_cache, build, out, only=()):
         require(not any(op['drop_x86'] for op in stubs), 'translate-mode recipe not supported by generation v1')
         run([sys.executable, toolroot / 'hao-embed', '--stub', build / 'hao-stub', '--root', system,
              '--x86-cache', Path(native_cache).parent, '--stubs', out / 'embed',
+             '--allow-dropped-constraints', toolroot.parent / 'releases/dropped-constraints.txt',
              *[system / op['path'] for op in stubs]], 'generate-stubs')
     for op in packages['image']['plan']['operations']:
         if op['op'] != 'replace-v1' or op['artifact'] not in selected: continue
@@ -446,7 +454,7 @@ def generate(bundle, system, native_cache, build, out, only=()):
         path, digest = next(iter(binding['paths'].items()))
         require(macho(safe(system, path).read_bytes(), hao_fat.CPU_ARM64)['sha256'] == digest, 'AOT generation source changed')
         dest = out / name; dest.parent.mkdir(parents=True, exist_ok=True)
-        run([build / 'hao', '--aot', '--cache', dest.parent.resolve(), system / path], 'aot-' + binding['uuid'])
+        run([build / 'hao', '--aot', '--cache', dest.parent.resolve(), '--cpu=baseline', system / path], 'aot-' + binding['uuid'])
     for name in selected:
         require(sha(safe(out, name)) == files[name]['sha256'], 'generated bytes differ: ' + name)
     receipt = dict(schema=1, assembly_sha256=summary['assembly_sha256'], generated=sorted(selected),

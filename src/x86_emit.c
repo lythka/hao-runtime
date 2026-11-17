@@ -8,12 +8,19 @@ void xb_init(xbuf *b, void *mem, size_t size)
     b->end = b->start + size;
     b->overflow = false;
     b->bad = false;
+    b->count = false;
+}
+void xb_init_count(xbuf *b, const void *at, size_t size)
+{
+    xb_init(b, (void *)(uintptr_t)at, size);
+    b->count = true;
 }
 
 void xb_u8(xbuf *b, uint8_t v)
 {
     if (b->p >= b->end) { b->overflow = true; return; }
-    *b->p++ = v;
+    if (!b->count) *b->p = v;
+    b->p++;
 }
 void xb_u16(xbuf *b, uint16_t v) { xb_u8(b, (uint8_t)v); xb_u8(b, (uint8_t)(v >> 8)); }
 void xb_u32(xbuf *b, uint32_t v) { xb_u16(b, (uint16_t)v); xb_u16(b, (uint16_t)(v >> 16)); }
@@ -181,7 +188,7 @@ static void rip_fix(xbuf *b, uint8_t *start, const void *target)
     int64_t d = (int64_t)(intptr_t)target - (int64_t)(intptr_t)b->p;
     if (!fits32(d)) { b->p = start; bad(b); return; }
     int32_t v = (int32_t)d;
-    memcpy(b->p - 4, &v, 4);
+    if (!b->count) memcpy(b->p - 4, &v, 4);
 }
 void x_mov_ld_rip(xbuf *b, int size, int dst, const void *target)
 {
@@ -251,6 +258,13 @@ void x_unary(xbuf *b, int op, int w, int r) { enc_rr(b, 0, w, 0, OP1(0xF7), op, 
 void x_imul_rr(xbuf *b, int w, int dst, int src) { enc_rr(b, 0, w, 0, OP2(0x0F, 0xAF), dst, src); }
 void x_bsr(xbuf *b, int w, int dst, int src) { enc_rr(b, 0, w, 0, OP2(0x0F, 0xBD), dst, src); }
 void x_bsf(xbuf *b, int w, int dst, int src) { enc_rr(b, 0, w, 0, OP2(0x0F, 0xBC), dst, src); }
+void x_crc32(xbuf *b, int size, int dst, int src)
+{
+    if (size != 1 && size != 2 && size != 4 && size != 8) { bad(b); return; }
+    /* F2 (66 for a word source) [REX] 0F 38 F0 (byte source) / F1 */
+    enc_rr(b, P_F2 | (size == 2 ? P_66 : 0), size == 8, size == 1 && src >= 4 && src < 8,
+           (const uint8_t[]){0x0F, 0x38, (uint8_t)(size == 1 ? 0xF0 : 0xF1)}, 3, dst, src);
+}
 void x_bswap(xbuf *b, int w, int r)
 {
     if (!okreg(b, r)) return;
@@ -310,14 +324,14 @@ bool x_patch32(xbuf *b, size_t at, size_t target)
     int64_t rel = (int64_t)target - (int64_t)(at + 4);
     if (at + 4 > xb_len(b) || !fits32(rel)) return bad(b);
     int32_t v = (int32_t)rel;
-    memcpy(b->start + at, &v, 4);
+    if (!b->count) memcpy(b->start + at, &v, 4);
     return true;
 }
 bool x_patch8(xbuf *b, size_t at, size_t target)
 {
     int64_t rel = (int64_t)target - (int64_t)(at + 1);
     if (at + 1 > xb_len(b) || !fits8(rel)) return bad(b);
-    b->start[at] = (uint8_t)(int8_t)rel;
+    if (!b->count) b->start[at] = (uint8_t)(int8_t)rel;
     return true;
 }
 void x_call_r(xbuf *b, int r) { enc_rr(b, 0, 0, 0, OP1(0xFF), 2, r); }
@@ -386,6 +400,7 @@ size_t x_jrcxz8(xbuf *b)
 void x_mfence(xbuf *b) { xb_u8(b, 0x0F); xb_u8(b, 0xAE); xb_u8(b, 0xF0); }
 void x_stmxcsr(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP2(0x0F, 0xAE), 3, m); }
 void x_ldmxcsr(xbuf *b, xmem m) { enc_rm(b, P_NONE, 0, 0, OP2(0x0F, 0xAE), 2, m); }
+void x_vzeroupper(xbuf *b) { xb_u8(b, 0xC5); xb_u8(b, 0xF8); xb_u8(b, 0x77); }
 void x_xchg_mr(xbuf *b, int size, xmem m, int r)
 {
     if (!oksize(b, size)) return;

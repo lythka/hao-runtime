@@ -2,7 +2,11 @@
 # A guest closure native SwiftUI calls (View.overlay's content) returns an Optional whose nil hao's Optional
 # witness calls left in the guest's encoding (tests/guest/overlaynil.swift); the callback's return gives it
 # back the native encoding. The program is arm64 natively and arm64e under hao (JIT, --interp, AOT); every
-# line must equal native arm64.
+# line must equal native arm64. The `plain` case's content holds a third extra inhabitant of a pointer word,
+# whose arm64 and x86_64 encodings overlap (arm64's 2 is x86_64's second): hao refuses it by default, so the
+# default run must stop there with the refusal line, after the `inlined` lines and before the end, and the three engines run
+# under the experimental HAO_SWIFT_VALUE_PASSTHROUGH=1 for the conversions after it. Given the placeholder's
+# row of the walk's facts table (a fixture), the nil is translated instead and the run equals native.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/overlaynil.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -24,14 +28,35 @@ fail=0
 [ $nrc = 0 ] || fail=1
 for mode in jit interp aot; do
     case $mode in
-    jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
-    interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
-    aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
+    jit) set -- env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" ;;
+    interp) set -- env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" --interp ;;
+    aot) set -- env HAO_CACHE="$OUT/aot" HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" ;;
     esac
     timeout -s KILL "$T" "$@" "$OUT/overlaynil.arm64e" >"$OUT/$mode.out" 2>"$OUT/$mode.err"; rc=$?
     if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
     printf '%-9s rc=%s %s\n' "$mode" "$rc" "$r"
     [ $r = SAME ] || diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16
+done
+timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" "$OUT/overlaynil.arm64e" >"$OUT/default.out" 2>"$OUT/default.err"; rc=$?
+n=$(wc -l <"$OUT/default.out" | tr -d ' ')
+head -n "$n" "$OUT/native.out" >"$OUT/native.prefix"
+if [ $rc != 0 ] && [ "$n" -ge 4 ] && [ "$n" -lt "$(wc -l <"$OUT/native.out" | tr -d ' ')" ] &&
+   cmp -s "$OUT/native.prefix" "$OUT/default.out" &&
+   grep -q 'Swift value boundary refused: .*type=Swift.Optional<Swift.Optional<SwiftUI.ModifiedContent' "$OUT/default.err"
+then r=REFUSED; else r=NOT-REFUSED; fail=1; fi
+printf '%-9s rc=%s %s\n' default "$rc" "$r"
+# With the placeholder's row (tests/guest/overlaynil.facts, test switch HAO_SWIFT_WALK_FACTS; a TEST_SWITCHES
+# build), the walk translates the third inhabitant by the POINTER rule: no refusal, equal to native arm64.
+for mode in jit interp aot; do
+    case $mode in
+    jit) set -- env HAO_NO_AOT=1 HAO_SWIFT_WALK_FACTS="$here/overlaynil.facts" "$HAO" ;;
+    interp) set -- env HAO_NO_AOT=1 HAO_SWIFT_WALK_FACTS="$here/overlaynil.facts" "$HAO" --interp ;;
+    aot) set -- env HAO_CACHE="$OUT/aot" HAO_SWIFT_WALK_FACTS="$here/overlaynil.facts" "$HAO" ;;
+    esac
+    timeout -s KILL "$T" "$@" "$OUT/overlaynil.arm64e" >"$OUT/facts.$mode.out" 2>"$OUT/facts.$mode.err"; rc=$?
+    if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/facts.$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
+    printf 'facts %-9s rc=%s %s\n' "$mode" "$rc" "$r"
+    [ $r = SAME ] || grep -a 'Swift value boundary refused' "$OUT/facts.$mode.err" | head -2 | cut -c1-300 | sed 's/^/    /'
 done
 [ $fail = 0 ] && echo "overlaynil: PASS" || echo "overlaynil: FAIL"
 exit $fail

@@ -71,14 +71,32 @@ image works; those are tested on the target system.
   process none.
 - The scripts that use a test switch (`HAO_LIBVAL_USER`, `HAO_SIGRETURN_USER`,
   `HAO_AOT_LIMIT_KB`, `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`,
-  `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`) need a build compiled with `-DHAO_TEST_SWITCHES`; a
+  `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`, `HAO_AOT_FREE_MB`, `HAO_CRASH`,
+  `HAO_SWIFT_WALK_FACTS`) need a build compiled with `-DHAO_TEST_SWITCHES`; a
   release build ignores them.
 - `HAO_BRIDGE_CHECK=1` reports native-boundary mismatches, such as unbalanced
   native frames and results that differ from the signature. `HAO_NX_STATS=1`
   groups, by native caller and guest target, the native-to-guest calls that
   arrived by faulting on a non-executable guest page, and prints them at exit.
 - On a target system, the boot arguments `hao_crash=1` and `hao_nx_stats=1`
-  send the same diagnostics to the console and `/private/var/log/hao`.
+  send the same diagnostics to the console and `/private/var/log/hao`
+  (`HAO_CRASH=1` does what `hao_crash=1` does, in a test build).
+- A Swift value survey of a whole system needs a survey build of libhao
+  (`make B=build-survey SURVEY=1`; a release build ignores the switch, says
+  so once and refuses) on an image booted with `hao_crash=1
+  hao_swift_value_audit=1`. Every process then lets a Swift value hao would
+  refuse go on to native code (accepting the memory corruption that refusal
+  prevents: such an image is for listing, not for use) and writes one
+  `hao-swift-audit {JSON}` line per refused (type, reason) to the owner-only
+  `/private/var/log/hao/console.log` (a user's processes: their directory
+  under it; a sandboxed process: private unified-log records, `log show
+  --predicate 'subsystem == "com.hao"'`). A record names types by their
+  facts-table keys (mangled, private contexts' addresses removed), the
+  layout, offset and depth, the keys above the type, the boundary (`reason`,
+  `class`) and the guest caller and native witness by image UUID and offset,
+  never an address or a path (`swiftvalue.c` `audit_record`).
+  `HAO_SWIFT_VALUE_AUDIT=1` does the same for one program in a survey or
+  test build.
 - `HAO_DIAG_TIME=1` (boot argument `hao_diag_time=1`) starts each diagnostics
   line with `@SECONDS ` on the mach clock, the clock of the kernel's and the
   unified log's timestamps, and prints one `phase NAME at S s (+MS ms)` line per
