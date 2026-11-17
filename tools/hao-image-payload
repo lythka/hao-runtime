@@ -1,7 +1,8 @@
 #!/bin/bash
 # hao-image-payload [--no-embed | --translate TLIST] [--macos-min VER] [--require-dyld-fix]
 #                   [--x86-cache X86_DYLD_DIR] [--coverage-report SUMMARY.json] [--units DIR [--units-version NAME]]
-#                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR] OUT ROOT [LIST]
+#                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR]
+#                   [--cryptex NAME=DIR]... [--source CHECKOUT] OUT ROOT [LIST]
 #   Build the hao payload for one macOS release image from its System root
 #   (e.g. a read-only mount of the IPSW's filesystem image):
 #     OUT/root/usr/libexec/hao, OUT/root/usr/lib/hao/{libhao,libhao_identity}.dylib,
@@ -98,10 +99,19 @@
 #   build.json aot and payload-manifest.json aot hold the format version and the CPU
 #   profile; build.json aot also the counts, bytes, skips and the libhao UUID. Off by default:
 #   the 936 embedded 27.0 programs make 919 caches, about 2.1 GB.
+#   --cryptex NAME=DIR: ROOT is the IPSW's system image alone and the cryptex NAME (OS, App) is its own
+#   image, mounted at DIR. What the installed system has under System/Volumes/Preboot/Cryptexes/NAME is read
+#   from DIR, and every path recorded is the one a ROOT with the cryptexes grafted in gives
+#   (tools/hao_root.py; hao-embed, stub_identity_gate.py, hao-trust-list and the AOT list), so the payload is
+#   byte for byte the same either way.
+#   --source CHECKOUT builds and records that hao-runtime checkout (its sources, build, helper scripts and
+#   release lists) with this checkout's packaging tools (hao-embed, stub_identity_gate.py, hao-trust-list,
+#   hao_root.py): tools/hao-runtime-from-source --checkout, to rebuild an archive made before --cryptex.
 #   Nothing else here is tied to one release.
 set -euo pipefail
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2; }
 TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= UNITS_VERSION= X86C= AOT=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
+CRYPTEX=() SOURCE=
 while [ $# -gt 0 ]; do
     case "$1" in
         --translate) [ $# -ge 2 ] || usage; TLIST=$2; shift 2 ;;
@@ -116,6 +126,8 @@ while [ $# -gt 0 ]; do
         --aot) AOT=1; shift ;;
         --aot-list) [ $# -ge 2 ] || usage; ALIST=$2; AOT=1; shift 2 ;;
         --aot-jobs) [ $# -ge 2 ] || usage; AJOBS=$2; shift 2 ;;
+        --cryptex) [ $# -ge 2 ] || usage; CRYPTEX+=(--cryptex "$2"); shift 2 ;;
+        --source) [ $# -ge 2 ] || usage; SOURCE=$2; shift 2 ;;
         -h|--help) usage ;;
         --) shift; while [ $# -gt 0 ]; do POS+=("$1"); shift; done ;;
         -*) echo "hao-image-payload: unknown option $1" >&2; usage ;;
@@ -145,7 +157,13 @@ if [ -n "$LIST" ]; then
     [ -f "$LIST" ] || { echo "hao-image-payload: no list $LIST" >&2; exit 2; }
     LIST=$(cd "$(dirname "$LIST")" && pwd)/$(basename "$LIST")
 fi
-H=$(cd "$(dirname "$0")/.." && pwd)
+# T: the packaging tools (this checkout); H: the checkout built and recorded (--source, else this one)
+T=$(cd "$(dirname "$0")/.." && pwd)
+if [ -n "$SOURCE" ]; then
+    H=$(cd "$SOURCE" && pwd) || { echo "hao-image-payload: no --source $SOURCE" >&2; exit 2; }
+else
+    H=$T
+fi
 [ ! -e "$OUT" ] || { echo "hao-image-payload: $OUT exists" >&2; exit 1; }
 [ -z "$UNITS" ] || [ -d "$UNITS" ] || { echo "hao-image-payload: no units directory $UNITS" >&2; exit 2; }
 [ -d "$ROOT" ] || { echo "hao-image-payload: no ROOT $ROOT" >&2; exit 1; }
@@ -183,7 +201,7 @@ EOF
 fi
 ditto "$KEXT" "$OUT/HaoExec.kext"
 cp "$H/kext/stamp_identity.py" "$H/tools/hao-install.py" "$H/tools/hao_fat.py" "$H/tools/hao_codesig.py" "$OUT/"
-EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"}
+EMBED=("$T/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${CRYPTEX[@]+"${CRYPTEX[@]}"} ${X86C:+--x86-cache "$X86C"}
        --save-skeletons "$OUT/embed/skeletons" --allow-dropped-constraints "$H/releases/dropped-constraints.txt")
 LOG=$OUT/embed/embed.log
 rc=0
@@ -214,20 +232,25 @@ if [ $rc != 0 ]; then
     exit 1
 fi
 # embed.log names programs relative to ROOT, so the record does not depend on where ROOT is mounted
-python3 -I - "$LOG" "$ROOT" <<'EOF'
+# (a cryptex's folder, --cryptex, by its place under ROOT)
+python3 -I - "$LOG" "$ROOT" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF'
 import os, sys
-log, root = sys.argv[1:]
-pre = sorted({'\t' + r.rstrip('/') + '/' for r in (root, os.path.realpath(root))}, key=len, reverse=True)
+log, root, *cx = sys.argv[1:]
+pre = {'\t' + r.rstrip('/') + '/': '\t' for r in (root, os.path.realpath(root))}
+for n, d in (s.split('=', 1) for s in cx[1::2]):
+    for r in (d, os.path.realpath(d)):
+        pre['\t' + r.rstrip('/') + '/'] = '\tSystem/Volumes/Preboot/Cryptexes/%s/' % n
+pre = sorted(pre.items(), key=lambda kv: len(kv[0]), reverse=True)
 out = []
 for l in open(log).read().splitlines(True):
-    for p in pre:
-        l = l.replace(p, '\t')
+    for p, to in pre:
+        l = l.replace(p, to)
     out.append(l)
 open(log, 'w').write(''.join(out))
 EOF
 # Every stub against its program's arm slice by tools/stub_identity_gate.py's rules (fail closed: a DIFF stops
 # the build); OUT/embed/identity/{summary.md,diff.tsv,programs.tsv}, build.json stub_identity.
-if ! python3 "$H/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"} \
+if ! python3 "$T/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${CRYPTEX[@]+"${CRYPTEX[@]}"} ${X86C:+--x86-cache "$X86C"} \
         --dropped-constraints "$H/releases/dropped-constraints.txt" --out "$OUT/embed/identity" > "$OUT/embed/identity.log" 2>&1; then
     grep -h '^| ' "$OUT/embed/identity/summary.md" 2>/dev/null | head -40 >&2 || cat "$OUT/embed/identity.log" >&2
     echo "hao-image-payload: a stub's load-time identity differs from its program's (see $OUT/embed/identity)" >&2
@@ -276,11 +299,11 @@ if [ -n "$UNITS" ]; then
     fi
     tail -1 "$OUT/units-match.txt"
 fi
-python3 "$H/tools/hao-trust-list" "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
+python3 "$T/tools/hao-trust-list" ${CRYPTEX[@]+"${CRYPTEX[@]}"} "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
 chmod 644 "$OUT/root/usr/lib/hao/trusted-cdhashes"
 head -1 "$OUT/root/usr/lib/hao/trusted-cdhashes"
 # Which stub runs which Apple program: the stubs whose named arm slice is in the list above
-python3 "$H/tools/hao-trust-list" --stubs "$OUT/embed" "$OUT/root/usr/lib/hao/trusted-cdhashes" "$ROOT" \
+python3 "$T/tools/hao-trust-list" ${CRYPTEX[@]+"${CRYPTEX[@]}"} --stubs "$OUT/embed" "$OUT/root/usr/lib/hao/trusted-cdhashes" "$ROOT" \
     > "$OUT/root/usr/lib/hao/stub-identities" 2> "$OUT/stub-identities.log"
 chmod 644 "$OUT/root/usr/lib/hao/stub-identities"
 head -1 "$OUT/root/usr/lib/hao/stub-identities"
@@ -338,11 +361,14 @@ fi
 # directory rules, so OUT and the directories above it must be owned by the user this
 # runs as (by root, when it runs as root) and not group- or other-writable.
 if [ $AOT = 1 ]; then
-    python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" <<'EOF' || exit 1
+    python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" "$T/tools" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF' || exit 1
 import concurrent.futures, functools, hashlib, json, os, re, struct, subprocess, sys, time
-hao, libhao, root, out, alist, jobs = sys.argv[1:]
+hao, libhao, root, out, alist, jobs, tools, *cx = sys.argv[1:]
+sys.path.insert(0, tools)
+import hao_root
 aotdir = os.path.join(out, 'root/usr/lib/hao/aot')
 rroot = os.path.realpath(root)
+tree = hao_root.Root(root, hao_root.parse(cx[1::2]))
 
 
 def macho_uuid(path):
@@ -390,11 +416,11 @@ os.chmod(os.path.join(out, 'root/usr/lib/hao/aot-list'), 0o644)
 progs, by_ino, bad = [], {}, []
 for rel in want:
     f = os.path.join(root, rel)
-    real = os.path.realpath(f)
-    if not real.startswith(rroot + '/') or not os.path.isfile(real):
+    real = tree.resolve(f)
+    if not real.startswith(rroot + '/') or not os.path.isfile(tree.host(real)):
         bad.append('%s: not a file under ROOT' % rel)
         continue
-    st = os.stat(real)
+    st = os.stat(tree.host(real))
     k = (st.st_dev, st.st_ino)
     if k in by_ino:
         by_ino[k]['paths'].append(rel)
@@ -419,7 +445,7 @@ secs = {}
 def one(p):
     t = time.monotonic()
     try:
-        r = subprocess.run([hao, '--aot', '--cache', cache, '--cpu=' + CPU, '--', os.path.join(rroot, p['file'])], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+        r = subprocess.run([hao, '--aot', '--cache', cache, '--cpu=' + CPU, '--', tree.host(os.path.join(rroot, p['file']))], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, errors='replace', timeout=600)
         rc, err = r.returncode, (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
@@ -487,9 +513,12 @@ EOF
 fi
 [ -z "$ALIST" ] || { cp "$ALIST" "$OUT/aot-list.txt"; chmod 644 "$OUT/aot-list.txt"; }
 [ -n "$UNITS_VERSION" ] || { [ -z "$UNITS" ] || UNITS_VERSION=$(basename "$UNITS"); }
-python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" "$UNITS_VERSION" <<'EOF'
+python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" "$UNITS_VERSION" \
+    "$T/tools" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF'
 import hashlib, json, os, plistlib, struct, subprocess, sys
-out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min, units_version = sys.argv[1:]
+out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min, units_version, tools, *cx = sys.argv[1:]
+sys.path.insert(0, tools)
+import hao_root
 census = os.path.join(out, 'census', 'summary.json')
 census = json.load(open(census)) if os.path.exists(census) else None
 aot = os.path.join(out, 'aot.json')
@@ -532,8 +561,8 @@ m = json.load(open(os.path.join(out, 'embed/manifest.json')))
 translate = None
 if mode == 'translate':
     # manifest paths are real paths relative to ROOT (a listed symlink names its target)
-    real = lambda p: os.path.relpath(os.path.realpath(os.path.join(root, p)), os.path.realpath(root))
-    want = list(dict.fromkeys(real(l.strip()) for l in open(os.path.join(out, 'embed/translate.txt')) if l.strip()))
+    real = hao_root.Root(root, hao_root.parse(cx[1::2])).relpath
+    want = list(dict.fromkeys(real(os.path.join(root, l.strip())) for l in open(os.path.join(out, 'embed/translate.txt')) if l.strip()))
     got = {e['path']: e for e in m['files']}
     absent = [p for p in want if p not in got]
     if absent:
