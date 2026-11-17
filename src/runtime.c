@@ -1962,15 +1962,18 @@ static int diag_log_fd(bool may_open, bool may_start)
     lfd = diag_high_fd(lfd);
     int none = -1;
     if (!__atomic_compare_exchange_n(&diag_lock, &none, lfd, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        close(fd);   /* another thread opened it first */
+        /* another opener claimed it; retry ends only when that opener publishes. If it has not
+         * published yet (it may be this thread, interrupted by a fatal report), write through this
+         * descriptor rather than lose the lines; it stays open, once per such race. */
         close(lfd);
-        fd = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
-    } else {
-        diag_lock_set(lfd);
-        __atomic_store_n(&diag_log, fd, __ATOMIC_RELEASE);
-        pend_flush(fd, may_start);
+        int pub = __atomic_load_n(&diag_log, __ATOMIC_ACQUIRE);
+        if (pub >= 0) { close(fd); return pub; }
+        return fd;
     }
+    diag_lock_set(lfd);
+    __atomic_store_n(&diag_log, fd, __ATOMIC_RELEASE);
     __atomic_store_n(&diag_retry, 0, __ATOMIC_RELEASE);
+    pend_flush(fd, may_start);
     return fd;
 }
 
