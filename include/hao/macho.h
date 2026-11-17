@@ -143,7 +143,7 @@ uint64_t hao_island_room(uint64_t nfstarts_bound);
  *    bytes is the file, mapped, and the segments are mapped from the file
  *    as before, shared with every process that maps it.
  * fd stays the file for what the kernel is asked about it (F_ADDFILESIGS_INFO,
- * F_CHECK_LV, F_GETSIGSINFO); the slice does not own it.
+ * F_CHECK_LV); the slice does not own it.
  */
 /* An embedded code signature as hao_codesig_parse (libval.c) read it: the
  * one reader, for the CLI's policy, integrity and library validation alike.
@@ -299,14 +299,26 @@ typedef struct {
 /* Is sl the slice the record names? The slice's signature is verified
  * (hao_slice_verify: structure, page hashes) and its CodeDirectory must be
  * the recorded one. 0: yes; -1: no, or the record is not one hao reads
- * (why). The loader's gate asks this for the main executable when the
- * process's own main executable has the section. */
+ * (why). The loader's gate asks this for the main executable of every
+ * embedded program (a stub without the section is refused), and of the CLI
+ * if its own main executable has the section. */
 int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n);
-enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
-/* The next image loaded is the main executable: its signature sets the
- * policy (enabled = false: off, HAO_NO_LIBVAL=1 in an ordinary process;
- * no boot argument turns it off). */
-void hao_libval_expect_main(bool enabled);
+enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL };
+/* How the process started, said by the front end that started it (main.c):
+ * HAO_ENTRY_CLI, hao's own launcher (`hao PROGRAM`, every routed exec),
+ * which has checked the file it was given (hao_guest_sig_enforce); or
+ * HAO_ENTRY_EMBEDDED, an embedded program's stub, whose __hao_slice record
+ * must name the main executable's slice. */
+enum { HAO_ENTRY_CLI = 1, HAO_ENTRY_EMBEDDED = 2 };
+/* The next image loaded is the main executable, started through ENTRY
+ * (anything but HAO_ENTRY_CLI is taken as HAO_ENTRY_EMBEDDED): its
+ * signature sets the policy (enabled = false: off, HAO_NO_LIBVAL=1 in an
+ * ordinary process; no boot argument turns it off). A main executable that
+ * requires library validation is refused when the process cannot be made
+ * to require it (CS_REQUIRE_LV). */
+void hao_libval_expect_main(bool enabled, int entry);
+/* The loader's unit tests: 1 makes setting CS_REQUIRE_LV fail. */
+extern int hao_libval_test_setlv;
 /* The loader's gate, after an image's load commands validate and before it
  * is mapped: sl is the slice the image is then built from. img->fd and the
  * slice fields are set. 0 = may load, else -1 with why filled. */

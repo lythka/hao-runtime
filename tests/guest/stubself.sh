@@ -4,7 +4,8 @@
 # the ObjC tagged-pointer switch never runs another file, and a process whose
 # credentials changed at exec does not re-exec at all. And the ARM slice of that
 # file is the one the stub was made for (src/libval.c hao_libval_bound): a copy of
-# the file with another slice in it does not run under the stub's identity.
+# the file with another slice in it does not run under the stub's identity, and a
+# stub that names no slice runs none.
 #   OUT=dir [B=build] [T=60] tests/guest/stubself.sh
 # The executable's path is made to name another program between the kernel's exec
 # and the stub's main by a library inserted with DYLD_INSERT_LIBRARIES
@@ -94,6 +95,21 @@ run sr arch -x86_64 emb/A-resigned
 [ $rc = 126 ] && has sr "is not the code its x86_64 slice was made for" && ! has sr "^stubself" &&
     pass "the changed slice signed again: refused (rc 126), a valid signature of its own is not enough" ||
     bad "re-signed ARM slice: rc $rc: $(head -c 300 sr.out)"
+
+# --- a stub made before hao-embed wrote the record: hao-stub's object linked as hao-embed links it, but
+# with no __TEXT,__hao_slice, with A's validly signed ARM slice and with that slice unsigned. Such a stub
+# names no ARM code, so it runs none.
+clang -arch x86_64 -o legacy.x86 "$B/front/stub.o" -L"$B" -lhao -lhao_identity -Wl,-rpath,"$B" &&
+    codesign -s - -f legacy.x86 2>/dev/null &&
+    lipo emb/A -thin arm64e -output legacy.arm && cp legacy.arm legacy-unsigned.arm &&
+    codesign --remove-signature legacy-unsigned.arm && lipo -create legacy.x86 legacy.arm -output emb/L-signed &&
+    lipo -create legacy.x86 legacy-unsigned.arm -output emb/L-unsigned || exit 2
+for c in signed unsigned; do
+    run "l$c" arch -x86_64 "emb/L-$c"
+    [ $rc = 126 ] && has "l$c" "does not name its ARM code" && ! has "l$c" "^stubself" &&
+        pass "stub without a __hao_slice record, $c ARM slice: refused (rc 126), its code not run" ||
+        bad "stub without a record, $c ARM slice: rc $rc: $(head -c 300 "l$c.out")"
+done
 
 # --- the path names another program by the time the stub opens it
 ln -s "$OUT/emb/A" link1

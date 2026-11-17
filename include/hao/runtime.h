@@ -233,9 +233,10 @@ void hao_diag_guest_addr(FILE *f, uint64_t a);   /* " (image+off, file vmaddr V)
 const char *hao_diag_guest_where(uint64_t a, char *buf, size_t n);   /* the same text in buf ("" otherwise) */
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 /* Load the main executable from fd, the open descriptor its launcher has
- * checked (main.c); path only names it. The loader owns fd from here on.
- * hao_main_image is set before its imports bind. */
-hao_image *hao_load_main_image(const char *path, int fd, char *err, size_t errlen);
+ * checked (main.c); path only names it, entry is the launcher
+ * (HAO_ENTRY_CLI or HAO_ENTRY_EMBEDDED, hao/macho.h). The loader owns fd
+ * from here on. hao_main_image is set before its imports bind. */
+hao_image *hao_load_main_image(const char *path, int fd, int entry, char *err, size_t errlen);
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */

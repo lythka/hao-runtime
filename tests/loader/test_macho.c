@@ -448,7 +448,7 @@ static void gate_plain(const uint8_t *seed, size_t n, const uint8_t *lib, size_t
     char err[512], path[1100];
     uint8_t *d = copy_of(seed, n);
     d[sig_at(d) - 1] ^= 1;                       /* the last hashed byte before the signature: __LINKEDIT, not code */
-    hao_libval_expect_main(true);
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
     hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
     note(!img && strstr(err, "does not match its hash"), "main executable with a page that does not match its hash: refused before its policy is read");
     note(hao_libval_mode() == HAO_LIBVAL_UNDECIDED, "a refused main executable decides nothing");
@@ -463,7 +463,7 @@ static void gate_plain(const uint8_t *seed, size_t n, const uint8_t *lib, size_t
     unsigned before = hao_slice_verify_passes;
     bool ok = sl && hao_slice_verify(sl, NULL, err, sizeof err) == 0 && hao_slice_verify(sl, NULL, err, sizeof err) == 0;
     if (sl) hao_slice_hand(sl);
-    hao_libval_expect_main(true);
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
     img = ok ? hao_load_image_fd_cb(path, fd, resolver, NULL, NULL, err, sizeof err) : NULL;
     note(img && hao_slice_verify_passes == before + 1, "main executable checked before the load: hashed once in all");
     note(hao_libval_mode() == HAO_LIBVAL_OFF && !strcmp(hao_libval_reason(), "neither platform nor hardened"),
@@ -529,10 +529,10 @@ static void gate_hardened(const uint8_t *seed, size_t n, const uint8_t *lib, siz
     size_t so = sig_at(d), cd = so + be32at(d + so + 16);        /* the first index entry: the CodeDirectory */
     d[cd + 13] |= 0x01;                                          /* flags (big-endian) |= 0x10000, runtime */
     hao_libval_set_verifier(fake_signer, true, NULL);
-    hao_libval_expect_main(true);
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
     hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
     int m = hao_libval_mode();
-    note(img && (m == HAO_LIBVAL_KERNEL || m == HAO_LIBVAL_PLATFORM) && strstr(hao_libval_reason(), "runtime"),
+    note(img && m == HAO_LIBVAL_KERNEL && strstr(hao_libval_reason(), "runtime"),
          "hardened main executable: library validation on");
     free(d);
 
@@ -560,6 +560,53 @@ static void gate_hardened(const uint8_t *seed, size_t n, const uint8_t *lib, siz
     hao_libval_set_verifier(NULL, true, NULL);
     l = load_bytes("lib.bin", lib, ln, err, sizeof err);
     note(!l && strstr(err, "can say who signed it"), "no signer check in the process: a library that needs one is not loaded");
+}
+
+/* The main executable of an embedded program: this test's own main executable is the "stub", and it has
+ * no __hao_slice record, as a stub made before hao-embed wrote one. Such a stub runs nothing, whatever
+ * the program's signature or policy; hao's own launcher (HAO_ENTRY_CLI) has no record and runs it. */
+static void gate_entry(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    (void)lib; (void)ln;
+    char err[512];
+    hao_libval_expect_main(true, HAO_ENTRY_EMBEDDED);
+    hao_image *img = load_bytes("main.bin", seed, n, err, sizeof err);
+    note(!img && strstr(err, "does not name its ARM code") && hao_libval_mode() == HAO_LIBVAL_UNDECIDED,
+         "embedded entry, stub without a __hao_slice record: refused");
+    hao_libval_expect_main(false, HAO_ENTRY_EMBEDDED);
+    img = load_bytes("main.bin", seed, n, err, sizeof err);
+    note(!img && strstr(err, "does not name its ARM code"), "the same with library validation turned off: refused");
+    uint8_t *d = copy_of(seed, n);
+    wr32(d, find_cmd(d, LC_CODE_SIGNATURE, NULL) + 12, 0);       /* an unsigned program */
+    hao_libval_expect_main(true, 0);
+    img = load_bytes("main.bin", d, n, err, sizeof err);
+    note(!img && strstr(err, "does not name its ARM code"), "no entry said, unsigned program under a stub without a record: refused");
+    free(d);
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
+    img = load_bytes("main.bin", seed, n, err, sizeof err);
+    note(img != NULL, "CLI entry, the same program: loads");
+}
+
+/* A hardened main executable in a process that cannot be made to require library validation: refused,
+ * not run with library validation for guest images only. */
+static void gate_setlv(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    (void)lib; (void)ln;
+    char err[512];
+    uint8_t *d = copy_of(seed, n);
+    size_t so = sig_at(d), cd = so + be32at(d + so + 16);
+    d[cd + 13] |= 0x01;                                          /* runtime */
+    hao_libval_test_setlv = 1;
+    hao_libval_set_verifier(fake_signer, true, NULL);
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
+    hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
+    note(!img && strstr(err, "cannot be made to require it") && hao_libval_mode() == HAO_LIBVAL_UNDECIDED,
+         "hardened main executable, CS_REQUIRE_LV cannot be set: refused");
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
+    img = load_bytes("main.bin", seed, n, err, sizeof err);
+    note(img && hao_libval_mode() == HAO_LIBVAL_OFF, "a program that does not require library validation: loads");
+    hao_libval_test_setlv = 0;
+    free(d);
 }
 
 /* Reads a list of "b FILE" (a signature blob) and "m FILE" (a thin Mach-O)
@@ -939,6 +986,8 @@ int main(int argc, char **argv)
     fflush(stdout);
     fails += in_child(gate_plain, seed, n, lib, ln, &passes);
     fails += in_child(gate_hardened, seed, n, lib, ln, &passes);
+    fails += in_child(gate_entry, seed, n, lib, ln, &passes);
+    fails += in_child(gate_setlv, seed, n, lib, ln, &passes);
 
     printf("test_macho: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

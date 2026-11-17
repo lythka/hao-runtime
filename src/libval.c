@@ -25,18 +25,18 @@
  *    non-platform library of another Team ID in this process, whatever its
  *    entitlements (measured: an ad hoc dylib is refused with "mapping
  *    process and mapped file (non-platform) have different Team IDs" in a
- *    process signed with disable-library-validation);
+ *    process signed with disable-library-validation). A process that cannot
+ *    set it does not run the program;
  *  - guest images (arm64 dylibs hao maps as data, which the kernel never
  *    validates as code), on the bytes the loader then builds the image
  *    from (check_image below; the slice is taken once, hao/macho.h
  *    hao_slice): every page hash, checked by hao, whatever the policy; then
  *    the loader attaches the slice's signature to the vnode
  *    (F_ADDFILESIGS_INFO, the cdhash must be hao's) and asks the kernel
- *    whether this process may map it (F_CHECK_LV). If the kernel refused
- *    CS_REQUIRE_LV, a guest image must at least be platform code
- *    (F_GETSIGSINFO). Where the kernel cannot hold the signature (an x86_64
- *    kernel accepts only 4 KiB-page CodeDirectories; Apple's arm64 code is
- *    signed with 16 KiB pages, so on Intel this is every Apple library) hao
+ *    whether this process may map it (F_CHECK_LV). Where the kernel cannot
+ *    hold the signature (an x86_64 kernel accepts only 4 KiB-page
+ *    CodeDirectories; Apple's arm64 code is signed with 16 KiB pages, so on
+ *    Intel this is every Apple library) hao
  *    applies AMFI's rule itself with the signer it establishes
  *    (guest_sig.c): a trusted cdhash list or Security's `anchor apple`
  *    (platform), else the main executable's Team ID with a certificate for
@@ -61,7 +61,10 @@
  * __TEXT,__hao_slice, which the stub's signature does cover, and the gate
  * below loads a main executable in such a process only if its verified
  * CodeDirectory is that one (hao_libval_bound). Without it, a copy of the
- * file with another ARM slice would run that code under the stub's identity.
+ * file with another ARM slice would run that code under the stub's identity,
+ * so a stub without the record runs nothing. Which front end started the
+ * process (hao_libval_expect_main's entry) says whether the main executable
+ * is a stub; the record's absence never does.
  *
  * This file depends only on libc (CommonCrypto is libSystem's): the loader
  * unit tests and fuzzers link it with macho.c.
@@ -446,6 +449,7 @@ int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, 
 
 static int mode = HAO_LIBVAL_UNDECIDED;
 static bool expect_main;
+static int entry_mode;              /* HAO_ENTRY_CLI, else the main executable is an embedded program's */
 static char reason[160];
 static hao_imgsig_fn verifier;      /* guest_sig.c's signer check (NULL: the loader's unit tests) */
 static bool force_user;             /* HAO_LIBVAL_USER: signers in user space even where the kernel answers */
@@ -463,9 +467,12 @@ void hao_libval_set_verifier(hao_imgsig_fn fn, bool force, void (*report)(const 
     report_line = report;
 }
 
-void hao_libval_expect_main(bool enabled)
+int hao_libval_test_setlv;
+
+void hao_libval_expect_main(bool enabled, int entry)
 {
     expect_main = true;
+    entry_mode = entry;
     if (!enabled && mode == HAO_LIBVAL_UNDECIDED) {
         mode = HAO_LIBVAL_OFF;
         snprintf(reason, sizeof reason, "turned off (hao_no_libval)");
@@ -478,7 +485,10 @@ const char *hao_libval_reason(void) { return reason; }
  * is verified on the bytes it is built from (by hao_guest_sig_enforce
  * already, on this slice, for the CLI; here for an embedded program), and
  * the policy is read from that CodeDirectory: an invalid signature is a
- * refusal, not a program without a policy. */
+ * refusal, not a program without a policy. A program that requires library
+ * validation runs only in a process the kernel holds to it (CS_REQUIRE_LV):
+ * without that, native libraries of any signer could load into it, which
+ * natively they cannot, so it is refused. */
 static int decide(hao_slice *sl, char *why, size_t n)
 {
     static const hao_codesig unsigned_code;
@@ -505,16 +515,15 @@ static int decide(hao_slice *sl, char *why, size_t n)
              cs->platform && (cs->flags & (CS_RUNTIME | CS_REQUIRE_LV)) ? ", " : "",
              cs->flags & CS_RUNTIME ? "runtime" : cs->flags & CS_REQUIRE_LV ? "library flag" : "");
     uint32_t f = CS_REQUIRE_LV, now = 0;
-    int r = csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
+    int r = hao_libval_test_setlv ? (errno = EPERM, -1) : csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
     int e = errno;
-    if (r == 0 && csops(getpid(), CS_OPS_STATUS, &now, sizeof now) == 0 && (now & CS_REQUIRE_LV)) {
-        mode = HAO_LIBVAL_KERNEL;
-    } else {
-        mode = HAO_LIBVAL_PLATFORM;
-        size_t l = strlen(reason);
-        snprintf(reason + l, sizeof reason - l, "; CS_REQUIRE_LV not set (%s): guest images platform only",
-                 r ? strerror(e) : "flags unchanged");
+    if (r != 0 || csops(getpid(), CS_OPS_STATUS, &now, sizeof now) != 0 || !(now & CS_REQUIRE_LV)) {
+        snprintf(why, n, "it requires library validation (%s), and this process cannot be made to require it "
+                 "(CS_REQUIRE_LV: %s)", reason, r ? strerror(e) : "flags unchanged");
+        reason[0] = 0;
+        return -1;
     }
+    mode = HAO_LIBVAL_KERNEL;
     return 0;
 }
 
@@ -545,7 +554,6 @@ int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_c
 static const char *lv_rule(const char *team, const hao_imgsig *g)
 {
     if (g->apple) return NULL;
-    if (mode == HAO_LIBVAL_PLATFORM) return "mapped file is not a platform binary";
     if (main_platform) return "mapping process is a platform binary, but mapped file is not";
     if (!team && main_team[0]) return "mapped file has no Team ID and is not a platform binary (signed with custom identity or adhoc?)";
     if (!team || !main_team[0] || strcmp(team, main_team))
@@ -564,9 +572,8 @@ static const char *lv_rule(const char *team, const hao_imgsig *g)
  *     CODESIGNING "Invalid Page"); any other invalid signature is a load
  *     failure;
  *  2. with library validation on, who may be mapped: the kernel, where it
- *     holds the signature (F_ADDFILESIGS_INFO, then F_CHECK_LV or
- *     F_GETSIGSINFO); else the same rule in user space with the signer
- *     hao establishes (guest_sig.c). An x86_64 kernel holds only 4 KiB-page
+ *     holds the signature (F_ADDFILESIGS_INFO, then F_CHECK_LV); else the
+ *     same rule in user space with the signer hao establishes (guest_sig.c). An x86_64 kernel holds only 4 KiB-page
  *     CodeDirectories, so on Intel every 16 KiB-page arm64 signature
  *     (all of Apple's) takes the user-space route. So does a same-team
  *     library the kernel refuses because the process's Team ID is hao's.
@@ -575,7 +582,7 @@ static const char *lv_rule(const char *team, const hao_imgsig *g)
  */
 static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
 {
-    bool lv = mode == HAO_LIBVAL_KERNEL || mode == HAO_LIBVAL_PLATFORM;
+    bool lv = mode == HAO_LIBVAL_KERNEL;
     if (!sl->sig_size) {
         if (!lv) return 0;
         snprintf(k, kn, "mapped file is not code signed");
@@ -613,7 +620,7 @@ static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
         } else if (memcmp(fs.fs_cdhash, cs->cdhash, sizeof cs->cdhash) || fs.fs_hash_type != cs->hash_type) {
             snprintf(k, kn, "the kernel holds a different code signature for this file (rewritten in place?)");
             return -1;
-        } else if (mode == HAO_LIBVAL_KERNEL) {
+        } else {
             char msg[256] = "";
             fchecklv_t cl = {.lv_file_start = (off_t)img->slice_off, .lv_error_message_size = sizeof msg,
                              .lv_error_message = msg};
@@ -624,11 +631,6 @@ static int check_image(hao_image *img, hao_slice *sl, char *k, size_t kn)
                 return -1;
             }
             user = true;
-        } else {
-            fgetsigsinfo_t gi = {.fg_file_start = (off_t)img->slice_off, .fg_info_request = GETSIGSINFO_PLATFORM_BINARY};
-            if (fcntl(img->fd, F_GETSIGSINFO, &gi) == 0 && gi.fg_sig_is_platform) return 0;
-            snprintf(k, kn, "mapped file is not a platform binary");
-            return -1;
         }
     }
     snprintf(route, sizeof route, "user space%s, %u KiB pages", force_user ? " (HAO_LIBVAL_USER)" : "", 1u << (cs->page_shift - 10));
@@ -651,12 +653,18 @@ int hao_libval_image(hao_image *img, hao_slice *sl, char *why, size_t n)
         expect_main = false;
         /* An embedded program: this process's main executable is its stub, and the stub's record is in pages
          * the kernel validated. Whatever the policy, and whether or not library validation is on, the ARM
-         * code that runs under the stub's identity is the code the stub was made for. No record: hao's own
-         * launcher, which has checked the file it was given (hao_guest_sig_enforce), or a stub made before
-         * hao-embed wrote one, whose ARM slice is verified below but is not tied to it. */
+         * code that runs under the stub's identity is the code the stub was made for. A stub without a
+         * record (made before hao-embed wrote one) names no code, so it runs none. hao's own launcher
+         * (entry HAO_ENTRY_CLI, said by its front end, not by a missing record) has checked the file it was
+         * given (hao_guest_sig_enforce) and runs under hao's identity. */
         unsigned long size = 0;
         const void *record = getsectiondata((const struct mach_header_64 *)_NSGetMachExecuteHeader(), "__TEXT",
                                             HAO_SLICE_SECTION, &size);
+        if (!record && entry_mode != HAO_ENTRY_CLI) {
+            snprintf(why, n, "its x86_64 slice does not name its ARM code (no __TEXT,%s record: a stub made before "
+                     "hao-embed wrote one); embed the program again", HAO_SLICE_SECTION);
+            return -1;
+        }
         if (record && hao_libval_bound(record, size, sl, why, n) != 0) return -1;
         return mode == HAO_LIBVAL_UNDECIDED ? decide(sl, why, n) : 0;
     }
