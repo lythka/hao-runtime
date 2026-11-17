@@ -7,6 +7,9 @@
  *   test_macho CORPUS_DIR SCRATCH_DIR
  */
 #include "hao/macho.h"
+#include "hao/code.h"
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
 #include <mach-o/fixup-chains.h>
@@ -753,6 +756,91 @@ static int codesig_report(const char *list)
     return 0;
 }
 
+/* ------------------------------------------------------------------ code writes */
+
+static int prot_at(uint64_t p)
+{
+    mach_vm_address_t r = p;
+    mach_vm_size_t sz = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t obj = MACH_PORT_NULL;
+    if (mach_vm_region(mach_task_self(), &r, &sz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS ||
+        r > p)
+        return -1;
+    return info.protection;
+}
+
+/* hao_code_write: guest code changed by a compatibility patch is read-only again afterwards, at the guest
+ * address, in the alias (HAO_CODE_ALIAS) and, for a poisoned page, PROT_NONE again. A patch across a page
+ * boundary is written and both pages are restored. */
+static void code_write_tests(const uint8_t *seed, size_t n)
+{
+    char path[1100], err[512] = "";
+    snprintf(path, sizeof path, "%s/code.bin", scratch);
+    put_file(path, seed, n, n);
+    for (int alias = 0; alias < 2; alias++) {
+        hao_code_alias_mode = alias;
+        hao_image *img = hao_load_image(path, resolver, err, sizeof err);
+        bool ok = img && img->nfstarts && (!alias || img->code_delta);
+        if (ok) {
+            uint64_t a = img->fstarts[0], p = a & ~0xfffull;
+            static const uint32_t w[4] = {0xd503201f, 0xd503201f, 0x12345678, 0x9abcdef0};
+            int before = prot_at(p);
+            ok = !(before & VM_PROT_WRITE) && hao_code_write(a, img->code_delta, w, sizeof w) &&
+                 !memcmp(hao_code_ptr_im(img, a), w, sizeof w) && prot_at(p) == before &&
+                 (!alias || (!memcmp((const void *)(uintptr_t)a, w, sizeof w) && prot_at(p + (uint64_t)img->code_delta) == VM_PROT_READ));
+            if (!ok) printf("  code write: prot before %d after %d\n", before, prot_at(p));
+        }
+        note(ok, alias ? "patched guest code: read-only again in the guest mapping and its alias"
+                       : "patched guest code: the page is read-only again");
+        if (img) hao_unload_image(img);
+    }
+    hao_code_alias_mode = false;
+    /* across a page boundary, in an anonymous mapping standing for guest code */
+    uint8_t *m = mmap(NULL, 0x2000, PROT_READ, MAP_PRIVATE | MAP_ANON, -1, 0);
+    uint8_t w8[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    bool ok = m != MAP_FAILED && hao_code_write((uint64_t)(uintptr_t)m + 0xffc, 0, w8, 8) && !memcmp(m + 0xffc, w8, 8) &&
+              prot_at((uint64_t)(uintptr_t)m) == VM_PROT_READ && prot_at((uint64_t)(uintptr_t)m + 0x1000) == VM_PROT_READ;
+    note(ok, "patch across a page boundary: both pages written, both read-only again");
+    /* a page that cannot be made writable (not mapped): refused, nothing written */
+    if (m != MAP_FAILED) munmap(m + 0x1000, 0x1000);
+    note(m != MAP_FAILED && !hao_code_write((uint64_t)(uintptr_t)m + 0x1000, 0, w8, 8), "patch of an unmapped page: refused");
+    /* a fork while a write is open: the child's hook gives the range its protection back and frees the lock
+     * (here the writer is this thread, as if it had not been copied) */
+    bool fk = m != MAP_FAILED && hao_guest_write_begin((uint64_t)(uintptr_t)m, (uint64_t)(uintptr_t)m + 0x1000) == VM_PROT_READ &&
+              prot_at((uint64_t)(uintptr_t)m) == (VM_PROT_READ | VM_PROT_WRITE);
+    hao_code_fork_child();
+    fk = fk && prot_at((uint64_t)(uintptr_t)m) == VM_PROT_READ && hao_guest_write_begin((uint64_t)(uintptr_t)m, (uint64_t)(uintptr_t)m + 0x1000) >= 0;
+    hao_guest_write_end(PROT_READ);
+    note(fk && prot_at((uint64_t)(uintptr_t)m) == VM_PROT_READ, "fork during a guest write: the child restores the page and the lock");
+    if (m != MAP_FAILED) munmap(m, 0x1000);
+}
+
+/* hao_image_seal: the image's SG_READ_ONLY segments (__DATA_CONST) are writable after the load (hao adapts
+ * them) and read-only after the seal; hao_image_sealed_cas writes one word and leaves the page read-only. */
+static void seal_tests(const uint8_t *seed, size_t n)
+{
+    char path[1100], err[512] = "";
+    snprintf(path, sizeof path, "%s/seal.bin", scratch);
+    put_file(path, seed, n, n);
+    hao_image *img = hao_load_image(path, resolver, err, sizeof err);
+    size_t o = img ? find_cmd(seed, LC_SEGMENT_64, "__DATA_CONST") : 0;
+    const struct segment_command_64 *sg = o ? (const void *)(seed + o) : NULL;
+    bool ok = sg && (sg->flags & SG_READ_ONLY);
+    uint64_t a = ok ? sg->vmaddr + img->slide : 0;
+    ok = ok && (prot_at(a) & VM_PROT_WRITE) && hao_image_seal(img) && img->nsealed == 1 && prot_at(a) == VM_PROT_READ;
+    note(ok, "seal: __DATA_CONST writable after the load, read-only after hao_image_seal");
+    uint64_t old = 0;
+    if (ok) memcpy(&old, (const void *)(uintptr_t)a, 8);
+    ok = ok && hao_image_sealed_at(a, 8) == img && !hao_image_sealed_at(a + sg->vmsize, 8) &&
+         hao_image_sealed_cas(a, old, old ^ 0x5a5a) && *(const uint64_t *)(uintptr_t)a == (old ^ 0x5a5a) &&
+         !hao_image_sealed_cas(a, old, 1) && prot_at(a) == VM_PROT_READ;
+    note(ok, "seal: one word written through hao_image_sealed_cas, the page read-only again");
+    note(ok && hao_image_seal(img) && img->nsealed == 1, "seal: sealing again seals nothing twice");
+    if (img) hao_unload_image(img);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--codesig")) return codesig_report(argv[2]);
@@ -768,6 +856,8 @@ int main(int argc, char **argv)
 #define FRESH() memcpy(d, seed, n)
 
     FRESH(); expect("seed exec-arm64e loads", d, n, NULL);
+    code_write_tests(seed, n);
+    seal_tests(seed, n);
     { size_t a; uint8_t *x = slurp("exec-arm64", &a); expect("seed exec-arm64 loads", x, a, NULL); free(x); }
     expect("seed lib-arm64e loads", lib, ln, NULL);
     expect("seed fat-x86_64-arm64e loads", fat, fn, NULL);

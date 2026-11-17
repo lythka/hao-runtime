@@ -564,6 +564,10 @@ tests/guest/optwitness.sh
 tests/guest/optwitness.swift
 tests/guest/overlaynil.sh
 tests/guest/overlaynil.swift
+tests/guest/refuse.m
+tests/guest/refuse.sh
+tests/guest/refusehelper.h
+tests/guest/refusehelper.m
 tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
 tests/guest/layoutxi.sh
@@ -671,6 +675,11 @@ tests/guest/varsniffhelper.c
 tests/guest/varsniffhelper.h
 tests/guest/vbench.c
 tests/guest/vbench2.c
+tests/guest/wx.c
+tests/guest/wx.sh
+tests/guest/wx.swift
+tests/guest/wxguard.c
+tests/guest/wxguard.sh
 tests/guest/x8.c
 tests/guest/x8helper.c
 tests/guest/x8helper.h

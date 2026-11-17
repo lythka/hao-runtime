@@ -18,6 +18,7 @@
 #include <mach-o/fixup-chains.h>
 #include <mach-o/loader.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/acl.h>
@@ -896,6 +897,56 @@ static bool is_pagezero(const struct segment_command_64 *sg)
            !strncmp(sg->segname, "__PAGEZERO", 16);
 }
 
+/* ------------------------------------------------------------- sealing */
+
+bool hao_image_seal(hao_image *img)
+{
+    if (!img || img->dsc || !img->base) return true;
+    const struct mach_header_64 *mh = (const void *)(uintptr_t)img->base;
+    if (mh->magic != MH_MAGIC_64) return true;
+    bool ok = true;
+    const uint8_t *p = (const uint8_t *)(mh + 1), *end = p + mh->sizeofcmds;
+    for (uint32_t k = 0; k < mh->ncmds && p + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *lc = (const void *)p;
+        if (lc->cmdsize < sizeof *lc || lc->cmdsize > (uint64_t)(end - p)) break;
+        p += lc->cmdsize;
+        if (lc->cmd != LC_SEGMENT_64 || lc->cmdsize < sizeof(struct segment_command_64)) continue;
+        const struct segment_command_64 *sg = (const void *)lc;
+        if (!(sg->flags & SG_READ_ONLY) || !(sg->initprot & VM_PROT_WRITE) || !sg->vmsize) continue;
+        uint64_t lo = sg->vmaddr + img->slide, hi = lo + sg->vmsize;
+        bool done = false;   /* sealed by an earlier call */
+        for (int j = 0; j < img->nsealed; j++) done |= img->sealed_lo[j] == lo;
+        if (done) continue;
+        if (img->nsealed == HAO_MAX_RANGES) { ok = false; break; }
+        if (mprotect((void *)(uintptr_t)lo, hi - lo, PROT_READ)) { ok = false; continue; }
+        img->sealed_lo[img->nsealed] = lo;
+        img->sealed_hi[img->nsealed] = hi;
+        img->nsealed++;
+    }
+    return ok;
+}
+
+bool hao_image_sealed_overlap(uint64_t a, uint64_t n)
+{
+    for (hao_image *img = hao_images_first(); img && n; img = __atomic_load_n(&img->next, __ATOMIC_ACQUIRE))
+        for (int k = 0; k < img->nsealed; k++)
+            if (a < img->sealed_hi[k] && a + n > img->sealed_lo[k]) return true;
+    return false;
+}
+
+hao_image *hao_image_sealed_at(uint64_t a, size_t n)
+{
+    hao_image *img = hao_image_for_addr(a);
+    for (int k = 0; img && k < img->nsealed; k++)
+        if (a >= img->sealed_lo[k] && a < img->sealed_hi[k] && n <= img->sealed_hi[k] - a) return img;
+    return NULL;
+}
+
+bool hao_image_sealed_cas(uint64_t a, uint64_t expected, uint64_t desired)
+{
+    return hao_guest_cas_ro(a, expected, desired);   /* code.c: one guest write at a time, fork-safe */
+}
+
 bool hao_island_reserve;
 
 uint64_t hao_island_room(uint64_t n)
@@ -918,7 +969,8 @@ static void map_island_room(hao_image *img, uint64_t room, bool reserved)
 {
     uint64_t at = img->base + img->vmsize;
     if (reserved) munmap((void *)(uintptr_t)at, room);
-    void *p = mmap((void *)(uintptr_t)at, room, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    /* read/write, not executable, until its first entry makes it a W^X region (jit.c hao_wx_region) */
+    void *p = mmap((void *)(uintptr_t)at, room, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (p == MAP_FAILED) return;
     if (!island_reach((uint64_t)(uintptr_t)p, room, img->base, img->base + img->vmsize)) { munmap(p, room); return; }
     img->isl_lo = img->isl_next = (uint64_t)(uintptr_t)p;
@@ -1538,7 +1590,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         if (sg->initprot & VM_PROT_READ) prot |= PROT_READ;
         if (sg->initprot & VM_PROT_WRITE) prot |= PROT_WRITE;
         if (sg->initprot & VM_PROT_EXECUTE) prot |= PROT_READ;  /* code is data for the translator */
-        /* __DATA_CONST is made read-only by dyld after binding; keep that behaviour */
+        /* SG_READ_ONLY segments (__DATA_CONST) stay writable for hao's adaptations of the image and
+         * are made read-only before its initializers run (hao_image_seal), as dyld does after binding */
         if (mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot) != 0)
             ERR("%s: cannot set the protection of segment %.16s (errno %d)", path, sg->segname, errno);
     }

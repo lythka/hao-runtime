@@ -84,6 +84,9 @@ typedef struct hao_thread {
      * cpu_save_push), reset by each segment to its entry count. */
     hao_cpu *cpu_saves;
     unsigned cpu_saves_n;
+    /* where a callback without a signature lets the guest store an indirect result the
+     * native caller gave no buffer for (runtime.c callback_plain): made at first use */
+    uint8_t *noret;
     hao_seg *seg;              /* innermost running segment */
     void *eh_landed;           /* exception that stopped at this segment's native-call guard */
     void *eh_resume;           /* exception to resume natively after the current native step */
@@ -151,6 +154,9 @@ typedef struct {
     uint64_t rbp;         /* the native caller's rbp at entry */
 } hao_cb_frame;
 #define HAO_CB_FAULT 1
+/* r10 of an island entry (swiftmeta.c), whose guest function is a Swift function: swiftcc passes an indirect
+ * result's buffer in rax, which hao_callback hands the guest as x8 (a plain C entry's rax is no buffer) */
+#define HAO_CB_SWIFTCC 4
 
 typedef void (*hao_trap_fn)(hao_thread *t, uint64_t arg);
 
@@ -215,6 +221,9 @@ void hao_diag_init(void);                 /* once, at startup (hao_install_fault
 void hao_diag_write(const char *b, size_t n);   /* async-signal-safe: console and log, whole */
 size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base);   /* async-signal-safe: v in base 10 or 16 */
 void hao_diag_write_fatal(const char *b, size_t n);   /* the same for a fatal report: may also open a log still waiting for its volume */
+/* Async-signal-safe fatal line: "hao[PROG:PID]: what" and each of n values in hex, through
+ * hao_diag_write, then abort (no stdio, no dladdr, no allocation) */
+__attribute__((noreturn)) void hao_fatal_safe(const char *what, const uint64_t *v, int n);
 extern size_t hao_diag_log_cap;           /* the log's size limit (bytes) */
 /* A multi-line report written with one hao_diag_write (hao_diag_block_end):
  * fprintf into hao_diag_block's FILE (HAO_DIAG if no memory). Not in signal handlers. */
@@ -459,12 +468,27 @@ int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint
 bool hao_aot_write_dir(char *out, size_t n);   /* the directory `hao --aot` with no --cache writes to; false: none */
 bool hao_aot_generation(uint8_t out[16]);
 uint64_t hao_thunk_for(uint64_t guest);
+uint64_t hao_swift_thunk_for(uint64_t guest);   /* passed to a native Swift function: entry marked HAO_CB_SWIFTCC */
 uint64_t hao_thunk_target(uint64_t thunk);
 bool hao_in_code_cache(uint64_t a);
 void hao_jit_alias(uint64_t entry, uint64_t guest);
 uint64_t hao_sig_thunk(uint64_t guest, void *sig);   /* sig: an hsig* (abi.c); 0 if none can be made */
 uint64_t hao_sig_thunk_target(uint64_t thunk);
 void hao_jit_fork_child(void);         /* fork child: re-initialise the module's mutexes */
+/* W^X (jit.c): hao's executable memory (code cache, Swift islands) is read/execute only. hao_wx_region
+ * makes MAP_JIT memory mapped read/write (not executable) such a region; a write maps the bytes it
+ * changes read/write elsewhere for its duration: hao_wx_begin (NULL: frozen, a fork child on an Intel
+ * Mac) .. hao_wx_end, in a hao critical section, no write inside another. */
+typedef struct { uintptr_t x, map, len; } hao_wx_win;
+bool hao_wx_region(void *x, size_t size);
+bool hao_wx_covers(uint64_t a, uint64_t n);
+/* interpose.c: a guest call that would change the mapping (map: map over, unmap) or the protection
+ * (prot) of [a, a+n) where it overlaps hao's executable memory, the thunks' table or (map, or prot with
+ * write or execute) an image's sealed constant data: refused (EACCES / KERN_PROTECTION_FAILURE) */
+bool hao_guest_vm_guarded(uint64_t a, uint64_t n, int prot, bool map);
+void *hao_wx_begin(void *x, size_t n, hao_wx_win *win);
+void hao_wx_end(hao_wx_win *win, size_t written);
+bool hao_wx_write(void *x, const void *src, size_t n);
 /* blocks.c */
 void hao_thunk_native_args(hao_thread *t);
 void hao_thunk_native_blocks(hao_thread *t);

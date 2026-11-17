@@ -501,6 +501,215 @@ of its cases fail with the old installer), `tests/tools/bundle.sh`. Limits:
 the manifest's hashes are not a signature; the scan reads the whole System
 volume once; copies outside it are not found.
 
+## Constant data of guest images stayed writable
+
+The loader gave every segment its initial protection, so the
+SG_READ_ONLY segments (`__DATA_CONST`, `__AUTH_CONST`: GOT entries,
+global blocks and their descriptors, ObjC and Swift constant metadata)
+stayed writable for the life of the process, where dyld makes them
+read-only once the image is bound. hao adapts some of that data itself
+(ObjC and Swift registration, block invokes and helpers, function
+slots), so the segments now stay writable through those steps and are
+made read-only (`hao_image_seal`) just before the image's initializers
+run. blocks.c, which may meet a guest block's descriptor or a global
+block long after, writes such a word with `hao_image_sealed_cas`: the
+page writable for that one store, then read-only again. The Swift
+Optional witnesses (swiftvalue.c) converted a value's nils in place
+before a native destroy; a static value in sealed data (an array a
+`let` initializes at compile time) is now destroyed as a converted
+copy (`guest/optwitness` faulted there with the seal and without this);
+only for a bitwise-takable type (value witness flag IsNonBitwiseTakable
+clear): weak references and the C++ values that may not move need
+run-time registration and cannot be static constants, so those stay in
+place. An image whose constant data cannot be sealed now stops the
+process before its initializers run; sealing again seals only what is
+left. The late Swift field rewrites of swiftmeta.c use the same guest
+writer as these stores (code.c, see the guest code entry).
+
+Test: `test_macho` (writable after the load, read-only after the seal, a
+sealed store leaves the page read-only), `guest/wx` (the program's
+`__DATA_CONST` reads back read-only in main, as natively; it was
+writable). Limits: shared-cache images (dsc.c) are not sealed, their
+data is fixed up page by page as it is used; the slots a sealed store
+writes are found only by blocks.c, and any other late writer into a
+sealed segment would fault (none other was seen in the 119 guest and
+host entries of tests/check.list).
+
+## Calls hao could not place went through the register bridge
+
+A guest call of a native function or ObjC method whose signature hao had
+read but could not place (more arguments than it handles, an aggregate
+over 64 KB, more stack arguments than its buffer, a malformed encoding)
+was made through the register bridge all the same, which put the
+arguments in the wrong places. A native call of a guest function or
+block with such a signature got a plain thunk. Both now stop the process
+with `bridge: REFUSED call to NAME ...` or `bridge: REFUSED callback into
+guest ...`, as a REFUSED binding does. The refusal and the W^X
+failures write their line with `hao_fatal_safe` (no stdio, no dladdr),
+as they may happen in a callback a signal interrupted; the log's cap
+line is written without snprintf, and the guest writer's lock (code.c)
+is taken only inside a hao critical section, so a guest signal handler
+cannot wait on it while it interrupts its holder. A fork child that
+cannot restore an open write's protection stops. An encoding hao cannot read at all
+still takes the register bridge, as any call without a signature.
+
+A callback without a signature whose native caller gave no result buffer
+(a C caller's rax is not one) let the guest write an indirect result 1 KB
+below the guest's live stack; a larger result overwrote the caller's
+frames. x8 is now the caller's rax only for a Swift callee by its own
+symbol or entry: an island entry (r10 = HAO_CB_SWIFTCC), a guest function
+whose defined symbol is a Swift mangled name (read from the image's
+symbol table, no dladdr), one handed to a native function whose own
+exported symbol is a Swift mangled name (its entry is marked the same
+way: `hao_swift_thunk_for`), or a native function the guest called that
+jumped on to guest code (its return address is hao_native_call's, which
+put the guest's own x8 in rax); a value that cannot be a data pointer is
+never taken. A caller's image with Swift metadata no longer counts.
+Otherwise x8 points into the thread's own area: 64 KB for each of the
+first 16 nesting levels, each followed by a 64 KB guard, so a larger
+result faults in its level's guard; a deeper level gets a guard itself.
+The area is made without a lock (a signal handler's callback that makes
+it first wins). The value the native caller reads is still not the
+guest's result: that needs the signature.
+
+An unsupported signature that cannot get its refusing signature thunk
+(HAO_NO_CLOSURES, the area full) is refused when it is registered,
+never given a plain thunk or a signature noted for its address before.
+
+Test: `guest/refuse` (JIT and --interp). An 8 KB result: the guest's
+stack canary was overwritten, now intact. A 96 KB result: it ran over
+another level's part, now it faults in the guard. A 70000-byte ObjC
+argument: SIGSEGV, now refused. A guest block with a 70000-byte
+parameter: printed 0 (native 11), now refused; with HAO_NO_CLOSURES at
+registration. A release-style build (local symbols stripped) of
+`guest/swiftthunks`, whose closures native Swift generics call: same
+output as native (it relies on the native callee's symbol).
+`guest/indirect-x8` and the guest and host entries of tests/check.list
+pass. Limits: a stripped guest Swift function reached by a path none of
+these covers (a native C caller, an NX fault from code that is not a
+Swift export) gets hao's area: a result it returns in memory is lost.
+
+## Translated code, thunks and Swift island entries were writable and executable
+
+The code cache (translated blocks, the dispatcher stubs, plain and
+signature thunks) and the Swift island rooms were mapped
+read/write/execute for the life of the process: any write primitive in
+a guest process could place x86 code there. Each such region is now
+MAP_JIT memory mapped read/write, never executable, until
+`hao_wx_region` (src/jit.c) takes a memory entry of it and makes it
+read/execute only (on an Intel Mac its maximum protection too). hao
+writes it through a read/write mapping of just the pages a write
+changes, made from the memory entry at a random page of a free 8 MB slot
+of a 256 MB window reserved at a random address (no access; a guest may
+not map there), and put back to the reservation when the write ends: a
+burst of up to 8 translated blocks (the block asked for and the blocks
+its direct branches reach in the same image, chained to each other and
+entered in the translation table only once the mapping is gone), one
+chain patch, a page of thunk code, one island fill. Thunk code no longer
+holds its guest function: a slot loads it (and a signature thunk its
+hsig) from a table of its own read/write mapping, so a thunk only fills
+its table entries, and the code is made a page at a time. A region whose
+memory entry cannot be had is refused: the code cache runs interpreted,
+an island leaves its entries on the NX-fault path; nothing is written
+through the executable mapping.
+
+Measured on the development host: `mach_vm_remap` of MAP_JIT memory is
+refused (KERN_PROTECTION_FAILURE); `pthread_jit_write_protect_np` does
+nothing on x86_64; toggling MAP_JIT pages between read/execute and
+read/write/execute around each write faults under Rosetta (SIGBUS on
+the store whenever another thread runs the page); a memory entry of an
+executable mapping (read/execute) is refused, so the region is made from
+read/write memory; a mapping of a named memory entry cannot be MAP_JIT
+(KERN_INVALID_ARGUMENT), and executing a plain one kills a hardened
+process with only allow-jit. Under Rosetta a write through another
+mapping is not seen by code Rosetta already translated (999 of 1000
+rewrites ran the old code) until the page is made writable: after each
+write hao makes the written pages read/write/execute and read/execute
+again, writing nothing through them, and the maximum protection stays
+read/write/execute there. That is a weakening of the development host
+only. A new random address for every write mapping left 19 MB of page
+tables (`guest/footprint` spread); the 256 MB window keeps them bounded.
+
+A guest could still change these mappings itself: mprotect, munmap or
+mmap MAP_FIXED of a code cache page reached the kernel unchanged (and
+under JIT unmapping one ended the process with SIGBUS). Guest calls of
+mprotect, munmap, mmap with MAP_FIXED, mach_vm_/vm_protect, _deallocate,
+_allocate, _map and _remap with VM_FLAGS_OVERWRITE, a remap of hao's
+memory, and the raw system calls and Mach traps behind them are now
+refused (EACCES, KERN_PROTECTION_FAILURE) where they overlap hao's
+executable memory or the thunks' table, and where they would make an
+image's sealed constant data writable or executable or remap it
+(natively a program may make its own `__DATA_CONST` writable). Test:
+`guest/wxguard` (9 of 9 refused; before, 0 of 9 and JIT died). A remap
+of sealed constant data (a second, shared view the guest could make
+writable) is refused too. The address argument of allocate, map and
+remap (libsystem calls and raw traps) is read once into hao's storage,
+checked and passed from there, and the result written back: another
+guest thread changing it meanwhile does not move an allowed overwrite
+onto protected memory. Sealed segments keep their maximum protection:
+hao still writes them after the seal (block descriptors, Swift fields).
+
+A lazily installed AOT block is marked filled only once its links to
+blocks not yet copied are cut and its write mapping is gone (before, a
+fork in between left a child a filled block jumping into unfilled code).
+The threat model these defend is in docs/security-model.md (Executable
+memory), with what it leaves out.
+
+A fork child has no memory entries (they are not inherited). Under
+Rosetta it takes them again (the region briefly read/write, not
+executable, while the child's only thread is in hao). On an Intel Mac
+the maximum protection does not allow that: the child's executable
+memory is frozen; new guest code there is interpreted and new callbacks
+take the NX-fault path.
+
+Test: `guest/wx` (C and Swift, native/JIT/--interp/AOT): no region of
+the process is writable and executable, and no writable mapping of
+executable memory stays, after translated code, chained branches,
+thunks and island entries have run (before: 3 to 6 regions; with the
+persistent write view of the previous version, 1). `test_jitlock sigs`
+reads the thunk tables. Measured on the development host (Rosetta, load
+14 to 29), clang compiling one file, interleaved, fastest of 7: before
+1.21 s, after 0.91 s (13,000 W^X writes for 28,000 blocks, 32,000 links
+and 56,000 thunks); a steady loop 1.68 to 1.71 s both. No Intel run yet.
+
+Not verified on Intel hardware: block chaining rewrites a 4-aligned
+rel32 in code other threads may be running, with one store and no
+serializing instruction on the threads that run it. That keeps the
+store whole (it never crosses 8 bytes or a cache line), and both the
+old and the new target are complete translations, but it is not the
+cross-modifying-code protocol Intel documents (the executing processor
+synchronizes). Rosetta runs on the development host say nothing about
+Intel processors; this needs a stress run on one.
+
+## Patched guest code pages stayed writable
+
+`hao_code_write` (the one writer of guest instructions: the shared-cache
+selector and GOT-load rewrites, and the compatibility patch of one
+image) made each page it touched readable and writable and never made it
+read-only again, so those guest code pages stayed writable for the life
+of the process, and no protection call was checked. It now writes page
+by page: the page's protection is read, the page is writable for the
+copy only and gets that protection back (a poisoned `HAO_CODE_ALIAS`
+page stays `PROT_NONE`). A page that cannot be made writable is reported
+and the write refused; one that cannot be made read-only again stops the
+process. These writes, the sealed-data stores of blocks.c and the Swift
+metadata field rewrites of swiftmeta.c go through one writer in code.c
+(`hao_guest_write_begin`/`_end`), one at a time, which reads a page's
+protection under its lock and records the interval it made writable: a
+fork child gives that interval its protection back and frees the lock
+(`hao_code_fork_child`; before, a fork during such a write left the
+page writable and the lock held in the child). A fork during
+`hao_wx_region` leaves at most a region that is read/write and not
+executable, or read/execute with no memory entry, which nothing in the
+child writes. The fork-lock audit script of another branch
+(tests/host/fork_locks.py) is not in this tree. The patches are applied before any of the image's code runs
+and an image patched this way gets no AOT cache. Test: `test_macho`
+(page read-only again at the guest address and in the alias, a patch
+across a page boundary, an unmapped page refused). Limits: guest
+`mprotect` of its own code pages still reaches the kernel unchanged, so
+a guest can make its code writable and change it before it is
+translated, as a native process without hardened runtime can.
+
 ## Swift `dynamic` functions under the image's interface units
 
 A Swift `dynamic` function begins with `swift_getFunctionReplacement(&link,
