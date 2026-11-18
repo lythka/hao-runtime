@@ -60,6 +60,7 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"code_alias", offsetof(hao_opts_t, code_alias), BOOT_NO},
     {"libval_user", offsetof(hao_opts_t, libval_user), BOOT_NO},
     {"swift_value_passthrough", offsetof(hao_opts_t, swift_value_passthrough), BOOT_NO},
+    {"swift_value_strict", offsetof(hao_opts_t, swift_value_strict), BOOT_NO},
     {"swift_value_audit", offsetof(hao_opts_t, swift_value_audit), BOOT_SURVEY},
 };
 #define NKNOBS (sizeof knobs / sizeof knobs[0])

@@ -37,6 +37,9 @@ typedef struct {
          swift_value_passthrough, /* HAO_SWIFT_VALUE_PASSTHROUGH (open tier, no boot argument): experimental, for
                                     triage only, accepting memory corruption: a Swift value hao cannot certify goes on
                                     to native code instead of being refused (swiftvalue.c decline) */
+         swift_value_strict,     /* HAO_SWIFT_VALUE_STRICT (tests; a HAO_TEST_SWITCHES build only): refuse a Swift
+                                    value no row or rule certifies, which the default reports and passes as found
+                                    (swiftvalue.c uncertified) */
          swift_value_audit,      /* boot argument hao_swift_value_audit=1 (every process, every tier) or
                                     HAO_SWIFT_VALUE_AUDIT (open tier): a survey image's setting, accepting memory
                                     corruption as the pass-through does: a value hao cannot certify goes on, and one
@@ -82,7 +85,7 @@ extern hao_opts_t hao_opt;
  * flags and the environment are filtered by hao_env_switch_allowed(). The
  * test switches (HAO_LIBVAL_USER, HAO_SIGRETURN_USER, HAO_AOT_LIMIT_KB,
  * HAO_BRIDGE_ABORT, HAO_NO_JIT_MEMORY, HAO_CODE_ALIAS, HAO_CPU_FEATURES,
- * HAO_AOT_LIST_DIR, HAO_AOT_FREE_MB, HAO_CRASH) are read only by a
+ * HAO_AOT_LIST_DIR, HAO_AOT_FREE_MB, HAO_CRASH, HAO_SWIFT_VALUE_STRICT) are read only by a
  * HAO_TEST_SWITCHES build, from an open-tier environment. */
 void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *bootargs, bool pid1, int tier);
 /* Runtime (src/trust.c): once per process, from environ and kern.bootargs. */

@@ -12,13 +12,17 @@
 # "box" a captured C?? variable, "anyarray", "anycopy", "anyassign", "anybox": that storage and [Any] storage and a
 # box of Any holding guest-written C?? nils, destroyed by the runtime (dropped, after a copy of the array value,
 # assigned over): equal native arm64, converted at destruction. "frozen": a native frozen enum the guest built is
-# examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64.
-#   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/svpolicy.sh
+# examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64. The refusals run under the test
+# switch HAO_SWIFT_VALUE_STRICT=1; by default "refuse" is reported (report-only) and goes on, equal native,
+# and "boxed" and "task" (known wrong: a nil native code would misread) are still refused.
+#   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svpolicy.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-svpolicy)}
-HAO=${HAO:-$repo/build/hao}
+HAO=${HAO:-$repo/build-ts/hao}
+# Uncertified values are refused here, as they are by default only once their rows land (a test build).
+export HAO_SWIFT_VALUE_STRICT=1
 T=${T:-60}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 for a in arm64e arm64; do
@@ -64,8 +68,8 @@ refused refuse aot "unresolved active representation" env HAO_CACHE="$OUT/aot" "
 refused gate jit "unresolved active representation" env HAO_NO_AOT=1 "$HAO"
 refused wide jit "type graph past the walk's bounds" env HAO_NO_AOT=1 "$HAO"
 refused result jit "native result has unresolved active representation" env HAO_NO_AOT=1 "$HAO"
-refused boxed jit "unresolved active representation .*type=Any)" env HAO_NO_AOT=1 "$HAO"
-refused task jit "child task result is copied by native code" env HAO_NO_AOT=1 "$HAO"
+refused boxed jit "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 "$HAO"
+refused task jit "child task result" env HAO_NO_AOT=1 "$HAO"
 refused unreflected jit "unresolved active representation .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 "$HAO"
 # The pass classes, named under HAO_BRIDGE_CHECK.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" pass >"$OUT/check.out" 2>"$OUT/check.err"
@@ -97,5 +101,16 @@ if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/passthrough.out" &&
    grep -q 'passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH)' "$OUT/passthrough.err"; then r=SAME; else r=DIFF; fail=1; fi
 echo "passthrough rc=$rc $r"
 [ $r = SAME ] || { diff "$OUT/native.refuse.out" "$OUT/passthrough.out" | sed 's/^/    /' | head -8; tail -3 "$OUT/passthrough.err" | sed 's/^/    /'; }
+# The default (v0.0.1): an uncertified value is reported once and goes on, equal native; a known-wrong one
+# (a guest-encoded nil in a shared box, a child task's C?? result) is still refused.
+timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO" "$OUT/svpolicy.arm64e" refuse \
+    >"$OUT/report.out" 2>"$OUT/report.err"; rc=$?
+if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/report.out" && ! grep -q 'boundary refused' "$OUT/report.err" &&
+   [ "$(grep -c 'not certified, passed as found (report-only): unresolved active representation' "$OUT/report.err")" = 1 ] &&
+   grep -q '^hao-swift-audit .*"reason":"unresolved active representation' "$OUT/report.err"; then r=SAME; else r=DIFF; fail=1; fi
+echo "report-only rc=$rc $r"
+[ $r = SAME ] || tail -3 "$OUT/report.err" | sed 's/^/    /'
+refused boxed default "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+refused task default "child task result has a nil native code would copy" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
 [ $fail = 0 ] && echo "svpolicy: PASS" || echo "svpolicy: FAIL"
 exit $fail
