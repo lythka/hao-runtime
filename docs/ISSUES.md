@@ -816,6 +816,31 @@ admitting it: when either fails, the storage is refused. Coverage of
 native copies and assignments (initialized-storage tracking and the
 runtime's array operations) is the next step.
 
+Report-only (v0.0.1). A value no row or rule certifies either way is
+reported and passed as found, as before the refusal policy, instead of
+refused (`swiftvalue.c` `uncertified`): an unresolved active representation
+(at any boundary: a guest call of a native witness, a result, a lent value,
+an array element, a stored value at its final destruction), an unresolved
+assignment destination, a type graph or guest-defined fields past the
+walk's bounds, storage of an unsettled type whose destruction cannot be
+hooked, and a child task result that only needs certifying. It prints `Swift value survey: not
+certified, passed as found (report-only): REASON (...)` and its
+`hao-swift-audit` records once per (type, reason), where the diagnostics
+go; such a value can still be misread (entry "refused again" below).
+Known-wrong values stay refused: a walk failure the walk knows is right
+(`Recipe.h` `HAO_SV_KNOWN_WRONG`: a REFUSE row, an architecture-different
+layout, an outer nil or invalid existential that is no value of its type,
+a patch over a tag bit or past the patch capacity, a guest-encoded nil in a
+shared box), invalid type metadata, a storage element type or child task
+result with a nil to convert and no rule or hook, a lent value that needs
+conversion and cannot be copied, the ownership and ABI cases of an
+activation whose value needs conversion, malformed storage (null,
+overlapping, array extent), missing Optional metadata and failed
+allocations. Strictness returns per type as rows land (v0.0.2); the test
+switch `HAO_SWIFT_VALUE_STRICT=1` (test builds) refuses uncertified values
+as before, and the Swift value tests run under it. Test: `guest/svpolicy`
+(report-only and a known-wrong refusal by default), `guest/svfacts`.
+
 ## Swift value walk: per-type facts, carrier rules, the survey image's audit
 
 The walk (`src/swiftvalue/Recipe.c`) consults a per-type facts table before
@@ -937,6 +962,9 @@ generated rows themselves (their cache is 26B131's), the native-source path
 through a real native generic result, and a whole image under the audit.
 
 ## Swift values hao cannot certify are refused again
+
+Partly superseded by report-only (Open (high) entry above) for values no
+rule covers.
 
 A Swift value crossing to native code that the walk could not certify
 passed through unpatched by default. That is not "at worst a low-address

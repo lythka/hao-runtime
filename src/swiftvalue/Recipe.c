@@ -80,6 +80,10 @@ static void nominals(reflection *r)
 static int guest_laid_listed(const void *type);
 static int guest_witnessed(reflection *r, const void *type);
 static int holds_archdiff(reflection *r, const void *type, unsigned depth);
+/* A refusal the walk knows to be right, not a missing rule (Recipe.h
+ * HAO_SV_KNOWN_WRONG): a value native code would misread or that is no value
+ * of its type, a REFUSE row, a nil past the patch capacity. */
+#define WRONG(r) ((r)->passes |= HAO_SV_KNOWN_WRONG, 0)
 static int scalar_only(reflection *r, const void *type, unsigned depth);
 static int guest_tag_witnesses(reflection *r, const void *g);
 
@@ -873,7 +877,8 @@ int settled_node(const void *type, int *whole)
  * type's size and so its enclosing layouts can differ too, also where the
  * walk does not descend (an inactive Optional payload, an enum's inactive
  * cases). The search is bounded at 16 levels and 64 fields a level; what
- * lies beyond is not searched. */
+ * lies beyond is not searched. 1 one is held, 2 fields not known (nothing
+ * shows it holds none), else 0. */
 static int holds_archdiff(reflection *r, const void *type, unsigned depth)
 {
     if (guest_laid_listed(type)) return 1;
@@ -883,20 +888,20 @@ static int holds_archdiff(reflection *r, const void *type, unsigned depth)
         type == r->string || (kind == 0x200 && m[1] == r->array) || native_opaque(r, type)) return 0;
     int memo = holds_archdiff_memo(type);
     if (memo >= 0) return memo;
-    int listed = 0;
+    int listed = 0, c;
     if (kind == 0x202) listed = holds_archdiff(r, m[2], depth + 1);
     else if (kind == 0x201) {
         const void *payloads[HAO_SV_MAX_ENUM_PAYLOADS];
         int n = enum_inline_payloads(type, payloads);
-        for (int i = 0; i < n && !listed; ++i) listed = holds_archdiff(r, payloads[i], depth + 1);
+        for (int i = 0; i < n && listed != 1; ++i) if ((c = holds_archdiff(r, payloads[i], depth + 1))) listed = c;
     } else {
         intptr_t count = known_fields(r, type);
-        if (count < 0) listed = 1;   /* fields not known: nothing shows it holds none */
-        for (intptr_t i = 0; i < count && !listed; ++i) {
+        if (count < 0) listed = 2;   /* fields not known: nothing shows it holds none */
+        for (intptr_t i = 0; i < count && listed != 1; ++i) {
             field_info info = {0};
             const void *child = r->field(type, i, &info);
             if (info.free_name) info.free_name(info.name);
-            if (child) listed = holds_archdiff(r, child, depth + 1);
+            if (child && (c = holds_archdiff(r, child, depth + 1))) listed = c;
         }
     }
     holds_archdiff_remember(type, listed);
@@ -1025,7 +1030,7 @@ static int boxed_payload(reflection *r, const void *payload, const unsigned char
     uint64_t box, word, mask = pv->flags & 255, at = (16 + mask) & ~mask;
     memcpy(&box,value,8);
     if (box < 4096 || (box & 7) || pv->size > 4096 || !hao_probe_read8(box,&word) ||
-        (pv->size && !hao_probe_read8(box + at + ((pv->size - 1) & ~(uint64_t)7),&word))) return 0;
+        (pv->size && !hao_probe_read8(box + at + ((pv->size - 1) & ~(uint64_t)7),&word))) return WRONG(r);   /* no box */
     empty_patch local[64];
     unsigned n = 0;
     r->boxed++;
@@ -1064,7 +1069,7 @@ static int existential_payload(reflection *r, const void *type, const unsigned c
     uint64_t dynamic; memcpy(&dynamic,value + 24,8);
 #ifdef HAO_SWIFT_VALUE_RUNTIME
     uint64_t table = 0;
-    if (dynamic < 4096 || (dynamic & 7) || !hao_probe_read8(dynamic - 8,&table) || !table || (table & 7)) return 0;
+    if (dynamic < 4096 || (dynamic & 7) || !hao_probe_read8(dynamic - 8,&table) || !table || (table & 7)) return WRONG(r);
 #else
     return 0;
 #endif
@@ -1073,7 +1078,7 @@ static int existential_payload(reflection *r, const void *type, const unsigned c
     int whole = 0;
     if (settled_node(payload,&whole) && whole) { r->passes |= HAO_SV_PASS_IDENTICAL; return 1; }   /* by its metadata */
     if (pv->flags & 0x00020000) return boxed_payload(r,payload,value,depth);   /* out of line: a box */
-    if (pv->size > 24) return 0;
+    if (pv->size > 24) return WRONG(r);   /* inline in a 3-word buffer only up to its size */
     r->boxed++;
     int ok = collect(r,payload,value,base,out,capacity,used,depth + 1);
     r->boxed--;
@@ -1093,7 +1098,7 @@ static int pointer_xi_optional(reflection *r, const void *type, const empty_plan
     if (!plan->consumed || plan->consumed > 2 || plan->offset > vwt(type)->size - 8) return 0;
     uint64_t word; memcpy(&word, value + plan->offset, 8);
     if (plan->consumed == 1 ? word == 0 : (word == 1 || word == 2)) {
-        if (*used == capacity) return 0;
+        if (*used == capacity) return WRONG(r);
         /* Native generic containers may delegate to ARM field witnesses.
          * Their receiving encoding comes from the actual witness set,
          * independently of both the process architecture and source bits. */
@@ -1230,7 +1235,7 @@ static int image_case(reflection *r, const void *type, const walk_fact *f, const
             int differs = 0;
             for (uint64_t b = at; b < at + 8; ++b) differs |= amask[b] != xmask[b] || ((arm[b] ^ x86[b]) & xmask[b]);
             if (!differs) continue;
-            if ((patched && at < last + 8) || *used == capacity) { verdict = 0; break; }
+            if ((patched && at < last + 8) || *used == capacity) { verdict = WRONG(r); break; }
             uint64_t word, guest = 0, receiver = 0;
             memcpy(&word,value + at,8);
             for (unsigned k = 0; k < 8; ++k) {
@@ -1268,7 +1273,8 @@ static int guest_convert(reflection *r, const void *type, const walk_fact *f, co
             if (info.free_name) info.free_name(info.name);
             intptr_t at = r->offset(type,i);
             if (!child || at < 0 || (uint64_t)at > size || vwt(child)->size > size - (uint64_t)at ||
-                !walk_fact_field(f,(unsigned)i,&verdict) || verdict == WALK_FACT_REFUSE) return 0;
+                !walk_fact_field(f,(unsigned)i,&verdict)) return 0;
+            if (verdict == WALK_FACT_REFUSE) return WRONG(r);
             if (verdict == WALK_FACT_SAME) { r->passes |= HAO_SV_PASS_IDENTICAL; continue; }
             if (!collect(r,child,value + at,base + (uint64_t)at,out,capacity,used,depth + 1)) return 0;
         }
@@ -1280,7 +1286,8 @@ static int guest_convert(reflection *r, const void *type, const walk_fact *f, co
     const void *payload = NULL;
     int indirect = 0;
     if (kind != 0x201 || image_case(r,type,f,value,base,out,capacity,used,1,&which,&from) != 1 ||
-        !walk_fact_field(f,which,&verdict) || verdict == WALK_FACT_REFUSE) return 0;
+        !walk_fact_field(f,which,&verdict)) return 0;
+    if (verdict == WALK_FACT_REFUSE) return WRONG(r);
     if (verdict == WALK_FACT_SAME || !walk_fact_payload(type,which,&payload,&indirect)) {
         r->passes |= HAO_SV_PASS_IDENTICAL;   /* an empty case (its row SAME) or a payload the same on both */
         return verdict == WALK_FACT_SAME;
@@ -1347,7 +1354,7 @@ static int pointer_word_xi(reflection *r, const void *type, const unsigned char 
         nil = reading == 1;
     }
     if (nil) {
-        if (*used == capacity) return 0;
+        if (*used == capacity) return WRONG(r);
         out[(*used)++] = (empty_patch){base + at, word, receiver, (uint32_t)p + 1, p};
         r->passes |= HAO_SV_PASS_INACTIVE;
         return 1;
@@ -1408,7 +1415,7 @@ static int fact_verdict(reflection *r, const void *type, const unsigned char *va
         if (f.guest) return guest_convert(r,type,&f,value,base,out,capacity,used,depth);
         return case_images(r,type,&f,value,base,out,capacity,used,depth);
     default:                    /* WALK_FACT_REFUSE, or a verdict this runtime does not know */
-        return 0;
+        return WRONG(r);
     }
 #else
     (void)r; (void)type; (void)value; (void)base; (void)out; (void)capacity; (void)used; (void)depth;
@@ -1429,7 +1436,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
      * that holds such a type inline, has no representation both sides read
      * alike: refused under every rule below, the one for small values
      * included. Inside a native opaque type everything is native-laid-out. */
-    if (!r->opaque && holds_archdiff(r, type, 0)) return 0;
+    int archdiff = r->opaque ? 0 : holds_archdiff(r, type, 0);
+    if (archdiff) return archdiff == 1 ? WRONG(r) : 0;
     /* A patch rewrites a whole pointer word. A value of fewer than 8 bytes
      * holds no pointer, so no nil in it has a pointer extra inhabitant and
      * the case it is in cannot hide one: there is nothing to patch. */
@@ -1448,7 +1456,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
          * storage uses the existing native object/ARC domain; this is not a
          * validator for arbitrary string bytes or foreign-runtime objects. */
         r->passes |= HAO_SV_PASS_OWNED;
-        return bits > 2;
+        return bits > 2 ? 1 : WRONG(r);
     }
     if (kind == 0x202) {
         const void *const *m = type;
@@ -1467,7 +1475,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             uint64_t word, none = 0x7fffffffu - payload->extra;
             memcpy(&word,value + code_at,8);
             if (word == none) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* inactive payload remains opaque */
-            if (word > none && word < 0x7fffffffu) return 0; /* an outer Optional's nil: not this type's value */
+            if (word > none && word < 0x7fffffffu) return WRONG(r); /* an outer Optional's nil: not this type's value */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
         /* A payload whose inhabitants are an enum's tag byte: this
@@ -1479,7 +1487,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             tag_byte_xi(r,m[2],&tag_at,&enum_xi) && enum_xi >= payload->extra) {
             unsigned tag = value[tag_at], none = 255 - (enum_xi - payload->extra);
             if (tag == none) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }    /* inactive payload remains opaque */
-            if (tag >= 256 - enum_xi && tag < none) return 0; /* an outer Optional's nil */
+            if (tag >= 256 - enum_xi && tag < none) return WRONG(r); /* an outer Optional's nil */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
         /* A payload whose inhabitants are a native spare-bit enum's that
@@ -1507,7 +1515,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
                     unsigned char ox[8 * HAO_SV_SPARE_WORDS], oa[8 * HAO_SV_SPARE_WORDS];
                     int oh;
                     if (xi_patterns(&xe,j,ox,oa,&oh) &&
-                        (!memcmp(found,ox,(size_t)size) || (oh && !memcmp(found,oa,(size_t)size)))) return 0;
+                        (!memcmp(found,ox,(size_t)size) || (oh && !memcmp(found,oa,(size_t)size)))) return WRONG(r);
                 }
                 return collect(r,m[2],value,base,out,capacity,used,depth + 1);
             }
@@ -1519,14 +1527,14 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             size_t alignment = (ov->flags & 255) + 1;
             if (alignment < sizeof(void *)) alignment = sizeof(void *);
             if (!inject || ov->stride < ov->size || ov->stride > 8192 ||
-                posix_memalign((void **)&scratch,alignment,(size_t)ov->stride)) return 0;
+                posix_memalign((void **)&scratch,alignment,(size_t)ov->stride)) return WRONG(r);
             memset(scratch,0xa5,(size_t)ov->stride);
             inject(scratch,1,type);
             const unsigned char *receiver = scratch + xe.offset;
             int ok = !memcmp(receiver,x86,(size_t)size) || !memcmp(receiver,arm,(size_t)size);
             for (uint64_t w = 0; ok && w < size; w += 8) {
                 if (!memcmp(x86 + w,arm + w,8)) continue;
-                if (w + 8 > size || *used == capacity) { ok = 0; break; }
+                if (w + 8 > size || *used == capacity) { ok = WRONG(r); break; }
                 uint64_t f, rb, ab;
                 memcpy(&f,found + w,8); memcpy(&rb,receiver + w,8); memcpy(&ab,arm + w,8);
                 out[(*used)++] = (empty_patch){base + xe.offset + w, f, rb, k + 1, ab};
@@ -1556,7 +1564,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
                 const unsigned char *found = value + guest_at;
                 if (!memcmp(found,nil,(size_t)size)) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* inactive payload */
                 for (uint32_t j = k + 1; j < vwt(guest_enum)->extra && j < k + 9; ++j)
-                    if (guest_spare_bit_xi(guest_enum,j,nil) && !memcmp(found,nil,(size_t)size)) return 0;
+                    if (guest_spare_bit_xi(guest_enum,j,nil) && !memcmp(found,nil,(size_t)size)) return WRONG(r);
                 return collect(r,m[2],value,base,out,capacity,used,depth + 1);
             }
         }
@@ -1572,7 +1580,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             byte_value_xi(r,m[2],&byte_at,&byte_first,&byte_xi) && byte_xi >= payload->extra) {
             unsigned found = value[byte_at], none = byte_first + (byte_xi - payload->extra);
             if (found == none) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* inactive payload remains opaque */
-            if (found > none) return 0;                                          /* an outer Optional's nil */
+            if (found > none) return WRONG(r);                                   /* an outer Optional's nil */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
         /* No payload extra inhabitants: Swift's single-payload enum layout
@@ -1630,7 +1638,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             uint64_t word, first = inner.consumed;
             memcpy(&word,value + inner.offset,8);
             if (word >= first && word < first + empty_cases) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
-            if (word >= first + empty_cases && word < first + empty_cases + 8) return 0;
+            if (word >= first + empty_cases && word < first + empty_cases + 8) return WRONG(r);
             return collect(r,single,value,base,out,capacity,used,depth + 1);
         }
         enum_case_plan active;
@@ -1649,7 +1657,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         for (unsigned i = first; i < *used; ++i) {
             uint64_t at = out[i].offset - base;
             for (uint64_t b = at; b < at + 8; ++b)
-                if ((fixed.mask[b / 8] >> (8 * (b % 8))) & 0xff) return 0;
+                if ((fixed.mask[b / 8] >> (8 * (b % 8))) & 0xff) return WRONG(r);
         }
         return 1;
     }
@@ -1664,11 +1672,11 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         r->passes |= HAO_SV_PASS_OWNED;
         if (kind == 0) {
             uint64_t bits; memcpy(&bits,value,8);
-            return bits >= 4096 && !(bits & 7);
+            return bits >= 4096 && !(bits & 7) ? 1 : WRONG(r);
         }
         uint32_t flags, protocols; memcpy(&flags,(const char *)type + 8,4); memcpy(&protocols,(const char *)type + 12,4);
         uint64_t tables = flags & 0xffffff, first = (flags & 0x80000000u) ? 32 : 8;
-        if ((flags & 0x3f000000u) || first + 8 * tables > v->size) return 0;
+        if ((flags & 0x3f000000u) || first + 8 * tables > v->size) return WRONG(r);
         /* Every protocol a Swift protocol defined in a guest image
          * (TargetExistentialTypeMetadata: kind, flags, protocol count, then
          * the superclass constraint if flag bit 30, then the protocol
@@ -1684,8 +1692,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         for (uint64_t i = 0; i < tables; ++i) {
             uint64_t table, conformance = 0;
             memcpy(&table,value + first + 8 * i,8);
-            if (!table || !hao_probe_read8(table,&conformance) || !conformance) return 0;
-            if (!guest_protocols && (hao_image_for_addr(table) || hao_image_for_addr(conformance))) return 0;
+            if (!table || !hao_probe_read8(table,&conformance) || !conformance) return WRONG(r);
+            if (!guest_protocols && (hao_image_for_addr(table) || hao_image_for_addr(conformance))) return WRONG(r);
         }
         return existential_payload(r,type,value,base,out,capacity,used,depth);
     }
@@ -1798,7 +1806,7 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
     if (!type || !value || !out || !r.kind || !r.count || !r.offset || !r.field || !r.array || !r.optional) return -1;
     if (!collect(&r, type, value, 0, out, capacity, &used, 0) || (r.surveyed && survey_mode != 2)) {
         if (unresolved && r.unresolved) *unresolved = r.unresolved;
-        if (passes) *passes = r.passes & HAO_SV_UNCONVERTIBLE;
+        if (passes) *passes = r.passes & (HAO_SV_UNCONVERTIBLE | HAO_SV_KNOWN_WRONG);
         return -1;
     }
     if (unresolved) *unresolved = NULL;
