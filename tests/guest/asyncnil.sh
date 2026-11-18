@@ -5,12 +5,14 @@
 # The program is built -O and -Onone, arm64 natively and arm64e under hao (JIT, --interp, AOT); every line must
 # equal native arm64. Run with "value", a child task returning Node?? is refused when it is created (the runtime
 # copies the result natively first) and, with HAO_SWIFT_VALUE_PASSTHROUGH=1, equals native.
-#   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/asyncnil.sh
+#   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/asyncnil.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-asyncnil)}
-HAO=${HAO:-$repo/build/hao}
+HAO=${HAO:-$repo/build-ts/hao}
+# Uncertified values are refused here, as they are by default only once their rows land (a test build).
+export HAO_SWIFT_VALUE_STRICT=1
 T=${T:-60}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 fail=0

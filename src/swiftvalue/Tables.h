@@ -45,7 +45,7 @@ int native_resilient_type(const void *type);
 /* A native struct or enum's defining image (LC_UUID as 32 hex digits) and
  * descriptor offset; 0 for a guest type or another kind. */
 int native_type_place(const void *type, char uuid[33], uint64_t *offset);
-/* A memo for Recipe.c's holds_archdiff, by metadata: -1 unknown, 0, 1. */
+/* A memo for Recipe.c's holds_archdiff, by metadata: -1 not memoized, else its result (0, 1, 2). */
 int holds_archdiff_memo(const void *type);
 void holds_archdiff_remember(const void *type, int listed);
 void tables_fork_child(void);

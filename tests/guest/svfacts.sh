@@ -6,13 +6,15 @@
 # REFUSE row on Int?, which the rules certify) must be refused. Without the fixture "same" is refused. Under
 # HAO_SWIFT_VALUE_AUDIT=1 "refuse" goes on, equal to native, with one hao-swift-audit record naming the
 # refused type by its table key, its parent chain and the guest caller's image UUID and offset; a release
-# build (REL) ignores the audit, says so once, and refuses.
+# build (REL) ignores the audit and HAO_SWIFT_VALUE_STRICT, says so once, and reports "same" (report-only).
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svfacts.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-svfacts)}
 HAO=${HAO:-$repo/build-ts/hao}
+# Uncertified values are refused here, as they are by default only once their rows land (a test build).
+export HAO_SWIFT_VALUE_STRICT=1
 T=${T:-60}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 for a in arm64e arm64; do
@@ -52,19 +54,21 @@ echo "same     nofacts rc=$rc $r"
 # caller's image UUID and offset, and no address or path.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_WALK_FACTS="$facts" HAO_SWIFT_VALUE_AUDIT=1 "$HAO" "$OUT/svfacts.arm64e" refuse \
     >"$OUT/audit.out" 2>"$OUT/audit.err"; rc=$?
-n=$(grep -cE '^hao-swift-audit \{"v":1,.*"class":"representation","type":"SiSg","kind":514,.*"depth":1,"chain":\["SiSg_7svfacts1CCSgSgt"\],.*"caller_image":"[0-9A-F]{32}","caller_offset":[0-9]+,' "$OUT/audit.err")
+n=$(grep -cE '^hao-swift-audit \{"v":1,.*"class":"known-wrong","type":"SiSg","kind":514,.*"depth":1,"chain":\["SiSg_7svfacts1CCSgSgt"\],.*"caller_image":"[0-9A-F]{32}","caller_offset":[0-9]+,' "$OUT/audit.err")
 # no address or path in a record: image UUIDs and offsets only
 grep '^hao-swift-audit' "$OUT/audit.err" | grep -qE '"lr"|"pc"|/' && n=0
 if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/audit.out" && [ "$n" = 1 ] &&
    ! grep -q 'Swift value boundary refused' "$OUT/audit.err"; then r=RECORDED; else r=NOT-RECORDED; fail=1; fi
 echo "refuse   audit   rc=$rc $r ($n record)"
 [ $r = RECORDED ] || grep -a 'hao-swift-audit' "$OUT/audit.err" | head -3 | cut -c1-400 | sed 's/^/    /'
-# A release build (REL, default build/hao) ignores the audit, says so once, and refuses as always.
+# A release build (REL, default build/hao) ignores the audit and the strict switch, says so once, and
+# reports the uncertified value, which goes on equal to native.
 REL=${REL:-$repo/build/hao}
 if [ -x "$REL" ]; then
     timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_AUDIT=1 "$REL" "$OUT/svfacts.arm64e" same >"$OUT/release.out" 2>"$OUT/release.err"; rc=$?
-    if [ $rc != 0 ] && [ "$(grep -c 'hao_swift_value_audit ignored: this libhao is not a survey build' "$OUT/release.err")" = 1 ] &&
-       grep -q 'Swift value boundary refused' "$OUT/release.err" && ! grep -q '^hao-swift-audit' "$OUT/release.err"
+    if [ $rc = 0 ] && [ "$(grep -c 'hao_swift_value_audit ignored: this libhao is not a survey build' "$OUT/release.err")" = 1 ] &&
+       cmp -s "$OUT/native.same.out" "$OUT/release.out" && ! grep -q 'Swift value boundary refused' "$OUT/release.err" &&
+       grep -q 'not certified, passed as found (report-only)' "$OUT/release.err"
     then r=IGNORED; else r=NOT-IGNORED; fail=1; fi
     echo "same     release audit rc=$rc $r"
 fi

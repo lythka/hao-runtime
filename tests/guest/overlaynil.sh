@@ -7,12 +7,14 @@
 # default run must stop there with the refusal line, after the `inlined` lines and before the end, and the three engines run
 # under the experimental HAO_SWIFT_VALUE_PASSTHROUGH=1 for the conversions after it. Given the placeholder's
 # row of the walk's facts table (a fixture), the nil is translated instead and the run equals native.
-#   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/overlaynil.sh
+#   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/overlaynil.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-overlaynil)}
-HAO=${HAO:-$repo/build/hao}
+HAO=${HAO:-$repo/build-ts/hao}
+# Uncertified values are refused here, as they are by default only once their rows land (a test build).
+export HAO_SWIFT_VALUE_STRICT=1
 T=${T:-60}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 for a in arm64e arm64; do

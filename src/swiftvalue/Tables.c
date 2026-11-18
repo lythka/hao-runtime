@@ -153,7 +153,7 @@ int mpenum_type(const void *type, mpenum_row *out)
 
 int archdiff_type(const void *type) { return (int)(rows_of(type) & 0xff); }
 
-/* Metadata -> 1 holds a listed type inline, 2 does not (Recipe.c). */
+/* Metadata -> holds_archdiff + 1: 1 no listed type held inline, 2 one, 3 fields not known (Recipe.c). */
 static hao_gmap holds = HAO_GMAP_INIT(2, 1, 6, 14);
 int holds_archdiff_memo(const void *type)
 {
@@ -166,6 +166,6 @@ void holds_archdiff_remember(const void *type, int listed)
     hao_crit_enter(); pthread_mutex_lock(&lock);
     bool fresh;
     uint64_t *slot = hao_gmap_claim1(&holds, (uint64_t)(uintptr_t)type, &fresh);
-    if (slot && fresh) { slot[1] = listed ? 2 : 1; hao_gmap_publish1(&holds, slot, (uint64_t)(uintptr_t)type); }
+    if (slot && fresh) { slot[1] = (uint64_t)listed + 1; hao_gmap_publish1(&holds, slot, (uint64_t)(uintptr_t)type); }
     pthread_mutex_unlock(&lock); hao_crit_leave();
 }

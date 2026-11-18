@@ -51,6 +51,13 @@ enum { HAO_SV_PASS_IDENTICAL = 1, HAO_SV_PASS_INACTIVE = 2, HAO_SV_PASS_OWNED = 
 /* Set in *PASSES also when the walk refuses: a value it found in the
  * guest's encoding needing a conversion it may not make (a shared box). */
 enum { HAO_SV_UNCONVERTIBLE = 8 };
+/* Set in *PASSES also when the walk refuses for a cause it knows, not for a
+ * missing rule: a value native code would misread or that is no value of its
+ * type (an outer nil, a tag bit under a patch, an invalid existential), a
+ * REFUSE row, an architecture-different layout, a nil past the patch
+ * capacity, a failed allocation. swiftvalue.c refuses such a value even
+ * where it only reports an uncertified one. */
+enum { HAO_SV_KNOWN_WRONG = 16 };
 /* collect_empty_patches_detail, or with EXISTENTIALS collect_witness_patches,
  * also reporting the pass classes of a certified walk. */
 /* The EXISTENTIALS argument of collect_value_patches, collect_partial_patches

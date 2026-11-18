@@ -41,6 +41,7 @@ typedef struct { uint64_t pc; const void *type; unsigned slots; } entry;
 typedef struct hao_swift_value_plan {
     const void *type;
     bool uncertifiable;   /* the type graph is past the walk's bounds: every value of it is refused */
+    bool invalid;         /* its metadata is invalid (builder invalid): refused even where uncertified values pass */
     unsigned count;
     entry *entries;
     struct hao_swift_value_plan *next;
@@ -50,6 +51,7 @@ typedef struct {
     node nodes[NODE_LIMIT]; entry entries[ENTRY_LIMIT];
     unsigned nnode, nentry;
     bool failed, existentials;
+    bool invalid;    /* with failed: metadata no valid type has (stride below size, a field outside its parent) */
     bool converts;   /* some node has a nil whose encoding differs (a conversion the walk knows) */
     bool unproven;   /* for one such node the facts table has no case images, or refuses it */
 } builder;
@@ -154,6 +156,7 @@ static bool first_report(const void *type, const char *why)
  * private records. */
 static const char *refusal_class(const char *why)
 {
+    if (strstr(why,"misread") || strstr(why,"cannot be converted")) return "known-wrong";
     if (strstr(why,"representation")) return "representation";
     if (strstr(why,"assignment") || strstr(why,"ownership") || strstr(why,"borrowed")) return "ownership";
     if (strstr(why,"allocation")) return "allocation";
@@ -211,9 +214,9 @@ static bool native_image_of(uint64_t pc, uint8_t uuid[16], uint64_t *offset)
 /* One audit record (see above). Types by their table keys, code by image
  * UUID and offset: no address, no path. */
 static void audit_record(const void *type, const char *why, uint64_t offset, unsigned depth, const void *const *chain,
-                         const void *walked, const void *root, uint64_t lr, uint64_t pc)
+                         const void *walked, const void *root, uint64_t lr, uint64_t pc, bool once)
 {
-    if (!first_report(type,why)) return;
+    if (once && !first_report(type,why)) return;
     FILE *f = HAO_DIAG;
     const witnesses *v = vwt(type);
     typedef uintptr_t SWIFT kind_fn(const void *);
@@ -253,7 +256,7 @@ static void audit_record(const void *type, const char *why, uint64_t offset, uns
     funlockfile(f);
 }
 static void audit(const void *type, const char *why, const void *walked, const void *value, int existentials,
-                  const void *root, uint64_t lr, uint64_t pc)
+                  const void *root, uint64_t lr, uint64_t pc, bool once)
 {
     audit_entry entries[8];
     unsigned found = 0;
@@ -262,22 +265,56 @@ static void audit(const void *type, const char *why, const void *walked, const v
         (void)collect_audit_patches(walked,value,scratch,64,existentials,entries,8,&found);
     }
     for (unsigned i = 0; i < found; ++i)
-        audit_record(entries[i].type,why,entries[i].offset,entries[i].depth,entries[i].chain,walked,root,lr,pc);
-    if (!found) audit_record(type,why,0,0,NULL,walked,root,lr,pc);
+        audit_record(entries[i].type,why,entries[i].offset,entries[i].depth,entries[i].chain,walked,root,lr,pc,once);
+    if (!found) audit_record(type,why,0,0,NULL,walked,root,lr,pc,once);
+}
+
+/* Whether WHY means only that no row or rule proves the value either way
+ * (v0.0.1 policy, docs/ISSUES.md): the walk's bounds, an active
+ * representation it has no rule for, a type not settled at a destruction
+ * hao cannot hook. Such a value is reported and passed as found, as before
+ * the refusal policy, unless HAO_SWIFT_VALUE_STRICT (tests). Every other
+ * reason is a value hao knows native code would misread (a nil it must
+ * convert and cannot), malformed storage, or a failed allocation a
+ * conversion needs: those stay refused. */
+static bool uncertified(const char *why)
+{
+    static const char *const reasons[] = {
+        "type graph past the walk's bounds",
+        "guest-defined fields past the walk's bound",
+        "box of a type that is not settled cannot be certified at its destruction",
+        "array storage of a type that is not settled cannot be certified at its destruction",
+        "child task result is copied by native code before it can be certified",
+    };
+    for (unsigned k = 0; k < sizeof reasons / sizeof reasons[0]; ++k) if (!strcmp(why,reasons[k])) return true;
+    return strstr(why,"unresolved") != NULL;   /* "... unresolved active representation ...", "unresolved assignment destination" */
 }
 
 /* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
  * walk refused it, ROOT the type of the activation, LR and PC the guest call. */
-/* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH or the audit. */
+/* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH, the audit, or for an
+ * uncertified reason (report-only). */
 static void decline_walk(const void *type, const char *why, const void *walked, const void *value, int existentials,
                          const void *root, uint64_t lr, uint64_t pc)
 {
-    if (hao_opt.swift_value_audit) { audit(type,why,walked,value,existentials,root,lr,pc); return; }
+    if (hao_opt.swift_value_audit) { audit(type,why,walked,value,existentials,root,lr,pc,true); return; }
     if (hao_opt.swift_value_audit_ignored && first_report(NULL,"audit ignored")) {
         hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1); refusing\n");
+        fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1)\n");
     }
     bool pass = hao_opt.swift_value_passthrough;
+    if (!pass && !hao_opt.swift_value_strict && uncertified(why)) {
+        if (!first_report(type,why)) return;
+        hao_crit_enter();   /* no guest signal handler runs inside the report */
+        audit(type,why,walked,value,existentials,root,lr,pc,false);
+        type_name n = name_of(type), r = name_of(root);
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG,"Swift value survey: not certified, passed as found (report-only): %s (metadata=%p size=%llu "
+            "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
+            vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
+        hao_crit_leave();
+        return;
+    }
     if (pass && !first_report(type,why)) return;
     if (walked && value) {
         empty_patch scratch[64];
@@ -322,6 +359,8 @@ static int certified_patches(const void *type, const void *value, empty_patch *p
     if (!value) { decline(type,"null value storage",NULL,NULL,root,lr,pc); return 0; }
     int n = collect_value_patches(type,value,p,cap,&unresolved,existentials,known_layout,&passes);
     if (n >= 0) { pass_note(type,passes); return n; }
+    if (passes & HAO_SV_UNCONVERTIBLE) why = "guest-encoded nil in a shared box cannot be converted";   /* known wrong */
+    else if (passes & HAO_SV_KNOWN_WRONG) why = "value native code would misread";   /* Recipe.h HAO_SV_KNOWN_WRONG */
     decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc);
     n = collect_partial_patches(type,value,p,cap,existentials,known_layout);
     return n < 0 ? 0 : n;
@@ -333,12 +372,14 @@ static int certified_patches(const void *type, const void *value, empty_patch *p
  * type is uncertifiable, never unaffected. */
 static bool graph(builder *b, const void *type, unsigned depth)
 {
-    if (!type || depth > 32 || b->nnode == NODE_LIMIT) { b->failed = true; return false; }
+    if (!type) { b->failed = b->invalid = true; return false; }
+    if (depth > 32 || b->nnode == NODE_LIMIT) { b->failed = true; return false; }
     for (unsigned i = 0; i < b->nnode; ++i) if (b->nodes[i].type == type) return b->nodes[i].affected;
     unsigned at = b->nnode++;
     b->nodes[at].type = type;
     const witnesses *v = vwt(type);
-    if (v->size > 4096 || v->stride < v->size) { b->failed = true; return false; }
+    if (v->stride < v->size) { b->failed = b->invalid = true; return false; }
+    if (v->size > 4096) { b->failed = true; return false; }
     if (v->flags & 0x00800000) {   /* IsNonCopyable: settled only by a SAME row */
         walk_fact f;
         if (walk_fact_of(type,&f) && f.verdict == WALK_FACT_SAME) { b->nodes[at].affected = false; return false; }
@@ -373,7 +414,7 @@ static bool graph(builder *b, const void *type, unsigned depth)
             intptr_t offset = b->offset(type,i);
             if (info.free_name) info.free_name(info.name);
             if (!child || offset < 0 || (uint64_t)offset > v->size || vwt(child)->size > v->size - (uint64_t)offset) {
-                b->failed = true; return false;
+                b->failed = b->invalid = true; return false;
             }
             affected |= graph(b,child,depth + 1);
         }
@@ -431,6 +472,7 @@ static const plan *prepare(const void *type)
     if (!p) { free(b); return NULL; }
     p->type = type;
     p->uncertifiable = !syms || b->failed;
+    p->invalid = !syms || b->invalid;
     if (!p->uncertifiable && affected && b->nentry) {
         p->entries = malloc(b->nentry * sizeof(entry));
         if (!p->entries) { free(b); free(p); return NULL; }   /* not cached: a later call tries again */
@@ -453,7 +495,10 @@ void hao_swift_value_begin(hao_thread *t, hao_swift_value_scope *scope, const vo
     if (!scope || hao_opt.no_swift_values) return;
     const plan *p = prepare(type);
     if (!p) { decline(type,"scratch allocation",NULL,NULL,type,t->cpu.x[30],0); return; }
-    if (p->uncertifiable) { decline(type,"type graph past the walk's bounds",NULL,NULL,type,t->cpu.x[30],0); return; }
+    if (p->uncertifiable) {
+        decline(type,p->invalid ? "type graph has invalid metadata" : "type graph past the walk's bounds",NULL,NULL,type,t->cpu.x[30],0);
+        return;
+    }
     if (!p->count) return;   /* every node settled, or none with a native witness to intercept */
     *scope = (hao_swift_value_scope){t->swift_values,p,output};
     t->swift_values = scope;
@@ -803,13 +848,20 @@ enum { WITNESS_CONVERTS = 1,    /* certification, and a nil whose encoding diffe
        WITNESS_SETTLED = 2,     /* nothing: every node settled */
        WITNESS_UNCERTIFIABLE = 3, /* refusal: the type graph is past the walk's bounds */
        WITNESS_CERTIFY = 4,     /* certification only */
-       WITNESS_UNPROVEN = 5 };  /* as CONVERTS, but a conversion has no certified rule (graph b->unproven) */
+       WITNESS_UNPROVEN = 5,    /* as CONVERTS, but a conversion has no certified rule (graph b->unproven) */
+       WITNESS_INVALID = 6 };   /* refusal: invalid metadata (graph b->invalid), or no memory to tell */
+/* The refusal of a type in STATE, or NULL. */
+static const char *state_refusal(int state)
+{
+    return state == WITNESS_UNCERTIFIABLE ? "type graph past the walk's bounds" :
+           state == WITNESS_INVALID ? "type graph has invalid metadata" : NULL;
+}
 static int witness_state(const void *type)
 {
     const uint64_t *e = hao_gmap_get1(&witness_types,(uint64_t)(uintptr_t)type);
     if (e) return (int)e[1];
     builder *b = calloc(1,sizeof *b);
-    if (!b) return WITNESS_UNCERTIFIABLE;   /* not cached: a later call tries again */
+    if (!b) return WITNESS_INVALID;   /* not cached: a later call tries again */
     b->existentials = true;
     b->kind = HAO_DLSYM("swift_getMetadataKind");
     b->count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
@@ -817,7 +869,7 @@ static int witness_state(const void *type)
     b->field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
     bool ok = b->kind && b->count && b->offset && b->field;
     bool affected = ok && graph(b,type,0);
-    int state = !ok || b->failed ? WITNESS_UNCERTIFIABLE : !affected ? WITNESS_SETTLED :
+    int state = !ok || b->invalid ? WITNESS_INVALID : b->failed ? WITNESS_UNCERTIFIABLE : !affected ? WITNESS_SETTLED :
                 b->unproven ? WITNESS_UNPROVEN : b->converts ? WITNESS_CONVERTS : WITNESS_CERTIFY;
     free(b);
     hao_crit_enter(); pthread_mutex_lock(&lock);
@@ -832,8 +884,8 @@ static int witness_state(const void *type)
 static bool witness_affected(const void *type, uint64_t lr, uint64_t pc)
 {
     int state = witness_state(type);
-    if (state == WITNESS_UNCERTIFIABLE) {
-        decline(type,"type graph past the walk's bounds",NULL,NULL,type,lr,pc);
+    if (state_refusal(state)) {
+        decline(type,state_refusal(state),NULL,NULL,type,lr,pc);
         return false;   /* HAO_SWIFT_VALUE_PASSTHROUGH: unexamined */
     }
     return state != WITNESS_SETTLED;
@@ -1114,8 +1166,9 @@ void hao_swift_task_result(const void *future, uint64_t lr)
     if (hao_opt.no_swift_values || !future) return;
     int state = witness_state(future);
     if (state == WITNESS_SETTLED) return;
-    decline(future,state == WITNESS_UNCERTIFIABLE ? "type graph past the walk's bounds" :
-            "child task result is copied by native code before it can be certified",NULL,NULL,future,lr,0);
+    decline(future,state_refusal(state) ? state_refusal(state) : state == WITNESS_CERTIFY ?
+            "child task result is copied by native code before it can be certified" :
+            "child task result has a nil native code would copy in the guest's encoding",NULL,NULL,future,lr,0);
 }
 
 /* Storage guest code creates and native code destroys: array storage
@@ -1138,8 +1191,8 @@ static void storage_element(const void *element, bool box, const char *why, uint
     if (hao_opt.no_swift_values || !element) return;
     int state = witness_state(element);
     bool hook = box ? HAO_DLSYM("swift_allocBox") != NULL : HAO_DLSYM("$ss23_ContiguousArrayStorageCfD") != NULL;
-    if (state == WITNESS_UNCERTIFIABLE || state == WITNESS_UNPROVEN || (state == WITNESS_CONVERTS && !hook))
-        decline(element,why,NULL,NULL,element,lr,0);
+    if (state_refusal(state)) decline(element,state_refusal(state),NULL,NULL,element,lr,0);
+    else if (state == WITNESS_UNPROVEN || (state == WITNESS_CONVERTS && !hook)) decline(element,why,NULL,NULL,element,lr,0);
 }
 void hao_swift_storage_alloc(const void *metadata, uint64_t lr)
 {
@@ -1385,7 +1438,8 @@ void hao_swift_storage_made(void *object)
     else if (m[0] > 0x7ff && (m[4] & 3) && (const void *)(uintptr_t)m[8] == HAO_DLSYM("$ss23_ContiguousArrayStorageCMn"))
         element = array_element(m);
     else return;
-    if (!element || witness_state(element) == WITNESS_SETTLED) return;
+    int state = element ? witness_state(element) : WITNESS_SETTLED;
+    if (state == WITNESS_SETTLED) return;
     void *array_original = box ? NULL : HAO_DLSYM("$ss23_ContiguousArrayStorageCfD");
     void *alloc_box = box ? HAO_DLSYM("swift_allocBox") : NULL;
     bool admitted = false;
@@ -1403,7 +1457,9 @@ void hao_swift_storage_made(void *object)
     }
     admitted = admitted && storage_note_locked((uint64_t)(uintptr_t)object,true);
     pthread_mutex_unlock(&storage_lock); hao_crit_leave();
-    if (!admitted)
+    if (!admitted && (state == WITNESS_CONVERTS || state == WITNESS_UNPROVEN))   /* a nil to convert: known wrong */
+        decline(element,"storage element type has a nil native code would destroy in the guest's encoding",NULL,NULL,element,0,0);
+    else if (!admitted)
         decline(element,box ? "box of a type that is not settled cannot be certified at its destruction"
                             : "array storage of a type that is not settled cannot be certified at its destruction",
                 NULL,NULL,element,0,0);
