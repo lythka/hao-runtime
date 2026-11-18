@@ -151,6 +151,8 @@ typedef struct hao_plan {
     uint16_t swift_enum;              /* NSTextAlignment registers converted (hao_swift_textalign): bits 0-7
                                        * arguments x0-x7, HAO_SWIFT_ENUM_RESULT the result */
     uint8_t probes;                   /* HAO_PLAN_PROBE: calls that looked for an ObjC type */
+    uint8_t swiftfn;                  /* 1: bound under a Swift mangled name (a guest function passed to it is a
+                                       * Swift function value); kept by every later plan of the address */
     uint64_t sel;                     /* HAO_BRS_OBJCIMP: the selector the method was found by */
     uint64_t bsig;                    /* HAO_BRS_BLOCKSIG: the typing block's signature string when it lies in
                                        * the shared cache (never freed), else 0 (hao_bridge_block_recheck) */
