@@ -57,6 +57,7 @@ guest/objcva	300	par	tests/guest/objcva.sh
 guest/optwitness	300	par	tests/guest/optwitness.sh
 guest/overlaynil	300	par	tests/guest/overlaynil.sh
 guest/viewselfnil	300	par	tests/guest/viewselfnil.sh
+guest/stripview	300	par	tests/guest/stripview.sh
 guest/svpolicy	300	par	tests/guest/svpolicy.sh
 guest/svcarriers	300	par	tests/guest/svcarriers.sh
 guest/poddestroy	300	par	tests/guest/poddestroy.sh

@@ -587,7 +587,11 @@ exported symbol is a Swift mangled name (its entry is marked the same
 way: `hao_swift_thunk_for`), or a native function the guest called that
 jumped on to guest code (its return address is hao_native_call's, which
 put the guest's own x8 in rax); a value that cannot be a data pointer is
-never taken. A caller's image with Swift metadata no longer counts.
+never taken. A native caller in an image with Swift metadata counts
+again: SwiftUI calls stripped guest closures from unexported code
+through no entry hao made (a closure passed in a stack slot, one stored
+in a value guest code built), and without it their results in memory
+went to hao's area, leaving SwiftUI's buffer uninitialized.
 Otherwise x8 points into the thread's own area: 64 KB for each of the
 first 16 nesting levels, each followed by a 64 KB guard, so a larger
 result faults in its level's guard; a deeper level gets a guard itself.
@@ -608,9 +612,14 @@ registration. A release-style build (local symbols stripped) of
 `guest/swiftthunks`, whose closures native Swift generics call: same
 output as native (it relies on the native callee's symbol).
 `guest/indirect-x8` and the guest and host entries of tests/check.list
-pass. Limits: a stripped guest Swift function reached by a path none of
-these covers (a native C caller, an NX fault from code that is not a
-Swift export) gets hao's area: a result it returns in memory is lost.
+pass. `guest/stripview` (stripped): an alert's message closure and a
+GeometryReader's content, called by SwiftUI; without the caller's image
+rule swift_retain of 0x20 (the Calculator and Bluetooth Settings alert
+crash), now the same output as native. Limits: a stripped guest Swift
+function reached by a native C caller outside a Swift image gets hao's
+area: a result it returns in memory is lost; a C function in a Swift
+image that calls a guest function returning in memory with a leftover
+data pointer in rax hands it over.
 
 ## Translated code, thunks and Swift island entries were writable and executable
 
