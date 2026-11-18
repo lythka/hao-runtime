@@ -1618,7 +1618,7 @@ static void trap_task_entry(hao_thread *t, uint64_t arg)
  * native code destroys (swiftvalue.c hao_swift_storage_element). */
 static void trap_storage(hao_thread *t, uint64_t arg)
 {
-    hao_swift_storage_element((const void *)(uintptr_t)t->cpu.x[arg ? 1 : 0], t->cpu.x[30]);
+    hao_swift_storage_element((const void *)(uintptr_t)t->cpu.x[arg ? 1 : 0], !arg, t->cpu.x[30]);
     hao_thunk_native_args(t);
     t->native_calls++;
     hao_native_call((uint64_t)(uintptr_t)(arg ? nat_alloc_array : nat_alloc_box), &t->cpu, 16);

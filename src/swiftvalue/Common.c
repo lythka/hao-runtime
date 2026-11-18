@@ -406,7 +406,7 @@ static bool stable_byte_xi_count(byte_xi_reflection *r, const void *type, unsign
     if (k != 0x200 && k != 0x301) return false;
     if (k == 0x200 && (!m[1] || (u32(m[1]) & 31) != 17)) return false;
     intptr_t count = r->count(type);
-    if (count < 0 || count > 64) return false;
+    if (count < 0 || count > HAO_SV_FIELD_LIMIT) return false;
     uint32_t extra = 0;
     for (intptr_t i = 0; i < count; i++) {
         field_info info = {0};
@@ -452,7 +452,7 @@ static bool selected_byte_xi(byte_xi_reflection *r, const void *type,
     if (k != 0x200 && k != 0x301) return false;
     if (k == 0x200 && (!m[1] || (u32(m[1]) & 31) != 17)) return false;
     intptr_t count = r->count(type);
-    if (count < 1 || count > 64) return false;
+    if (count < 1 || count > HAO_SV_FIELD_LIMIT) return false;
     const void *best = NULL;
     uint32_t extra = 0;
     uint64_t offset = 0;
