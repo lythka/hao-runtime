@@ -1158,28 +1158,46 @@ void recipe_fork_child(void) { images_lock = (pthread_mutex_t)PTHREAD_MUTEX_INIT
  * payload case with a mask of its own (a multi-payload enum) is not walked
  * from the images, and a CONVERT row of another enum than an Optional is
  * refused. */
+static int image_case(reflection *r, const void *type, const walk_fact *f, const unsigned char *value,
+                      uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, int multi,
+                      unsigned *found, uint64_t *defined_from);
 static int case_images(reflection *r, const void *type, const walk_fact *f, const unsigned char *value,
                        uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
 {
-    const witnesses *v = vwt(type);
     uintptr_t kind = r->kind(type);
+    unsigned which;
+    uint64_t from;
+    if (kind != 0x202 || ((const void *const *)type)[1] != r->optional) return 0;
+    int verdict = image_case(r,type,f,value,base,out,capacity,used,0,&which,&from);
+    if (verdict >= 0) return verdict;
+    return collect(r,((const void *const *)type)[2],value,base,out,capacity,used,depth + 1);
+}
+/* The case of VALUE by F's images: -1 in no case with an image of its own
+ * (the payload case of a single-payload enum), 0 refused, 1 in case *FOUND
+ * (its differing defined words patched; *DEFINED_FROM the first byte either
+ * mask defines). Without MULTI as case_images says; with MULTI (a guest
+ * enum's row) every case may have an image, payload cases too, and exactly
+ * one must match; a case with no image is the one matched when none other is. */
+static int image_case(reflection *r, const void *type, const walk_fact *f, const unsigned char *value,
+                      uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, int multi,
+                      unsigned *found, uint64_t *defined_from)
+{
+    const witnesses *v = vwt(type);
     uint64_t size = v->size;
-    if (kind != 0x202 || ((const void *const *)type)[1] != r->optional || size < 8 || size > WALK_FACT_IMAGE_BYTES ||
-        !f->nimages) return 0;
+    if (size < 8 || size > WALK_FACT_IMAGE_BYTES || !f->nimages) return 0;
     static unsigned char arm[WALK_FACT_IMAGE_BYTES], amask[WALK_FACT_IMAGE_BYTES], x86[WALK_FACT_IMAGE_BYTES],
                          xmask[WALK_FACT_IMAGE_BYTES], zeros[WALK_FACT_IMAGE_BYTES], ones[WALK_FACT_IMAGE_BYTES];
-    int verdict = -1;   /* -1: in no empty case (yet) */
+    int verdict = -1, matches = 0;   /* -1: in no case with an image (yet) */
+    unsigned chosen = 0, unimaged = 0, nunimaged = 0;
     hao_crit_enter(); pthread_mutex_lock(&images_lock);
-    for (unsigned i = 0; i < f->nimages && verdict < 0; ++i) {
+    for (unsigned i = 0; i < f->nimages && verdict != 0; ++i) {
         unsigned which;
         if (!walk_fact_image(f,i,&which,arm,amask,x86,xmask,size)) { verdict = 0; break; }
         int any_arm = 0, any_x86 = 0;
         for (uint64_t b = 0; b < size; ++b) { any_arm |= amask[b]; any_x86 |= xmask[b]; }
-        if (which == 0) {                            /* an Optional's payload case */
-            if (any_arm || any_x86) verdict = 0;     /* a mask of its own: not a single payload */
-            continue;
-        }
-        if (!any_arm || !any_x86 ||                  /* an empty case no bit proves */
+        if (!any_arm && !any_x86 && (multi || which == 0)) { unimaged = which; nunimaged++; continue; }
+        if (which == 0 && !multi) { verdict = 0; break; }   /* an Optional's payload case with a mask: not a single payload */
+        if (!any_arm || !any_x86 ||                  /* a case no bit proves */
             !injected_fill(type,which,0x00,zeros) || !injected_fill(type,which,0xff,ones)) { verdict = 0; break; }
         int stale = 0, is_arm = 1, is_x86 = 1;
         for (uint64_t b = 0; b < size; ++b) {
@@ -1192,7 +1210,19 @@ static int case_images(reflection *r, const void *type, const walk_fact *f, cons
                       is_arm == is_x86 ? is_arm : -1;
         if (reading < 0) { verdict = 0; break; }    /* unknown source, the readings differ */
         if (!reading) continue;
-        verdict = 1;
+        if (matches++) { verdict = 0; break; }      /* two cases read alike: no case proven */
+        chosen = i;
+        if (!multi) break;
+    }
+    if (verdict && !matches) {
+        verdict = multi && nunimaged == 1 ? 1 : nunimaged > 1 ? 0 : -1;
+        if (verdict > 0) { *found = unimaged; *defined_from = size; }
+    } else if (verdict && matches == 1) {
+        unsigned which;
+        verdict = walk_fact_image(f,chosen,&which,arm,amask,x86,xmask,size);
+        *found = which;
+        *defined_from = size;
+        for (uint64_t b = 0; b < size; ++b) if ((amask[b] | xmask[b]) && b < *defined_from) *defined_from = b;
         uint64_t last = 0;
         int patched = 0;
         for (uint64_t w = 0; w < size && verdict; w += 8) {
@@ -1201,21 +1231,65 @@ static int case_images(reflection *r, const void *type, const walk_fact *f, cons
             for (uint64_t b = at; b < at + 8; ++b) differs |= amask[b] != xmask[b] || ((arm[b] ^ x86[b]) & xmask[b]);
             if (!differs) continue;
             if ((patched && at < last + 8) || *used == capacity) { verdict = 0; break; }
-            uint64_t found, guest = 0, receiver = 0;
-            memcpy(&found,value + at,8);
+            uint64_t word, guest = 0, receiver = 0;
+            memcpy(&word,value + at,8);
             for (unsigned k = 0; k < 8; ++k) {
                 unsigned char fb = value[at + k];
                 receiver |= (uint64_t)(unsigned char)((fb & ~xmask[at + k]) | (x86[at + k] & xmask[at + k])) << (8 * k);
                 guest |= (uint64_t)(unsigned char)((fb & ~amask[at + k]) | (arm[at + k] & amask[at + k])) << (8 * k);
             }
-            out[(*used)++] = (empty_patch){base + at, found, receiver, which + 1, guest};
+            out[(*used)++] = (empty_patch){base + at, word, receiver, which + 1, guest};
             last = at; patched = 1;
         }
-        if (verdict) r->passes |= HAO_SV_PASS_INACTIVE;   /* an empty case: no payload */
+        if (verdict && !multi) r->passes |= HAO_SV_PASS_INACTIVE;   /* an empty case: no payload */
     }
     pthread_mutex_unlock(&images_lock); hao_crit_leave();
-    if (verdict >= 0) return verdict;
-    return collect(r,((const void *const *)type)[2],value,base,out,capacity,used,depth + 1);
+    return verdict;
+}
+
+/* A guest-defined type's CONVERT row (Facts.h walk_fact_of): a struct by
+ * its fields' rows, each field at its live offset (a SAME field as found, a
+ * REFUSE one refused, any other walked by its own type's row or the rules);
+ * an enum by its cases' images (image_case: the case, the tag words that
+ * differ patched), then the active payload case by its row the same way,
+ * walked only where no tag bit lies inside the payload's bytes. */
+static int guest_convert(reflection *r, const void *type, const walk_fact *f, const unsigned char *value,
+                         uint64_t base, empty_patch *out, unsigned capacity, unsigned *used, unsigned depth)
+{
+    uintptr_t kind = r->kind(type);
+    uint64_t size = vwt(type)->size;
+    char verdict;
+    if (kind == 0x200) {
+        intptr_t count = known_fields(r,type);
+        if (count < 0) return 0;
+        for (intptr_t i = 0; i < count; ++i) {
+            field_info info = {0};
+            const void *child = r->field(type,i,&info);
+            if (info.free_name) info.free_name(info.name);
+            intptr_t at = r->offset(type,i);
+            if (!child || at < 0 || (uint64_t)at > size || vwt(child)->size > size - (uint64_t)at ||
+                !walk_fact_field(f,(unsigned)i,&verdict) || verdict == WALK_FACT_REFUSE) return 0;
+            if (verdict == WALK_FACT_SAME) { r->passes |= HAO_SV_PASS_IDENTICAL; continue; }
+            if (!collect(r,child,value + at,base + (uint64_t)at,out,capacity,used,depth + 1)) return 0;
+        }
+        return 1;
+    }
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    unsigned which;
+    uint64_t from;
+    const void *payload = NULL;
+    int indirect = 0;
+    if (kind != 0x201 || image_case(r,type,f,value,base,out,capacity,used,1,&which,&from) != 1 ||
+        !walk_fact_field(f,which,&verdict) || verdict == WALK_FACT_REFUSE) return 0;
+    if (verdict == WALK_FACT_SAME || !walk_fact_payload(type,which,&payload,&indirect)) {
+        r->passes |= HAO_SV_PASS_IDENTICAL;   /* an empty case (its row SAME) or a payload the same on both */
+        return verdict == WALK_FACT_SAME;
+    }
+    if (indirect || !payload || vwt(payload)->size > from) return 0;
+    return collect(r,payload,value,base,out,capacity,used,depth + 1);
+#else
+    return 0;
+#endif
 }
 
 /* An Optional the table does not list (a guest's instantiation over a
@@ -1292,7 +1366,38 @@ static int fact_verdict(reflection *r, const void *type, const unsigned char *va
 {
 #ifdef HAO_SWIFT_VALUE_RUNTIME
     walk_fact f;
-    if (!walk_fact_of(type,&f)) return -1;
+    if (!walk_fact_of(type,&f)) {
+        /* An Optional of a guest row's type whose extra inhabitants are the
+         * same on both (XI class SAME): its nil is the same bytes, the ones
+         * its own witness injects (over zeros and ones, in scratch storage:
+         * the defined bits); a value that is not nil is a payload, walked. */
+        const void *const *m = type;
+        const witnesses *v = vwt(type);
+        uint64_t size = v->size;
+        if (r->kind(type) != 0x202 || m[1] != r->optional || !m[2] || !walk_fact_of(m[2],&f) || !f.guest ||
+            f.verdict == WALK_FACT_REFUSE || f.xi_class != WALK_XI_SAME || vwt(m[2])->size != size || vwt(m[2])->extra != v->extra + 1 || size > 4096)
+            return -1;
+        typedef struct { const void *metadata; uintptr_t state; } response;
+        typedef response SWIFT generic_fn(uintptr_t, const void *const *, const void *);
+        generic_fn *get = HAO_DLSYM("swift_getGenericMetadata");
+        if (!get || get(0,m + 2,r->optional).metadata != type) return 0;   /* the runtime's Optional of it only */
+        hao_crit_enter();
+        unsigned char *zeros = malloc((size_t)size * 2 + 1), *ones = zeros ? zeros + size : NULL;
+        int nil = 1, defined = 0;
+        if (!zeros || !injected_fill(type,1,0x00,zeros) || !injected_fill(type,1,0xff,ones)) {
+            free(zeros); hao_crit_leave(); return 0;
+        }
+        for (uint64_t b = 0; b < size; ++b) {
+            unsigned char mask = (unsigned char)~(zeros[b] ^ ones[b]);
+            nil &= ((value[b] ^ zeros[b]) & mask) == 0;
+            defined |= mask;
+        }
+        free(zeros);
+        hao_crit_leave();
+        if (!defined) return 0;   /* a nil no bit tells */
+        if (nil) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
+        return collect(r,m[2],value,base,out,capacity,used,depth + 1);
+    }
     switch (f.verdict) {
     case WALK_FACT_SAME:
         r->passes |= HAO_SV_PASS_IDENTICAL;
@@ -1300,6 +1405,7 @@ static int fact_verdict(reflection *r, const void *type, const unsigned char *va
     case WALK_FACT_DYNAMIC:     /* the existential and field rules certify the dynamic parts */
         return -1;
     case WALK_FACT_CONVERT:
+        if (f.guest) return guest_convert(r,type,&f,value,base,out,capacity,used,depth);
         return case_images(r,type,&f,value,base,out,capacity,used,depth);
     default:                    /* WALK_FACT_REFUSE, or a verdict this runtime does not know */
         return 0;
