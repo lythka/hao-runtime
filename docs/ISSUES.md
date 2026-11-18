@@ -617,9 +617,7 @@ GeometryReader's content, called by SwiftUI; without the caller's image
 rule swift_retain of 0x20 (the Calculator and Bluetooth Settings alert
 crash), now the same output as native. Limits: a stripped guest Swift
 function reached by a native C caller outside a Swift image gets hao's
-area: a result it returns in memory is lost; a C function in a Swift
-image that calls a guest function returning in memory with a leftover
-data pointer in rax hands it over.
+area: a result it returns in memory is lost.
 
 ## Translated code, thunks and Swift island entries were writable and executable
 
