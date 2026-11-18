@@ -7,7 +7,8 @@
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
 # tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
 # tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
-# tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/onmac_pin_check.py),
+# tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/onmac_pin_check.py; --install-live,
+# tests/tools/test_install_live.py),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike) and
 # tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file) and
@@ -186,6 +187,10 @@ else bad "hao-install.py twice: rc $r1 $r2: $(cat "$d/2.log")"; fi
 if python3 -I "$here/test_install.py" >"$d/paths.log" 2>&1; then
     pass "hao-install.py path rules: $(grep '^Ran' "$d/paths.log") (unsafe manifest names and symlinks refused)"
 else bad "hao-install.py path rules: $(tail -15 "$d/paths.log")"; fi
+# --- hao-runtime-on-mac --install-live: only what differs is written, with hao-install.py's checks; other systems refused
+if python3 -I "$here/test_install_live.py" >"$d/live.log" 2>&1; then
+    pass "hao-runtime-on-mac --install-live: $(grep '^Ran' "$d/live.log") (libhao-only update, restub, refusals; the running-Mac path as far as --dry-run)"
+else bad "hao-runtime-on-mac --install-live: $(tail -15 "$d/live.log")"; fi
 # --- tools/hao_ifunit.py match: each interface unit names an image of the x86_64 cache (hao-image-payload --units)
 if python3 -I "$here/test_ifunit_match.py" >"$d/ifmatch.log" 2>&1; then
     pass "interface units against the x86_64 cache: $(grep '^Ran' "$d/ifmatch.log") (another library's or another name's unit refused)"
