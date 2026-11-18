@@ -265,6 +265,8 @@ tests/guest/bridgeunit.sh
 tests/guest/bridgeunit_gen.py
 tests/guest/callback-routes.sh
 tests/guest/callbacks.sh
+tests/guest/carrierdestroy.sh
+tests/guest/carrierdestroy.swift
 tests/guest/cbstructs.m
 tests/guest/cfnull.c
 tests/guest/cfnull.sh

@@ -6,9 +6,8 @@
 # tuples of a C?? with guest multi-payload enums, which the tuple witnesses take whole: trailing tag bytes
 # (one, two and five empty cases) and tags in the payloads' spare bits (decoded from the image's record).
 # The program is arm64 natively and arm64e under hao (JIT, --interp, AOT); every line must equal
-# native arm64. It keeps its values in arrays of them, whose storage hao refuses by default (native code
-# destroys it; swiftvalue.c storage_element): the default run must stop with that refusal, and the three
-# engines run with HAO_SWIFT_VALUE_PASSTHROUGH=1, where no other kind of value may be passed through.
+# native arm64 with no refusal. It keeps its values in arrays of them, whose storage native code destroys:
+# admitted as carriers (swiftvalue.c storage_element), their nils converted at that final destruction.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/optwitness.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -30,19 +29,15 @@ fail=0
 [ $nrc = 0 ] || fail=1
 for mode in jit interp aot; do
     case $mode in
-    jit) set -- env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" ;;
-    interp) set -- env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" --interp ;;
-    aot) set -- env HAO_CACHE="$OUT/aot" HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" ;;
+    jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
+    interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
+    aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
     esac
     timeout -s KILL "$T" "$@" "$OUT/optwitness.arm64e" >"$OUT/$mode.out" 2>"$OUT/$mode.err"; rc=$?
-    if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
+    if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out" && ! grep -q 'Swift value boundary refused' "$OUT/$mode.err"
+    then r=SAME; else r=DIFF; fail=1; fi
     printf '%-9s rc=%s %s\n' "$mode" "$rc" "$r"
-    [ $r = SAME ] || diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16
+    [ $r = SAME ] || { diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16; grep -a 'Swift value' "$OUT/$mode.err" | head -4 | cut -c1-300; }
 done
-other=$(cat "$OUT"/jit.err "$OUT"/interp.err "$OUT"/aot.err | grep 'passed through unpatched' | grep -vc 'array element type')
-[ "$other" = 0 ] || { echo "optwitness: $other values other than array storage passed through"; fail=1; }
-timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" "$OUT/optwitness.arm64e" >"$OUT/default.out" 2>"$OUT/default.err"; rc=$?
-if [ $rc != 0 ] && grep -q 'Swift value boundary refused: array element type' "$OUT/default.err"; then r=REFUSED; else r=NOT-REFUSED; fail=1; fi
-printf '%-9s rc=%s %s\n' default "$rc" "$r"
 [ $fail = 0 ] && echo "optwitness: PASS" || echo "optwitness: FAIL"
 exit $fail
