@@ -2,7 +2,8 @@
  * included once per section. Under the test switch HAO_SWIFT_WALK_FACTS=FILE
  * (a HAO_TEST_SWITCHES build, an open process) a fixture file's rows are
  * looked up first, in any process, with no layout check: one row a line,
- *   type KEY VERDICT [XI-CLASS XI-OFFSET]   (SAME, DYNAMIC, CONVERT or REFUSE; NONE, SAME, POINTER, OTHER)
+ *   type KEY VERDICT [XI-CLASS XI-OFFSET [UNCHECKED]]   (SAME, DYNAMIC, CONVERT or REFUSE; NONE, SAME, POINTER,
+ *        OTHER; UNCHECKED: a SAME row on a type with guest parts, which no generated row names)
  *   image KEY CASE ARM64-IMAGE ARM64-MASK X86_64-IMAGE X86_64-MASK   (hex, as SWIFTWALK_IMAGES)
  * ("#" starts a comment; tests/guest/svfacts.facts). */
 #include "Facts.h"
@@ -12,6 +13,9 @@
 #include "hao/opts.h"
 #include "hao/runtime.h"
 #include "hao/dlsym_once.h"
+#include <dlfcn.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -57,7 +61,7 @@ static const struct { int32_t type, which; const char *arm, *arm_mask, *x86, *x8
 #define SWIFTWALK_X86_CACHE_UUID "954AA5DE1C5D3D479921AF7AF681D333"
 #endif
 
-typedef struct { char verdict; char *key; unsigned first_image, nimages; char xi_class; int xi_offset; } fixture_type;
+typedef struct { char verdict; char *key; unsigned first_image, nimages; char xi_class; int xi_offset; bool unchecked; } fixture_type;
 typedef struct { unsigned which; unsigned char *arm, *arm_mask, *x86, *x86_mask; size_t n; } fixture_image;
 static fixture_type *ftypes;
 static fixture_image *fimages;
@@ -126,9 +130,9 @@ static void load_fixture_from(const char *path)
         char line[4096], key[2048], a[300], b[300], c[300], d[300], verdict[16];
         unsigned which;
         while (f && fgets(line, sizeof line, f) && nftypes < 1024 && nfimages < 1024) {
-            char xi[16] = "NONE";
+            char xi[16] = "NONE", mark[16] = "";
             int xi_offset = -1;
-            if (sscanf(line, "type %2047s %15s %15s %d", key, verdict, xi, &xi_offset) >= 2) {
+            if (sscanf(line, "type %2047s %15s %15s %d %15s", key, verdict, xi, &xi_offset, mark) >= 2) {
                 fixture_type *g = realloc(ftypes, (nftypes + 1) * sizeof *ftypes);
                 if (!g) break;
                 ftypes = g;
@@ -136,7 +140,7 @@ static void load_fixture_from(const char *path)
                          !strcmp(verdict, "CONVERT") ? WALK_FACT_CONVERT : WALK_FACT_REFUSE;
                 char c = !strcmp(xi, "SAME") ? WALK_XI_SAME : !strcmp(xi, "POINTER") ? WALK_XI_POINTER :
                          !strcmp(xi, "OTHER") ? WALK_XI_OTHER : WALK_XI_NONE;
-                ftypes[nftypes++] = (fixture_type){v, strdup(key), 0, 0, c, xi_offset};
+                ftypes[nftypes++] = (fixture_type){v, strdup(key), 0, 0, c, xi_offset, !strcmp(mark, "UNCHECKED")};
             } else if (sscanf(line, "image %2047s %u %299s %299s %299s %299s", key, &which, a, c, b, d) == 6) {
                 size_t na = 0, nb = 0, nc = 0, nd = 0;
                 unsigned char *arm = unhex(a, &na), *x86 = unhex(b, &nb), *am = unhex(c, &nc), *xm = unhex(d, &nd);
@@ -201,6 +205,177 @@ int walk_fact_key(const char *s, uint64_t n, char *out, uint64_t cap)
     return 1;
 }
 
+static bool peek(uint64_t address, void *out, size_t size)
+{
+    mach_vm_size_t got = 0;
+    return address >= 4096 && address <= UINT64_MAX - size &&
+        mach_vm_read_overwrite(mach_task_self(), address, size, (mach_vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS &&
+        got == size;
+}
+static bool guest_addr(uint64_t a) { return hao_image_for_addr(a) != NULL; }
+/* An address in a native image dyld loaded: not the heap, not a guest image. */
+static bool native_addr(uint64_t a)
+{
+    Dl_info i = {0};
+    return a >= 4096 && !guest_addr(a) && dladdr((const void *)(uintptr_t)a, &i) && i.dli_fbase;
+}
+static bool native_code(uint64_t f) { return native_addr(f) && !hao_image_for_code(f) && !hao_guest_of_entry(f) && !hao_is_trap(f); }
+typedef struct { const void *metadata; uintptr_t state; } facts_response;
+typedef facts_response SWIFT generic_metadata_fn(uintptr_t, const void *const *, const void *);
+typedef const void *conforms_fn(const void *, const void *);
+typedef const void *SWIFT metatype_fn(const void *);
+typedef facts_response SWIFT tuple_fn(uintptr_t, uintptr_t, const void *const *, const char *, const void *);
+typedef const void *SWIFT existential_fn(uintptr_t, const void *, uintptr_t, const void *const *);
+/* The generic parameter a requirement's mangled subject names, at depth 0
+ * ("x", "q_", "q<n>_"); -1 for anything else. */
+static int subject_param(uint64_t name)
+{
+    char t[8] = {0};
+    if (!peek(name, t, 1)) return -1;
+    if (t[0] == 'x') return peek(name + 1, t + 1, 1) && !t[1] ? 0 : -1;
+    if (t[0] != 'q' || !peek(name, t, sizeof t - 1)) return -1;
+    int n = 0, k = 1;
+    if (t[k] == '_') return t[k + 1] ? -1 : 1;                           /* "x" is 0, "q_" 1, "q<n>_" n + 2 */
+    while (t[k] >= '0' && t[k] <= '9' && k < 5) n = n * 10 + (t[k++] - '0');
+    return k > 1 && t[k] == '_' && !t[k + 1] ? n + 2 : -1;
+}
+static bool rel32(uint64_t field, uint64_t *out)
+{
+    int32_t r;
+    if (!peek(field, &r, 4) || !r) return false;
+    *out = field + (int64_t)r;
+    return true;
+}
+static bool native_identity(const void *type, unsigned depth);
+/* A generic nominal TYPE of native descriptor DESC (generic header at
+ * DESC + HEAD, key arguments at ARGS): the runtime's own metadata for its
+ * arguments, each type argument native and each conformance the runtime's. */
+static bool native_generic(const void *type, uint64_t desc, uint64_t head_at, uint64_t args_at, unsigned depth)
+{
+    uint16_t head[4];   /* GenericContextDescriptorHeader */
+    if (!peek(desc + head_at, head, sizeof head) || head[0] > 16 || head[1] > 16 || head[2] > 32 || (head[3] & 1))
+        return false;   /* no packs */
+    unsigned char params[16];
+    if (head[0] && !peek(desc + head_at + 8, params, head[0])) return false;
+    uint64_t args[32];
+    if (head[2] && !peek(args_at, args, 8ull * head[2])) return false;
+    int slot_of[16];
+    unsigned arg = 0;
+    for (unsigned i = 0; i < head[0]; ++i) {
+        slot_of[i] = -1;
+        if (!(params[i] & 0x80)) continue;
+        if (arg >= head[2]) return false;
+        slot_of[i] = (int)arg;
+        unsigned k = params[i] & 0x3f;
+        if (k == 2) { ++arg; continue; }                               /* a value */
+        if (k || !native_identity((const void *)(uintptr_t)args[arg++], depth + 1)) return false;
+    }
+    conforms_fn *conforms = HAO_DLSYM("swift_conformsToProtocol");
+    uint64_t req = desc + head_at + 8 + ((head[0] + 3u) & ~3u);
+    for (unsigned i = 0; i < head[1]; ++i, req += 12) {
+        uint32_t rf;
+        int32_t pr;
+        uint64_t name, proto;
+        if (!peek(req, &rf, 4)) return false;
+        if (!(rf & 0x80)) continue;                                    /* no key argument */
+        if ((rf & 0x1f) || arg >= head[2] || !rel32(req + 4, &name) || !peek(req + 8, &pr, 4) || !pr || (pr & 2))
+            return false;                                              /* a Swift protocol conformance only */
+        proto = req + 8 + (int64_t)(pr & ~3);
+        if ((pr & 1) && !peek(proto, &proto, 8)) return false;
+        int p = subject_param(name);
+        if (p < 0 || p >= head[0] || slot_of[p] < 0 || (params[p] & 0x3f) || !native_addr(proto) || !conforms ||
+            conforms((const void *)(uintptr_t)args[slot_of[p]], (const void *)(uintptr_t)proto) !=
+                (const void *)(uintptr_t)args[arg++])
+            return false;
+    }
+    if (arg != head[2]) return false;
+    generic_metadata_fn *get = HAO_DLSYM("swift_getGenericMetadata");
+    return get && get(0, (const void *const *)(uintptr_t)args_at, (const void *)(uintptr_t)desc).metadata == type;
+}
+/* A non-generic nominal TYPE of native descriptor DESC: in its image, or
+ * what the descriptor's native access function returns. */
+static bool native_plain(const void *type, uint64_t desc)
+{
+    uint64_t access;
+    if (native_addr((uint64_t)(uintptr_t)type)) return true;
+    if (!rel32(desc + 12, &access) || !native_code(access)) return false;
+    return ((facts_response SWIFT (*)(uintptr_t))(uintptr_t)access)(0).metadata == type;
+}
+/* Whether TYPE is the native type its name says, proven positively: a SAME
+ * row skips the walk, so a guest type spelled like a listed one (its own
+ * module, a guest generic argument, metadata forged on the heap) must not
+ * get it. A non-generic type's metadata lies in a native image; a generic
+ * one's is what the native runtime returns for its native descriptor and its
+ * key arguments, each generic argument native in turn and each conformance
+ * the one the runtime finds. Its destroy witness is native code. */
+static bool native_identity(const void *type, unsigned depth)
+{
+    uint64_t t = (uint64_t)(uintptr_t)type, m[2], vwt, destroy;
+    if (depth > 8 || !peek(t - 8, &vwt, 8) || !peek(t, m, sizeof m) || guest_addr(t) || guest_addr(vwt) ||
+        !peek(vwt + 8, &destroy, 8) || !native_code(destroy))
+        return false;
+    uint64_t kind = m[0];
+    if (kind > 0x7ff) {   /* a class: an ObjC class in its image, or a Swift class by its descriptor */
+        uint64_t data, desc;
+        uint32_t flags, bounds[3];
+        if (native_addr(t)) return true;
+        if (!peek(t + 32, &data, 8) || !(data & 3) || !peek(t + 64, &desc, 8) || !native_addr(desc) ||
+            !peek(desc, &flags, 4) || (flags & 31) != 16) return false;
+        if (!(flags & 0x80)) return native_plain(type, desc);
+        /* no resilient superclass, no negative members: arguments at positive size - immediate members */
+        if ((flags & (3u << 28)) || !peek(desc + 24, bounds, sizeof bounds) || bounds[1] <= bounds[2] || bounds[1] > 4096)
+            return false;
+        return native_generic(type, desc, 52, t + 8ull * (bounds[1] - bounds[2]), depth);
+    }
+    switch (kind) {
+    case 0x200: case 0x201: case 0x202: {
+        uint64_t desc = m[1];
+        uint32_t flags;
+        if (!native_addr(desc) || !peek(desc, &flags, 4) || ((flags & 31) != 17 && (flags & 31) != 18)) return false;
+        /* after the type's 28 bytes and the two rel32 of TypeGenericContextDescriptorHeader; arguments at word 2 */
+        return flags & 0x80 ? native_generic(type, desc, 36, t + 16, depth) : native_plain(type, desc);
+    }
+    case 0x300: case 0x203: case 0x204: return native_addr(t);   /* builtin and foreign: in their image */
+    case 0x301: {   /* the runtime's tuple of these elements and labels */
+        uint64_t labels, e[16];
+        char text[512] = {0};
+        if (m[1] > 16 || !peek(t + 16, &labels, 8)) return false;
+        if (labels) {
+            unsigned n = 0;
+            while (n < sizeof text - 1 && peek(labels + n, text + n, 1) && text[n]) ++n;
+            if (n == sizeof text - 1 || text[n]) return false;
+        }
+        for (uint64_t i = 0; i < m[1]; ++i)
+            if (!peek(t + 24 + 16 * i, &e[i], 8) || !native_identity((const void *)(uintptr_t)e[i], depth + 1)) return false;
+        tuple_fn *get = HAO_DLSYM("swift_getTupleTypeMetadata");
+        return get && get(0, m[1], (const void *const *)e, labels ? text : NULL, NULL).metadata == type;
+    }
+    case 0x302: return native_addr(vwt);   /* a function value: a code pointer and a context, whatever its signature */
+    case 0x303: {   /* the runtime's existential of these native protocols */
+        uint32_t flags = (uint32_t)m[1], n = (uint32_t)(m[1] >> 32);
+        uint64_t at = t + 16, super = 0, p[16];
+        if (n > 16) return false;
+        if (flags & 0x40000000) {
+            if (!peek(at, &super, 8) || !native_identity((const void *)(uintptr_t)super, depth + 1)) return false;
+            at += 8;
+        }
+        if (n && !peek(at, p, 8ull * n)) return false;
+        for (uint32_t i = 0; i < n; ++i) if (!native_addr(p[i] & ~UINT64_C(1))) return false;
+        existential_fn *get = HAO_DLSYM("swift_getExistentialTypeMetadata");
+        return get && get((flags & 0x80000000u) ? 1 : 0, (const void *)(uintptr_t)super, n, (const void *const *)p) == type;
+    }
+    case 0x304: case 0x306: {
+        metatype_fn *get = kind == 0x304 ? HAO_DLSYM("swift_getMetatypeMetadata") : HAO_DLSYM("swift_getExistentialMetatypeMetadata");
+        return get && native_identity((const void *)(uintptr_t)m[1], depth + 1) && get((const void *)(uintptr_t)m[1]) == type;
+    }
+    case 0x305: {
+        metatype_fn *get = HAO_DLSYM("swift_getObjCClassMetadata");
+        return get && native_addr(m[1]) && get((const void *)(uintptr_t)m[1]) == type;
+    }
+    default: return false;
+    }
+}
+
 int walk_fact_of(const void *type, walk_fact *out)
 {
     if (!type) return 0;
@@ -210,8 +385,11 @@ int walk_fact_of(const void *type, walk_fact *out)
     const uint64_t *e = hao_gmap_get1(&by_type, (uint64_t)(uintptr_t)type);
     uint64_t found = e ? e[1] : 0;
     if (!e) {
-        uint64_t n;
-        const char *name = walk_fact_mangled(type, &n);
+        uint64_t n, vwt = 0;
+        struct { uint64_t size, stride; uint32_t flags, extra; } v = {0};
+        /* The value witness table's layout words first: a type whose table cannot be read has no row. */
+        bool readable = peek((uint64_t)(uintptr_t)type - 8, &vwt, 8) && peek(vwt + 64, &v, sizeof v);
+        const char *name = readable ? walk_fact_mangled(type, &n) : NULL;
         char key[4096];
         found = UINT64_C(1) << 63;
         if (name && walk_fact_key(name, n, key, sizeof key)) {
@@ -222,14 +400,17 @@ int walk_fact_of(const void *type, walk_fact *out)
                 int c = strcmp(key, types[mid].key);
                 if (!c) {
                     /* The row describes this type only while its live layout is the row's. */
-                    const struct { void *fn[8]; uint64_t size, stride; uint32_t flags, extra; } *v = ((const void *const *)type)[-1];
-                    if (v->size == types[mid].size && v->stride == types[mid].stride && v->flags == types[mid].flags &&
-                        v->extra == types[mid].x86_xi) found = (uint64_t)mid + 1;
+                    if (v.size == types[mid].size && v.stride == types[mid].stride && v.flags == types[mid].flags &&
+                        v.extra == types[mid].x86_xi) found = (uint64_t)mid + 1;
                     break;
                 }
                 if (c < 0) hi = mid - 1; else lo = mid + 1;
             }
         }
+        bool fixture = !(found >> 63) && (found >> 32);
+        char verdict = found >> 63 ? 0 : fixture ? ftypes[(found & 0xffffffffu) - 1].verdict : types[found - 1].verdict;
+        if (verdict == WALK_FACT_SAME && !(fixture && ftypes[(found & 0xffffffffu) - 1].unchecked) && !native_identity(type, 0))
+            found = UINT64_C(1) << 63;
         hao_crit_enter(); pthread_mutex_lock(&lock);
         bool fresh;
         uint64_t *slot = hao_gmap_claim1(&by_type, (uint64_t)(uintptr_t)type, &fresh);

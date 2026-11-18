@@ -837,6 +837,22 @@ POINTER has its nil translated by the pointer rule at the row's word (q on
 arm64, 2q on x86_64, any depth; the offset checked against the Optional's
 own witness). A type with no row (every guest type, and native types not
 listed) keeps the rules, which refuse what they cannot certify.
+A noncopyable type (value witness flag IsNonCopyable) was refused at the
+gate before its row was read; a SAME row now settles it there, and without
+one it is still refused (`guest/svnoncopy`: boxes of `Mutex<Int>` and of
+`Mutex<AsyncStream<@Sendable () -> ()>.Continuation>`, the latter under the
+generated table's key, equal native under JIT, `--interp`, AOT with fixture
+rows; refused without them). A SAME row, any type, applies only to the
+native type it names, proven positively (`Facts.c` `native_identity`): a
+non-generic type's metadata in a native image; a generic one's what
+`swift_getGenericMetadata` returns for its native descriptor and arguments,
+each argument native in turn and each conformance the one
+`swift_conformsToProtocol` finds; tuples, metatypes, existentials and ObjC
+wrappers the runtime's own; a native destroy witness. A guest `Mutex<Int>`
+of a module named Synchronization, a `Mutex<Guest>` and heap copies of
+native metadata are refused (`guest/svnoncopy`, `host/svidentity`). A
+function type's row admits any signature (its value's layout is fixed).
+Not measured: the generated rows on 26B131.
 
 Source encoding: from three Optional levels a pointer word's encodings
 overlap (arm64's 2 is x86_64's first inhabitant). The walk is told who wrote
