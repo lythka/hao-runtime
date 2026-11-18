@@ -62,7 +62,7 @@ FRONT_LD := -Wl,-rpath,@executable_path -Wl,-rpath,$(HAO_LIBDIR)
 # linked into every embedded program by tools/hao-embed.
 FRONT_CFLAGS := $(ARCH) -O2 $(WARN)
 
-.PHONY: all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke catalog-gate
+.PHONY: image-scan all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke catalog-gate
 all: $(B)/libhaocore.a $(B)/libhao.dylib $(B)/hao $(B)/hao-stub $(B)/front/stub.o $(B)/libhao_codeid.a
 
 $(MIN_STAMP):
@@ -378,3 +378,7 @@ legacy-dyld-test: all
 .PHONY: indexed-mulhigh-test
 indexed-mulhigh-test: all
 	HAO=$(abspath $(B))/hao OUT=$(abspath $(B))/indexed-mulhigh python3.14 -I tests/guest/indexed-mulhigh/run.py
+
+# ARM-only launchd jobs of a mounted system image: no refusal the baseline runtime lacks (needs ROOT and BASELINE)
+image-scan: $(B)/hao
+	OUT=$(or $(SCAN_OUT),$(B)/image-scan) tests/image/launchd-scan.sh $(ROOT) $(abspath $(B)/hao) $(BASELINE)

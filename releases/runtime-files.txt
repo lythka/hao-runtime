@@ -765,3 +765,4 @@ tests/guest/ioreg.c
 tests/host/ioreg.c
 tests/guest/appdomain.c
 tests/guest/appdomain.sh
+tests/image/launchd-scan.sh
