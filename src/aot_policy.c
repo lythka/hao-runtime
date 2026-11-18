@@ -194,7 +194,7 @@ static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "H
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
                                             "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_CPU_FEATURES",
-                                            "HAO_AOT_FREE_MB", "HAO_CRASH", "HAO_SWIFT_WALK_FACTS", NULL};
+                                            "HAO_AOT_FREE_MB", "HAO_CRASH", "HAO_SWIFT_WALK_FACTS", "HAO_SWIFT_GUEST_FACTS", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {

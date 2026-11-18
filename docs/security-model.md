@@ -356,7 +356,8 @@ never for a release image. It also reads the test switches
 (`HAO_LIBVAL_USER`, which also keeps `HAO_TRUST_LIST` for a program that
 requires library validation, `HAO_SIGRETURN_USER`, `HAO_AOT_LIMIT_KB`,
 `HAO_BRIDGE_ABORT`, `HAO_NO_JIT_MEMORY`, `HAO_CODE_ALIAS`, `HAO_AOT_LIST_DIR`,
-`HAO_AOT_FREE_MB`, `HAO_CRASH`, `HAO_CPU_FEATURES`, `HAO_SWIFT_WALK_FACTS`) from an open
+`HAO_AOT_FREE_MB`, `HAO_CRASH`, `HAO_CPU_FEATURES`, `HAO_SWIFT_WALK_FACTS`,
+`HAO_SWIFT_GUEST_FACTS`) from an open
 process's environment, and the bridging and signal bring-up knobs as boot
 arguments. `HAO_DISTRUST_ENV=1|2` is read by every build: it can only lower a
 process to the guarded or set-ID rules.

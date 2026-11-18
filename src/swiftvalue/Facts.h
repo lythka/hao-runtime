@@ -38,11 +38,26 @@ typedef struct {
     unsigned nimages;          /* CONVERT: case images, at most 64 */
     int first_image;           /* opaque to callers: walk_fact_image's first index */
     int fixture;
+    int guest;                 /* a guest-defined type's row (src/swiftguest_gen.inc): its index + 1; 0 a native row */
 } walk_fact;
 /* TYPE's row in this process (the generated table, or under the test switch
  * HAO_SWIFT_WALK_FACTS a fixture file's: tests/guest/svfacts.facts), 0 when
- * it has none. */
+ * it has none. A guest-defined struct or enum with no such row gets its row
+ * of src/swiftguest_gen.inc (or under HAO_SWIFT_GUEST_FACTS a fixture's:
+ * Facts.c), found by identity, never by name: its nominal descriptor lies in
+ * a loaded guest image of the row's LC_UUID at the row's offset, its generic
+ * arguments are the row's (native ones by walk key and native row, guest ones
+ * by their own rows), its live value witness table has the row's size,
+ * stride, flags and XI count, and its fields (an enum's cases) are the row's,
+ * each a native type with a row of its key or a guest type of the row named,
+ * through every nested guest row. A row that matches by identity but whose
+ * fields do not is REFUSE. */
 int walk_fact_of(const void *type, walk_fact *out);
+/* A guest row's verdict for field (an enum's case) INDEX; 0 if not listed. */
+int walk_fact_field(const walk_fact *f, unsigned index, char *verdict);
+/* The payload type of case INDEX of the enum TYPE (an indirect case: NULL,
+ * *INDIRECT 1), from its field descriptor; 0 if it has no such payload case. */
+int walk_fact_payload(const void *type, unsigned index, const void **payload, int *indirect);
 /* Case image I of a CONVERT row (every case is listed): its case index, each
  * architecture's image (the bytes its destructiveInjectEnumTag writes over
  * zeros) and mask (1 for each bit the injection defines: the same over a
