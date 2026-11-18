@@ -120,7 +120,9 @@ func drain<S: AsyncSequence>(_ s: S) async throws -> Int { var n = 0; for try aw
         print("child " + (await childThrows()))
         print("controls " + (await controls()))
         print("generic " + (await generic()))
-        print("value " + (await taskValue()))
+        // A child task's Node?? result is copied by the runtime before hao sees it: refused by default
+        // (tests/guest/asyncnil.sh runs it on its own).
+        if CommandLine.arguments.dropFirst().first == "value" { print("value " + (await taskValue())); return }
         print("iterators " + iterators())
         print("done")
     }

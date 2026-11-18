@@ -56,12 +56,20 @@ static void *bundle_dlopen(const char *path, int mode)
     if (path && path[0] == '@' && guest_expand && guest_expand(path, __builtin_return_address(0), expanded, sizeof expanded) > 0)
         path = expanded;
     set_error(NULL);
-    void *h = dlopen(path, mode);
+    /* The runtime selects guest-owned ARM libraries before dyld can open their native slice.
+     * An error from a selected guest image is final, including signature/library-validation failure. */
+    char early[1024] = "";
+    void *h = guest_open2 ? guest_open2(path, mode, __builtin_return_address(0), early, sizeof early) : NULL;
+    if (h || early[0]) {
+        if (!h) set_error(early);
+        return h;
+    }
+    h = dlopen(path, mode);
     if (h || !path) return h;
     const char *native = dlerror();
     char original[1024], why[1024] = "";
     snprintf(original, sizeof original, "%s", native ? native : "dlopen failed");
-    h = guest_open2 ? guest_open2(path, mode, __builtin_return_address(0), why, sizeof why) : guest_open(path, mode, why, sizeof why);
+    h = guest_open2 ? guest_open2(path, mode, NULL, why, sizeof why) : guest_open(path, mode, why, sizeof why);
     if (!h) set_error(why[0] ? why : original);
     else (void)dlerror();
     return h;

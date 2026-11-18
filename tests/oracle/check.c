@@ -1,12 +1,14 @@
 /*
  * x86_64 checker: replays oracle records through hao's interpreter and its
  * block translator and compares the result with the native arm64 run.
- *   check RECORDS.bin [--show N] [--bad FILE]
+ *   check RECORDS.bin [--show N] [--bad FILE] [--cpu MASK]
+ * --cpu: the JIT pass translates for the host's optional CPU features
+ * (hao/cpufeat.h) within MASK (baseline, host or hex; 0: none of them).
  *
  * Compared bit-exactly: x0-x30 (except the platform register x18), SP, NZCV,
  * FPCR, FPSR.QC, v0-v31 (NaN payloads included) and the scratch memory
  * (hash of the whole filled region). FPSR's IEEE cumulative flags are
- * counted separately and fail the gate; in fma records, a flag
+ * counted separately and fail the gate; in fma and fmad records, a flag
  * difference is a mismatch. For fma records the checker also reports how many
  * have only normal or zero operands and results at or above 2^-125 (what the
  * round-to-odd path of fp_muladd admits), and for how many of those
@@ -24,6 +26,7 @@
 #include "known.h"
 #include "hao/cpu.h"
 #include "hao/opts.h"
+#include "hao/cpufeat.h"
 #include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
@@ -132,6 +135,13 @@ int main(int argc, char **argv)
     for (int k = 2; k < argc; k++) {
         if (!strcmp(argv[k], "--show") && k + 1 < argc) show = atoi(argv[++k]);
         else if (!strcmp(argv[k], "--bad") && k + 1 < argc) badpath = argv[++k];
+        else if (!strcmp(argv[k], "--cpu") && k + 1 < argc) {
+            /* the JIT under a profile without the features the mask clears (hao/cpufeat.h) */
+            uint64_t keep;
+            char why[160];
+            if (!hao_cpu_profile_parse(argv[++k], HAO_CPU_ALL, &keep, why, sizeof why)) { fprintf(stderr, "%s\n", why); return 2; }
+            hao_opt.cpu_clear = HAO_CPU_ALL & ~keep;
+        }
     }
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror("open"); return 1; }
@@ -231,7 +241,7 @@ int main(int argc, char **argv)
                     if (!why[0] && fpcr != r.out.fpcr) snprintf(why, sizeof why, "fpcr got %x want %x", fpcr, r.out.fpcr);
                     if (!why[0] && ((fpsr ^ r.out.fpsr) & (1u << 27)))
                         snprintf(why, sizeof why, "fpsr.QC got %x want %x", fpsr, r.out.fpsr);
-                    if (!why[0] && mode == OM_FMA && ((fpsr ^ r.out.fpsr) & 0x9f))
+                    if (!why[0] && (mode == OM_FMA || mode == OM_FMAD) && ((fpsr ^ r.out.fpsr) & 0x9f))
                         snprintf(why, sizeof why, "fpsr got %x want %x (in %x)", fpsr, r.out.fpsr, r.in.fpsr);
                     if (why[0]) C->mismatch++;
                     else {
@@ -268,6 +278,9 @@ int main(int argc, char **argv)
             if (mode == OM_KNOWN && (!a || !b)) fails++;
         }
     }
+    char cn[160];
+    uint64_t prof = hao_cpu_features() & HAO_CPU_JIT;
+    printf("jit CPU profile %#llx (%s)\n", (unsigned long long)prof, prof ? hao_cpu_names(prof, cn, sizeof cn) : "none");
     for (int pass = 0; pass < 2; pass++) {
         counts *C = &cnt[pass];
         printf("%s %-6s records %ld | native ran %ld: match %ld, mismatch %ld, hao-fault %ld, hao-undef %ld (+%ld known unimplemented)"

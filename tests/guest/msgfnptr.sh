@@ -15,6 +15,8 @@
 #   OUT=dir HAO=/abs/build/hao [HAO_BASE=/abs/old/hao] [T=60] [SECTIONS="sorted ..."] [MODES="jit interp aot"] tests/guest/msgfnptr.sh
 # Prints one line per section and mode (SAME, DIFF, CRASH sig=N, TIMEOUT; nx=N); exit 1 on any failure.
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-msgfnptr)}

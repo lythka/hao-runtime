@@ -11,6 +11,8 @@
 # image's __cstring puts a signature depends only on its layout).
 #   OUT=dir HAO=/abs/build/hao [T=60] [SECTIONS="getimp ..."] [MODES="jit interp aot"] tests/guest/objcimp.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-objcimp)}

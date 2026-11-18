@@ -141,8 +141,13 @@ static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
     if (!t) return NULL;
     hao_plan_slot *s = tab_slot(t, a);
     if (s->key == a) {
-        const hao_plan *old = s->plan;
-        if (!better(p, old)) return old;
+        const hao_plan *old = s->plan, *keep = better(p, old) ? p : old;
+        if (!keep->swiftfn && (p->swiftfn || old->swiftfn)) {   /* a Swift name of the address, from either */
+            hao_plan *c = arena_alloc(sizeof *c);
+            if (c) { *c = *keep; c->swiftfn = 1; keep = c; }
+        }
+        if (keep == old) return old;
+        p = keep;
         __atomic_store_n(&s->plan, p, __ATOMIC_RELEASE);
         hao_ncache_invalidate();
         return p;
@@ -176,9 +181,10 @@ static const hao_plan *tab_put(uint64_t a, const hao_plan *p)
 static const hao_plan unknown_import = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL};
 static const hao_plan unknown_bare = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .flags = HAO_PLAN_DLADDR};
 /* the same for a synchronous Swift function (packed stack arguments from the call site) */
-static const hao_plan unknown_import_sitepack = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .kind = HAO_KIND_SITEPACK};
+static const hao_plan unknown_import_sitepack = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .kind = HAO_KIND_SITEPACK,
+                                                 .swiftfn = 1};
 static const hao_plan unknown_bare_sitepack = {.cls = HAO_BR_UNKNOWN, .argmask = HAO_BR_SCAN_ALL, .flags = HAO_PLAN_DLADDR,
-                                               .kind = HAO_KIND_SITEPACK};
+                                               .kind = HAO_KIND_SITEPACK, .swiftfn = 1};
 
 /* bind counts: edges (one per resolved import) by class and source */
 static uint64_t st_bind_cls[HAO_BR_NCLASS], st_bind_src[HAO_BRS_N], st_bare, st_bare_named, st_bare_typed, st_bare_skipped;
@@ -943,6 +949,7 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
     memset(p, 0, sizeof *p);
     p->native = native;
     p->argmask = HAO_BR_SCAN_ALL;
+    p->swiftfn = !strncmp(gname, "_$s", 3) || !strncmp(gname, "_$S", 3);
     if (swift_async(gname)) p->flags |= HAO_PLAN_SWIFTASYNC;
     if (hao_swift_async_param(gname)) p->flags |= HAO_PLAN_ASYNCARG;
     if (hao_swift_genres_bind(native, gname, p->flags & HAO_PLAN_SWIFTASYNC)) p->flags |= HAO_PLAN_GENRESULT;
@@ -977,7 +984,11 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
             p->tp[0] = native;
             p->tp[1] = nh;
             p->tp[2] = (uint64_t)(uintptr_t)hao_bridge_code_arg;
-        } else if (r->flags & HAO_IFR_SIG) { p->kind = 'A'; p->enc = v->str + r->enc; }
+        } else if (r->flags & HAO_IFR_SIG) {
+            p->kind = 'A';
+            p->enc = v->str + r->enc;
+            (void)hao_sig_simple(p->enc);   /* parsed and cached now: the call path (abi.c hao_sig) only finds it */
+        }
         else if (r->kind == HAO_IF_KIND_STACKPACK && (p->flags & HAO_PLAN_SWIFTASYNC)) {
             /* a swifttailcc callee pops its own stack arguments (swiftcc.c): no repack; the
              * generator never types one */
@@ -1095,14 +1106,16 @@ static const char *cx_expr_primary(const char *p, int d, cx_rec *r)
 
 static const char *cx_template_arg(const char *p, int d, cx_rec *r)
 {
-    if (p[0] == 'T' && p[1] == 'y') return cx_template_arg(p + 2, d, r);   /* a type parameter's declaration */
-    if (p[0] == 'T' && p[1] == 'n') {                                   /* a non-type parameter's: its type */
-        if (!(p = cx_type(p + 2, d, r))) return NULL;
-        return cx_template_arg(p, d, r);
+    for (;;) {
+        if (p[0] == 'T' && p[1] == 'y') p += 2;                          /* a type parameter's declaration */
+        else if (p[0] == 'T' && p[1] == 'n') {                          /* a non-type parameter's: its type */
+            if (!(p = cx_type(p + 2, d, r))) return NULL;
+        } else break;
     }
     switch (*p) {
     case 'L': return cx_expr_primary(p, d, r);
-    case 'J':
+    case 'J':                                                           /* a pack: bounded like the other nestings */
+        if (++d > 64) return NULL;
         for (p++; *p != 'E';)
             if (!*p || !(p = cx_template_arg(p, d, r))) return NULL;
         return p + 1;
@@ -1335,7 +1348,8 @@ static const hao_plan *publish(const hao_plan *tmp, const char *name)
     L();
     bool share = tmp->cls == HAO_BR_UNKNOWN && (!tmp->kind || tmp->kind == HAO_KIND_SITEPACK) && !hao_bridge_counting &&
                  !tmp->why && !tmp->redirect && !tmp->swift_enum &&
-                 !(tmp->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT | HAO_PLAN_VIEWSELF | HAO_PLAN_PROBE));
+                 !(tmp->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT | HAO_PLAN_VIEWSELF | HAO_PLAN_PROBE)) &&
+                 tmp->swiftfn == (tmp->kind == HAO_KIND_SITEPACK);
     if (share && tmp->kind) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare_sitepack : &unknown_import_sitepack);
     else if (share) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare : &unknown_import);
     else {
@@ -1372,6 +1386,7 @@ static void note_async_entry(const char *gname, uint64_t afp)
     else memset(&tmp, 0, sizeof tmp), tmp.argmask = HAO_BR_SCAN_ALL, tmp.cls = HAO_BR_UNKNOWN;
     tmp.native = fn;
     tmp.flags |= HAO_PLAN_SWIFTASYNC;
+    tmp.swiftfn = 1;
     char name[1024];
     snprintf(name, sizeof name, "%.*s", (int)(n - 2), gname);
     if (hao_swift_genres_bind(fn, name, true)) tmp.flags |= HAO_PLAN_GENRESULT;

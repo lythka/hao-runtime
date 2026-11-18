@@ -138,7 +138,7 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
 
     if ((op0 & 0xE) == 0xA) {                         /* branches, exceptions, system */
         if ((i & 0x7C000000) == 0x14000000) {         /* B, BL */
-            o->target = pc + (uint64_t)(sx(i & 0x3ffffff, 26) << 2);
+            o->target = pc + ((uint64_t)sx(i & 0x3ffffff, 26) << 2);
             if (i >> 31) { o->flow = F_CALL; o->wr = bit(30); }
             else o->flow = F_JUMP;
             return;
@@ -146,18 +146,18 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
         if ((i & 0x7E000000) == 0x34000000) {         /* CBZ/CBNZ */
             o->rd = bit(rd);
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x7ffff, 19) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x7ffff, 19) << 2);
             return;
         }
         if ((i & 0x7E000000) == 0x36000000) {         /* TBZ/TBNZ */
             o->rd = bit(rd);
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x3fff, 14) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x3fff, 14) << 2);
             return;
         }
         if ((i & 0xFF000000) == 0x54000000) {         /* B.cond, BC.cond */
             o->flow = F_COND;
-            o->target = pc + (uint64_t)(sx((i >> 5) & 0x7ffff, 19) << 2);
+            o->target = pc + ((uint64_t)sx((i >> 5) & 0x7ffff, 19) << 2);
             return;
         }
         if ((i & 0xFF000000) == 0xD4000000) {         /* SVC/HVC/SMC; BRK, HLT end the path */
@@ -248,7 +248,7 @@ static void decode(uint32_t i, uint64_t pc, ins *o)
                 if (!v) o->wr = bit(rt);
                 return;
             } else {                                  /* LDRAA/LDRAB */
-                int64_t imm = sx(((i >> 12) & 0x1ff) | ((i >> 13) & 0x200), 10) << 3;
+                int64_t imm = (int64_t)((uint64_t)sx(((i >> 12) & 0x1ff) | ((i >> 13) & 0x200), 10) << 3);
                 o->imm = imm; o->bytes = 8; o->load = 1;
                 if ((i >> 11) & 1) { o->wb_reg = rn; o->wb = imm; o->imm = imm; o->wr |= bit(rn); }
                 o->wr |= bit(rt);
@@ -563,6 +563,22 @@ static demangle_fn demangler(void)
     return fn;
 }
 
+/* The demangled text of SYM (its leading '_' dropped, N bytes) in BUF of
+ * SIZE bytes, or, when it does not fit there (swift_demangle copies what
+ * fits and sets the size it needs), demangled again on the heap: the
+ * rules below read the result type at the end of the text. BUF, a string
+ * the caller frees with demangled_free, or NULL. Bind time only: it may
+ * allocate. */
+static char *demangle_full(demangle_fn dm, const char *sym, size_t n, char *buf, size_t size)
+{
+    size_t len = size;
+    if (!dm(sym, n, buf, &len, 0)) return NULL;
+    if (len <= size) { buf[size - 1] = 0; return buf; }
+    len = 0;
+    return dm(sym, n, NULL, &len, 0);
+}
+static void demangled_free(char *d, char *buf) { if (d != buf) free(d); }
+
 /* Kind for a demangled entity "Name(params) async [throws[(E)]] -> T":
  * T a narrow integer type, the arrow the entity's own (its parameter list's
  * '(' follows the name, not a space as in a function-type result). */
@@ -604,11 +620,11 @@ char hao_swift_async_result_kind(const char *sym)
     if (n < 6 || (sym[n - 1] != 'F' && !(sym[n - 1] == 'Z' && sym[n - 2] == 'F'))) return 0;
     demangle_fn dm = demangler();
     if (!dm) return 0;
-    char buf[1024];
-    size_t len = sizeof buf;
-    if (!dm(sym + 1, n - 1, buf, &len, 0)) return 0;
-    buf[len < sizeof buf ? len : sizeof buf - 1] = 0;
-    return hao_swift_async_kind_for_demangled(buf);
+    char buf[1024], *d = demangle_full(dm, sym + 1, n - 1, buf, sizeof buf);
+    if (!d) return 0;
+    char kind = hao_swift_async_kind_for_demangled(d);
+    demangled_free(d, buf);
+    return kind;
 }
 
 /* Does the demangled entity "Name(params) ..." have a parameter whose type
@@ -635,11 +651,11 @@ bool hao_swift_async_param(const char *sym)
     if (strncmp(sym, "_$s", 3) || !strstr(sym, "Ya")) return false;
     demangle_fn dm = demangler();
     if (!dm) return false;
-    char buf[4096];
-    size_t len = sizeof buf;
-    if (!dm(sym + 1, strlen(sym + 1), buf, &len, 0)) return false;
-    buf[sizeof buf - 1] = 0;
-    return hao_swift_async_param_demangled(buf);
+    char buf[4096], *d = demangle_full(dm, sym + 1, strlen(sym + 1), buf, sizeof buf);
+    if (!d) return false;
+    bool yes = hao_swift_async_param_demangled(d);
+    demangled_free(d, buf);
+    return yes;
 }
 
 /* The narrow-result and async-parameter rules above read the demangler's
@@ -861,11 +877,11 @@ uint16_t hao_swift_textalign(const char *sym, bool final)
     if (!sym || strncmp(sym, "_$s", 3) || !strcasestr(sym, "alignment")) return 0;
     demangle_fn dm = demangler();
     if (!dm) return 0;
-    char buf[4096];
-    size_t len = sizeof buf;
-    if (!dm(sym + 1, strlen(sym + 1), buf, &len, 0)) return 0;
-    buf[len < sizeof buf ? len : sizeof buf - 1] = 0;
-    return hao_swift_textalign_demangled(buf, final);
+    char buf[4096], *d = demangle_full(dm, sym + 1, strlen(sym + 1), buf, sizeof buf);
+    if (!d) return 0;
+    uint16_t at = hao_swift_textalign_demangled(d, final);
+    demangled_free(d, buf);
+    return at;
 }
 
 uint64_t hao_swift_textalign_value(uint64_t v)
@@ -1045,13 +1061,13 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
     if (hao_gmap_get1(&genres_fns, native)) return true;
     demangle_fn dm = demangler();
     if (!dm) return false;
-    char buf[2048], context[512];
-    size_t dl = sizeof buf;
-    if (!dm(sym + 1, len - 1, buf, &dl, 0)) return false;
-    buf[dl < sizeof buf ? dl : sizeof buf - 1] = 0;
+    char buf[2048], context[512], *d = demangle_full(dm, sym + 1, len - 1, buf, sizeof buf);
+    if (!d) return false;
     int param;
     bool throwing;
-    if (!hao_swift_genres_demangled(buf, context, sizeof context, &param, &throwing)) return false;
+    bool parsed = hao_swift_genres_demangled(d, context, sizeof context, &param, &throwing);
+    demangled_free(d, buf);
+    if (!parsed) return false;
     genres *g = calloc(1, sizeof *g);
     if (!g || !(g->context = strdup(context))) { free(g); return false; }
     g->native = native;
@@ -1247,11 +1263,12 @@ void hao_swift_genres_result(const void *type, uint64_t result) { genres_convert
  *
  * A binding qualifies by its mangled prefix and demangled name. Self is
  * found at the first call: the argument word (x0-x7, then the first eight
- * stack words) holding struct, enum or Optional metadata of a native type,
- * followed by a witness table whose conformance descriptor is SwiftUI.View's
- * conformance of that type. The positions are the signature's, so they hold
- * for every call. self is then lent as a converted copy
- * (swiftvalue.c hao_swift_borrow_to_native): the guest's value is not written.
+ * stack words) holding struct, enum or Optional metadata, followed by a
+ * witness table whose conformance descriptor is SwiftUI.View's conformance
+ * of that type. The positions are the signature's, so they hold for every
+ * call. The closures self holds get Swift entries (hao_swift_value_closures:
+ * native code calls them later), and self of a native type is then lent as a
+ * converted copy (swiftvalue.c hao_swift_borrow_to_native).
  */
 typedef struct viewself { int8_t self_at, wt_at; } viewself;   /* argument word index; -2 not found yet, -1 none */
 static hao_gmap viewself_fns = HAO_GMAP_INIT(2, 1, 4, 16);     /* native -> viewself * */
@@ -1263,12 +1280,12 @@ bool hao_swift_viewself_bind(uint64_t native, const char *sym)
     if (hao_gmap_get1(&viewself_fns, native)) return true;
     demangle_fn dm = demangler();
     if (!dm) return false;
-    char buf[2048];
-    size_t len = strlen(sym), dl = sizeof buf;
-    if (!dm(sym + 1, len - 1, buf, &dl, 0)) return false;
-    buf[dl < sizeof buf ? dl : sizeof buf - 1] = 0;
-    const char *close = strncmp(buf, "(extension in ", 14) ? NULL : strchr(buf, ')');
-    if (!close || strncmp(close, "):SwiftUI.View.", 15)) return false;   /* an instance member: self is a value */
+    char buf[2048], *d = demangle_full(dm, sym + 1, strlen(sym + 1), buf, sizeof buf);
+    if (!d) return false;
+    const char *close = strncmp(d, "(extension in ", 14) ? NULL : strchr(d, ')');
+    bool member = close && !strncmp(close, "):SwiftUI.View.", 15);   /* an instance member: self is a value */
+    demangled_free(d, buf);
+    if (!member) return false;
     if (!view_protocol) {
         uint64_t p = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT, "$s7SwiftUI4ViewMp");
         if (!p) return false;
@@ -1289,12 +1306,12 @@ bool hao_swift_viewself_bind(uint64_t native, const char *sym)
     return s != NULL;
 }
 
-/* M: metadata of a native struct, enum or Optional; *desc its nominal type descriptor */
+/* M: metadata of a struct, enum or Optional; *desc its nominal type descriptor */
 static bool viewself_meta(uint64_t m, uint64_t *desc)
 {
     uint64_t kind;
     if (!m || (m & 7) || !genres_read(m, &kind, 8) || (kind != 0x200 && kind != 0x201 && kind != 0x202)) return false;
-    return genres_read(m + 8, desc, 8) && *desc && !(*desc & 3) && !hao_image_for_addr(*desc);
+    return genres_read(m + 8, desc, 8) && *desc && !(*desc & 3);
 }
 
 /* WT: a witness table of the conformance to SwiftUI.View of the type DESC describes */
@@ -1313,6 +1330,148 @@ static bool viewself_conforms(uint64_t wt, uint64_t desc)
     default: return false;
     }
     return tref == desc;
+}
+
+/*
+ * The Body a guest body returns (hao_swift_body_result).
+ *
+ * SwiftUI's protocols with a body (View, ViewModifier, Scene, Commands, ...)
+ * have native code call the conforming type's body witness, which returns a
+ * Body in native memory (the indirect result). Closures in it are called
+ * later by native code: a GeometryReader's content made in the body, a guest
+ * View's @ViewBuilder property. They get Swift entries
+ * (hao_swift_value_closures), Body's metadata asked of the witness table as
+ * native code asks it (swift_getAssociatedTypeWitness). A witness's last two
+ * arguments are Self's metadata and the witness table; the table is a
+ * conformance to a protocol whose body requirement's slot holds the callee's
+ * entry. The requirement is the protocol's exported method descriptor of
+ * `body` returning its associated type Body: the getter's symbol, made from
+ * the protocol's module and name, or ViewModifier's body(content:). Body's
+ * own requirement is the associated type access function whose name in the
+ * protocol's list is "Body". Which argument is the table is found at a
+ * callee's first call and remembered per address.
+ */
+typedef struct { uint64_t m; uint32_t state; } assoc_response;
+typedef assoc_response __attribute__((swiftcall)) assoc_witness_fn(uint64_t, const void *, const void *, const void *, const void *);
+typedef struct { uint64_t proto, reqbase, body, type; } body_proto;   /* body 0: none */
+enum { BODY_PROTOS = 128 };
+static body_proto body_protos[BODY_PROTOS];
+static unsigned body_nprotos;                                         /* published count */
+static assoc_witness_fn *body_assoc;
+
+/* N bytes of the NUL-terminated string at A into out (false if longer or unreadable) */
+static bool body_string(uint64_t a, char *out, size_t n)
+{
+    for (size_t k = 0; k < n; k++) {
+        if (!genres_read(a + k, &out[k], 1)) return false;
+        if (!out[k]) return true;
+    }
+    return false;
+}
+
+/* a relative pointer at A (bit 0: indirect, when INDIRECT) */
+static bool body_rel(uint64_t a, bool indirect, uint64_t *out)
+{
+    int32_t r;
+    if (!genres_read(a, &r, 4) || !r) return false;
+    *out = a + (uint64_t)(int64_t)(indirect ? r & ~1 : r);
+    return !(indirect && (r & 1)) || genres_read(*out, out, 8);
+}
+
+static void body_proto_compute(uint64_t proto, body_proto *bp)
+{
+    uint32_t h[6];   /* flags, parent, name, requirements in signature, requirements, associated type names */
+    uint64_t parent, pname, name, names;
+    char mod[64], nm[64], assoc[256], sym[256];
+    bp->proto = proto;
+    if (!genres_read(proto, h, sizeof h) || (h[0] & 0x1f) != 3 || h[4] > 256) return;   /* a protocol */
+    if (!body_rel(proto + 4, true, &parent) || !genres_read(parent, h, 4) || (h[0] & 0x1f) != 0) return;   /* a module */
+    if (!body_rel(parent + 8, false, &pname) || !body_string(pname, mod, sizeof mod)) return;
+    if (!body_rel(proto + 8, false, &name) || !body_string(name, nm, sizeof nm)) return;
+    if (!body_rel(proto + 20, false, &names) || !body_string(names, assoc, sizeof assoc)) return;
+    uint32_t nsig, nreq;
+    genres_read(proto + 12, &nsig, 4);
+    genres_read(proto + 16, &nreq, 4);
+    uint64_t req = proto + 24 + 12 * (uint64_t)nsig;
+    snprintf(sym, sizeof sym, "$s%zu%s%zu%sP4body4BodyQzvgTq", strlen(mod), mod, strlen(nm), nm);
+    uint64_t body = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT, sym);
+    if (!body) {
+        uint64_t vm = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT, "$s7SwiftUI12ViewModifierP4body7content4BodyQzAA01_cD8_ContentVyxG_tFTq");
+        if (vm >= req && vm < req + 8 * (uint64_t)nreq) body = vm;
+    }
+    if (body < req || body >= req + 8 * (uint64_t)nreq || (body - req) % 8) return;
+    /* Body's position among the associated type names, then that associated type access function */
+    int at = -1, k = 0;
+    for (char *save = NULL, *w = strtok_r(assoc, " ", &save); w; w = strtok_r(NULL, " ", &save), k++) if (!strcmp(w, "Body")) at = k;
+    if (at < 0) return;
+    for (uint32_t i = 0, j = 0; i < nreq; i++) {
+        uint32_t f;
+        if (!genres_read(req + 8 * (uint64_t)i, &f, 4)) return;
+        if ((f & 0xf) == 7 && (int)j++ == at) { bp->type = req + 8 * (uint64_t)i; break; }
+    }
+    if (!bp->type) return;
+    bp->reqbase = req - 8;   /* the witness table's slot of requirement k: 1 + k (0: the conformance descriptor) */
+    bp->body = body;
+}
+
+/* the body requirement of the protocol at PROTO, computed once per protocol (NULL: the table is full) */
+static const body_proto *body_proto_of(uint64_t proto)
+{
+    unsigned n = __atomic_load_n(&body_nprotos, __ATOMIC_ACQUIRE);
+    for (unsigned k = 0; k < n; k++)
+        if (body_protos[k].proto == proto) return &body_protos[k];
+    body_proto bp = {0};
+    body_proto_compute(proto, &bp);
+    hao_crit_enter();
+    pthread_mutex_lock(&genres_lock);
+    const body_proto *r = NULL;
+    n = body_nprotos;
+    for (unsigned k = 0; k < n && !r; k++)
+        if (body_protos[k].proto == proto) r = &body_protos[k];
+    if (!r && n < BODY_PROTOS) {
+        body_protos[n] = bp;
+        __atomic_store_n(&body_nprotos, n + 1, __ATOMIC_RELEASE);
+        r = &body_protos[n];
+    }
+    pthread_mutex_unlock(&genres_lock);
+    hao_crit_leave();
+    return r;
+}
+
+/* WT: a witness table whose protocol's body requirement slot holds an entry of TARGET */
+static const body_proto *body_witness(uint64_t target, uint64_t wt)
+{
+    uint64_t cd, proto, slot;
+    if (!wt || (wt & 7) || !genres_read(wt, &cd, 8) || !cd || (cd & 3) || !body_rel(cd, true, &proto) || !proto) return NULL;
+    const body_proto *bp = body_proto_of(proto);
+    if (!bp || !bp->body || !genres_read(wt + (bp->body - bp->reqbase), &slot, 8) || !slot) return NULL;
+    uint64_t g = hao_guest_of_entry(slot);
+    return (g ? g : slot) == target ? bp : NULL;
+}
+
+void hao_swift_body_result(uint64_t target, const uint64_t *a, uint64_t value)
+{
+    enum { N = 2048 };
+    static uint64_t memo[N];   /* target << 8 | witness table argument (0: none) */
+    if (!value || hao_opt.no_swift_thunks || hao_current()->sig_nest || target >> 56) return;
+    if (!body_assoc) {
+        void *f = dlsym(RTLD_DEFAULT, "swift_getAssociatedTypeWitness");
+        if (!f) return;
+        __atomic_store_n(&body_assoc, (assoc_witness_fn *)f, __ATOMIC_RELAXED);
+    }
+    uint64_t *e = &memo[(target >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
+    const body_proto *bp = NULL;
+    int k = v >> 8 == target ? (int)(v & 0xff) : -1;
+    if (k == 0) return;
+    if (k > 0) bp = body_witness(target, a[k]);
+    else {
+        for (k = 1; k < 6 && !(bp = body_witness(target, a[k])); k++) { }
+        __atomic_store_n(e, target << 8 | (bp ? (unsigned)k : 0), __ATOMIC_RELAXED);
+    }
+    if (!bp || !a[k - 1] || (a[k - 1] & 7)) return;
+    assoc_response r = body_assoc(0, (const void *)(uintptr_t)a[k], (const void *)(uintptr_t)a[k - 1],
+                                  (const void *)(uintptr_t)bp->reqbase, (const void *)(uintptr_t)bp->type);
+    if (r.m) hao_swift_value_closures(r.m, value);
 }
 
 static uint64_t viewself_word(const hao_cpu *c, int k)
@@ -1350,6 +1509,8 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native)
     }
     m = viewself_word(c, at);
     if (!viewself_meta(m, &desc)) return NULL;
+    hao_swift_value_closures(m, c->x[20]);   /* closures in self native code calls later get Swift entries */
+    if (hao_image_for_addr(desc)) return NULL;   /* the guest's own type: its witnesses are the guest's */
     return hao_swift_borrow_to_native((const void *)(uintptr_t)m, (const void *)(uintptr_t)c->x[20]);
 }
 
@@ -1465,7 +1626,7 @@ static int sitepack_call(uint64_t call, uint64_t native)
     if (!im) return -1;
     uint32_t i = *(const uint32_t *)hao_code_ptr_im(im, call);
     if ((i & 0xFC000000) == 0x94000000)                           /* BL */
-        return stub_target(call + (uint64_t)(sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
+        return stub_target(call + ((uint64_t)sx(i & 0x3ffffff, 26) << 2)) == untag(native) ? SITEPACK_DIRECT : -1;
     if ((i & 0xFFFFFC1F) == 0xD63F0000 || (i & 0xFEFFF800) == 0xD63F0800)   /* BLR, BLRAA/BLRAB(Z) */
         return (int)((i >> 5) & 31);
     return -1;
@@ -1762,6 +1923,14 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
     }
 #undef REFUSE
     return packed ? n : 0;
+}
+
+/* How many SysV stack slots past x6 and x7 the native function NATIVE reads (its code shows them), or -1 */
+int hao_swift_callee_stack_slots(uint64_t native)
+{
+    hao_x86_stackuse u;
+    if (!callee_stackuse(native, &u)) return -1;
+    return u.nslots > 2 ? u.nslots - 2 : 0;
 }
 
 int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width)

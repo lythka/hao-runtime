@@ -9,7 +9,7 @@
 # program's mach header, load commands and LC_UUID but other code, whose
 # cache the program must not run. Also the other rules of the environment
 # tiers that need a running guest: dependency paths in a set-ID process (L)
-# and the diagnostics log's lock and mode (M). Prints PASS/FAIL per case;
+# and the diagnostics log's lock, mode, directory and unified-log fallback (M). Prints PASS/FAIL per case;
 # exit 1 on FAIL.
 # Writes nothing outside OUT except case H, which runs `hao --aot` with no
 # HOME, no --cache and no HAO_CACHE and removes the one cache file it creates in
@@ -125,6 +125,9 @@ patched C10-truncated-half "header says" truncate=$(( $(stat -f %z "$AOT") / 2 )
 patched C10b-truncated-header "truncated" truncate=40
 patched C11-other-build-gen-byte "another hao build" flip.gen
 patched C11b-version-4 "format version" hdr.version=4
+patched C11d-version-7 "format version" hdr.version=7
+patched C15-cpu-profile-beyond-host "translated for CPU features this machine lacks: bit40" hdr.cpu_profile=0x10000000000
+patched C15b-cpu-profile-edited-hash-not-fixed "payload hash mismatch" hdr.cpu_profile=0 nohash
 patched C12-guest-uuid "guest UUID differs" flip.uuid
 patched C12b-guest-id "guest load commands differ" hdr.guest_id=+1
 patched C12c-vmsize "vmsize" hdr.vmsize=+0x4000
@@ -372,6 +375,7 @@ else bad "H no HOME: rc=$rc $(cat "$OUT/h.err")"; fi
 # root:wheel when run as root, as in the image builder) and rejects a symlink
 I=$OUT/inst; mkdir -p "$I/sys/usr/lib" "$I/sys/private/var/db" "$I/pay/root/usr/lib/hao/aot" "$I/pay/embed"
 echo '{"files": [], "required": [], "stub_sha256": ""}' > "$I/pay/embed/manifest.json"
+echo '{"files": {"embed/manifest.json": "'$(shasum -a 256 "$I/pay/embed/manifest.json" | cut -d' ' -f1)'"}}' > "$I/pay/payload-manifest.json"
 python3 -I "$repo/tools/hao-install.py" "$I/sys" "$I/pay" >"$I/log" 2>&1; rc=$?
 m1=$(stat -f %Lp "$I/sys/usr/lib/hao/aot" 2>/dev/null); m2=$(stat -f %Lp "$I/sys/private/var/db/hao" 2>/dev/null)
 [ $rc = 0 ] && [ "$m1" = 755 ] && [ "$m2" = 755 ] && pass "I hao-install.py: usr/lib/hao/aot $m1, private/var/db/hao $m2" \
@@ -404,6 +408,66 @@ k=$(timeout -s KILL "$T" "$HAO" "$OUT/openfds.arm64e" 2>&1 | tail -1)
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/loadtime" "$here/loadtime.c" -L"$B" -lhao -Wl,-rpath,"$B" && codesign -s - -f "$OUT/loadtime" 2>/dev/null
 l=$(HAO_CACHE=$C timeout -s KILL "$T" "$OUT/loadtime" "$G" 5 2>/dev/null | tail -1)
 case $l in *": 5/5 loaded, min "*) pass "L loadtime: ${l#*: }" ;; *) bad "L loadtime: $l" ;; esac
+
+# --- P: CPU profiles (include/hao/cpufeat.h). hao --aot --cpu= can only drop features this host has;
+# the header records what the code may use; the loader takes a cache only where the host has all of it.
+# HAO_CPU_FEATURES (a TEST_SWITCHES build) clears features: a cache needing a cleared one is rejected by name.
+profile_of() { python3 -I -c 'import sys; print(hex(int.from_bytes(open(sys.argv[1], "rb").read()[136:144], "little")))' "$1"; }
+HP=$(profile_of "$AOT")
+fresh "$OUT/p0"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/p0" --cpu=0 "$G" >"$OUT/p0.gen" 2>&1; grc=$?
+p0=$(profile_of "$OUT/p0/$NAME" 2>/dev/null)
+run p0 HAO_CACHE="$OUT/p0"
+[ $grc = 0 ] && [ $rc = 7 ] && [ "$p0" = 0x0 ] && grep -q "CPU profile 0 (none)" "$OUT/p0.gen" && grep -q "loaded:" "$OUT/p0.err" && [ "$out" = "$WANT" ] \
+    && pass "P1 --cpu=0: profile 0 recorded, loads here (host's cache profile $HP)" || bad "P1 --cpu=0: rc=$grc/$rc profile=$p0 $(tail -1 "$OUT/p0.gen")"
+fresh "$OUT/pb"
+timeout -s KILL "$T" "$HAO" --aot --cpu=baseline --cache "$OUT/pb" "$G" >"$OUT/pb.gen" 2>&1; rc=$?
+pb=$(profile_of "$OUT/pb/$NAME" 2>/dev/null)
+[ $rc = 0 ] && [ -n "$pb" ] && [ $(( pb & ~0x1f )) = 0 ] && [ $(( pb & ~HP )) = 0 ] \
+    && pass "P2 --cpu=baseline: profile $pb, within the baseline and this host" || bad "P2 --cpu=baseline: rc=$rc profile=$pb"
+timeout -s KILL "$T" "$HAO" --aot --cpu=avx2 --cache "$OUT/pb" "$G" >"$OUT/pbad.gen" 2>&1; rc=$?
+[ $rc = 64 ] && grep -q "expected baseline, host or a hexadecimal" "$OUT/pbad.gen" && pass "P3 --cpu=avx2 refused (rc 64)" || bad "P3 --cpu=avx2: rc=$rc"
+# the host-profile cache with every optional feature cleared by the test switch
+run p4 HAO_CACHE="$C" HAO_CPU_FEATURES=0
+if grep -q "HAO_CPU_FEATURES ignored" "$OUT/p4.err"; then
+    grep -q "loaded:" "$OUT/p4.err" && pass "P4 HAO_CPU_FEATURES ignored by a build without test switches; the cache loads" || bad "P4 ignored, but: $(head -2 "$OUT/p4.err")"
+elif [ "$HP" = 0x0 ]; then
+    grep -q "loaded:" "$OUT/p4.err" && pass "P4 HAO_CPU_FEATURES=0: this host's cache has profile 0 and loads" || bad "P4 profile 0: $(head -2 "$OUT/p4.err")"
+else
+    names=$(grep -o 'translated for CPU features this machine lacks: .*' "$OUT/p4.err" | head -1)
+    [ $rc = 7 ] && [ "$out" = "$WANT" ] && [ -n "$names" ] && ! grep -q "loaded:" "$OUT/p4.err" \
+        && pass "P4 HAO_CPU_FEATURES=0: profile $HP rejected ($names), runs translated" || bad "P4: rc=$rc $(grep -E 'AOT|rejected' "$OUT/p4.err" | head -2)"
+    run p5 HAO_CACHE="$OUT/p0" HAO_CPU_FEATURES=0
+    grep -q "loaded:" "$OUT/p5.err" && [ "$out" = "$WANT" ] && pass "P5 HAO_CPU_FEATURES=0: the profile-0 cache loads" || bad "P5: $(head -2 "$OUT/p5.err")"
+fi
+# --- V: a program that requires library validation reads caches from the system directories only, so
+# `hao --aot --check` and `hao --aot` answer with those: a cache in HAO_CACHE is missing for it, and nothing
+# is skipped for it or written there. The ad hoc program is the control.
+fresh "$OUT/v"; fresh "$OUT/vp"
+VH=$OUT/hardened.arm64e
+cp "$G" "$VH" && codesign -s - -f -o runtime "$VH" 2>/dev/null || exit 1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/v" "$VH" >/dev/null 2>&1
+timeout -s KILL 120 "$HAO" --aot --cache "$OUT/vp" "$G" >/dev/null 2>&1
+HAO_CACHE="$OUT/vp" timeout -s KILL 60 "$HAO" --aot --check "$G" >"$OUT/v0.out" 2>&1; r0=$?
+HAO_CACHE="$OUT/v" timeout -s KILL 60 "$HAO" --aot --check "$VH" >"$OUT/v1.out" 2>&1; r1=$?
+[ $r0 = 0 ] && grep -q ": valid (" "$OUT/v0.out" && [ $r1 = 3 ] && grep -q ": missing" "$OUT/v1.out" &&
+    pass "V --check: HAO_CACHE's cache valid for the ad hoc program, missing for the hardened one" ||
+    bad "V --check: ad hoc rc $r0 ($(head -c 200 "$OUT/v0.out")), hardened rc $r1 ($(head -c 200 "$OUT/v1.out"))"
+n=$(ls "$OUT/v" | wc -l)
+HAO_CACHE="$OUT/v" timeout -s KILL 120 "$HAO" --aot "$VH" >"$OUT/v2.out" 2>&1; r2=$?
+[ $r2 != 0 ] && ! grep -q "skipped" "$OUT/v2.out" && grep -q "requires library validation" "$OUT/v2.out" && [ "$(ls "$OUT/v" | wc -l)" = "$n" ] &&
+    pass "V hao --aot, hardened program, HAO_CACHE: not skipped as valid, nothing written there" ||
+    bad "V hao --aot hardened: rc $r2: $(head -c 300 "$OUT/v2.out")"
+# the path names the ad hoc program while --check verifies it, and the hardened one (whose cache is in
+# HAO_CACHE) once that descriptor is closed (tests/aot/swapclose.c): the file checked must be the one verified
+clang -arch x86_64 -O1 -dynamiclib -o "$OUT/swapclose.dylib" "$here/swapclose.c" && codesign -s - -f "$OUT/swapclose.dylib" 2>/dev/null || exit 1
+cp "$G" "$OUT/vswap" && cp "$VH" "$OUT/vswap.with"
+timeout -s KILL 60 env DYLD_INSERT_LIBRARIES="$OUT/swapclose.dylib" SWAP_FILE="$OUT/vswap" SWAP_WITH="$OUT/vswap.with" \
+    HAO_CACHE="$OUT/v" "$HAO" --aot --check "$OUT/vswap" >"$OUT/v3.out" 2>&1; r3=$?
+if [ -e "$OUT/vswap.with" ]; then bad "V --check, path swapped: the swap did not happen: $(head -c 300 "$OUT/v3.out")"
+elif [ $r3 = 1 ] && grep -q "changed while it was checked" "$OUT/v3.out" && ! grep -q ": valid" "$OUT/v3.out"; then
+    pass "V --check, path swapped from the ad hoc to the hardened program after verification: not checked"
+else bad "V --check, path swapped: rc $r3: $(head -c 300 "$OUT/v3.out")"; fi
 
 # --- F: the policy unit test
 clang -arch x86_64 -O1 -I"$repo/include" -o "$OUT/policy" "$here/policy.c" "$B/libhaocore.a" && codesign -s - -f "$OUT/policy" 2>/dev/null
@@ -477,5 +541,61 @@ set -- $m
 # the old lock waited 200 ms for the directory's flock and then opened no log (so no mode repair)
 [ "$1" = ok ] && [ "$2" = 600 ] && [ "$3" -lt 150 ] && pass "M directory flock held elsewhere: log opened (0644 -> 0600), start ${3} ms" \
     || bad "M directory flock held: $m"
+
+# A log directory another user may write is not used (they could put a file of their own in the log's place), and
+# what the log does not take goes to the unified log as private records: they hold register values and addresses,
+# which any user may read from a public one. The verbose run writes at least one diagnostics line.
+for d in w777 r555; do mkdir -p "$OUT/$d"; done; chmod 777 "$OUT/w777"; chmod 555 "$OUT/r555"
+m=$(python3 -I - "$HAO" "$G" "$OUT" "$T" <<'EOF'
+import os, subprocess, sys, time
+hao, guest, out, t = sys.argv[1:]
+res = []
+for d in ('w777', 'r555'):
+    p = subprocess.Popen([hao, guest], env={'HAO_DIAG_DIR': out + '/' + d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rc = p.wait(timeout=int(t))
+    recs = []
+    for k in range(10):
+        time.sleep(1)
+        r = subprocess.run(['/usr/bin/log', 'show', '--last', '2m', '--style', 'compact', '--predicate',
+                            'subsystem == "com.hao" AND processID == %d' % p.pid], capture_output=True, text=True)
+        recs = [l.split('[com.hao:diag] ', 1)[1] for l in r.stdout.splitlines() if '[com.hao:diag] ' in l]
+        if recs: break
+    res.append('%s rc=%d log=%s records=%d public=%d' % (d, rc, 'yes' if os.path.exists(out + '/' + d + '/console.log') else 'no',
+                                                     len(recs), sum(1 for l in recs if l.strip() != '<private>')))
+print('; '.join(res))
+EOF
+)
+case $m in
+"w777 rc=7 log=no records="[1-9]*" public=0; r555 rc=7 log=no records="[1-9]*" public=0")
+    pass "M other-writable directory not used; unified-log records private ($m)" ;;
+*) bad "M other-writable directory / private records: $m" ;;
+esac
+
+# The 64 MB cap holds for every write: a log 30 bytes short of the cap less the room kept for the closing line gets
+# its first line cut there and one "reached its cap" line; a second process adds nothing, and the file stays under
+# the cap. The log is sparse up to there.
+C=$OUT/cap; mkdir -p "$C" && chmod 755 "$C"
+m=$(python3 -I - "$HAO" "$G" "$C" "$T" <<'EOF'
+import os, subprocess, sys
+hao, guest, d, t = sys.argv[1:]
+cap, keep = 64 << 20, 200
+boot = subprocess.run(['/usr/sbin/sysctl', '-n', 'kern.bootsessionuuid'], capture_output=True, text=True).stdout.strip()
+p = d + '/console.log'
+with open(p, 'wb') as f:
+    f.write(('hao: console.log of boot %s\n' % boot).encode())
+    f.truncate(cap - keep - 30)
+os.chmod(p, 0o600)
+for k in range(2):
+    subprocess.run([hao, guest], env={'HAO_DIAG_DIR': d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=int(t))
+    if k == 0: first = os.path.getsize(p)
+size = os.path.getsize(p)
+with open(p, 'rb') as f:
+    f.seek(cap - keep - 30); tail = f.read()
+print('size=%s first=%s caplines=%d' % ('under' if size <= cap else 'over', 'same' if first == size else 'grew', tail.count(b'reached its cap')))
+EOF
+)
+[ "$m" = "size=under first=same caplines=1" ] && pass "M the cap holds across processes: one cap line ($m)" || bad "M cap: $m"
 
 exit $fail

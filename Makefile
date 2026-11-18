@@ -17,7 +17,8 @@ endif
 endif
 # The CPU profile hao-x86_64-avx-cx16-v1 (docs/releases.md): Intel Macs with AVX, so also SSSE3, SSE4.1,
 # SSE4.2, POPCNT and CMPXCHG16B. Compiled code and the translator use at most x86-64-v2 (no VEX encodings:
-# Rosetta, where the tests run, has no AVX); src/main.c refuses a CPU without the profile at startup.
+# Rosetta, where the tests run, has no AVX), except vzeroupper where CPUID and XCR0 report AVX state
+# (src/jit.c hao_vzeroupper); src/main.c refuses a CPU without the profile at startup.
 ARCH      := -arch x86_64 -mmacosx-version-min=$(MACOS_MIN) -march=x86-64-v2
 # Debug info names sources and objects relative to the checkout, and the debug
 # map and libhaocore.a carry no file times (ZERO_AR_DATE), so the same commit
@@ -29,14 +30,19 @@ REPRO     := -ffile-prefix-map=$(CURDIR)=.
 ifdef TEST_SWITCHES
 REPRO     += -DHAO_TEST_SWITCHES
 endif
+# SURVEY=1: a diagnostics build for a survey image, which honours
+# hao_swift_value_audit=1 (src/opts.c BOOT_SURVEY). Never the build that ships.
+ifdef SURVEY
+REPRO     += -DHAO_SURVEY_BUILD
+endif
 WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-CFLAGS    := $(ARCH) -std=gnu11 -O2 -g $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
+CFLAGS    := $(ARCH) -std=gnu11 -O2 -g -ffp-contract=off $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
 # Changing MACOS_MIN in one B rebuilds everything there.
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
 
 CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c \
-        src/a64_imm.c src/a64_cond.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c
+        src/a64_imm.c src/a64_cond.c src/a64_regs.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
 RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
@@ -44,7 +50,7 @@ RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c src/valist_builder.c
 RT += src/ioreg.c src/ids.c
 RT += src/swiftvalue/Recipe.c src/swiftvalue/Enum.c src/swiftvalue/Common.c src/swiftvalue/Aggregate.c
-RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c
+RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c src/swiftvalue/Facts.c
 RT_O := $(patsubst src/%.c,$(B)/%.o,$(RT)) $(B)/bridge_x86_64.o
 
 # libhao.dylib holds the runtime; hao (CLI, kext launcher) and hao-stub (the
@@ -56,7 +62,7 @@ FRONT_LD := -Wl,-rpath,@executable_path -Wl,-rpath,$(HAO_LIBDIR)
 # linked into every embedded program by tools/hao-embed.
 FRONT_CFLAGS := $(ARCH) -O2 $(WARN)
 
-.PHONY: all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke catalog-gate
+.PHONY: image-scan all test check test-guest oracle unit aot forktest jitlocktest bridgetest async-contract-test fuzz fuzz-smoke catalog-gate
 all: $(B)/libhaocore.a $(B)/libhao.dylib $(B)/hao $(B)/hao-stub $(B)/front/stub.o $(B)/libhao_codeid.a
 
 $(MIN_STAMP):
@@ -132,13 +138,17 @@ $(B)/oracle-check: tests/oracle/check.c tests/oracle/record.h tests/oracle/known
 $(B)/oracle-atomic: tests/oracle/atomic16.c $(B)/libhaocore.a $(B)/jit.o $(B)/stubs_oracle.o
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a -lpthread && codesign -s - -f $@
 
-# Every mode runs; the target fails if any of them reports a failure.
+# Every mode runs; the target fails if any of them reports a failure. The
+# simd records (AES, PMULL) are checked again with the JIT translating for no
+# optional CPU feature (hao/cpufeat.h): the helper paths those lowerings skip.
 ORACLE_N ?= 200000
-ORACLE_MODES ?= dp simd mem block fma known reserved
+ORACLE_MODES ?= dp simd mem block fma known reserved fmad
 oracle: $(B)/oracle-native $(B)/oracle-check $(B)/oracle-atomic
 	@fail=0; for m in $(ORACLE_MODES); do \
 	  timeout -s KILL 900 $(B)/oracle-native $(B)/oracle-$$m.bin $(ORACLE_N) 0x$$(date +%s)$$RANDOM $$m || fail=1; \
 	  echo "== $$m"; timeout -s KILL 900 $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m.txt || fail=1; \
+	  if [ $$m = simd ]; then echo "== $$m (JIT without optional CPU features)"; \
+	    timeout -s KILL 900 $(B)/oracle-check $(B)/oracle-$$m.bin --show 5 --bad $(B)/oracle_bad_$$m-cpu0.txt --cpu 0 || fail=1; fi; \
 	done; \
 	echo "== atomic"; timeout -s KILL 300 $(B)/oracle-atomic || fail=1; \
 	exit $$fail
@@ -171,16 +181,17 @@ oracle-asan: $(B)/oracle-native $(B)/asan/oracle-check $(B)/asan/oracle-atomic
 	if grep -lE 'runtime error:|ERROR: AddressSanitizer' $(B)/asan/oracle-*.log; then echo "sanitizer reports in the logs above"; fail=1; fi; \
 	exit $$fail
 
-# Unit tests of the A64 immediate decoder and condition mapping.
-$(B)/test_imm_cond: tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c include/hao/a64_imm.h include/hao/a64_cond.h include/hao/cpu.h include/hao/x86.h $(MIN_STAMP)
+# Unit tests of the A64 immediate decoder, condition mapping and x8 input walk.
+$(B)/test_imm_cond: tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c src/a64_regs.c include/hao/a64_imm.h include/hao/a64_cond.h include/hao/a64_regs.h include/hao/cpu.h include/hao/x86.h $(MIN_STAMP)
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) -o $@ tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c && codesign -s - -f $@
+	$(CC) $(CFLAGS) -o $@ tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c src/a64_regs.c && codesign -s - -f $@
 
 # Unit test of the switch snapshot parser (src/opts.c) with the tier rules.
 $(B)/opts_test: tests/aot/opts_test.c $(B)/libhaocore.a
 	$(CC) $(CFLAGS) -o $@ $< $(B)/libhaocore.a && codesign -s - -f $@
 
-# Fork while other threads hold the JIT, thunk, signature and block locks.
+# Fork while other threads hold the JIT, thunk, signature, bridge, signal-disposition
+# and name-index locks.
 $(B)/test_fork: tests/host/fork.c $(B)/libhao.dylib
 	$(CC) $(ARCH) -O1 -Iinclude -o $@ $< -L$(B) -lhao -Wl,-rpath,$(abspath $(B)) && codesign -s - -f $@
 
@@ -228,11 +239,17 @@ $(B)/test_images: tests/loader/test_images.c src/macho.c src/code.c src/libval.c
 	@mkdir -p $(B)
 	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_images.c src/macho.c src/code.c src/libval.c && codesign -s - -f $@
 
+# The carried-section reader of libhao_identity (src/process_identity.c), under
+# ASan, on crafted guest files.
+$(B)/test_identity: tests/loader/test_identity.c src/process_identity.c src/oslog.c src/native_bundle_identity.c include/hao/identity.h include/hao/native_bundle.h $(MIN_STAMP)
+	@mkdir -p $(B)
+	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_identity.c src/oslog.c src/native_bundle_identity.c -lobjc && codesign -s - -f $@
+
 # Unit test of the interface-unit parser (src/ifunit.c), under ASan/UBSan: one
 # corruption per rule and every single-bit edit of the fuzz seeds.
-$(B)/test_ifunit: tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c include/hao/bridge.h include/hao/aot.h $(MIN_STAMP)
+$(B)/test_ifunit: tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c include/hao/bridge.h include/hao/aot.h $(MIN_STAMP)
 	@mkdir -p $(B)
-	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c && codesign -s - -f $@
+	$(CC) $(ARCH) -std=gnu11 -O1 -g -Iinclude -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer $(REPRO) -o $@ tests/loader/test_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c && codesign -s - -f $@
 
 $(B)/test_helper_descriptor: tests/aot/helper_descriptor.c $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
 	$(CC) $(CFLAGS) -o $@ $< $(B)/jit.o $(B)/stubs_oracle.o $(B)/libhaocore.a
@@ -255,7 +272,7 @@ $(B)/test_round16: tests/aot/round16.c $(B)/libhaocore.a
 $(B)/test_ioreg: tests/host/ioreg.c src/ioreg.c $(MIN_STAMP)
 	$(CC) $(CFLAGS) -framework CoreFoundation -o $@ $< && codesign -s - -f $@
 
-unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_ifunit $(B)/test_gmap $(B)/test_x86args $(B)/test_ioreg
+unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_identity $(B)/test_ifunit $(B)/test_gmap $(B)/test_x86args $(B)/test_ioreg
 	timeout -s KILL 30 $(B)/test_ioreg
 	timeout -s KILL 120 $(B)/test_round16
 	timeout -s KILL 90 $(B)/test_helper_descriptor
@@ -268,6 +285,7 @@ unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/te
 	@mkdir -p $(B)/loader-test
 	$(B)/test_macho tests/fuzz/corpus/macho $(B)/loader-test
 	$(B)/test_images tests/fuzz/corpus/macho $(B)/loader-test
+	$(B)/test_identity $(B)/loader-test
 	$(B)/test_ifunit tests/fuzz/corpus/ifunit
 
 # AOT cache trust and format checks, plus the policy unit test
@@ -297,6 +315,7 @@ ioregtest: all $(B)/test_ioreg_guest
 
 test: unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
 	tools/check_x86.sh
+	python3.14 -I -B tests/host/fork_locks.py
 
 # Every other test script that runs unattended on a development host
 # (tests/check.list, tests/README.md), in parallel (CHECK_J jobs), each with a
@@ -330,8 +349,8 @@ $(B)/fuzz/fuzz_typeenc: tests/fuzz/fuzz_typeenc.c src/abi.c $(wildcard include/h
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -Wno-unused-function -o $@ tests/fuzz/fuzz_typeenc.c $(B)/fuzz/driver.o && codesign -s - -f $@
 $(B)/fuzz/fuzz_codesig: tests/fuzz/fuzz_codesig.c src/libval.c $(wildcard include/hao/*.h) $(B)/fuzz/driver.o
 	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -Wno-unused-function -o $@ tests/fuzz/fuzz_codesig.c $(B)/fuzz/driver.o && codesign -s - -f $@
-$(B)/fuzz/fuzz_ifunit: tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c include/hao/bridge.h include/hao/aot.h $(B)/fuzz/driver.o
-	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -o $@ tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c $(B)/fuzz/driver.o && codesign -s - -f $@
+$(B)/fuzz/fuzz_ifunit: tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c include/hao/bridge.h include/hao/aot.h $(B)/fuzz/driver.o
+	$(CC) $(FUZZ_CFLAGS) $(FUZZ_COV) -fsanitize=undefined -fno-sanitize-recover=all -o $@ tests/fuzz/fuzz_ifunit.c src/ifunit.c src/aot_policy.c src/cpufeat.c $(B)/fuzz/driver.o && codesign -s - -f $@
 fuzz: $(FUZZERS)
 fuzz-smoke: $(FUZZERS)
 	B=$(B) FUZZ_TIME=$(FUZZ_TIME) tests/fuzz/run.sh
@@ -359,3 +378,7 @@ legacy-dyld-test: all
 .PHONY: indexed-mulhigh-test
 indexed-mulhigh-test: all
 	HAO=$(abspath $(B))/hao OUT=$(abspath $(B))/indexed-mulhigh python3.14 -I tests/guest/indexed-mulhigh/run.py
+
+# ARM-only launchd jobs of a mounted system image: no refusal the baseline runtime lacks (needs ROOT and BASELINE)
+image-scan: $(B)/hao
+	OUT=$(or $(SCAN_OUT),$(B)/image-scan) tests/image/launchd-scan.sh $(ROOT) $(abspath $(B)/hao) $(BASELINE)

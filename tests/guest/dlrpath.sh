@@ -2,9 +2,10 @@
 # Guest dlopen of @rpath, @executable_path and @loader_path names (tests/guest/dlrpath.c) in an app-bundle layout:
 # under hao they resolve from the calling guest image, as dyld resolves them natively, not from hao's own
 # directory. Built twice: arm64 (native reference) and arm64e (guest), each in its own Test.app; the universal
-# libnat opens natively. JIT, --interp and AOT must print what native arm64 prints.
+# libnat stays in the guest domain. JIT, --interp and AOT must print what native arm64 prints.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/dlrpath.sh
 set -u
+unset HAO_NATIVE_APP_LIBS
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-dlrpath)}
@@ -39,6 +40,10 @@ for mode in jit interp aot; do
     rc=$?
     if [ $rc = 0 ] && cmp -s "$OUT/native.out" "$OUT/$mode.out"; then echo "dlrpath $mode: PASS"
     else echo "dlrpath $mode: FAIL (rc=$rc)"; diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -8; fail=1; fi
+    timeout -s KILL "$T" env HAO_NATIVE_APP_LIBS=1 "$@" "$G" >"$OUT/$mode.native-libs.out" 2>"$OUT/$mode.native-libs.err"
+    if [ $? = 0 ] && grep -qx 'nat_value=86' "$OUT/$mode.native-libs.out"; then
+        echo "dlrpath $mode native app libs: PASS"
+    else echo "dlrpath $mode native app libs: FAIL"; fail=1; fi
 done
 [ $fail = 0 ] && echo "dlrpath: PASS" || echo "dlrpath: FAIL"
 exit $fail

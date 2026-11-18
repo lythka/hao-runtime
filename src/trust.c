@@ -53,6 +53,7 @@ static bool entitled(void)
 }
 
 static int tier = HAO_ENV_SETUGID;
+static bool proc_restricted = true;    /* set-ID (fail closed until read) */
 static pthread_once_t tier_once = PTHREAD_ONCE_INIT;
 
 static void tier_init(void)
@@ -61,6 +62,7 @@ static void tier_init(void)
     f.setugid = issetugid() != 0;
     bool (*restricted)(void) = (bool (*)(void))dlsym(RTLD_DEFAULT, "dyld_process_is_restricted");
     f.restricted = restricted && restricted();
+    proc_restricted = f.setugid;
     f.entitled = entitled();
     f.identity = listed();
     f.pid = getpid();
@@ -78,6 +80,12 @@ int hao_env_tier(void)
 {
     pthread_once(&tier_once, tier_init);
     return tier;
+}
+
+bool hao_env_restricted(void)
+{
+    pthread_once(&tier_once, tier_init);
+    return proc_restricted;
 }
 
 const char *hao_env_tier_name(int t)

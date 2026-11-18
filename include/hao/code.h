@@ -69,9 +69,20 @@ static inline uint32_t hao_code_read32(uint64_t a)
 }
 
 /* Change n bytes of guest instructions at guest address a, in the guest
- * mapping (left readable and writable, as dsc.c has always done) and in the
- * alias delta bytes away (0: none). */
-void hao_code_write(uint64_t a, int64_t delta, const void *src, size_t n);
+ * mapping and in the alias delta bytes away (0: none). Each page is
+ * writable only for the copy and gets its protection back. False (nothing
+ * or part written) when a page could not be made writable. */
+bool hao_code_write(uint64_t a, int64_t delta, const void *src, size_t n);
+
+/* Writes hao makes into guest memory the guest may not write (its code, sealed constant data, Swift
+ * metadata fields), one at a time: hao_guest_write_begin takes the lock, makes [lo, hi) writable if it
+ * was not and returns the protection the range had (-1: none made, not locked); hao_guest_write_end
+ * gives it `prot` back (or leaves it, if it was writable) and unlocks; failure stops the process.
+ * hao_guest_cas_ro: one word so. hao_code_fork_child: a fork child restores an open write's range. */
+int hao_guest_write_begin(uint64_t lo, uint64_t hi);
+void hao_guest_write_end(int prot);
+bool hao_guest_cas_ro(uint64_t a, uint64_t expected, uint64_t desired);
+void hao_code_fork_child(void);
 
 /* ---- aliases and poisoning (src/code.c), for the loaders */
 /* HAO_CODE_ALIAS (hao_opts_init sets hao_code_alias_mode before any image loads): give images an alias. */

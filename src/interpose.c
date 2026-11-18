@@ -30,6 +30,8 @@
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -440,8 +442,6 @@ static xrange *xr;
 static size_t nxr, capxr;
 static pthread_mutex_t xr_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void hao_interpose_fork_child(void) { xr_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
-
 /* under xr_lock: drop [lo, hi) from the set, splitting a range it cuts */
 static void xr_cut(uint64_t lo, uint64_t hi)
 {
@@ -497,12 +497,26 @@ bool hao_guest_exec_mapped(uint64_t a)
     return r;
 }
 
+bool hao_guest_vm_guarded(uint64_t a, uint64_t n, int prot, bool map)
+{
+    if (!n || a + n < a) return false;
+    bool r = hao_wx_covers(a, n) || (hao_image_sealed_overlap(a, n) && (map || (prot & (PROT_WRITE | PROT_EXEC))));
+    if (r) HAO_LOG(1, "guest %s of [%#llx, %#llx) refused: hao's executable memory or sealed constant data\n",
+                   map ? "mapping change" : "protection change", (unsigned long long)a, (unsigned long long)(a + n));
+    return r;
+}
+
 /* arg: 0 mmap, 1 mprotect, 2 munmap; the native call with the guest's arguments, then the note */
 static void trap_vm(hao_thread *t, uint64_t which)
 {
     hao_cpu *c = &t->cpu;
     uint64_t a = c->x[0], n = c->x[1];
     int prot = (int)c->x[2];
+    if (which == 0 ? ((int)c->x[3] & MAP_FIXED) && hao_guest_vm_guarded(a, n, prot, true) : hao_guest_vm_guarded(a, n, prot, which == 2)) {
+        c->x[0] = which == 0 ? (uint64_t)(uintptr_t)MAP_FAILED : (uint64_t)(int64_t)-1;
+        errno = EACCES;
+        return;
+    }
     if (which == 0) {
         void *p = mmap((void *)(uintptr_t)a, (size_t)n, prot, (int)c->x[3], (int)c->x[4], (off_t)c->x[5]);
         c->x[0] = (uint64_t)(uintptr_t)p;
@@ -521,6 +535,64 @@ static void trap_vm(hao_thread *t, uint64_t which)
         if (which == 2 || (prot & PROT_EXEC)) hao_guest_vm_note(a, n, which == 1);
         errno = e;
     }
+}
+
+/* The Mach VM calls a guest makes on its own task: refused where they would change hao's executable
+ * memory or sealed constant data (hao_guest_vm_guarded), else made with the guest's arguments. The
+ * 64-bit and vm_ forms take the same arguments on arm64 and x86_64; arm64 passes those past the
+ * eighth on the stack at their natural size (cur/max protections and inheritance 4 bytes each, the
+ * remaps' cur/max pointers 8). */
+enum { MVM_PROTECT, MVM_DEALLOCATE, MVM_ALLOCATE, MVM_MAP, MVM_REMAP, MVM_REMAP_NEW };
+static void trap_mvm(hao_thread *t, uint64_t which)
+{
+    hao_cpu *c = &t->cpu;
+    uint64_t *x = c->x;
+    const uint8_t *sp = (const uint8_t *)(uintptr_t)x[31];
+    mach_port_t task = (mach_port_t)x[0];
+    bool self = task == mach_task_self();
+    kern_return_t kr;
+    switch (which) {
+    case MVM_PROTECT:
+        if (self && hao_guest_vm_guarded(x[1], x[2], (int)x[4], false)) { kr = KERN_PROTECTION_FAILURE; break; }
+        kr = mach_vm_protect(task, x[1], x[2], (boolean_t)x[3], (vm_prot_t)x[4]);
+        break;
+    case MVM_DEALLOCATE:
+        if (self && hao_guest_vm_guarded(x[1], x[2], 0, true)) { kr = KERN_PROTECTION_FAILURE; break; }
+        kr = mach_vm_deallocate(task, x[1], x[2]);
+        break;
+    case MVM_ALLOCATE: case MVM_MAP: default: {
+        /* the address is read once, into hao's own storage: the value checked is the value used (another
+         * guest thread may change the guest's copy meanwhile), and the result is written back */
+        mach_vm_address_t *ga = (mach_vm_address_t *)(uintptr_t)x[1], addr = 0;
+        if (!ga) { kr = KERN_INVALID_ARGUMENT; break; }
+        memcpy(&addr, ga, sizeof addr);
+        int flags = (int)(which == MVM_ALLOCATE ? x[3] : x[4]);
+        if (self && (flags & VM_FLAGS_OVERWRITE) && hao_guest_vm_guarded(addr, x[2], 0, true)) { kr = KERN_PROTECTION_FAILURE; break; }
+        if (which == MVM_ALLOCATE) kr = mach_vm_allocate(task, &addr, x[2], flags);
+        else if (which == MVM_MAP) {
+            int32_t cur, max;
+            uint32_t inh;
+            memcpy(&cur, sp, 4); memcpy(&max, sp + 4, 4); memcpy(&inh, sp + 8, 4);
+            kr = mach_vm_map(task, &addr, x[2], x[3], flags, (mem_entry_name_port_t)x[5], x[6], (boolean_t)x[7], cur, max, inh);
+        } else {   /* remap, remap_new */
+            uint64_t curp, maxp;
+            uint32_t inh;
+            memcpy(&curp, sp, 8); memcpy(&maxp, sp + 8, 8); memcpy(&inh, sp + 16, 4);
+            /* a second view of hao's executable memory or of sealed constant data (copy or shared) would be
+             * one the guest could make writable */
+            if ((mach_port_t)x[5] == mach_task_self() && (hao_wx_covers(x[6], x[2]) || hao_image_sealed_overlap(x[6], x[2]))) {
+                kr = KERN_PROTECTION_FAILURE;
+                break;
+            }
+            vm_prot_t *cp = (vm_prot_t *)(uintptr_t)curp, *mp = (vm_prot_t *)(uintptr_t)maxp;
+            kr = which == MVM_REMAP ? mach_vm_remap(task, &addr, x[2], x[3], flags, (vm_map_t)x[5], x[6], (boolean_t)x[7], cp, mp, inh)
+                                    : mach_vm_remap_new(task, &addr, x[2], x[3], flags, (vm_map_read_t)x[5], x[6], (boolean_t)x[7], cp, mp, inh);
+        }
+        if (kr == KERN_SUCCESS) memcpy(ga, &addr, sizeof addr);
+        break;
+    }
+    }
+    x[0] = (uint64_t)(int64_t)kr;
 }
 
 /* xo_warn/xo_err family: text-mode output identical to BSD err(3).
@@ -877,6 +949,12 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
     {"_execl", trap_execl, 0}, {"_execle", trap_execl, 1}, {"_execlp", trap_execl, 2},
     {"_vfork", trap_vfork, 0},
     {"_mmap", trap_vm, 0}, {"_mprotect", trap_vm, 1}, {"_munmap", trap_vm, 2},
+    {"_mach_vm_protect", trap_mvm, MVM_PROTECT}, {"_vm_protect", trap_mvm, MVM_PROTECT},
+    {"_mach_vm_deallocate", trap_mvm, MVM_DEALLOCATE}, {"_vm_deallocate", trap_mvm, MVM_DEALLOCATE},
+    {"_mach_vm_allocate", trap_mvm, MVM_ALLOCATE}, {"_vm_allocate", trap_mvm, MVM_ALLOCATE},
+    {"_mach_vm_map", trap_mvm, MVM_MAP}, {"_vm_map", trap_mvm, MVM_MAP},
+    {"_mach_vm_remap", trap_mvm, MVM_REMAP}, {"_vm_remap", trap_mvm, MVM_REMAP},
+    {"_mach_vm_remap_new", trap_mvm, MVM_REMAP_NEW}, {"_vm_remap_new", trap_mvm, MVM_REMAP_NEW},
     {"_CFLog", trap_cflog, 0},
     {"__os_log_internal", trap_os_log_internal, 0},
     {"_os_log_set_client_type", trap_os_log_client_type, 0},
@@ -888,9 +966,16 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
  * answers with the first entry of a name, as the linear scans it replaced
  * did. Entries `keep` rejects are left out. A built index is published
  * with release order and never changes again; builders take ix_lock, and
- * each built index joins ix_built for hao_interpose_selfcheck. */
+ * each built index joins ix_built for hao_interpose_selfcheck (a fork child
+ * may lack one its parent was linking when it forked). */
 static pthread_mutex_t ix_lock = PTHREAD_MUTEX_INITIALIZER;
 static hao_name_index *ix_built;
+
+void hao_interpose_fork_child(void)
+{
+    xr_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    ix_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
 
 const char *hao_name_at(const hao_name_index *ix, size_t k)
 {
@@ -923,9 +1008,11 @@ static const uint32_t *ix_get(hao_name_index *ix)
             if (ix_kept(ix, k)) v[len++] = (uint32_t)k;
         qsort_r(v, len, sizeof *v, ix, ix_cmp);
         ix->len = len;
+        __atomic_store_n(&ix->idx, v, __ATOMIC_RELEASE);
+        /* linked after it is published: a fork child whose parent was
+         * between the two rebuilds an unpublished index and links it once */
         ix->next = ix_built;
         ix_built = ix;
-        __atomic_store_n(&ix->idx, v, __ATOMIC_RELEASE);
     }
     pthread_mutex_unlock(&ix_lock);
     hao_crit_leave();

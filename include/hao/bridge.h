@@ -151,6 +151,8 @@ typedef struct hao_plan {
     uint16_t swift_enum;              /* NSTextAlignment registers converted (hao_swift_textalign): bits 0-7
                                        * arguments x0-x7, HAO_SWIFT_ENUM_RESULT the result */
     uint8_t probes;                   /* HAO_PLAN_PROBE: calls that looked for an ObjC type */
+    uint8_t swiftfn;                  /* 1: bound under a Swift mangled name (a guest function passed to it is a
+                                       * Swift function value); kept by every later plan of the address */
     uint64_t sel;                     /* HAO_BRS_OBJCIMP: the selector the method was found by */
     uint64_t bsig;                    /* HAO_BRS_BLOCKSIG: the typing block's signature string when it lies in
                                        * the shared cache (never freed), else 0 (hao_bridge_block_recheck) */
@@ -336,7 +338,8 @@ int hao_cxx_bool_types(const char *name, size_t off[HAO_CXX_BOOL_MAX]);
 /* blocks.c: the argument scan. hao_thunk_native_args_mask scans the slots
  * mask names (HAO_BR_SCAN_ALL: hao_thunk_native_args); hao_args_code_slots
  * reports, changing nothing, which slots the full scan would act on. */
-void hao_thunk_native_args_mask(struct hao_thread *t, unsigned mask);
+void hao_thunk_native_args_mask(struct hao_thread *t, unsigned mask, bool swiftcc);   /* swiftcc: a Swift callee */
+void hao_thunk_native_stack_swift(struct hao_thread *t, const uint16_t *off, int n, unsigned mask);   /* a Swift callee's stack words */
 unsigned hao_args_code_slots(struct hao_thread *t);
 
 /* cxxstr.c: native C++ functions outside libc++ that take a std::string

@@ -1,7 +1,8 @@
 #!/bin/bash
 # hao-image-payload [--no-embed | --translate TLIST] [--macos-min VER] [--require-dyld-fix]
 #                   [--x86-cache X86_DYLD_DIR] [--coverage-report SUMMARY.json] [--units DIR [--units-version NAME]]
-#                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR] OUT ROOT [LIST]
+#                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR]
+#                   [--cryptex NAME=DIR]... [--source CHECKOUT] OUT ROOT [LIST]
 #   Build the hao payload for one macOS release image from its System root
 #   (e.g. a read-only mount of the IPSW's filesystem image):
 #     OUT/root/usr/libexec/hao, OUT/root/usr/lib/hao/{libhao,libhao_identity}.dylib,
@@ -25,7 +26,8 @@
 #     OUT/build.json                             (release, mode, inputs and hashes; dated by the commit)
 #     OUT/payload-manifest.json                  (the runtime -> patcher contract, hao_contract.py "payload" check:
 #                                                 version, commit, clean, os_build, cache_uuid, units_version,
-#                                                 units_sha256, layout_version and the sha256 of every other
+#                                                 units_sha256, layout_version, aot (AOT format and CPU
+#                                                 profile, or null) and the sha256 of every other
 #                                                 file under OUT; --units-version names the unit set, default
 #                                                 the --units directory's name; layout_version is the install
 #                                                 layout hao-install.py reads, bumped when that changes)
@@ -86,17 +88,30 @@
 #   once hao-install.py has made it and its files root-owned (src/aot_policy.c). A cache
 #   is bound to the program's LC_UUID and load commands (embedding copies the arm64e slice
 #   byte for byte) and to this build's libhao LC_UUID, so it is valid only with the
-#   libhao.dylib of the same payload. Fails closed: every program gets a valid cache or
+#   libhao.dylib of the same payload. Caches are made with `hao --aot --cpu=baseline`: they
+#   use only the optional CPU features every supported Mac has (the Ivy Bridge set,
+#   include/hao/cpufeat.h), whatever the build machine has, so they load on every Mac the
+#   image boots; a cache recording any other feature fails the build. Fails closed: every program gets a valid cache or
 #   one of three recorded outcomes (nothing to translate; translated code larger than
 #   the generator's 64 MB buffer; an image hao does not load: legacy LC_DYLD_INFO fixups);
 #   any other generation error fails the build. OUT/aot.json lists each program (paths
 #   relative to ROOT, no times) and OUT/aot-list.txt is the list as given;
-#   build.json aot holds the counts, bytes, skips and the libhao UUID. Off by default:
+#   build.json aot and payload-manifest.json aot hold the format version and the CPU
+#   profile; build.json aot also the counts, bytes, skips and the libhao UUID. Off by default:
 #   the 936 embedded 27.0 programs make 919 caches, about 2.1 GB.
+#   --cryptex NAME=DIR: ROOT is the IPSW's system image alone and the cryptex NAME (OS, App) is its own
+#   image, mounted at DIR. What the installed system has under System/Volumes/Preboot/Cryptexes/NAME is read
+#   from DIR, and every path recorded is the one a ROOT with the cryptexes grafted in gives
+#   (tools/hao_root.py; hao-embed, stub_identity_gate.py, hao-trust-list and the AOT list), so the payload is
+#   byte for byte the same either way.
+#   --source CHECKOUT builds and records that hao-runtime checkout (its sources, build, helper scripts and
+#   release lists) with this checkout's packaging tools (hao-embed, stub_identity_gate.py, hao-trust-list,
+#   hao_root.py): tools/hao-runtime-from-source --checkout, to rebuild an archive made before --cryptex.
 #   Nothing else here is tied to one release.
 set -euo pipefail
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2; }
 TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= UNITS_VERSION= X86C= AOT=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
+CRYPTEX=() SOURCE=
 while [ $# -gt 0 ]; do
     case "$1" in
         --translate) [ $# -ge 2 ] || usage; TLIST=$2; shift 2 ;;
@@ -111,6 +126,8 @@ while [ $# -gt 0 ]; do
         --aot) AOT=1; shift ;;
         --aot-list) [ $# -ge 2 ] || usage; ALIST=$2; AOT=1; shift 2 ;;
         --aot-jobs) [ $# -ge 2 ] || usage; AJOBS=$2; shift 2 ;;
+        --cryptex) [ $# -ge 2 ] || usage; CRYPTEX+=(--cryptex "$2"); shift 2 ;;
+        --source) [ $# -ge 2 ] || usage; SOURCE=$2; shift 2 ;;
         -h|--help) usage ;;
         --) shift; while [ $# -gt 0 ]; do POS+=("$1"); shift; done ;;
         -*) echo "hao-image-payload: unknown option $1" >&2; usage ;;
@@ -140,7 +157,13 @@ if [ -n "$LIST" ]; then
     [ -f "$LIST" ] || { echo "hao-image-payload: no list $LIST" >&2; exit 2; }
     LIST=$(cd "$(dirname "$LIST")" && pwd)/$(basename "$LIST")
 fi
-H=$(cd "$(dirname "$0")/.." && pwd)
+# T: the packaging tools (this checkout); H: the checkout built and recorded (--source, else this one)
+T=$(cd "$(dirname "$0")/.." && pwd)
+if [ -n "$SOURCE" ]; then
+    H=$(cd "$SOURCE" && pwd) || { echo "hao-image-payload: no --source $SOURCE" >&2; exit 2; }
+else
+    H=$T
+fi
 [ ! -e "$OUT" ] || { echo "hao-image-payload: $OUT exists" >&2; exit 1; }
 [ -z "$UNITS" ] || [ -d "$UNITS" ] || { echo "hao-image-payload: no units directory $UNITS" >&2; exit 2; }
 [ -d "$ROOT" ] || { echo "hao-image-payload: no ROOT $ROOT" >&2; exit 1; }
@@ -178,8 +201,8 @@ EOF
 fi
 ditto "$KEXT" "$OUT/HaoExec.kext"
 cp "$H/kext/stamp_identity.py" "$H/tools/hao-install.py" "$H/tools/hao_fat.py" "$H/tools/hao_codesig.py" "$OUT/"
-EMBED=("$H/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"}
-       --save-skeletons "$OUT/embed/skeletons")
+EMBED=("$T/tools/hao-embed" --stub "$B/hao-stub" --stubs "$OUT/embed" --root "$ROOT" ${CRYPTEX[@]+"${CRYPTEX[@]}"} ${X86C:+--x86-cache "$X86C"}
+       --save-skeletons "$OUT/embed/skeletons" --allow-dropped-constraints "$H/releases/dropped-constraints.txt")
 LOG=$OUT/embed/embed.log
 rc=0
 case $MODE in
@@ -209,21 +232,26 @@ if [ $rc != 0 ]; then
     exit 1
 fi
 # embed.log names programs relative to ROOT, so the record does not depend on where ROOT is mounted
-python3 -I - "$LOG" "$ROOT" <<'EOF'
+# (a cryptex's folder, --cryptex, by its place under ROOT)
+python3 -I - "$LOG" "$ROOT" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF'
 import os, sys
-log, root = sys.argv[1:]
-pre = sorted({'\t' + r.rstrip('/') + '/' for r in (root, os.path.realpath(root))}, key=len, reverse=True)
+log, root, *cx = sys.argv[1:]
+pre = {'\t' + r.rstrip('/') + '/': '\t' for r in (root, os.path.realpath(root))}
+for n, d in (s.split('=', 1) for s in cx[1::2]):
+    for r in (d, os.path.realpath(d)):
+        pre['\t' + r.rstrip('/') + '/'] = '\tSystem/Volumes/Preboot/Cryptexes/%s/' % n
+pre = sorted(pre.items(), key=lambda kv: len(kv[0]), reverse=True)
 out = []
 for l in open(log).read().splitlines(True):
-    for p in pre:
-        l = l.replace(p, '\t')
+    for p, to in pre:
+        l = l.replace(p, to)
     out.append(l)
 open(log, 'w').write(''.join(out))
 EOF
 # Every stub against its program's arm slice by tools/stub_identity_gate.py's rules (fail closed: a DIFF stops
 # the build); OUT/embed/identity/{summary.md,diff.tsv,programs.tsv}, build.json stub_identity.
-if ! python3 "$H/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${X86C:+--x86-cache "$X86C"} \
-        --out "$OUT/embed/identity" > "$OUT/embed/identity.log" 2>&1; then
+if ! python3 "$T/tools/stub_identity_gate.py" --stubs "$OUT/embed" --root "$ROOT" ${CRYPTEX[@]+"${CRYPTEX[@]}"} ${X86C:+--x86-cache "$X86C"} \
+        --dropped-constraints "$H/releases/dropped-constraints.txt" --out "$OUT/embed/identity" > "$OUT/embed/identity.log" 2>&1; then
     grep -h '^| ' "$OUT/embed/identity/summary.md" 2>/dev/null | head -40 >&2 || cat "$OUT/embed/identity.log" >&2
     echo "hao-image-payload: a stub's load-time identity differs from its program's (see $OUT/embed/identity)" >&2
     exit 1
@@ -271,11 +299,11 @@ if [ -n "$UNITS" ]; then
     fi
     tail -1 "$OUT/units-match.txt"
 fi
-python3 "$H/tools/hao-trust-list" "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
+python3 "$T/tools/hao-trust-list" ${CRYPTEX[@]+"${CRYPTEX[@]}"} "$ROOT" > "$OUT/root/usr/lib/hao/trusted-cdhashes" 2> "$OUT/trust.log"
 chmod 644 "$OUT/root/usr/lib/hao/trusted-cdhashes"
 head -1 "$OUT/root/usr/lib/hao/trusted-cdhashes"
 # Which stub runs which Apple program: the stubs whose named arm slice is in the list above
-python3 "$H/tools/hao-trust-list" --stubs "$OUT/embed" "$OUT/root/usr/lib/hao/trusted-cdhashes" "$ROOT" \
+python3 "$T/tools/hao-trust-list" ${CRYPTEX[@]+"${CRYPTEX[@]}"} --stubs "$OUT/embed" "$OUT/root/usr/lib/hao/trusted-cdhashes" "$ROOT" \
     > "$OUT/root/usr/lib/hao/stub-identities" 2> "$OUT/stub-identities.log"
 chmod 644 "$OUT/root/usr/lib/hao/stub-identities"
 head -1 "$OUT/root/usr/lib/hao/stub-identities"
@@ -333,11 +361,14 @@ fi
 # directory rules, so OUT and the directories above it must be owned by the user this
 # runs as (by root, when it runs as root) and not group- or other-writable.
 if [ $AOT = 1 ]; then
-    python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" <<'EOF' || exit 1
-import concurrent.futures, hashlib, json, os, re, struct, subprocess, sys, time
-hao, libhao, root, out, alist, jobs = sys.argv[1:]
+    python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" "$T/tools" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF' || exit 1
+import concurrent.futures, functools, hashlib, json, os, re, struct, subprocess, sys, time
+hao, libhao, root, out, alist, jobs, tools, *cx = sys.argv[1:]
+sys.path.insert(0, tools)
+import hao_root
 aotdir = os.path.join(out, 'root/usr/lib/hao/aot')
 rroot = os.path.realpath(root)
+tree = hao_root.Root(root, hao_root.parse(cx[1::2]))
 
 
 def macho_uuid(path):
@@ -355,10 +386,13 @@ def macho_uuid(path):
 
 
 gen = macho_uuid(libhao)
-# Exactly the baseline and AES-NI profiles (jit.c gen_init), never arbitrary UUIDs.
-aes_gen = bytearray.fromhex(gen)
-aes_gen[15] ^= 1
-gen_profiles = {gen, aes_gen.hex()}
+# hao_aot_hdr (include/hao/aot.h), format 8: 144 bytes; nblocks at 64, the kind of code
+# identity at 96, the CPU profile (include/hao/cpufeat.h bits) at 136.
+AOT_VERSION, AOT_HDR = 8, 144
+# The release profile: what `hao --aot --cpu=baseline` may use, HAO_CPU_BASELINE (aes,
+# pclmul, avx, f16c, rdrand). A cache must not need any other feature.
+CPU = 'baseline'
+CPU_BASELINE = 0x1f
 if alist:
     want = []
     for l in open(alist):
@@ -382,11 +416,11 @@ os.chmod(os.path.join(out, 'root/usr/lib/hao/aot-list'), 0o644)
 progs, by_ino, bad = [], {}, []
 for rel in want:
     f = os.path.join(root, rel)
-    real = os.path.realpath(f)
-    if not real.startswith(rroot + '/') or not os.path.isfile(real):
+    real = tree.resolve(f)
+    if not real.startswith(rroot + '/') or not os.path.isfile(tree.host(real)):
         bad.append('%s: not a file under ROOT' % rel)
         continue
-    st = os.stat(real)
+    st = os.stat(tree.host(real))
     k = (st.st_dev, st.st_ino)
     if k in by_ino:
         by_ino[k]['paths'].append(rel)
@@ -411,7 +445,7 @@ secs = {}
 def one(p):
     t = time.monotonic()
     try:
-        r = subprocess.run([hao, '--aot', '--cache', cache, '--', os.path.join(rroot, p['file'])], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+        r = subprocess.run([hao, '--aot', '--cache', cache, '--cpu=' + CPU, '--', tree.host(os.path.join(rroot, p['file']))], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, errors='replace', timeout=600)
         rc, err = r.returncode, (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
@@ -421,11 +455,13 @@ def one(p):
     m = LINE.match(lines[-1]) if rc == 0 and lines else None
     if m:
         name = os.path.join(aotdir, m[3] + '.aot')
-        # hao_aot_hdr (include/hao/aot.h): 136 bytes, nblocks at 64, the kind of code identity at 96
-        h = open(name, 'rb').read(136) if os.path.isfile(name) else b''
-        nblocks = struct.unpack_from('<I', h, 64)[0] if len(h) == 136 else -1
-        if len(h) != 136 or h[:8] != b'HAOAOT2\0' or struct.unpack_from('<II', h, 8) != (7, 136) or h[16:32].hex() != m[3] or h[32:48].hex() not in gen_profiles:
-            p.update(status='error', why='%s: not a v7 cache of this guest and this libhao' % name)
+        h = open(name, 'rb').read(AOT_HDR) if os.path.isfile(name) else b''
+        nblocks = struct.unpack_from('<I', h, 64)[0] if len(h) == AOT_HDR else -1
+        cpu = struct.unpack_from('<Q', h, 136)[0] if len(h) == AOT_HDR else -1
+        if len(h) != AOT_HDR or h[:8] != b'HAOAOT2\0' or struct.unpack_from('<II', h, 8) != (AOT_VERSION, AOT_HDR) or h[16:32].hex() != m[3] or h[32:48].hex() != gen:
+            p.update(status='error', why='%s: not a v%d cache of this guest and this libhao' % (name, AOT_VERSION))
+        elif cpu & ~CPU_BASELINE:
+            p.update(status='error', why='%s: CPU profile %#x needs features beyond the baseline' % (name, cpu))
         elif struct.unpack_from('<I', h, 96)[0] != 1:
             # bound to a code hash, not a cdhash: hao takes no such cache from /usr/lib/hao/aot
             os.unlink(name)
@@ -434,7 +470,7 @@ def one(p):
             os.unlink(name)
             p.update(status='skipped', why='nothing to translate', uuid=m[3])
         else:
-            p.update(status='ok', uuid=m[3], blocks=int(m[1]), insns=int(m[2]), bytes=os.path.getsize(name))
+            p.update(status='ok', uuid=m[3], blocks=int(m[1]), insns=int(m[2]), bytes=os.path.getsize(name), cpu_profile='%#x' % cpu)
         return p
     for rx, why in SKIPS:
         if rc != 0 and any(rx.match(l) for l in lines):
@@ -462,7 +498,9 @@ summary = {'source': source, 'list_sha256': hashlib.sha256(open(alist, 'rb').rea
            'programs': len(want), 'files': len(progs), 'caches': len(files),
            'bytes': sum(os.path.getsize(os.path.join(aotdir, n)) for n in files),
            'blocks': sum(p['blocks'] for p in ok), 'guest_insns': sum(p['insns'] for p in ok),
-           'libhao_uuid': gen, 'jobs': njobs,
+           'libhao_uuid': gen, 'jobs': njobs, 'format_version': AOT_VERSION,
+           # what the caches were made for (hao --aot --cpu=) and the union of what they record
+           'cpu': CPU, 'cpu_profile': '%#x' % functools.reduce(lambda a, p: a | int(p['cpu_profile'], 16), ok, 0),
            'skipped': [{'path': p['paths'][0], 'why': p['why']} for p in progs if p['status'] == 'skipped'],
            'failures': [{'path': p['paths'][0], 'why': p['why']} for p in errors]}
 json.dump({'summary': summary, 'programs': progs}, open(os.path.join(out, 'aot.json'), 'w'), indent=1)
@@ -475,9 +513,12 @@ EOF
 fi
 [ -z "$ALIST" ] || { cp "$ALIST" "$OUT/aot-list.txt"; chmod 644 "$OUT/aot-list.txt"; }
 [ -n "$UNITS_VERSION" ] || { [ -z "$UNITS" ] || UNITS_VERSION=$(basename "$UNITS"); }
-python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" "$UNITS_VERSION" <<'EOF'
+python3 - "$OUT" "$ROOT" "$H" "$MODE" "${MIN:-}" "$BDIR" "$DYLD_FIX" "${TLIST:-}" "${LIST:-}" "$KEXT_MIN" "$UNITS_VERSION" \
+    "$T/tools" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF'
 import hashlib, json, os, plistlib, struct, subprocess, sys
-out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min, units_version = sys.argv[1:]
+out, root, h, mode, macos_min, bdir, dyld_fix, tlist, plist, kext_min, units_version, tools, *cx = sys.argv[1:]
+sys.path.insert(0, tools)
+import hao_root
 census = os.path.join(out, 'census', 'summary.json')
 census = json.load(open(census)) if os.path.exists(census) else None
 aot = os.path.join(out, 'aot.json')
@@ -520,8 +561,8 @@ m = json.load(open(os.path.join(out, 'embed/manifest.json')))
 translate = None
 if mode == 'translate':
     # manifest paths are real paths relative to ROOT (a listed symlink names its target)
-    real = lambda p: os.path.relpath(os.path.realpath(os.path.join(root, p)), os.path.realpath(root))
-    want = list(dict.fromkeys(real(l.strip()) for l in open(os.path.join(out, 'embed/translate.txt')) if l.strip()))
+    real = hao_root.Root(root, hao_root.parse(cx[1::2])).relpath
+    want = list(dict.fromkeys(real(os.path.join(root, l.strip())) for l in open(os.path.join(out, 'embed/translate.txt')) if l.strip()))
     got = {e['path']: e for e in m['files']}
     absent = [p for p in want if p not in got]
     if absent:
@@ -592,6 +633,9 @@ json.dump({'version': '%s-%s' % (ver['ProductBuildVersion'], full[:12]), 'commit
            'cache_uuid': (units or {}).get('x86_cache_uuid') or m.get('x86_cache_uuid'),
            'units_version': units_version or None, 'units_sha256': units['sha256'] if units else None,
            'layout_version': LAYOUT_VERSION,
+           # AOT caches in root/usr/lib/hao/aot, if any: the format and the CPU profile they were made for, which
+           # every Mac the image boots must have (include/hao/cpufeat.h; baseline: aes,pclmul,avx,f16c,rdrand)
+           'aot': {k: aot[k] for k in ('format_version', 'cpu', 'cpu_profile', 'caches')} if aot else None,
            'files': {r: files[r] if r in files else sha(os.path.join(out, r)) for r in sorted(listed)}},
           open(os.path.join(out, 'payload-manifest.json'), 'w'), indent=1, sort_keys=True)
 print('build.json:', ver['ProductVersion'], ver['ProductBuildVersion'], mode, 'minos', minos(os.path.join(h, bdir, 'hao')),

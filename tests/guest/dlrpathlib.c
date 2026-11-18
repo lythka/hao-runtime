@@ -12,5 +12,11 @@ int plug_value(void)
 int sub_value(void) { return 2; }
 #endif
 #ifdef NAT
-int nat_value(void) { return 7; }
+int nat_value(void) {
+#ifdef __x86_64__
+    return 86;
+#else
+    return 7;
+#endif
+}
 #endif

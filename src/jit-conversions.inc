@@ -210,7 +210,7 @@ static bool t_tail_conversion(tctx *t, uint32_t i, uint64_t pc)
     for (int j = 0; j < nr; j++) x_patch32(&t->b, restore[j], xb_len(&t->b));
     x_ldmxcsr(&t->b, MXCSR_SLOT);
     for (int j = 0; j < nd; j++) x_patch32(&t->b, decline[j], xb_len(&t->b));
-    helper(t, i, pc, true); st_helper--;
+    helper(t, i, pc, true); if (!t->dry) st_helper--;
     x_patch32(&t->b, done, xb_len(&t->b));
     return true;
 }

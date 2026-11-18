@@ -20,7 +20,7 @@
  */
 #include "hao/runtime.h"
 #include <errno.h>
-#include <cpuid.h>
+#include "hao/cpufeat.h"
 #include "hao/x86.h"
 #include "hao/a64_cond.h"
 #include <stdio.h>
@@ -30,9 +30,13 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include "hao/a64_imm.h"
 #include "hao/aot.h"
 #include "hao/gmap.h"
+#include "near_map.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -68,6 +72,10 @@ static uint8_t *cache, *cache_ptr, *cache_end;
 static unsigned cache_code_mb;
 static uint8_t *thunk_area, *thunk_ptr, *thunk_end;        /* native-callable thunks (below) */
 static uint8_t *sig_area, *sig_ptr, *sig_end;
+static uint64_t *thunk_tab, *sig_tab;  /* their guest functions (and hsigs): data near the cache */
+static uint8_t *thunk_gen, *sig_gen;   /* thunk code made up to here (whole pages) */
+static uint8_t *thunk_entry;           /* jmp [rip+0]; .quad hao_callback_entry (stub page) */
+#define THUNK_TAB ((size_t)THUNK_SLOTS * 8 + (SIG_AREA / SIG_SLOT) * 16)
 static uint8_t *scratch;
 /* The translation table, guest pc -> code. It starts at TABLE_MIN_BITS and
  * grows by replacement under jit_lock (a copy twice the size, published
@@ -153,15 +161,13 @@ static uint64_t st_fused;             /* instructions folded into the one before
 static uint64_t st_fl_exits, st_fl_unsaved;   /* direct exits reached with NZCV in EFLAGS / of those, left unsaved */
 static int jit_disabled_native;       /* HAO_JIT_HELPERS_ONLY=1: every insn via helper */
 
-/* Optional translation features are immutable for the lifetime of a process,
- * including fault recovery and AOT re-emission. AES is outside x86-64-v2. */
-static bool jit_aes;
+/* The optional CPU features (hao/cpufeat.h) the JIT translates for: this
+ * process's, reduced to what the translator consults, fixed once the switch
+ * snapshot is taken. Emission reads the profile from its tctx, never from
+ * here: an AOT block is re-emitted under its file's profile (aot_cpu_at). */
+static uint64_t jit_cpu;
 static pthread_once_t jit_cpu_once = PTHREAD_ONCE_INIT;
-static void jit_cpu_init(void)
-{
-    unsigned a, b, c, d;
-    jit_aes = __get_cpuid(1, &a, &b, &c, &d) && (c & bit_AES);
-}
+static void jit_cpu_init(void) { jit_cpu = hao_cpu_features() & HAO_CPU_JIT; }
 
 /* ------------------------------------------------------------ tables */
 
@@ -304,6 +310,234 @@ static void block_commit(uint8_t *start, size_t len)
     if (cache_ptr > cache_end) cache_ptr = cache_end;
 }
 
+/* ------------------------------------------------------- W^X
+ * hao's executable memory, the code cache and the Swift islands
+ * (swiftmeta.c), is never writable where it runs, and no lasting mapping
+ * lets anything write it. Each region is MAP_JIT memory mapped read/write
+ * only (not executable) and made a region by hao_wx_region: a memory entry
+ * of it is taken, the mapping becomes read/execute only and, on an Intel
+ * Mac, its maximum protection too, so nothing can make it writable again.
+ * It is never writable and executable at once, creation included.
+ *
+ * A write (hao_wx_begin .. hao_wx_end: a burst of translated blocks, one
+ * chain patch, a page of thunk code, one island fill) maps just the pages it
+ * changes from the memory entry, read/write, and unmaps them at hao_wx_end.
+ * It is placed at a random page of a free 8 MB slot of a 256 MB window
+ * reserved (no access) at a random address once, replacing that part of the
+ * reservation until hao_wx_end puts it back: a new random address for each
+ * write would leave page tables behind all over the address space (19 MB
+ * of them in tests/guest/footprint spread), and a guest may not map in the
+ * window (hao_wx_covers). A rel32 rewritten in place (block chaining) is one
+ * aligned 4-byte store there, seen whole by the threads that run the code.
+ *
+ * Under Rosetta a write through another mapping is not seen by code Rosetta
+ * has already translated, and only making the executable mapping writable
+ * drops those translations: hao_wx_end makes the written pages read/write/
+ * execute and read/execute again (nothing is written through them; the
+ * maximum protection stays read/write/execute there). That is a weakening
+ * of the development host only. Writing through the executable mapping
+ * itself, its protection toggled around the store, faults there (SIGBUS)
+ * when another thread runs the page.
+ *
+ * Not mach_vm_remap: xnu refuses to remap MAP_JIT memory. A region whose
+ * memory entry cannot be made is refused (the caller runs without it: the
+ * code cache, interpreted; an island, the NX-fault path), never written in
+ * place. Memory entries are not inherited: a fork child takes them again
+ * where the maximum protection allows (Rosetta); on an Intel Mac it cannot,
+ * and the child's executable memory is frozen: hao_wx_begin returns NULL,
+ * new guest code is interpreted and new callbacks take the NX-fault path.
+ * hao_wx_region runs in a hao critical section; writers hold one and open
+ * no write inside another. */
+#define WX_PAGE 4096u
+#define WX_REGIONS 8192
+typedef struct { uintptr_t x, size; mach_port_t entry; } wx_region;
+static wx_region wx_reg[WX_REGIONS];
+static uint32_t wx_n;                  /* published with release: entries below it are complete */
+static pthread_mutex_t wx_lock = PTHREAD_MUTEX_INITIALIZER;   /* adding a region */
+static int wx_rosetta = -1;            /* sysctl.proc_translated */
+static int wx_frozen;                  /* a fork child that could not take the memory entries again */
+#define WX_WINDOW (256ull << 20)
+#define WX_SLOT (8ull << 20)           /* one write mapping at most: a burst of blocks, an island fill */
+#define WX_SLOTS (WX_WINDOW / WX_SLOT) /* 32 */
+static uintptr_t wx_window;            /* reserved (no access) for the write mappings, which replace a part */
+static uint64_t wx_busy;               /* a bit per slot with a write mapping in it */
+static uint64_t wx_rand;               /* xorshift state: no lock (arc4random has one) */
+static uint64_t st_wx;
+
+static void wx_fail(const char *what, uintptr_t lo, uintptr_t hi, int err)
+{
+    uint64_t v[3] = {lo, hi, (uint64_t)err};
+    hao_fatal_safe(what, v, 3);   /* writes run in callbacks a signal may have interrupted: no stdio */
+}
+
+static void wx_protect(uintptr_t lo, uintptr_t hi, int prot)
+{
+    if (mprotect((void *)lo, hi - lo, prot)) wx_fail(prot & PROT_WRITE ? "W^X: executable memory cannot be made writable; range, error:" : "W^X: executable memory cannot be made read/execute only; range, error:", lo, hi, errno);
+}
+
+/* A read/write memory entry of [x, x+size), or MACH_PORT_NULL. x must be writable (not executable) now. */
+static mach_port_t wx_entry(uintptr_t x, size_t size)
+{
+    memory_object_size_t sz = size;
+    mach_port_t entry = MACH_PORT_NULL;
+    if (mach_make_memory_entry_64(mach_task_self(), &sz, (memory_object_offset_t)x, VM_PROT_READ | VM_PROT_WRITE, &entry,
+                                  MACH_PORT_NULL) != KERN_SUCCESS)
+        return MACH_PORT_NULL;
+    if (sz < size) { mach_port_deallocate(mach_task_self(), entry); return MACH_PORT_NULL; }
+    return entry;
+}
+
+/* Read/execute only from now on: an Intel Mac lowers the maximum protection too */
+static bool wx_seal_rx(uintptr_t x, size_t size)
+{
+    if (mprotect((void *)x, size, PROT_READ | PROT_EXEC)) return false;
+    return wx_rosetta || mach_vm_protect(mach_task_self(), x, size, TRUE, VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS;
+}
+
+/* Make [x, x+size), MAP_JIT memory of hao's mapped read/write and not executable (page aligned), a W^X
+ * region. Once per region (again: true). False when the table is full or the memory entry or the
+ * protection cannot be had: x is then left read/write, never executable, for the caller to unmap. */
+bool hao_wx_region(void *x, size_t size)
+{
+    uintptr_t a = (uintptr_t)x;
+    bool ok = false;
+    hao_crit_enter();
+    pthread_mutex_lock(&wx_lock);
+    if (wx_rosetta < 0) {
+        int tr = 0;
+        size_t n = sizeof tr;
+        wx_rosetta = sysctlbyname("sysctl.proc_translated", &tr, &n, NULL, 0) == 0 && tr == 1;
+        mach_vm_address_t win = 0;   /* reserved at a random address, kept: write mappings go in its slots */
+        if (mach_vm_map(mach_task_self(), &win, WX_WINDOW, 0, VM_FLAGS_ANYWHERE | VM_FLAGS_RANDOM_ADDR, MEMORY_OBJECT_NULL, 0, FALSE,
+                        VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY) == KERN_SUCCESS)
+            wx_window = (uintptr_t)win;
+        wx_rand = ((uint64_t)arc4random() << 32 | arc4random()) | 1;
+    }
+    uint32_t k = wx_n;
+    for (uint32_t i = 0; i < k; i++)
+        if (wx_reg[i].x == a) { ok = true; goto out; }
+    if (k == WX_REGIONS || (a | size) & (WX_PAGE - 1) || !wx_window) goto out;
+    mach_port_t entry = wx_entry(a, size);
+    if (entry == MACH_PORT_NULL) goto out;
+    if (!wx_seal_rx(a, size)) {
+        mach_port_deallocate(mach_task_self(), entry);
+        mprotect(x, size, PROT_READ | PROT_WRITE);   /* back as it came, if the maximum still allows */
+        goto out;
+    }
+    wx_reg[k] = (wx_region){a, size, entry};
+    __atomic_store_n(&wx_n, k + 1, __ATOMIC_RELEASE);
+    ok = true;
+out:
+    pthread_mutex_unlock(&wx_lock);
+    hao_crit_leave();
+    return ok;
+}
+
+static const wx_region *wx_find(uintptr_t a, size_t n)
+{
+    uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < k; i++)
+        if (a >= wx_reg[i].x && a - wx_reg[i].x < wx_reg[i].size && n <= wx_reg[i].size - (a - wx_reg[i].x)) return &wx_reg[i];
+    wx_fail("W^X: a write outside hao's executable memory; range, error:", a, a + n, 0);
+    return NULL;
+}
+
+/* Does [a, a+n) overlap hao's executable memory or the thunks' table (a guest may not change their
+ * mappings: interpose.c) */
+bool hao_wx_covers(uint64_t a, uint64_t n)
+{
+    uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < k; i++)
+        if (a < wx_reg[i].x + wx_reg[i].size && a + n > wx_reg[i].x) return true;
+    uint64_t t = (uint64_t)(uintptr_t)thunk_tab;
+    return (t && a < t + THUNK_TAB && a + n > t) || (wx_window && a < wx_window + WX_WINDOW && a + n > wx_window);
+}
+
+/* The address to write the n bytes of executable memory at x through (one write: hao_wx_end), or
+ * NULL in a fork child whose executable memory is frozen */
+void *hao_wx_begin(void *x, size_t n, hao_wx_win *win)
+{
+    if (__atomic_load_n(&wx_frozen, __ATOMIC_RELAXED)) return NULL;
+    uintptr_t a = (uintptr_t)x;
+    const wx_region *r = wx_find(a, n);
+    uintptr_t lo = a & ~(uintptr_t)(WX_PAGE - 1), hi = (a + n + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
+    if (hi - lo > WX_SLOT) wx_fail("W^X: a write larger than a slot of the write window; range, error:", lo, hi, 0);
+    uint64_t rnd = __atomic_load_n(&wx_rand, __ATOMIC_RELAXED);
+    rnd ^= rnd << 13; rnd ^= rnd >> 7; rnd ^= rnd << 17;
+    __atomic_store_n(&wx_rand, rnd, __ATOMIC_RELAXED);
+    /* a free slot from a random one on, and a random page in it */
+    unsigned slot = WX_SLOTS;
+    for (unsigned k = 0; k < WX_SLOTS && slot == WX_SLOTS; k++) {
+        unsigned s = (unsigned)((rnd + k) % WX_SLOTS);
+        uint64_t bit = 1ull << s;
+        if (!(__atomic_fetch_or(&wx_busy, bit, __ATOMIC_ACQ_REL) & bit)) slot = s;
+    }
+    if (slot == WX_SLOTS) wx_fail("W^X: every slot of the write window is in use; range, error:", lo, hi, 0);
+    mach_vm_address_t w = wx_window + slot * WX_SLOT + ((rnd >> 8) % ((WX_SLOT - (hi - lo)) / WX_PAGE + 1)) * WX_PAGE;
+    kern_return_t kr = mach_vm_map(mach_task_self(), &w, hi - lo, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, r->entry, lo - r->x,
+                                   FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS) wx_fail("W^X: executable memory cannot be mapped for a write; range, error:", lo, hi, kr);
+    *win = (hao_wx_win){a, (uintptr_t)w, hi - lo};
+    __atomic_fetch_add(&st_wx, 1, __ATOMIC_RELAXED);
+    return (void *)((uintptr_t)w + (a - lo));
+}
+
+/* The write is done: `written` bytes from its start changed */
+void hao_wx_end(hao_wx_win *win, size_t written)
+{
+    /* the slot back to the reservation (no access), then free */
+    mach_vm_address_t w = win->map;
+    kern_return_t kr = mach_vm_map(mach_task_self(), &w, win->len, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, MEMORY_OBJECT_NULL, 0, FALSE,
+                                   VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY);
+    if (kr != KERN_SUCCESS) wx_fail("W^X: a write mapping cannot be removed; range, error:", win->x, win->x + written, kr);
+    __atomic_fetch_and(&wx_busy, ~(1ull << ((win->map - wx_window) / WX_SLOT)), __ATOMIC_RELEASE);
+    if (wx_rosetta && written) {
+        uintptr_t lo = win->x & ~(uintptr_t)(WX_PAGE - 1), hi = (win->x + written + WX_PAGE - 1) & ~(uintptr_t)(WX_PAGE - 1);
+        wx_protect(lo, hi, PROT_READ | PROT_WRITE | PROT_EXEC);
+        wx_protect(lo, hi, PROT_READ | PROT_EXEC);
+    }
+    win->map = 0;
+}
+
+/* n bytes of src to executable memory at x; false when frozen */
+bool hao_wx_write(void *x, const void *src, size_t n)
+{
+    hao_wx_win win;
+    void *w = hao_wx_begin(x, n, &win);
+    if (!w) return false;
+    memcpy(w, src, n);
+    hao_wx_end(&win, n);
+    return true;
+}
+
+/* fork child: the memory entries were not inherited (another thread's write mapping was not either) */
+static void wx_fork_child(void)
+{
+    wx_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    /* another thread's write mapping was not inherited: its slot is a hole now; the whole window reserved again */
+    if (wx_window) {
+        mach_vm_address_t w = wx_window;
+        if (mach_vm_map(mach_task_self(), &w, WX_WINDOW, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, MEMORY_OBJECT_NULL, 0, FALSE,
+                        VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY) != KERN_SUCCESS)
+            __atomic_store_n(&wx_frozen, 1, __ATOMIC_RELAXED);
+    }
+    wx_busy = 0;
+    uint32_t k = __atomic_load_n(&wx_n, __ATOMIC_ACQUIRE);
+    bool ok = true;
+    for (uint32_t i = 0; i < k; i++) {
+        wx_region *r = &wx_reg[i];
+        r->entry = MACH_PORT_NULL;
+        /* nothing runs there now: this thread is in hao, and the child has no other */
+        if (ok && wx_rosetta && !mprotect((void *)r->x, r->size, PROT_READ | PROT_WRITE)) {
+            r->entry = wx_entry(r->x, r->size);
+            ok = r->entry != MACH_PORT_NULL;
+        } else
+            ok = false;
+        if (mprotect((void *)r->x, r->size, PROT_READ | PROT_EXEC)) wx_fail("W^X: executable memory cannot be made read/execute only; range, error:", r->x, r->x + r->size, errno);
+    }
+    if (!ok) __atomic_store_n(&wx_frozen, 1, __ATOMIC_RELAXED);
+}
+
 /* Warnings are noted under the lock and printed after it (no I/O inside). */
 enum { WARN_FULL = 1, WARN_OVERFLOW = 2, WARN_SIGS = 4, WARN_RMAP = 8 };
 static int warn_pending, warn_done;
@@ -361,6 +595,7 @@ typedef struct {
      * translation (t_vfp32, t_vfp_rint), kept for the next instruction
      * only (vfp_prev while it is emitted) */
     bool vfp_consts, vfp_prev;
+    uint64_t cpu;           /* optional CPU features (hao/cpufeat.h) this code may use */
     bool pic;               /* AOT: every guest address must be base-relative */
     bool not_pic;           /* ... and one was not (the blob is not written) */
     bool live_out[MAX_BLOCK_INSNS + 1];
@@ -485,8 +720,8 @@ static void exit_direct(tctx *t, uint64_t target)
      * the alignment of the final address. */
     x_nopn(&t->b, (int)((3 - xb_len(&t->b)) & 3));
     size_t j = x_jmp32(&t->b);
-    st_sites++;
-    if (j & 3) st_sites_unaligned++;
+    ST(st_sites);
+    if (j & 3) ST(st_sites_unaligned);
     size_t stub = xb_len(&t->b);
     x_patch32(&t->b, j, stub);
     if (t->links) {
@@ -1129,7 +1364,16 @@ static bool t_dp2(tctx *t, uint32_t i)
         stx(t, rd, RAX, false);
         return true;
     }
-    if (opc < 8 || opc > 11) return false;                 /* shifts; crc/pacga via helper */
+    if (opc >= 20 && opc <= 23 && (opc == 23) == (sf == 1)) {
+        /* CRC32CB/H/W/X: SSE4.2 crc32 (x86-64-v2, so no profile bit) is the
+         * same reflected Castagnoli update with no inversion. EFLAGS stay. */
+        ldx(t, RAX, rn, 0, false);
+        ldx(t, RCX, rm, sf, false);
+        x_crc32(&t->b, 1 << (opc & 3), RAX, RCX);
+        stx(t, rd, RAX, false);
+        return true;
+    }
+    if (opc < 8 || opc > 11) return false;                 /* shifts; CRC32 (IEEE), pacga via helper */
     static const int ops[4] = {XSHL, XSHR, XSAR, XROR};
     fl_clobber(t);
     ldx(t, RCX, rm, sf, false);
@@ -1667,7 +1911,7 @@ static void fp_store_checked(tctx *t, unsigned rd, int dbl, uint32_t insn, uint6
     x_patch32(&t->b, nan, xb_len(&t->b));
     for (unsigned k = 0; k < ndecline; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
     helper(t, insn, pc, true);
-    st_helper--;
+    if (!t->dry) st_helper--;
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1713,7 +1957,7 @@ static void fp_maxmin(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, den[1], xb_len(&t->b));
     x_patch32(&t->b, nan, xb_len(&t->b));
     helper(t, i, pc, true);
-    st_helper--;                                               /* counted as native */
+    if (!t->dry) st_helper--;                                   /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1770,7 +2014,7 @@ static void fp_to_int_z(tctx *t, uint32_t i, uint64_t pc)
     x_patch32(&t->b, out, xb_len(&t->b));
     x_patch32(&t->b, slow, xb_len(&t->b));
     helper(t, i, pc, true);
-    st_helper--;                                               /* counted as native */
+    if (!t->dry) st_helper--;                                   /* counted as native */
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
@@ -1829,7 +2073,7 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
         size_t done = x_jmp32(&t->b);
         for (int k = 0; k < nslow; k++) x_patch32(&t->b, slow[k], xb_len(&t->b));
         helper(t, i, pc, true);
-        st_helper--;                                           /* counted as native */
+        if (!t->dry) st_helper--;                               /* counted as native */
         x_patch32(&t->b, done, xb_len(&t->b));
     }
     return true;
@@ -1837,6 +2081,7 @@ static bool t_simd_fpconv(tctx *t, uint32_t i, uint64_t pc)
 }
 
 static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, int Q, uint32_t insn, uint64_t pc);
+static void t_vfp_fma64(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, uint32_t insn, uint64_t pc);
 static void t_scalar_indexed_mul(tctx *t, uint32_t i, uint64_t pc, int dbl, int idx);
 enum { RI_N, RI_M, RI_P, RI_Z, RI_A, RI_X, RI_I };
 static void t_vfp_rint(tctx *t, int mode, int dbl, int width, unsigned rd, unsigned rn, uint32_t insn, uint64_t pc);
@@ -1856,6 +2101,10 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
     int dbl = type == 1, pfx = dbl ? 0xF2 : 0xF3;
     if ((i & 0xFFC00000) == 0x1F000000) {
         t_vfp_fma(t, BIT(i, 15) != BIT(i, 21), rd, rn, rm, -1, 0, i, pc);
+        return true;
+    }
+    if ((i & 0xFFC00000) == 0x1F400000) {
+        t_vfp_fma64(t, BIT(i, 15) != BIT(i, 21), rd, rn, rm, -1, i, pc);
         return true;
     }
 
@@ -1948,7 +2197,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
         size_t done = x_jmp32(&t->b);
         for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
         helper(t, i, pc, true);
-        st_helper--;
+        if (!t->dry) st_helper--;
         x_patch32(&t->b, done, xb_len(&t->b));
         return true;
     }
@@ -1993,7 +2242,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
             size_t done = x_jmp32(&t->b);
             x_patch32(&t->b, big, xb_len(&t->b));
             helper(t, i, pc, true);
-            st_helper--;                                         /* counted as native */
+            if (!t->dry) st_helper--;                             /* counted as native */
             x_patch32(&t->b, done, xb_len(&t->b));
         }
         return true;
@@ -2032,7 +2281,7 @@ static bool t_fp(tctx *t, uint32_t i, uint64_t pc)
 /* EOR3 / BCAX (FEAT_SHA3; 1100 1110 00 op Rm 0 Ra Rn Rd): obfuscated code
  * runs EOR3 through its hot loops, so the two bitwise forms are native;
  * PXOR/PANDN leave EFLAGS alone. SHA*, RAX1 and XAR retain their helper;
- * the separate AES class uses t_aes when CPUID advertises AES-NI. */
+ * the separate AES class uses t_aes when the profile has AES-NI. */
 static bool t_eor3_bcax(tctx *t, uint32_t i)
 {
     unsigned rm = BITS(i, 20, 16), ra = BITS(i, 14, 10), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
@@ -2095,7 +2344,7 @@ static const uint8_t pcmpeq[3] = {0x74, 0x75, 0x76}, pcmpgt[3] = {0x64, 0x65, 0x
 static bool t_aes(tctx *t, uint32_t i)
 {
     unsigned size = BITS(i, 23, 22), op = BITS(i, 16, 12), rn = BITS(i, 9, 5), rd = BITS(i, 4, 0);
-    if (!jit_aes || size || op < 4 || op > 7) return false;
+    if (!(t->cpu & HAO_CPU_AES) || size || op < 4 || op > 7) return false;
     if (op < 6) {
         vld(t, 0, rd); vld(t, 1, rn); P(0xEF, 0, 1);          /* ARM AddRoundKey */
         vzero(t, 1); P38(op == 4 ? 0xDD : 0xDF, 0, 1);       /* aesenclast / aesdeclast */
@@ -2175,6 +2424,14 @@ static bool t_simd_three_diff(tctx *t, uint32_t i)
         }
         x_sse_shift_ri(&t->b, 0x71 + size, 2, 0, 8u << size); /* high-half add/sub */
         vnarrow(t, 1 << size); vst_narrow(t, rd, Q);
+        return true;
+    }
+    if (op == 14 && !U && size == 3 && (t->cpu & HAO_CPU_PCLMUL)) {
+        /* PMULL/PMULL2 .1Q: one carry-less 64 x 64 multiply of the low or the
+         * high doublewords. PMULL .8H (8 x 8) stays with the helper. */
+        vld(t, 0, rn); vld(t, 1, rm);
+        x_sse3a_rri(&t->b, 0x44, 0, 1, Q ? 0x11 : 0x00);   /* pclmulqdq */
+        vst(t, rd, 0, 1);
         return true;
     }
     if (size == 3 || (op > 3 && op != 5 && op != 7 && op != 8 && op != 10 && op != 12)) return false;
@@ -2852,7 +3109,7 @@ static void helper_keep_flags(tctx *t, uint32_t insn, uint64_t pc)
 {
     bool keep = t->in_eflags && t->live_out[t->idx], dirty = t->dirty;
     helper(t, insn, pc, true);
-    st_helper -= !t->dry;                                        /* counted as native */
+    if (!t->dry) st_helper--;                                    /* counted as native */
     if (keep) { x_mov_ld(&t->b, 2, RAX, FLAGS); fl_from_eax(t); }
     t->in_eflags = keep;
     t->dirty = keep && dirty;
@@ -2940,7 +3197,7 @@ static bool t_vfp_estimate(tctx *t, uint32_t i, uint64_t pc, bool scalar)
     vst(t, rd, 8, scalar ? 0 : (int)Q);
     size_t done = x_jmp32(&t->b);
     for (unsigned k = 0; k < nd; k++) x_patch32(&t->b, decline[k], xb_len(&t->b));
-    helper(t, i, pc, true); st_helper -= !t->dry;
+    helper(t, i, pc, true); if (!t->dry) st_helper--;
     x_patch32(&t->b, done, xb_len(&t->b));
     return true;
 }
@@ -2967,7 +3224,7 @@ static void t_fccmp(tctx *t, uint32_t i, uint64_t pc)
     x_lea(&t->b, 0, RAX, xmi(RDX, RAX, 4, 0)); x_lea(&t->b, 0, RAX, xmi(RAX, RCX, 2, 0));
     x_mov_ld(&t->b, 8, RAX, xmi(RBX, RAX, 8, CPU_OFF_FCMP)); x_mov_st(&t->b, 8, FLAGS, RAX);
     size_t done = x_jmp32(&t->b);
-    x_patch32(&t->b, special, xb_len(&t->b)); helper(t, i, pc, true); st_helper -= !t->dry;
+    x_patch32(&t->b, special, xb_len(&t->b)); helper(t, i, pc, true); if (!t->dry) st_helper--;
     size_t helper_done = skip ? x_jmp32(&t->b) : 0;
     if (skip) {
         x_patch32(&t->b, skip, xb_len(&t->b));
@@ -3125,6 +3382,24 @@ static void t_vfp_wide(tctx *t, int op, bool dbl, unsigned rd, unsigned rn, unsi
     x_patch32(&t->b, done, xb_len(&t->b));
 }
 
+/* The step of fma32_odd on two double lanes: the RN sum s moves one unit
+ * toward its exact TwoSum error a when a != 0 and s is even, giving the sum
+ * rounded to odd. a, b, c and e are destroyed. */
+static void vfp_odd_step(tctx *t, int a, int b, int c, int s, int e)
+{
+    vzero(t, c); P(0x6F, e, a);
+    x_sse_rri(&t->b, 0x66, 0xC2, a, c, 4);                      /* error != 0 */
+    P(0x6F, b, s); P(0xEF, b, e);
+    x_sse_shift_ri(&t->b, 0x72, 4, b, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, b, b, 0xF5);                   /* signs differ */
+    vones(t, e); x_sse_shift_ri(&t->b, 0x73, 2, e, 63);
+    P(0xEB, b, e);                                               /* -1 or +1 */
+    P(0x6F, c, s); x_sse_shift_ri(&t->b, 0x73, 6, c, 63);
+    x_sse_shift_ri(&t->b, 0x72, 4, c, 31);
+    x_sse_rri(&t->b, 0x66, 0x70, c, c, 0xF5);                   /* sum odd */
+    P(0xDF, c, a); P(0xDB, b, c); P(0xD4, s, b);               /* round to odd */
+}
+
 /* fma32_odd (a64_fp.c), two low single lanes -> two doubles in s.
  * a/b/c are destroyed; e is scratch. All inputs have passed integer
  * admission and MXCSR is RN. The product is exact; TwoSum recovers the
@@ -3139,17 +3414,7 @@ static void vfp_fma_odd(tctx *t, int a, int b, int c, int s, int e)
     P(0x6F, b, s); P(0x5C, b, a);                               /* c' */
     P(0x6F, e, s); P(0x5C, e, b);                               /* p' */
     P(0x5C, a, e); P(0x5C, c, b); P(0x58, a, c);               /* error */
-    vzero(t, c); P(0x6F, e, a);
-    x_sse_rri(&t->b, 0x66, 0xC2, a, c, 4);                      /* error != 0 */
-    P(0x6F, b, s); P(0xEF, b, e);
-    x_sse_shift_ri(&t->b, 0x72, 4, b, 31);
-    x_sse_rri(&t->b, 0x66, 0x70, b, b, 0xF5);                   /* signs differ */
-    vones(t, e); x_sse_shift_ri(&t->b, 0x73, 2, e, 63);
-    P(0xEB, b, e);                                               /* -1 or +1 */
-    P(0x6F, c, s); x_sse_shift_ri(&t->b, 0x73, 6, c, 63);
-    x_sse_shift_ri(&t->b, 0x72, 4, c, 31);
-    x_sse_rri(&t->b, 0x66, 0x70, c, c, 0xF5);                   /* sum odd */
-    P(0xDF, c, a); P(0xDB, b, c); P(0xD4, s, b);               /* round to odd */
+    vfp_odd_step(t, a, b, c, s, e);
 }
 
 /* fp_vec32_muladd's admission, arithmetic and rollback, with no EFLAGS
@@ -3244,6 +3509,103 @@ static void t_vfp_fma(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, 
     vfp_constants(t);
     x_patch32(&t->b, done, xb_len(&t->b));
     t->vfp_consts = true;
+}
+
+/* two_sum (a64_fp.c) on two double lanes: s = RN(a + b), and a becomes the
+ * exact error in the same operation order. b is destroyed; bb, x scratch. */
+static void vfp_two_sum(tctx *t, int a, int b, int s, int bb, int x)
+{
+    P(0x6F, s, a); P(0x58, s, b);                                /* s */
+    P(0x6F, bb, s); P(0x5C, bb, a);                             /* bb = s - a */
+    P(0x6F, x, s); P(0x5C, x, bb);                              /* s - bb */
+    P(0x5C, a, x); P(0x5C, b, bb); P(0x58, a, b);               /* error */
+}
+
+/* Veltkamp's split of a (split_hi in a64_fp.c) with xmm15 = 2^27 + 1:
+ * hi + lo = a, each of at most 26 significant bits and a sign. */
+static void vfp_split(tctx *t, int a, int hi, int lo, int g)
+{
+    P(0x6F, g, a); P(0x59, g, 15);
+    P(0x6F, hi, a); P(0x5C, hi, g); P(0x58, hi, g);
+    P(0x6F, lo, a); P(0x5C, lo, hi);
+}
+
+/* Double fused multiply-add: FMADD/FMSUB/FNMADD/FNMSUB, FMLA/FMLS .2D and
+ * the by-element forms, with fma64's arithmetic (a64_fp.c) on both lanes:
+ * Dekker's exact product, TwoSum with the addend, the low parts' sum
+ * rounded to odd and one final RN addition. Admission is narrower than
+ * fma64's and checked on the bits of every active lane before any FP
+ * instruction: a and b normal with exponents in [-459, 510] (so their sum
+ * lies in [-918, 1020]), c zero or normal with an exponent in [-970, 1021].
+ * MXCSR must be round to nearest without FTZ/DAZ and already have PE set,
+ * and FPCR must hold no control beyond RMode, FZ and DN. Every value formed
+ * is then zero or a normal number, so the intermediate steps can raise PE
+ * only, which is already set, and the result needs no flag of its own:
+ * MXCSR is never written. A scalar form's upper lanes are zero and raise
+ * nothing. Other operands, modes and a clear PE take the helper. No EFLAGS
+ * writes; xmm0-15 are scratch (vfp_constants are not kept). */
+static void t_vfp_fma64(tctx *t, bool sub, unsigned rd, unsigned rn, unsigned rm, int idx, uint32_t insn, uint64_t pc)
+{
+    bool scalar = BIT(insn, 28), three = (insn & 0x5F000000) == 0x1F000000;
+    if (scalar) {
+        x_movq_ld(&t->b, 0, VR(rn)); x_movq_ld(&t->b, 1, velem(rm, 8, idx < 0 ? 0 : idx));
+        x_movq_ld(&t->b, 2, VR(three ? BITS(insn, 14, 10) : rd));
+    } else {
+        vld(t, 0, rn); vld(t, 2, rd);
+        if (idx < 0) vld(t, 1, rm);
+        else { x_movq_ld(&t->b, 1, velem(rm, 8, idx)); P(0x6C, 1, 1); }
+    }
+    /* Biased exponents: a's in dwords 0 and 2 of xmm3, b's in 1 and 3. */
+    P(0x6F, 3, 0); x_sse_shift_ri(&t->b, 0x73, 6, 3, 1); x_sse_shift_ri(&t->b, 0x73, 2, 3, 53);
+    P(0x6F, 4, 1); x_sse_shift_ri(&t->b, 0x73, 6, 4, 1); x_sse_shift_ri(&t->b, 0x73, 2, 4, 53);
+    x_sse_shift_ri(&t->b, 0x73, 6, 4, 32); P(0xEB, 3, 4);
+    vconst(t, 5, 564 * 0x100000001ull, true); P(0x66, 5, 3);   /* below 564 */
+    vconst(t, 6, 1533 * 0x100000001ull, true); P(0x66, 3, 6);  /* above 1533 */
+    P(0xEB, 3, 5);
+    /* c: in dwords 0 and 2 (the others are zero on both sides) */
+    P(0x6F, 4, 2); x_sse_shift_ri(&t->b, 0x73, 6, 4, 1);
+    vzero(t, 6); P38(0x29, 6, 4);                                /* c is a zero */
+    x_sse_shift_ri(&t->b, 0x73, 2, 4, 53);
+    vconst(t, 5, 53, true); P(0x66, 5, 4);
+    vconst(t, 7, 2044, true); P(0x66, 4, 7);
+    P(0xEB, 4, 5); P(0xDF, 6, 4); P(0xEB, 3, 6);
+    if (scalar) x_sse_rr(&t->b, 0xF3, 0x7E, 0, 3, 3);           /* lane 0 only */
+    x_sse_rr(&t->b, 0x66, 0xD7, 0, RCX, 3);
+    size_t decline = jrcxnz32(t);
+    /* MXCSR: RC = 0, FTZ = DAZ = 0, PE = 1. FPCR: as fp_muladd's contract. */
+    x_stmxcsr(&t->b, MXCSR_SLOT);
+    x_movd_ld(&t->b, 5, MXCSR_SLOT);
+    vconst(t, 6, 0xE060, false); P(0xDB, 5, 6);
+    vconst(t, 6, 0x20, false); P(0xEF, 5, 6);
+    x_movd_ld(&t->b, 6, xm(RBX, offsetof(hao_cpu, fpcr)));
+    vconst(t, 7, 0x03c00000, false); P(0xDF, 7, 6);
+    P(0xEB, 5, 7);
+    x_sse_rr(&t->b, 0x66, 0x7E, 0, 5, RCX);
+    size_t control = jrcxnz32(t);
+    if (sub || (three && BIT(insn, 21))) {
+        vones(t, 5); x_sse_shift_ri(&t->b, 0x73, 6, 5, 63);
+        if (sub) P(0xEF, 0, 5);                                  /* negate the product exactly */
+        if (three && BIT(insn, 21)) P(0xEF, 2, 5);               /* and the addend */
+    }
+    vconst(t, 15, 0x41A0000002000000ull, true);                  /* 2^27 + 1 */
+    P(0x6F, 8, 0); P(0x59, 8, 1);                                /* uh */
+    vfp_split(t, 0, 3, 4, 6);                                    /* ah, al */
+    vfp_split(t, 1, 5, 7, 6);                                    /* bh, bl */
+    P(0x6F, 10, 8);                                              /* ul = al*bl - (((uh - ah*bh) - al*bh) - ah*bl) */
+    P(0x6F, 9, 3); P(0x59, 9, 5); P(0x5C, 10, 9);
+    P(0x6F, 9, 4); P(0x59, 9, 5); P(0x5C, 10, 9);
+    P(0x6F, 9, 3); P(0x59, 9, 7); P(0x5C, 10, 9);
+    P(0x6F, 9, 4); P(0x59, 9, 7); P(0x5C, 9, 10);
+    vfp_two_sum(t, 2, 8, 10, 11, 12);                            /* th; tl in xmm2 */
+    vfp_two_sum(t, 2, 9, 11, 12, 13);                            /* tl + ul; error in xmm2 */
+    vfp_odd_step(t, 2, 12, 13, 11, 14);                          /* v */
+    P(0x58, 10, 11);                                             /* RN(th + v) */
+    vst(t, rd, 10, !scalar);
+    size_t done = x_jmp32(&t->b);
+    x_patch32(&t->b, decline, xb_len(&t->b));
+    x_patch32(&t->b, control, xb_len(&t->b));
+    helper_keep_flags(t, insn, pc);
+    x_patch32(&t->b, done, xb_len(&t->b));
 }
 
 /* The half path keeps input vectors in xmm8-10, the uncommitted result in
@@ -3753,6 +4115,9 @@ static bool t_vfp_three_same(tctx *t, uint32_t i, uint64_t pc)
         case 0x04: case 0x44: case 0x64:
             t_vfp_compare64(t, !U ? VFP_EQ : size & 2 ? VFP_GT : VFP_GE, i, pc);
             return true;
+        case 0x01: case 0x21:                                   /* FMLA, FMLS */
+            t_vfp_fma64(t, size >> 1, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), -1, i, pc);
+            return true;
         case 0x02: wide_op = VFP_ADD; break;
         case 0x22: wide_op = VFP_SUB; break;
         case 0x43: wide_op = VFP_MUL; break;
@@ -3824,6 +4189,10 @@ static bool t_vfp_indexed(tctx *t, uint32_t i, uint64_t pc)
     }
     if (!BIT(i, 29) && BITS(i, 23, 22) == 3 && op == 9 && BIT(i, 30) && !BIT(i, 21)) {
         t_vfp_wide(t, VFP_MUL, true, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), 1, i, pc);
+        return true;
+    }
+    if (!BIT(i, 29) && BITS(i, 23, 22) == 3 && (op == 1 || op == 5) && BIT(i, 30) && !BIT(i, 21)) {
+        t_vfp_fma64(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), (int)BIT(i, 11), i, pc);
         return true;
     }
     if (BIT(i, 29) || BITS(i, 23, 22) != 2 || (op != 9 && op != 1 && op != 5)) return false;
@@ -4280,9 +4649,10 @@ static bool t_scalar_indexed(tctx *t, uint32_t i, uint64_t pc)
 {
     unsigned size = BITS(i, 23, 22), op = BITS(i, 15, 12);
     if (BIT(i, 29) || (size != 2 && size != 3) || (op != 1 && op != 5 && op != 9)) return false;
-    if (size == 3 && (BIT(i, 21) || op != 9)) return false;       /* reserved L; double FMA remains a helper */
+    if (size == 3 && BIT(i, 21)) return false;                    /* reserved L */
     int idx = size == 3 ? (int)BIT(i, 11) : (int)(BIT(i, 11) << 1 | BIT(i, 21));
     if (op == 9) t_scalar_indexed_mul(t, i, pc, size == 3, idx);
+    else if (size == 3) t_vfp_fma64(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), idx, i, pc);
     else t_vfp_fma(t, op == 5, BITS(i, 4, 0), BITS(i, 9, 5), BITS(i, 20, 16), idx, 0, i, pc);
     return true;
 }
@@ -4484,7 +4854,7 @@ static int fetch_block(uint64_t pc, hao_image *im, uint32_t *insns)
 /* Emit one block at the current position of t->b. */
 static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
 {
-    t->im = t->win ? NULL : hao_image_for_code(pc);
+    if (!t->dry || !t->im) t->im = t->win ? NULL : hao_image_for_code(pc);   /* hao_jit_locate passes it */
     bool live = n > 0 ? block_end_live(t, pc, insns, n) : true;   /* n == 0: the image was released under the fetch */
     for (int k = n - 1; k >= 0; k--) {
         t->live_out[k] = live;
@@ -4515,61 +4885,153 @@ static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
 }
 
 /* jit_lock held. NULL when the block cannot be translated (code cache or
- * table full, or its translation overflowed): the caller interprets it. */
+ * table full, or its translation overflowed): the caller interprets it.
+ *
+ * One W^X write (jit.c, above) costs a mapping and its removal, so a burst
+ * is written in one: the block at pc, then up to BURST - 1 blocks its
+ * direct branches reach in the same image (breadth first, not yet
+ * translated), as the AOT writer would make them. The burst's direct exits
+ * to translated code are chained before it is published. Blocks of guest
+ * memory outside its images (the guest's own generated code) are never
+ * translated ahead: the guest may not have written them yet. */
+#define BURST 8
+#define BURST_LINKS 128
+typedef struct { uint64_t pc; uint8_t *code; } burst_blk;
+
+/* jit_lock held: emit the block at p into the write mapping at w (base_slot: the image's base slot as
+ * seen there, when it has one), recording its direct exits in links. 0 and *len, or 1 when it did not fit
+ * and 2 when it overflowed otherwise. Not inlined: its context and instructions stay out of translate's
+ * frame, which runs deep in native stacks (guest/faultstack). */
+__attribute__((noinline)) static int burst_emit(uint64_t p, hao_image *im, uint8_t *w, uint8_t *base_slot, size_t room,
+                                                struct aot_link *links, int *nlinks, size_t *len)
+{
+    uint32_t insns[MAX_BLOCK_INSNS];
+    int n = fetch_block(p, im, insns);
+    tctx t;
+    memset(&t, 0, sizeof t);
+    t.cpu = jit_cpu;
+    if (im) {
+        /* written through the W^X write mapping: the base slot is addressed rip-relative, at the same distance */
+        t.base = im->base;
+        t.base_slot = base_slot;
+    }
+    t.links = links;
+    t.caplinks = BURST_LINKS;
+    xb_init(&t.b, w, room);
+    emit_block(&t, p, insns, n);
+    if (t.b.overflow) return t.b.p >= t.b.end ? 1 : 2;
+    if (t.b.bad) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "x86 encoder rejected an operand or displacement in the block at %#llx\n", (unsigned long long)p);
+        abort();
+    }
+    *nlinks = t.nlinks;
+    *len = xb_len(&t.b);
+    return 0;
+}
+
+/* the code of the burst's block for pc, or NULL (not inlined: vectorized in place, it spilled the table
+ * onto translate's frame) */
+__attribute__((noinline)) static void *burst_find(const burst_blk *b, unsigned n, uint64_t pc)
+{
+    for (unsigned j = 0; j < n; j++)
+        if (b[j].pc == pc) return b[j].code;
+    return NULL;
+}
+
+/* jit_lock held: enter a burst's blocks in the translation table; the first one's code, or NULL. Not
+ * inlined: insert's frame would join translate's, which runs deep in native stacks (guest/faultstack) */
+__attribute__((noinline)) static void *burst_publish(const burst_blk *b, unsigned n)
+{
+    void *first = NULL;
+    for (unsigned j = 0; j < n; j++) {
+        if (!insert(b[j].pc, b[j].code)) { cache_exhausted(); break; }
+        rmap_add(b[j].code, b[j].pc);
+        if (!j) first = b[j].code;
+    }
+    return first;
+}              /* direct exits of one block: at most one per instruction, and the fall-through */
 static void *translate(uint64_t pc)
 {
     if (__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) return NULL;
     if (table_used >= TABLE_MAX) { cache_exhausted(); return NULL; }
-    uint32_t insns[MAX_BLOCK_INSNS];
     hao_image *im = hao_image_for_code(pc);
-    int n = fetch_block(pc, im, insns);
-    tctx t;
-    memset(&t, 0, sizeof t);
-    if (im) {
-        if (!im->jit_slot) {
-            /* fill and claim the slot before publishing it (see jit_lock) */
-            uint8_t *slot = cache_alloc(16);
-            if (!slot) { cache_exhausted(); return NULL; }
-            memcpy(slot, &im->base, 8);
-            __atomic_store_n(&im->jit_slot, slot, __ATOMIC_RELEASE);
-        }
-        t.base = im->base;
-        t.base_slot = im->jit_slot;
+    if (im && !im->jit_slot) {
+        /* fill and claim the slot before publishing it (see jit_lock) */
+        uint8_t *slot = cache_alloc(16);
+        if (!slot) { cache_exhausted(); return NULL; }
+        if (!hao_wx_write(slot, &im->base, 8)) return NULL;   /* frozen: interpreted */
+        __atomic_store_n(&im->jit_slot, slot, __ATOMIC_RELEASE);
     }
     size_t avail;
     uint8_t *start = block_open(&avail);
     if (!start) { cache_exhausted(); return NULL; }
-    xb_init(&t.b, start, avail);
-    emit_block(&t, pc, insns, n);
-    if (t.b.overflow) {
-        /* nothing was claimed. At the end of the cache the block did not
-         * fit; otherwise an internal rel8 was out of range (a hao bug) */
-        if (t.b.p >= t.b.end) cache_exhausted();
-        else __atomic_fetch_or(&warn_pending, WARN_OVERFLOW, __ATOMIC_RELAXED);
-        return NULL;
+    size_t room = avail < BURST * (size_t)MAX_BLOCK_BYTES ? avail : BURST * (size_t)MAX_BLOCK_BYTES;
+    hao_wx_win win;
+    uint8_t *w = hao_wx_begin(start, room, &win);
+    if (!w) return NULL;   /* frozen: interpreted */
+    static struct aot_link links[BURST_LINKS];               /* jit_lock */
+    static struct { uint8_t *site; uint64_t target; } exits[BURST * BURST_LINKS];
+    static uint64_t queue[BURST * BURST_LINKS + 1];
+    static burst_blk made_blk[BURST];   /* published after the write is closed */
+    unsigned nexit = 0, qn = 0, qi = 0, made = 0;
+    queue[qn++] = pc;
+    while (qi < qn && made < BURST) {
+        uint64_t p = queue[qi++];
+        if (made && (burst_find(made_blk, made, p) || !im || hao_image_for_code(p) != im || im->aot || hao_is_trap(p) || lookup(p) || table_used + made >= TABLE_MAX))
+            continue;
+        uint8_t *cur = cache_ptr > start ? (uint8_t *)(((uintptr_t)cache_ptr + 15) & ~(uintptr_t)15) : start;
+        size_t left = (size_t)(start + room - cur), broom = left < MAX_BLOCK_BYTES ? left : MAX_BLOCK_BYTES;
+        if (made && broom < MAX_BLOCK_BYTES) break;
+        size_t len;
+        int nl, r = burst_emit(p, im, w + (cur - start), w + ((uint8_t *)(im ? im->jit_slot : NULL) - start), broom, links, &nl, &len);
+        if (r) {
+            if (made) break;   /* the burst ends before it */
+            hao_wx_end(&win, 0);
+            /* nothing was claimed. At the end of the cache the block did not
+             * fit; otherwise an internal rel8 was out of range or the block
+             * outgrew MAX_BLOCK_BYTES (a hao bug) */
+            if (r == 1 && broom == avail) cache_exhausted();
+            else __atomic_fetch_or(&warn_pending, WARN_OVERFLOW, __ATOMIC_RELAXED);
+            return NULL;
+        }
+        block_commit(cur, len);
+        st_bytes += len;
+        made_blk[made].pc = p;
+        made_blk[made++].code = cur;
+        for (int k = 0; k < nl && nexit < BURST * BURST_LINKS; k++) {
+            exits[nexit].site = cur + links[k].site;
+            exits[nexit++].target = links[k].target;
+            if (qn < BURST * BURST_LINKS + 1) queue[qn++] = links[k].target;
+        }
     }
-    if (t.b.bad) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "x86 encoder rejected an operand or displacement in the block at %#llx\n", (unsigned long long)pc);
-        abort();
+    /* direct exits to translated code: chained now (the dispatcher would, one write each) */
+    for (unsigned k = 0; k < nexit && !hao_opt.no_chain; k++) {
+        void *next = burst_find(made_blk, made, exits[k].target);
+        if (!next) next = lookup(exits[k].target);
+        uintptr_t site = (uintptr_t)exits[k].site;
+        if (!next || (site & 3) || hao_is_trap(exits[k].target)) continue;
+        int32_t rel = (int32_t)((intptr_t)next - (intptr_t)(site + 4));
+        memcpy(w + (site - (uintptr_t)start), &rel, 4);
+        st_links++;
     }
-    block_commit(start, xb_len(&t.b));
-    st_bytes += xb_len(&t.b);
-    if (!insert(pc, start)) { cache_exhausted(); return NULL; }
-    rmap_add(start, pc);
-    return start;
+    hao_wx_end(&win, made ? (size_t)(cache_ptr - start) : 0);
+    /* published only now: no write view of their code is left */
+    return burst_publish(made_blk, made);
 }
 
 /* Which guest instruction a host pc inside translated code belongs to.
  * Translated code updates cpu.pc only at block exits (and not at all
  * between chained blocks), so a signal handler gets the precise pc by
- * re-emitting the block: emission is deterministic and its length does not
- * depend on where the bytes go. Async-signal-safe: no locks, no allocation;
- * one locate at a time (a concurrent one reports false). */
-static uint8_t loc_buf[MAX_BLOCK_BYTES];
-static int loc_busy;
+ * re-emitting the block: emission is deterministic. The re-emission only
+ * measures (xb_init_count) at the block's own address, so its RIP and branch
+ * displacements are those of the first emission and it writes nothing.
+ * Async-signal-safe and reentrant: no locks, no allocation, no writes to
+ * shared state (statistics count only real emissions; the image lookup
+ * leaves the hint alone); about 1 KiB of stack besides the tctx. */
 
 static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc);
+static uint64_t aot_cpu_at(const hao_image *im, uint64_t code);
 
 bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
 {
@@ -4585,19 +5047,21 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
         }
         code = rmap[lo].code, pc = rmap[lo].pc;
     }
-    hao_image *im = hao_image_for_code(pc);
-    if (!im || __atomic_exchange_n(&loc_busy, 1, __ATOMIC_ACQUIRE)) return false;
-    static uint32_t insns[MAX_BLOCK_INSNS], off[MAX_BLOCK_INSNS + 1];
-    static bool fl[MAX_BLOCK_INSNS + 1];
+    hao_image *im = hao_image_for_code_peek(pc);
+    if (!im) return false;
+    uint32_t insns[MAX_BLOCK_INSNS], off[MAX_BLOCK_INSNS + 1];
+    bool fl[MAX_BLOCK_INSNS + 1];
     int ni = fetch_block(pc, im, insns);
     tctx t;
     memset(&t, 0, sizeof t);
     t.dry = true;
+    t.cpu = aot_cpu_at(im, code);
+    t.im = im;
     t.rec_off = off;
     t.rec_fl = fl;
     t.base = im->base;
     t.base_slot = im->jit_slot;
-    xb_init(&t.b, loc_buf, sizeof loc_buf);
+    xb_init_count(&t.b, (const void *)(uintptr_t)code, MAX_BLOCK_BYTES);
     bool ok = false;
     if (ni > 0) {
         emit_block(&t, pc, insns, ni);
@@ -4610,7 +5074,6 @@ bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
             ok = true;
         }
     }
-    __atomic_store_n(&loc_busy, 0, __ATOMIC_RELEASE);
     return ok;
 }
 
@@ -4668,11 +5131,8 @@ static void block_successors(const uint32_t *insns, int n, uint64_t pc, uint64_t
 
 /* The build identity: LC_UUID of the image holding this code (libhao.dylib
  * for both hao and the embedded stubs). ld64 derives it from the content,
- * so every changed build rejects every older cache. Bit zero of its last
- * byte additionally names the AES translation profile. Only the base UUID
- * and this explicit XOR-derived identity are accepted by packaging tools;
- * the runtime requires its own exact profile, so optional AES instructions
- * can never load on a CPU lacking AES-NI. */
+ * so every changed build rejects every older cache. The CPU features a
+ * cache's code may use are a header field of their own (cpu_profile). */
 static uint8_t gen_uuid[16];
 static bool gen_ok;
 static pthread_once_t gen_once = PTHREAD_ONCE_INIT;
@@ -4690,8 +5150,6 @@ static void gen_init(void)
             memcpy(gen_uuid, ((const struct uuid_command *)lc)->uuid, 16);
             static const uint8_t zero[16];
             gen_ok = memcmp(gen_uuid, zero, 16) != 0;
-            pthread_once(&jit_cpu_once, jit_cpu_init);
-            gen_uuid[15] ^= jit_aes ? 1 : 0;
             return;
         }
         p += lc->cmdsize;
@@ -4744,6 +5202,31 @@ static int aot_dirs(hao_aot_dir *d, int *w, char *why, size_t n)
     return hao_aot_dirs_for(tier, eu, pw, hao_opt.cache, d, w, why, n);
 }
 
+bool hao_aot_write_dir(char *out, size_t n)
+{
+    hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
+    int w;
+    char why[700];
+    aot_dirs(dirs, &w, why, sizeof why);
+    if (w < 0) return false;
+    snprintf(out, n, "%s", dirs[w].path);
+    return true;
+}
+
+/* The directories a run of a program reads caches from: for one whose
+ * verified signature requires library validation (lv), the system ones
+ * only, as at run time (guest_sig.c hao_guest_switches_for sets
+ * hao_aot_system_only there). hao --aot and --check answer with these. */
+static int aot_read_dirs(bool lv, hao_aot_dir *d, char *why, size_t n)
+{
+    bool was = hao_aot_system_only;
+    int w;
+    hao_aot_system_only = was || lv;
+    int r = aot_dirs(d, &w, why, n);
+    hao_aot_system_only = was;
+    return r;
+}
+
 static void aot_name(hao_image *im, char *out, size_t n, const char *ext)
 {
     char u[33];
@@ -4753,8 +5236,9 @@ static void aot_name(hao_image *im, char *out, size_t n, const char *ext)
 
 static bool fd_acl_allows(int fd)
 {
+    errno = 0;
     acl_t a = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
-    bool r = hao_aot_acl_allows(a);
+    bool r = hao_aot_acl_allows(a, errno);
     if (a) acl_free(a);
     return r;
 }
@@ -4932,7 +5416,7 @@ static void aot_expect(hao_image *im, const uint8_t *gen, uint64_t *lo, uint64_t
     uint32_t kind = !aot_image_sig(im, &s) ? 0 : s.size ? HAO_AOT_ID_CDHASH : HAO_AOT_ID_CODE;
     *x = (hao_aot_expect){im->uuid, gen, im->vmsize,
                           hao_aot_guest_id((const void *)(uintptr_t)im->base, aot_hdr_avail(im), im->slice_size),
-                          lo, hi, im->ncode, kind, 0, NULL};
+                          lo, hi, im->ncode, kind, 0, NULL, hao_cpu_features()};
 }
 
 /* A directory every process trusts (hao/aot.h): by kind or canonical path,
@@ -4962,6 +5446,26 @@ static int aot_cmp_code(void *ents, const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
+/* Where an image's cache lies in the code cache and the profile it was
+ * translated under, for hao_jit_locate: published (release) before any of
+ * its blocks is inserted, entered in the reverse map or recorded for lazy
+ * copying, so a fault in one always finds it. */
+static void aot_publish(hao_image *im, uint8_t *code, uint64_t size, uint64_t cpu)
+{
+    im->aot_size = size;
+    im->aot_cpu = cpu;
+    __atomic_store_n(&im->aot, code, __ATOMIC_RELEASE);
+}
+
+/* The profile the block at host address code was emitted under: its
+ * cache's, for a block of im's AOT cache, else the JIT's. Lock-free. */
+static uint64_t aot_cpu_at(const hao_image *im, uint64_t code)
+{
+    const uint8_t *a = im ? __atomic_load_n(&im->aot, __ATOMIC_ACQUIRE) : NULL;
+    if (a && code >= (uint64_t)(uintptr_t)a && code - (uint64_t)(uintptr_t)a < im->aot_size) return im->aot_cpu;
+    return jit_cpu;
+}
+
 /* Publish a checked cache. Other threads may be translating (an earlier
  * image's initializer started them), so its space comes from the
  * code-cache allocator, and the copy and the inserts are made under
@@ -4983,15 +5487,24 @@ static bool aot_install(hao_image *im, const hao_aot_view *v, char *why, size_t 
     hao_crit_enter();
     pthread_mutex_lock(&jit_lock);
     uint8_t *code = NULL;
-    if (!__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) && table_room(nb)) code = cache_alloc((size_t)cs);
+    if (!wx_frozen && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) && table_room(nb)) code = cache_alloc((size_t)cs);
     if (code) {
-        memcpy(code, v->code, (size_t)cs);
-        memcpy(code, &im->base, 8);       /* the base slot */
+        for (uint64_t off = 0; off < cs;) {   /* a slot of the write window at a time */
+            uint64_t len = cs - off < (2u << 20) ? cs - off : (2u << 20);
+            hao_wx_win win;
+            uint8_t *w = hao_wx_begin(code + off, (size_t)len, &win);   /* not frozen: not NULL */
+            memcpy(w, v->code + off, (size_t)len);
+            if (!off) memcpy(w, &im->base, 8);   /* the base slot */
+            hao_wx_end(&win, (size_t)len);
+            off += len;
+        }
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
+        /* the profile before any block is visible: a block run and faulted in
+         * before it was published would be re-emitted under the JIT's */
+        aot_publish(im, code, cs, v->hdr->cpu_profile);
         for (; k < nb; k++)
             if (!insert(im->base + v->ents[k].guest_off, code + v->ents[k].code_off)) { cache_exhausted(); break; }
         for (uint32_t j = 0; order && j < nb; j++) rmap_add(code + v->ents[order[j]].code_off, im->base + v->ents[order[j]].guest_off);
-        im->aot = code;
         st_aot_blocks += k;
     } else
         avail = cache_ptr < cache_end ? (size_t)(cache_end - cache_ptr) : 0;
@@ -5075,12 +5588,12 @@ static bool aot_lazy_install(hao_image *im, const hao_aot_view *v, const uint8_t
     pthread_mutex_lock(&jit_lock);
     uint32_t i = lazy_n;
     uint8_t *code = NULL;
-    if (i < AOT_LAZY_MAX && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) code = cache_alloc((size_t)z->cs);
+    if (i < AOT_LAZY_MAX && !wx_frozen && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) code = cache_alloc((size_t)z->cs);
     if (code) {
-        memcpy(code, &im->base, 8);       /* the base slot */
+        hao_wx_write(code, &im->base, 8);  /* the base slot (not frozen) */
         z->dst = code;
         __atomic_store_n(&im->jit_slot, code, __ATOMIC_RELEASE);
-        im->aot = code;
+        aot_publish(im, code, z->cs, v->hdr->cpu_profile);
         lazy_recs[i] = z;
         __atomic_store_n(&lazy_n, i + 1, __ATOMIC_RELEASE);
         __atomic_store_n(&im->aot_lazy, z, __ATOMIC_RELEASE);
@@ -5115,18 +5628,26 @@ static void *aot_lazy_take(uint64_t pc)
     uint32_t a = z->v.ents[i].code_off, e = i + 1 < z->nb ? z->v.ents[i + 1].code_off : (uint32_t)z->cs;
     uint8_t *code = z->dst + a;
     if (!z->filled[i]) {
-        memcpy(code, z->v.code + a, e - a);
-        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);   /* before the cut test: a link to itself stays */
         lo = 0, hi = z->nl;
         while (lo < hi) {
             uint32_t m = lo + (hi - lo) / 2;
             if (z->v.links[m].site < a) lo = m + 1; else hi = m;
         }
+        uint64_t wend = e;   /* the block and its link sites (each within the blob: aot_lazy_ok) */
         for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
-            if (!z->filled[z->v.links[k].target]) {
+            if ((uint64_t)z->v.links[k].site + 4 > wend) wend = (uint64_t)z->v.links[k].site + 4;
+        hao_wx_win win;
+        uint8_t *w = hao_wx_begin(code, wend - a, &win);
+        if (!w) return NULL;   /* frozen: interpreted */
+        memcpy(w, z->v.code + a, e - a);
+        for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
+            if (z->v.links[k].target != i && !z->filled[z->v.links[k].target]) {   /* a link to itself stays */
                 int32_t unlinked = 0;
-                memcpy(z->dst + z->v.links[k].site, &unlinked, 4);
+                memcpy(w + (z->v.links[k].site - a), &unlinked, 4);
             }
+        hao_wx_end(&win, wend - a);
+        /* complete only now: a fork child that sees it filled gets it with its links cut */
+        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);
         st_aot_blocks++;
         st_aot_lazy_bytes += e - a;
     }
@@ -5281,10 +5802,11 @@ bool hao_aot_load(hao_image *im)
     return false;
 }
 
-/* Whether one of dirs holds a cache this image would load: 0 (valid; where
- * names it), 1 (no file in any) or 2 (a file, none valid; why says the last
- * reason). The same checks as hao_aot_load, without the install. */
-static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where, size_t wn, char *why, size_t n)
+/* Whether one of dirs holds a cache this image would load with at most the
+ * CPU features cpu: 0 (valid; where names it), 1 (no file in any) or 2 (a
+ * file, none valid; why says the last reason). The same checks as
+ * hao_aot_load, without the install. */
+static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, uint64_t cpu, char *where, size_t wn, char *why, size_t n)
 {
     const uint8_t *gen = aot_gen();
     if (!gen) { snprintf(why, n, "this hao build has no LC_UUID"); return 2; }
@@ -5293,6 +5815,7 @@ static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where
     uint64_t lo[HAO_MAX_RANGES], hi[HAO_MAX_RANGES];
     hao_aot_expect x;
     aot_expect(im, gen, lo, hi, &x);
+    x.cpu &= cpu;
     aot_id id;
     bool seen = false;
     why[0] = 0;
@@ -5327,21 +5850,59 @@ static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, char *where
     return seen ? 2 : 1;
 }
 
-/* hao --aot --check: 0 valid, 3 missing, 4 stale, -1 not checkable. Writes nothing. */
-int hao_aot_check_file(const char *path, const char *cache_dir, bool print)
+/* hao --aot --check: 0 valid, 3 missing, 4 stale, -1 not checkable. Writes nothing. Valid: loadable
+ * here, using no CPU feature outside cpu. */
+int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint64_t cpu)
 {
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
     int w, nd;
+    bool verified = false;                  /* the file whose signature chose the directories */
+    uint64_t vdev = 0, vino = 0;
+    aot_id checked = {0};
     char why[700], where[PATH_MAX + 80], err[512];
     if (cache_dir) {
         if (!hao_aot_dir_explicit(hao_env_tier(), cache_dir, &dirs[0], why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return -1; }
         nd = 1;
-    } else nd = aot_dirs(dirs, &w, why, sizeof why);
+    } else {
+        /* the directories a run of this program reads: its signature, verified, says whether it requires
+         * library validation (a signature that does not verify runs nowhere) */
+        bool lv = false;
+        int f = open(path, O_RDONLY | O_CLOEXEC);
+        struct stat fst;
+        hao_slice *sl = f >= 0 && fstat(f, &fst) == 0 ? hao_slice_open(f, err, sizeof err) : NULL;
+        bool bad = sl && sl->sig_size && hao_slice_verify(sl, NULL, err, sizeof err) != 0;
+        if (sl && sl->sig.cd) {
+            lv = hao_codesig_library_validated(&sl->sig);
+            checked.kind = HAO_AOT_ID_CDHASH;
+            checked.hash = sl->sig.hash_type;
+            memcpy(checked.id, sl->sig.cdhash, sizeof sl->sig.cdhash);
+        }
+        if (sl) { verified = true; vdev = (uint64_t)fst.st_dev; vino = (uint64_t)fst.st_ino; }
+        hao_slice_close(sl);
+        if (f >= 0) close(f);
+        if (bad) { fprintf(stderr, "hao-aot: %s: code signature invalid (%s)\n", path, err); return -1; }
+        nd = aot_read_dirs(lv, dirs, why, sizeof why);
+        (void)w;
+    }
     if (nd <= 0) { fprintf(stderr, "hao-aot: no trusted AOT cache directory%s%s\n", why[0] ? ": " : "", why); return -1; }
     hao_image *im = hao_map_image_only(path, err, sizeof err);
     if (!im) { fprintf(stderr, "hao-aot: %s: %s\n", path, err); return -1; }
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); hao_unload_image(im); return -1; }
-    int r = aot_state(im, dirs, nd, where, sizeof where, why, sizeof why);
+    if (verified) {
+        /* the image checked is the file whose signature chose the directories: the same file, and the
+         * same CodeDirectory (or, unsigned then, unsigned now) */
+        aot_id now;
+        bool same = im->dev == vdev && im->ino == vino && aot_image_id(im, &now, why, sizeof why) &&
+                    (checked.kind == HAO_AOT_ID_CDHASH ? now.kind == HAO_AOT_ID_CDHASH && now.hash == checked.hash &&
+                                                         !memcmp(now.id, checked.id, 20)
+                                                       : now.kind != HAO_AOT_ID_CDHASH);
+        if (!same) {
+            fprintf(stderr, "hao-aot: %s: the file changed while it was checked: not checked\n", path);
+            hao_unload_image(im);
+            return -1;
+        }
+    }
+    int r = aot_state(im, dirs, nd, cpu, where, sizeof where, why, sizeof why);
     hao_unload_image(im);
     if (r == 0) { if (print) fprintf(stderr, "hao-aot: %s: valid (%s)\n", path, where); return 0; }
     if (r == 1) { if (print) fprintf(stderr, "hao-aot: %s: missing\n", path); return 3; }
@@ -5434,7 +5995,7 @@ static bool write_all(int fd, const uint8_t *p, size_t n)
 /* Translate every reachable block of `im` into one position-independent
  * blob and write it to dfd/<uuid>.aot. */
 static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_aot_dir *d, const char *dir, const aot_id *id,
-                        bool verbose)
+                        uint64_t cpu, bool verbose)
 {
     int rc = -1, ofd = -1;
     bool oom = false;
@@ -5449,6 +6010,7 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     hao_aot_link *links = NULL;
     tctx t;
     memset(&t, 0, sizeof t);
+    t.cpu = cpu & hao_cpu_features() & HAO_CPU_JIT;   /* never a feature this host cannot check by running */
     if (!work || !seen) goto oom;
 #define PUSH(a) do { uint64_t _a = (a); if (hao_image_for_code(_a) == im && !(_a & 3) && !seen[(_a - im->base) / 4]) { \
         if (nwork == cap) { uint64_t *_n = realloc(work, cap * 2 * 8); if (!_n) { oom = true; break; } work = _n; cap *= 2; } \
@@ -5575,6 +6137,7 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     h.id_kind = id->kind;
     h.id_hash = id->hash;
     memcpy(h.code_id, id->id, sizeof h.code_id);
+    h.cpu_profile = t.cpu;
     h.nblocks = (uint32_t)nents;
     h.nlinks = (uint32_t)nl;
     h.code_size = xb_len(&t.b);
@@ -5589,7 +6152,8 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
      * overwrites with the loading image's: zero in the file, so one guest and
      * one libhao always give the same bytes (reproducible payloads). */
     memset(q, 0, 8);
-    h.payload_hash = hao_aot_hash64(file + sizeof h, (size_t)(h.file_size - sizeof h), 0);
+    memcpy(file, &h, sizeof h);
+    h.payload_hash = hao_aot_file_hash(file, h.file_size);
     memcpy(file, &h, sizeof h);
     /* the loader's own checks, so generation and loading cannot drift apart */
     if (hao_aot_check(file, h.file_size, &x, NULL, why, sizeof why) != 0) {
@@ -5609,10 +6173,13 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
         char idx[2 * HAO_AOT_ID_LEN + 1];
         int nb = id->kind == HAO_AOT_ID_CDHASH ? HAO_AOT_CDHASH_LEN : HAO_AOT_ID_LEN;
         for (int k = 0; k < nb; k++) snprintf(idx + 2 * k, 3, "%02x", id->id[k]);
+        char cn[160];
         fprintf(stderr, "hao-aot: %s: %zu blocks, %llu insns (%.4f%% translated natively, rest via interpreter helper), %zu/%d links, "
-                "%zu KB code, bound to %s %s -> %s/%s\n",
+                "%zu KB code, CPU profile %#llx (%s), bound to %s %s -> %s/%s\n",
                 im->path, nents, (unsigned long long)ninsns, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0.0,
-                nl, t.nlinks, (size_t)(h.code_size >> 10), id->kind == HAO_AOT_ID_CDHASH ? "cdhash" : "code hash (unsigned)", idx, dir, name);
+                nl, t.nlinks, (size_t)(h.code_size >> 10), (unsigned long long)h.cpu_profile,
+                h.cpu_profile ? hao_cpu_names(h.cpu_profile, cn, sizeof cn) : "none", id->kind == HAO_AOT_ID_CDHASH ? "cdhash" : "code hash (unsigned)",
+                idx, dir, name);
     }
     rc = 0;
     goto out;
@@ -5697,7 +6264,7 @@ fail:
  * is (ownership, modes, ACLs and symlinks of every element; the rule for
  * unsigned guests if it is, or lies in, a system directory).
  */
-int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
+int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir, uint64_t cpu)
 {
     const uint8_t *gen = aot_gen();
     if (!gen) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return -1; }
@@ -5732,18 +6299,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
     if (!same) { fprintf(stderr, "hao-aot: %s: its private copy was replaced before it was mapped: no cache written\n", path); goto out; }
     snprintf(im->path, sizeof im->path, "%s", path);
     if (!im->has_uuid) { fprintf(stderr, "hao-aot: %s has no LC_UUID\n", path); goto out; }
-    {
-        /* a cache this image would already load, here or in a directory this process reads: nothing to write */
-        hao_aot_dir rd[HAO_AOT_MAX_DIRS];
-        int rw, rn = cache_dir ? 0 : aot_dirs(rd, &rw, why, sizeof why);
-        char where[PATH_MAX + 80];
-        if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
-        if (rn > 0 && aot_state(im, rd, rn, where, sizeof where, why, sizeof why) == 0) {
-            if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
-            rc = 0;
-            goto out;
-        }
-    }
+    bool lv = false;                  /* the verified signature requires library validation */
     aot_sig s;
     aot_id id;
     if (!aot_image_sig(im, &s)) {
@@ -5756,7 +6312,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
         why[0] = 0;
         hao_slice *sl = hao_slice_open(tfd, why, sizeof why);
         bool good = sl && hao_slice_verify(sl, NULL, why, sizeof why) == 0 && sl->sig.cd;
-        if (good) { g.hash_type = sl->sig.hash_type; memcpy(g.cdhash, sl->sig.cdhash, sizeof g.cdhash); }
+        if (good) { g.hash_type = sl->sig.hash_type; memcpy(g.cdhash, sl->sig.cdhash, sizeof g.cdhash); lv = hao_codesig_library_validated(&sl->sig); }
         else if (sl && !why[0]) snprintf(why, sizeof why, "its code signature could not be verified");
         hao_slice_close(sl);
         if (!good) {
@@ -5782,7 +6338,26 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir)
         }
         if (!aot_image_id(im, &id, why, sizeof why)) { fprintf(stderr, "hao-aot: %s: %s: no cache written\n", path, why); goto out; }
     }
-    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, verbose);
+    {
+        /* a cache this image would already load, here or in a directory a run of it reads, that uses
+         * no CPU feature outside the profile asked for: nothing to write */
+        hao_aot_dir rd[HAO_AOT_MAX_DIRS];
+        int rn = cache_dir ? 0 : aot_read_dirs(lv, rd, why, sizeof why);
+        char where[PATH_MAX + 80];
+        if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
+        if (rn > 0 && aot_state(im, rd, rn, cpu, where, sizeof where, why, sizeof why) == 0) {
+            if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
+            rc = 0;
+            goto out;
+        }
+        /* without --cache, the directory written must be one a run of it reads */
+        if (!cache_dir && lv && !aot_dir_system(&dirs[w], canon, dfd)) {
+            fprintf(stderr, "hao-aot: %s requires library validation, so only the system cache directories serve it; "
+                    "%s is not one: no cache written (--cache DIR writes there anyway)\n", path, canon);
+            goto out;
+        }
+    }
+    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, cpu, verbose);
 out:
     if (im) hao_unload_image(im);     /* and with it the last reference to the private copy */
     close(tfd);
@@ -5830,6 +6405,16 @@ void hao_aot_note_jit_block(hao_image *im, uint64_t pc)
 
 /* ------------------------------------------------------------- glue */
 
+/* Nonzero when the CPU and OS enable AVX state (CPUID.1:ECX AVX and OSXSAVE,
+ * XCR0 SSE and AVX): the entry stub and hao_native_call (bridge_x86_64.S)
+ * then clear the upper ymm halves with vzeroupper, so legacy-SSE translated
+ * code never runs with dirty uppers (a false dependency on every SSE
+ * instruction from Skylake on). Under Rosetta only with
+ * ROSETTA_ADVERTISE_AVX=1. Set by build_stubs, before any native call, from
+ * the host's word (HAO_CPU_AVX), not the process's: HAO_CPU_FEATURES limits
+ * what translations use, not the state native code can leave. */
+__attribute__((visibility("hidden"))) uint8_t hao_vzeroupper;
+
 static void build_stubs(void)
 {
     xbuf b;
@@ -5844,6 +6429,8 @@ static void build_stubs(void)
      * entries (callbacks/signals) save and restore it here. Guest integer
      * and vector registers stay in hao_cpu; recovery needs no new locations. */
     x_mov_ld(&b, 8, R12, xm(RBX, CPU_OFF_RT_JC));
+    hao_vzeroupper = (hao_cpu_host() & HAO_CPU_AVX) != 0;
+    if (hao_vzeroupper) x_vzeroupper(&b);   /* a native caller's uppers are dead here (SysV) */
     x_jmp_r(&b, RSI);
     while (xb_len(&b) & 15) x_int3(&b);
     exit_stub = b.p;
@@ -5926,7 +6513,8 @@ static void build_stubs(void)
 static int jit_state;
 
 /*
- * The code cache is one MAP_JIT region. When the kernel refuses it there is
+ * The code cache is one MAP_JIT region, read/execute only and written
+ * through a second mapping (W^X, above). When the kernel refuses it there is
  * no other source of executable memory worth having: a MAC policy refused it
  * (the process's sandbox denies dynamic-code-generation, or AMFI found no
  * allow-jit entitlement in a hardened process), and plain RWX memory either
@@ -5969,8 +6557,16 @@ static void jit_init_once(void)
     size_t fixed = 4096 + THUNK_AREA + SIG_AREA + SCRATCH_SIZE;
     size_t size = fixed + ((size_t)cache_code_mb << 20);
     errno = EPERM;
+    /* MAP_JIT, read/write (not executable) until hao_wx_region; the thunks' table is data of its own
+     * mapping within rel32 reach of them, not part of the code cache's memory */
     cache = hao_opt.no_jit_memory ? MAP_FAILED :
-            mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+            mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    if (cache != MAP_FAILED) {
+        thunk_tab = hao_map_near_prot((uint64_t)(uintptr_t)cache, (uint64_t)(uintptr_t)cache + 4096 + THUNK_AREA + SIG_AREA, THUNK_TAB,
+                                      PROT_READ | PROT_WRITE, 0);
+        if (!thunk_tab) { munmap(cache, size); cache = MAP_FAILED; errno = ENOMEM; }
+        else sig_tab = thunk_tab + THUNK_SLOTS;
+    }
     if (cache == MAP_FAILED) {
         int e = errno;
         cache = NULL;
@@ -5989,10 +6585,29 @@ static void jit_init_once(void)
     rmap = mmap(NULL, (size_t)rmap_cap * sizeof *rmap, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rmap == MAP_FAILED) rmap = NULL;   /* rmap_add warns once */
     build_stubs();
+    {   /* the thunks' common tail */
+        xbuf b;
+        thunk_entry = (uint8_t *)(((uintptr_t)cache_ptr + 15) & ~(uintptr_t)15);
+        xb_init(&b, thunk_entry, 16);
+        x_jmp_m(&b, xm(XRIP, 0));
+        xb_u64(&b, (uint64_t)(uintptr_t)hao_callback_entry);
+        if (b.overflow || b.bad || thunk_entry + 16 > cache + 4096) abort();
+    }
     cache_ptr = cache + 4096;
-    thunk_area = thunk_ptr = cache_ptr; cache_ptr += THUNK_AREA; thunk_end = cache_ptr;
-    sig_area = sig_ptr = cache_ptr; cache_ptr += SIG_AREA; sig_end = cache_ptr;
+    thunk_area = thunk_ptr = thunk_gen = cache_ptr; cache_ptr += THUNK_AREA; thunk_end = cache_ptr;
+    sig_area = sig_ptr = sig_gen = cache_ptr; cache_ptr += SIG_AREA; sig_end = cache_ptr;
     scratch = cache_ptr; cache_ptr += SCRATCH_SIZE;
+    if (!hao_wx_region(cache, size)) {   /* W^X from here on */
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "no W^X mapping for translated code (memory entry or protection refused); running interpreted, "
+                "native->guest calls take the fault path\n");
+        munmap(cache, size);
+        munmap(thunk_tab, THUNK_TAB);
+        cache = cache_ptr = cache_end = NULL;
+        hao_use_jit = 0;
+        __atomic_store_n(&jit_state, -1, __ATOMIC_RELEASE);
+        return;
+    }
     __atomic_store_n(&jit_state, 1, __ATOMIC_RELEASE);
 }
 
@@ -6154,7 +6769,14 @@ int hao_jit_run_block(hao_thread *th)
         bool ok = next && !(site & 3) && site >= (uint64_t)(uintptr_t)cache && site + 4 <= (uint64_t)(uintptr_t)cache_end;
         if (ok) {
             int32_t rel = (int32_t)((intptr_t)next - (intptr_t)(site + 4));
-            __atomic_store_n((int32_t *)(uintptr_t)site, rel, __ATOMIC_RELEASE);
+            hao_wx_win win;
+            hao_crit_enter();
+            int32_t *w = hao_wx_begin((void *)(uintptr_t)site, 4, &win);
+            if (w) {   /* frozen: left unchained */
+                __atomic_store_n(w, rel, __ATOMIC_RELEASE);
+                hao_wx_end(&win, 4);
+            }
+            hao_crit_leave();
             __atomic_fetch_add(&st_links, 1, __ATOMIC_RELAXED);
         } else if (next)
             __atomic_fetch_add(&st_link_skips, 1, __ATOMIC_RELAXED);
@@ -6174,7 +6796,7 @@ void hao_jit_stats(void)
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
             " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu"
-            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu\n",
+            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu wx_writes=%llu wx_frozen=%d\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
@@ -6183,7 +6805,7 @@ void hao_jit_stats(void)
             (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
             (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved,
             (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED), (unsigned long long)st_aot_lazy_blobs,
-            (unsigned long long)(st_aot_lazy_bytes >> 10));
+            (unsigned long long)(st_aot_lazy_bytes >> 10), (unsigned long long)st_wx, wx_frozen);
     uint64_t counts[HG_COUNT][2];
     for (unsigned g = 0; g < HG_COUNT; g++)
         for (unsigned k = 0; k < 2; k++)
@@ -6261,11 +6883,16 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
             n > 2 * MAX_BLOCK_INSNS || memcmp(es->last_code, code, 4u * (unsigned)n)) {
             tctx t;
             memset(&t, 0, sizeof t);
+            t.cpu = jit_cpu;
             t.win = code;
             t.win_base = base;
             t.win_n = n;
-            xb_init(&t.b, tscratch, SCRATCH_SIZE);
+            hao_wx_win win;
+            uint8_t *w = hao_wx_begin(tscratch, SCRATCH_SIZE, &win);
+            if (!w) return -4;
+            xb_init(&t.b, w, SCRATCH_SIZE);
             emit_block(&t, pc, code + k, m);
+            hao_wx_end(&win, t.b.overflow || t.b.bad ? 0 : xb_len(&t.b));
             if (t.b.overflow || t.b.bad) { es->last_m = 0; return -4; }
             es->last_pc = pc; es->last_m = m; es->last_base = base; es->last_n = n;
             if (n <= 2 * MAX_BLOCK_INSNS) memcpy(es->last_code, code, 4u * (unsigned)n);
@@ -6277,13 +6904,17 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
 }
 
 /* ------------------------------------------------- native-callable thunks
- * A guest function handed to native code gets an x86 entry point:
- *   movabs r11, guest ; xor r10d, r10d ; jmp [rip+0] ; .quad hao_callback_entry
- * so native callers reach the translator without a fault. A signature
- * thunk (a 64-byte slot of its own area) loads r10 with its hsig instead.
- * The guest address is always encoded as a 10-byte movabs, so it can be
- * read back at entry+2 (hao_thunk_target, hao_sig_thunk_target): x_mov_ri
- * would pick a shorter form for an address below 4 GB.
+ * A guest function handed to native code gets an x86 entry point, slot k
+ * of the thunk area:
+ *   mov r11, [rip+thunk_tab[k]] ; xor r10d, r10d ; jmp thunk_entry
+ * (thunk_entry: jmp [rip+0] ; .quad hao_callback_entry), so native callers
+ * reach the translator without a fault. A signature thunk (a 64-byte slot
+ * of its own area) loads r10 with its hsig from sig_tab instead. The code
+ * of a slot does not depend on its guest function: it is made a page at a
+ * time (thunk_page, one W^X write per page), and a new thunk only fills its
+ * table entries, read/write data of their own mapping, before it is handed
+ * out. hao_thunk_target and hao_sig_thunk_target read them back. The
+ * tables name guest code only; what runs natively stays read/execute.
  *
  * Capacity: THUNK_SLOTS plain thunks and 65536 signature thunks. When
  * either runs out, the request is logged once: a plain thunk request gets
@@ -6294,11 +6925,34 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
 static hao_gmap thunks = HAO_GMAP_INIT(2, 1, 8, 19);
 static pthread_mutex_t thunk_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void movabs(xbuf *b, int reg, uint64_t imm)
+/* thunk_lock held: the code of the next page of an area (slots of `slot` bytes, tab: `words` table words a
+ * slot); false when the area is used up or its memory cannot be written (a frozen fork child) */
+static bool thunk_page(uint8_t *area, uint8_t **gen, uint8_t *end, unsigned slot, uint64_t *tab, unsigned words)
 {
-    xb_u8(b, (uint8_t)(0x48 | (reg >= 8 ? 1 : 0)));    /* REX.W (+B) */
-    xb_u8(b, (uint8_t)(0xB8 + (reg & 7)));
-    xb_u64(b, imm);
+    uint8_t *p = *gen;
+    if (p >= end) return false;
+    hao_wx_win win;
+    uint8_t *w = hao_wx_begin(p, 4096, &win);
+    if (!w) return false;
+    for (unsigned off = 0; off < 4096; off += slot) {
+        uint8_t *x = p + off, *q = w + off;
+        uint64_t *t = tab + (size_t)(x - area) / slot * words;
+        unsigned n = 0;
+        int32_t d = (int32_t)((intptr_t)&t[0] - (intptr_t)(x + 7));
+        q[n++] = 0x4c; q[n++] = 0x8b; q[n++] = 0x1d; memcpy(q + n, &d, 4); n += 4;          /* mov r11, [rip+d] */
+        if (words == 2) {
+            d = (int32_t)((intptr_t)&t[1] - (intptr_t)(x + n + 7));
+            q[n++] = 0x4c; q[n++] = 0x8b; q[n++] = 0x15; memcpy(q + n, &d, 4); n += 4;      /* mov r10, [rip+d] */
+        } else {
+            q[n++] = 0x45; q[n++] = 0x31; q[n++] = 0xd2;                                     /* xor r10d, r10d */
+        }
+        d = (int32_t)((intptr_t)thunk_entry - (intptr_t)(x + n + 5));
+        q[n++] = 0xe9; memcpy(q + n, &d, 4); n += 4;                                         /* jmp thunk_entry */
+        memset(q + n, 0xcc, slot - n);
+    }
+    hao_wx_end(&win, 4096);
+    *gen = p + 4096;
+    return true;
 }
 
 /* fork child: the holders of these locks were not copied (see jit_lock) */
@@ -6307,6 +6961,7 @@ void hao_jit_fork_child(void)
     jit_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     thunk_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     pw_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    wx_fork_child();
 }
 
 static void full_once(int *flag, const char *what)
@@ -6328,14 +6983,9 @@ uint64_t hao_thunk_for(uint64_t guest)
     bool fresh;
     uint64_t *s = guest ? hao_gmap_claim1(&thunks, guest, &fresh) : NULL;
     if (s && !fresh) r = s[1];
-    else if (s && thunk_ptr + 32 <= thunk_end) {
-        xbuf b;
-        xb_init(&b, thunk_ptr, 32);
-        movabs(&b, R11, guest);
-        x_alu_rr(&b, XXOR, 0, R10, R10);                    /* no signature */
-        x_jmp_m(&b, xm(XRIP, 0));                           /* jmp [rip+0] */
-        xb_u64(&b, (uint64_t)(uintptr_t)hao_callback_entry);
-        if (b.overflow || b.bad) abort();
+    else if (s && thunk_ptr + 32 <= thunk_end &&
+             (thunk_ptr < thunk_gen || thunk_page(thunk_area, &thunk_gen, thunk_end, 32, thunk_tab, 1))) {   /* else: the fault path */
+        __atomic_store_n(&thunk_tab[(thunk_ptr - thunk_area) / 32], guest, __ATOMIC_RELEASE);
         r = (uint64_t)(uintptr_t)thunk_ptr;
         __atomic_store_n(&thunk_ptr, thunk_ptr + 32, __ATOMIC_RELEASE);
         s[1] = r;
@@ -6343,8 +6993,17 @@ uint64_t hao_thunk_for(uint64_t guest)
     }
     pthread_mutex_unlock(&thunk_lock);
     hao_crit_leave();
-    if (!r) full_once(&tfull, "thunk table full: further guest functions keep the NX-fault path");
+    if (!r && thunk_ptr + 32 > thunk_end) full_once(&tfull, "thunk table full: further guest functions keep the NX-fault path");
     return r ? r : guest;
+}
+
+/* The entry of a guest function passed to a native Swift function (its own exported symbol a Swift
+ * mangled name): a signature-thunk slot whose r10 is HAO_CB_SWIFTCC, one per function; the plain thunk
+ * when the area is full (its indirect results then go to hao's own area) */
+uint64_t hao_swift_thunk_for(uint64_t guest)
+{
+    uint64_t e = hao_sig_thunk(guest, (void *)(uintptr_t)HAO_CB_SWIFTCC);
+    return e ? e : hao_thunk_for(guest);
 }
 
 /* thunk address -> guest function (0 if not a thunk) */
@@ -6359,9 +7018,7 @@ uint64_t hao_thunk_target(uint64_t a)
     uint8_t *end = __atomic_load_n(&thunk_ptr, __ATOMIC_ACQUIRE);
     if (!thunk_area || a < (uint64_t)(uintptr_t)thunk_area || a >= (uint64_t)(uintptr_t)end) return 0;
     if ((a - (uint64_t)(uintptr_t)thunk_area) & 31) return 0;
-    uint64_t g;
-    memcpy(&g, (void *)(uintptr_t)(a + 2), 8);   /* imm64 of movabs r11 */
-    return g;
+    return __atomic_load_n(&thunk_tab[(a - (uint64_t)(uintptr_t)thunk_area) / 32], __ATOMIC_ACQUIRE);
 }
 
 /* Signature thunk: mov r11, guest; mov r10, sig; jmp [rip+0]; .quad
@@ -6386,15 +7043,10 @@ uint64_t hao_sig_thunk(uint64_t guest, void *sig)
     uint64_t *s = hao_gmap_claim(&sigthunks, key, &fresh);
     if (s && !fresh) r = s[2];
     else if (!s || sig_ptr + SIG_SLOT > sig_end) __atomic_fetch_or(&warn_pending, WARN_SIGS, __ATOMIC_RELAXED);
-    else {
-        xbuf b;
-        xb_init(&b, sig_ptr, SIG_SLOT);
-        movabs(&b, R11, guest);
-        movabs(&b, R10, key[1]);
-        x_jmp_m(&b, xm(XRIP, 0));                               /* jmp [rip+0] */
-        xb_u64(&b, (uint64_t)(uintptr_t)hao_callback_entry);
-        if (b.overflow || b.bad) abort();
-        while (xb_len(&b) < SIG_SLOT) x_int3(&b);
+    else if (sig_ptr < sig_gen || thunk_page(sig_area, &sig_gen, sig_end, SIG_SLOT, sig_tab, 2)) {   /* else 0: abi.c notes the signature */
+        uint64_t *t = &sig_tab[(sig_ptr - sig_area) / SIG_SLOT * 2];
+        __atomic_store_n(&t[0], guest, __ATOMIC_RELAXED);
+        __atomic_store_n(&t[1], key[1], __ATOMIC_RELEASE);
         r = (uint64_t)(uintptr_t)sig_ptr;
         __atomic_store_n(&sig_ptr, sig_ptr + SIG_SLOT, __ATOMIC_RELEASE);
         s[2] = r;
@@ -6406,15 +7058,22 @@ uint64_t hao_sig_thunk(uint64_t guest, void *sig)
     return r;   /* 0: area full (warned once); abi.c notes the signature for hao_callback */
 }
 
+/* signature thunk address -> its hsig (0 if not one): tests */
+uint64_t hao_sig_thunk_sig(uint64_t a)
+{
+    uint8_t *end = __atomic_load_n(&sig_ptr, __ATOMIC_ACQUIRE);
+    if (!sig_area || a < (uint64_t)(uintptr_t)sig_area || a >= (uint64_t)(uintptr_t)end || ((a - (uint64_t)(uintptr_t)sig_area) & (SIG_SLOT - 1)))
+        return 0;
+    return __atomic_load_n(&sig_tab[(a - (uint64_t)(uintptr_t)sig_area) / SIG_SLOT * 2 + 1], __ATOMIC_ACQUIRE);
+}
+
 /* signature thunk address -> guest function (0 if not one) */
 uint64_t hao_sig_thunk_target(uint64_t a)
 {
     uint8_t *end = __atomic_load_n(&sig_ptr, __ATOMIC_ACQUIRE);
     if (!sig_area || a < (uint64_t)(uintptr_t)sig_area || a >= (uint64_t)(uintptr_t)end) return 0;
     if ((a - (uint64_t)(uintptr_t)sig_area) & (SIG_SLOT - 1)) return 0;
-    uint64_t g;
-    memcpy(&g, (void *)(uintptr_t)(a + 2), 8);
-    return g;
+    return __atomic_load_n(&sig_tab[(a - (uint64_t)(uintptr_t)sig_area) / SIG_SLOT * 2], __ATOMIC_ACQUIRE);
 }
 
 /* Guest code branched to a native entry point of guest function `guest`

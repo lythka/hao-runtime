@@ -247,6 +247,15 @@ void hao_fmt_done(hao_fmtfix *fx)
 #define CONST_TAB 4096
 static struct { uint64_t key, val; } ctab[CONST_TAB];
 
+/* A slot another thread was making when the process forked stays without a
+ * value in the child, whose lookups of it would wait forever: free it (a
+ * key that probed past it may then get a second copy). */
+void hao_vafmt_fork_child(void)
+{
+    for (uint32_t i = 0; i < CONST_TAB; i++)
+        if (ctab[i].key && !ctab[i].val) ctab[i].key = 0;
+}
+
 static uint64_t const_make(char kind, uint64_t fmt)
 {
     uint64_t pos[MAXL], nl;

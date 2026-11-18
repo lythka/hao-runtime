@@ -150,6 +150,10 @@ int main(int argc, char **argv)
             begin(); x_movsx_rr(&B, 2, 0, a, c); end("movsx %s, %s", r32[a], r16[c]);
             begin(); x_movsx_rr(&B, 4, 1, a, c); end("movsxd %s, %s", r64[a], r32[c]);
             begin(); x_xchg_rr(&B, 1, a, c); end("xchg %s, %s", r64[a], r64[c]);
+            begin(); x_crc32(&B, 1, a, c); end("crc32 %s, %s", r32[a], r8n[c]);
+            begin(); x_crc32(&B, 2, a, c); end("crc32 %s, %s", r32[a], r16[c]);
+            begin(); x_crc32(&B, 4, a, c); end("crc32 %s, %s", r32[a], r32[c]);
+            begin(); x_crc32(&B, 8, a, c); end("crc32 %s, %s", r64[a], r64[c]);
             for (int cc = 0; cc < 16; cc += 3) {
                 begin(); x_cmov_rr(&B, cc, 1, a, c); end("cmov%s %s, %s", ccn[cc], r64[a], r64[c]);
             }
@@ -246,6 +250,7 @@ int main(int argc, char **argv)
                 {0x0F, 0, "palignr"}, {0x0F, 5, "palignr"}, {0x0F, 15, "palignr"}, {0x08, 0x04, "roundps"}, {0x08, 0x0B, "roundps"},
                 {0x09, 0x08, "roundpd"}, {0x09, 0x0C, "roundpd"}, {0x0A, 0x09, "roundss"}, {0x0B, 0x0A, "roundsd"},
                 {0x0B, 0, "roundsd"}, {0x0B, 1, "roundsd"}, {0x0B, 2, "roundsd"}, {0x0B, 3, "roundsd"},
+                {0x44, 0x00, "pclmulqdq"}, {0x44, 0x11, "pclmulqdq"}, {0x44, 0x01, "pclmulqdq"}, {0x44, 0x10, "pclmulqdq"},
             };
             for (unsigned k = 0; k < sizeof s3a / sizeof *s3a; k++) {
                 begin(); x_sse3a_rri(&B, s3a[k].op, a, c, s3a[k].imm); end("%s %s, %s, %u", s3a[k].mn, xmmn(a), xmmn(c), s3a[k].imm);
@@ -381,6 +386,7 @@ int main(int argc, char **argv)
         MUSTFAIL(x_sse_rm(&b, 0xF0, 0x10, 0, 0, xm(RCX, 0)));
         MUSTFAIL(x_sse38_rr(&b, 0x00, 16, 0));
         MUSTFAIL(x_sse3a_rri(&b, 0x0F, 0, -1, 3));
+        MUSTFAIL(x_crc32(&b, 3, RAX, RCX));
         MUSTFAIL(x_mov_rr(&b, 1, 16, RAX));
         MUSTFAIL(x_mov_ri(&b, -3, 1));
         MUSTFAIL(x_mov_ld(&b, 8, RAX, xmi(RCX, RSP, 1, 0)));
@@ -396,9 +402,34 @@ int main(int argc, char **argv)
         if (x_patch32(&b, at + 8, 0) || !b.bad) { fprintf(stderr, "x_patch32 outside the buffer not rejected\n"); fails++; }
         xb_init(&b, t, 2); x_mov_ri(&b, RAX, 1);
         if (!b.overflow) { fprintf(stderr, "overflow not reported\n"); fails++; }
+        /* A counting buffer measures what a real one emits at the same
+         * address, RIP displacements and patches included, and writes nothing. */
+        {
+            uint8_t u[64];
+            xbuf c;
+            size_t len[2];
+            for (int k = 0; k < 2; k++) {
+                xbuf *x = k ? &c : &b;
+                memset(u, 0xCC, sizeof u);
+                if (k) xb_init_count(x, u, sizeof u); else xb_init(x, u, sizeof u);
+                x_mov_ld_rip(x, 8, RAX, u + 40);
+                size_t j = x_jcc8(x, XCC_E);
+                x_mov_ri(x, RCX, 0x123456789ull);
+                x_patch8(x, j, xb_len(x));
+                len[k] = xb_len(x);
+                if (x->bad || x->overflow) { fprintf(stderr, "count mode: emission failed\n"); fails++; }
+            }
+            if (len[0] != len[1]) { fprintf(stderr, "count mode: length %zu, emitted %zu\n", len[1], len[0]); fails++; }
+            for (size_t k = 0; k < sizeof u; k++)
+                if (u[k] != 0xCC) { fprintf(stderr, "count mode wrote byte %zu\n", k); fails++; break; }
+            xb_init_count(&c, u, sizeof u);
+            x_mov_ld_rip(&c, 8, RAX, u + 0x100000000ll);
+            if (!c.bad || xb_len(&c)) { fprintf(stderr, "count mode: RIP range not checked\n"); fails++; }
+        }
         if (fails) return 1;
     }
     begin(); x_mfence(&B); end("mfence");
+    begin(); x_vzeroupper(&B); end("vzeroupper");
     begin(); x_int3(&B); end("int3");
     begin(); x_nop(&B); end("nop");
     begin(); x_lahf(&B); end("lahf");
