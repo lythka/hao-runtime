@@ -755,6 +755,22 @@ Limits: a changed file with another hard link refuses the overlay (a rename woul
 hao-install.py writes in place; extended attributes of a rewritten program are those the backend gives a new
 file; the live patch does not yet act on "remove"; the whole-volume legacy-stub scan (step 5) is not repeated.
 
+## Updating a running Mac's payload needed a new image
+
+A changed runtime reached an installed Mac only through a rebuilt image. `hao-runtime-on-mac --install-live
+PAYLOAD` updates it in place: it refuses a dirty payload, one for another os_build or x86_64 cache UUID than the
+system's (SystemVersion.plist, the cache header) and a system without `usr/lib/hao/install.json`; it plans with
+hao-install.py's own functions (refactored into `load_payload`, `embed_programs`, `replace_files`, `install_record`,
+`write_record`; its CLI and record are unchanged), refuses any embed or replace error before the first write, then
+writes only root/ files whose sha256 or mode differs, programs to embed or restub and pending replacements, removes
+usr/lib/hao/aot caches not bound to the new libhao and rewrites install.json (`payload`, `live`). Without `--system`
+it checks `csrutil authenticated-root status`, mounts the booted system volume (`mount_apfs -o nobrowse`) at a
+private mount point, installs there and runs `bless --mount MNT --bootefi --create-snapshot`. Test:
+`tests/tools/test_install_live.py` (`tests/tools/run.sh`). Limits: the running-Mac path is tested only as far as
+the commands `--dry-run` prints; its first real run is on a laptop or QEMU. Files a newer payload no longer has
+are not deleted; the whole-volume legacy-stub scan of hao-install.py step 5 is not repeated;
+`/private/var/db/hao` caches on the Data volume are left for hao to reject and remake.
+
 ## The payload tools needed the cryptexes grafted into ROOT
 
 `hao-image-payload`, `hao-embed`, `hao-trust-list`, `stub_identity_gate.py` and the AOT list read the OS and
