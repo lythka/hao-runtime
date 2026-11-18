@@ -854,10 +854,17 @@ allocations. A value holding a type whose fields are not known (no
 reflection metadata) is refused when beside it lies a nil to convert or a
 part the walk cannot read, such as an Optional around it whose case it
 cannot tell: such an Optional is refused also when it holds a value
-(over-refusal, the safe side). Strictness returns per type as rows land (v0.0.2); the test
+(over-refusal, the safe side). A published existential of a native
+protocol with the guest's conformance (its witness table arm64 code native
+code calls through hao's callbacks), or of a special representation such as
+the Error box, is not certified but not known wrong: reported, its payload
+still walked for a known-wrong part; only a witness table word that is no
+conformance is known wrong. Beside a type whose fields are not known it is
+still refused, as above. Strictness returns per type as rows land (v0.0.2); the test
 switch `HAO_SWIFT_VALUE_STRICT=1` (test builds) refuses uncertified values
 as before, and the Swift value tests run under it. Test: `guest/svpolicy`
-(report-only and a known-wrong refusal by default), `guest/svfacts`.
+(report-only and a known-wrong refusal by default), `guest/svfacts`,
+`guest/svconformance` (the existential verdicts).
 
 ## Swift value walk: per-type facts, carrier rules, the survey image's audit
 
