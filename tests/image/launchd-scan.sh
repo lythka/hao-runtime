@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs (inside a booted image: no developer tools needed) every ARM-only launchd job of a system image under HAO and under BASELINE_HAO and fails on a refusal or hao
+# Runs (inside a booted image: no developer tools needed) every ARM-only or hao-embedded launchd job of a system image under HAO and under BASELINE_HAO and fails on a refusal or hao
 # abort that the baseline does not show; a job that stops at a host-only check is UNKNOWN (judge it on a booted image). Jobs that link a window or UI framework are not run (no GUI on the host).
 #   OUT=dir [T=15] [J=4] tests/image/launchd-scan.sh ROOT HAO BASELINE_HAO
 # In an image: ROOT=/, HAO=/usr/libexec/hao, BASELINE_HAO a copied hao with its libhao and libhao_identity beside it.
@@ -27,8 +27,8 @@ for d in System/Library/LaunchDaemons System/Library/LaunchAgents Library/Launch
         bin=$ROOT$prog
         [ -f "$bin" ] || continue
         archs=$(file -b "$bin" 2>/dev/null) || continue
-        case $archs in *x86_64*) continue ;; esac
         case $archs in *arm64*) ;; *) continue ;; esac
+        case $archs in *x86_64*) grep -aq __hao_slice "$bin" || continue ;; esac
         grep -aqE "/(AppKit|SkyLight|UIKitCore)\.framework/" "$bin" && continue
         name=$(basename "$p" .plist)
         grep -qx "$name" "$OUT/jobs" && continue
