@@ -628,6 +628,12 @@ read/execute.
   it again. Routing grants nothing, so a path that names another file by then
   only runs that file under the same checks.
 - HaoExec routes unsigned and set-ID files; hao refuses them afterwards.
+- A native call into guest code whose result is returned in memory needs the
+  caller's result buffer. When the caller is in an image with Swift metadata
+  and its `rax` looks like a data pointer, hao takes `rax` as that buffer, as
+  a Swift caller passes it. A C function inside such an image that leaves an
+  unrelated pointer in `rax` gets that memory overwritten by the guest's
+  result, in its own process.
 - HaoExec clears CR0.WP on one CPU, with interrupts off, for the one store
   that installs its activator. A non-maskable interrupt taken in that window
   runs without kernel write protection.
