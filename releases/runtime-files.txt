@@ -468,6 +468,8 @@ tests/guest/refusehelper.h
 tests/guest/refusehelper.m
 tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
+tests/guest/stripview.sh
+tests/guest/stripview.swift
 tests/guest/svpolicy.sh
 tests/guest/svpolicy.swift
 tests/guest/svpolicy_lib.swift

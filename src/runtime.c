@@ -11,6 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include <mach-o/getsect.h>
 #include <mach-o/nlist.h>
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
@@ -460,6 +461,31 @@ static bool guest_swift_symbol(uint64_t pc)
         }
     }
     __atomic_store_n(m, pc << 1 | sw, __ATOMIC_RELAXED);
+    return sw;
+}
+
+/* Is the native code at pc in an image with Swift metadata (libswiftCore, SwiftUI and other Swift
+ * frameworks)? Their Swift functions are mostly not exported, so no symbol tells, and they call guest
+ * Swift functions no entry marks: a closure stored in a value guest code built (a GeometryReader's
+ * content, a ViewBuilder closure in a guest View struct), one passed in a stack slot. A plain callback
+ * from such code takes rax as x8 (callback_plain; a value that cannot be a data pointer still is not),
+ * as before dd2778e: a stripped closure's indirect result written to hao's own area leaves the native
+ * caller's buffer uninitialized. dladdr only on a miss; remembered per address (a direct-mapped table). */
+static bool native_swift_image(uint64_t pc)
+{
+    enum { N = 4096 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *e = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    Dl_info di;
+    bool sw = false;
+    if (dladdr((void *)(uintptr_t)pc, &di) && di.dli_fbase) {
+        const struct mach_header_64 *mh = di.dli_fbase;
+        unsigned long n = 0;
+        sw = mh->magic == MH_MAGIC_64 && (getsectiondata(mh, "__TEXT", "__swift5_typeref", &n) || getsectiondata(mh, "__TEXT", "__swift5_types", &n) ||
+                                          getsectiondata(mh, "__TEXT", "__swift5_proto", &n));
+    }
+    __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
     return sw;
 }
 
@@ -1143,9 +1169,10 @@ uint64_t hao_callback(hao_cb_frame *f)
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
     if (sig) { hao_callback_with_sig(f, sig); return 0; }
     /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry), its
-     * own symbol does, or a native function the guest called jumped on to it (a dispatch thunk's tail
-     * call returns to hao_native_call, which put the guest's own x8 in rax) */
-    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target);
+     * own symbol does, its native caller is Swift code (native_swift_image), or a native function the
+     * guest called jumped on to it (a dispatch thunk's tail call returns to hao_native_call, which put
+     * the guest's own x8 in rax) */
+    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target) || native_swift_image(f->ret);
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
