@@ -44,6 +44,8 @@
 #define walk_fact_mangled hao_sv_walk_fact_mangled
 #define walk_fact_key hao_sv_walk_fact_key
 #define walk_fact_image hao_sv_walk_fact_image
+#define walk_fact_field hao_sv_walk_fact_field
+#define walk_fact_payload hao_sv_walk_fact_payload
 #define walk_facts_fork_child hao_sv_walk_facts_fork_child
 #define recipe_fork_child hao_sv_recipe_fork_child
 #define walk_facts_load hao_sv_walk_facts_load

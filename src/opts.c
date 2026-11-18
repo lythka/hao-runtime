@@ -159,6 +159,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     if ((v = env_get(o, envp, "HAO_AOT_FREE_MB", tier))) snprintf(o->aot_free_mb, sizeof o->aot_free_mb, "%s", v);
     if (env_on(o, envp, "HAO_CRASH", tier)) o->crash = true;
     if ((v = env_get(o, envp, "HAO_SWIFT_WALK_FACTS", tier))) snprintf(o->swift_walk_facts, sizeof o->swift_walk_facts, "%s", v);
+    if ((v = env_get(o, envp, "HAO_SWIFT_GUEST_FACTS", tier))) snprintf(o->swift_guest_facts, sizeof o->swift_guest_facts, "%s", v);
     for (size_t k = 0; k < NKNOBS; k++) {
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)

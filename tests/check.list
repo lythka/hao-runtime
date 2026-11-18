@@ -62,6 +62,7 @@ guest/svcarriers	300	par	tests/guest/svcarriers.sh
 guest/poddestroy	300	par	tests/guest/poddestroy.sh
 guest/carrierdestroy	300	par	tests/guest/carrierdestroy.sh
 guest/svfacts	300	par	tests/guest/svfacts.sh
+guest/svguest	300	par	tests/guest/svguest.sh
 guest/svnoncopy	300	par	tests/guest/svnoncopy.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh
