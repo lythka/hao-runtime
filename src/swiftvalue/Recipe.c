@@ -63,6 +63,8 @@ typedef struct {
     const void *metatype_box;                   /* thick metatype witness table $sBomWV */
     const void *single[5];                      /* one-XI pointer nominals */
     int source;         /* HAO_SV_SOURCE_GUEST / _NATIVE: who wrote the value's bytes; 0 unknown or mixed */
+    unsigned looking;   /* collect_inner: the partial walk is inside a type refused for fields not known */
+    unsigned unknown;   /* collect_inner: types it refused there for their own fields not known */
 } reflection;
 static void nominals(reflection *r)
 {
@@ -1036,15 +1038,16 @@ static int boxed_payload(reflection *r, const void *payload, const unsigned char
     r->boxed++;
     int ok = collect(r,payload,(const unsigned char *)(uintptr_t)(box + at),0,local,64,&n,depth + 1);
     r->boxed--;
-    if (!ok) return 0;
     /* Each nil must already be in the encoding its reader takes: the
      * receiving witnesses' for a value native code gets, arm64's for one
-     * guest code reads inline (r->known_layout). */
-    for (unsigned i = 0; i < n; ++i)
+     * guest code reads inline (r->known_layout). One that is not cannot be
+     * converted in a shared box, also where the walk then failed. */
+    for (unsigned i = 0; i < n && i < 64; ++i)
         if (local[i].bits != (r->known_layout ? local[i].arm_bits : local[i].receiver_bits)) {
             r->passes |= HAO_SV_UNCONVERTIBLE;
             return 0;
         }
+    if (!ok) return 0;
     r->passes |= HAO_SV_PASS_OWNED;
     return 1;
 #else
@@ -1103,7 +1106,7 @@ static int pointer_xi_optional(reflection *r, const void *type, const empty_plan
          * Their receiving encoding comes from the actual witness set,
          * independently of both the process architecture and source bits. */
         uint64_t receiver;
-        if (!receiver_empty_bits(type,plan,&receiver)) return 0;
+        if (!receiver_empty_bits(type,plan,&receiver)) return WRONG(r);   /* a nil to convert, no encoding to convert to */
         out[(*used)++] = (empty_patch){base + plan->offset, word, receiver, plan->consumed, plan->consumed - 1u};
         return 1;                     /* inactive payload must remain opaque */
     }
@@ -1222,6 +1225,7 @@ static int image_case(reflection *r, const void *type, const walk_fact *f, const
     if (verdict && !matches) {
         verdict = multi && nunimaged == 1 ? 1 : nunimaged > 1 ? 0 : -1;
         if (verdict > 0) { *found = unimaged; *defined_from = size; }
+        if (multi && !nunimaged) WRONG(r);   /* every case imaged, none matches: no case of this enum */
     } else if (verdict && matches == 1) {
         unsigned which;
         verdict = walk_fact_image(f,chosen,&which,arm,amask,x86,xmask,size);
@@ -1350,7 +1354,7 @@ static int pointer_word_xi(reflection *r, const void *type, const unsigned char 
         int x86 = (word & 1) || word / 2 > p ? 0 : 2;   /* word / 2 == p is 2p, taken above */
         int reading = r->source == HAO_SV_SOURCE_GUEST ? arm : r->source == HAO_SV_SOURCE_NATIVE ? x86 :
                       !arm ? x86 : !x86 || arm == x86 ? arm : 0;   /* unknown: two valid readings must agree */
-        if (!reading) return 0;
+        if (!reading) return r->source || (!arm && !x86) ? WRONG(r) : 0;   /* no value of this type (in the writer's encoding) */
         nil = reading == 1;
     }
     if (nil) {
@@ -1437,7 +1441,27 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
      * alike: refused under every rule below, the one for small values
      * included. Inside a native opaque type everything is native-laid-out. */
     int archdiff = r->opaque ? 0 : holds_archdiff(r, type, 0);
-    if (archdiff) return archdiff == 1 ? WRONG(r) : 0;
+    if (archdiff == 1) return WRONG(r);
+    if (archdiff == 2 && !r->looking) {
+        /* Fields not known somewhere inside: refused as unproven. The partial
+         * walk still walks the type by the rules below, for a known-wrong part
+         * beside the unknown one or a nil to convert that the refusal would
+         * leave unconverted (flags only; nothing is patched): only the
+         * unknown types themselves may refuse for it to stay report-only. */
+        if (!r->survey) return 0;
+        unsigned mark = *used, refused = r->surveyed, unknown = r->unknown;
+        r->looking++;
+        int ok = collect_inner(r, type, value, base, out, capacity, used, depth);
+        r->looking--;
+        /* A part refused there for any other reason may hide such a nil
+         * (an Optional around the unknown type whose case it cannot tell). */
+        unsigned self = !ok && (kind == 0x200 || kind == 0x301) && known_fields(r,type) < 0;   /* the unknown type itself */
+        if ((!ok && !self) || r->surveyed - refused > r->unknown - unknown - self) r->passes |= HAO_SV_KNOWN_WRONG;
+        for (unsigned i = mark; i < *used; ++i)
+            if (out[i].bits != (r->known_layout ? out[i].arm_bits : out[i].receiver_bits)) r->passes |= HAO_SV_KNOWN_WRONG;
+        *used = mark;
+        return 0;
+    }
     /* A patch rewrites a whole pointer word. A value of fewer than 8 bytes
      * holds no pointer, so no nil in it has a pointer extra inhabitant and
      * the case it is in cannot hide one: there is nothing to patch. */
@@ -1519,7 +1543,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
                 }
                 return collect(r,m[2],value,base,out,capacity,used,depth + 1);
             }
-            if (!have_arm || xe.offset % 8) return 0;
+            if (!have_arm) return WRONG(r);   /* a nil arm64 cannot encode */
+            if (xe.offset % 8) return 0;
             /* The receiving witness set's own nil. */
             const witnesses *ov = vwt(type);
             inject_tag_fn *inject = ((inject_tag_fn *const *)ov)[13];
@@ -1594,7 +1619,7 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             v->stride == ((v->size + (v->flags & 255)) & ~(uint64_t)(v->flags & 255))) {
             unsigned tag = value[payload->size];
             if (tag == 1) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
-            if (tag != 0) return 0;
+            if (tag != 0) return WRONG(r);   /* no case of this Optional */
             return collect(r,m[2],value,base,out,capacity,used,depth + 1);
         }
 #ifdef HAO_SWIFT_VALUE_RUNTIME
@@ -1646,8 +1671,12 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             if (!active.payload) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* an empty case */
             return collect(r,active.payload,value,base,out,capacity,used,depth + 1);
         }
+        const void *runtime_payloads[HAO_SV_MAX_ENUM_PAYLOADS];
+        uint64_t extent;
+        if (enum_payloads(type,runtime_payloads,&extent)) return WRONG(r);   /* its layout holds, the value is no case */
         fixed_enum_case fixed;
-        if (!discover_fixed_enum_case(type,value,&fixed)) return 0;
+        fixed.malformed = 0;
+        if (!discover_fixed_enum_case(type,value,&fixed)) return fixed.malformed ? WRONG(r) : 0;
         if (!fixed.payload) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }   /* the empty case: no payload */
         if (!fixed.spare) return collect(r,fixed.payload,value,base,out,capacity,used,depth + 1);
         unsigned first = *used;
@@ -1661,7 +1690,11 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         }
         return 1;
     }
-    if (kind == 0x305) { r->passes |= HAO_SV_PASS_OWNED; return common_objc_reference_value(type,value); }
+    if (kind == 0x305) {
+        r->passes |= HAO_SV_PASS_OWNED;
+        if (common_objc_reference_value(type,value)) return 1;
+        return common_objc_reference_type(type) ? WRONG(r) : 0;   /* a reference word that is no object */
+    }
     /* A live existential or Swift object in a published value (the plain
      * walk; selected() plans their nils there too): native code takes it, so
      * each witness table must be native, its conformance descriptor in no
@@ -1705,13 +1738,13 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
     }
     if (kind != 0x200 && kind != 0x301) return other_kind(r,type,kind);
     intptr_t count = known_fields(r,type);
-    if (count < 0) return 0;
+    if (count < 0) { r->unknown += r->looking != 0; return 0; }   /* fields not known */
     for (intptr_t i = 0; i < count; ++i) {
         field_info info = {0};
         const void *child = r->field(type, i, &info);
         intptr_t at = r->offset(type, i);
         if (info.free_name) info.free_name(info.name);
-        if (!child || at < 0 || (uint64_t)at > v->size || vwt(child)->size > v->size - (uint64_t)at) return 0;
+        if (!child || at < 0 || (uint64_t)at > v->size || vwt(child)->size > v->size - (uint64_t)at) return WRONG(r);
         /* Reflection exposes a weak field's referent type. Nonzero weak ObjC
          * storage is not the strong object pointer certified by the first-
          * Optional rule; only its common zero representation is admitted. */
@@ -1834,9 +1867,9 @@ int collect_survey_patches(const void *type, const void *value, empty_patch *out
 }
 
 int collect_partial_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
-                            int existentials, int (*known_layout)(const void *))
+                            int existentials, int (*known_layout)(const void *), unsigned *passes)
 {
-    return collect_patches(type,value,out,capacity,NULL,existentials,known_layout,2,NULL);
+    return collect_patches(type,value,out,capacity,NULL,existentials,known_layout,2,passes);
 }
 
 int collect_audit_patches(const void *type, const void *value, empty_patch *out, unsigned capacity, int existentials,

@@ -22,8 +22,14 @@
 //           copied (the array value) then dropped, or assigned over; a captured generic `Any` holding one
 //           (a box): the runtime destroys the storage natively; hao converts the nils at that final
 //           destruction, so each equals native arm64. anymany: 200000 of them, some kept alive.
+//   boxmix: an `Any` boxing a `C??` nil before an InlineArray, destroyed: the nil needs converting in a
+//           shared box and the walk then fails: refused, also by default (known wrong).
+//   unrefbox: an `Any` boxing a `C??` nil beside a struct without reflection metadata: refused by default.
+//   unrefopt: the unreflected case inside an Optional: refused by default too.
+//   objcbad: an ObjC reference holding the word 1 beside a `C??`, copied: no object: refused by default.
 //   unreflected: a struct compiled without reflection metadata, holding an `Any.Type??`, beside a `C??`:
-//           its fields are not known, so it is refused (zero reported fields are not an empty struct).
+//           its fields are not known, so it is refused (zero reported fields are not an empty struct); by
+//           default too, since the sibling nil it needs converted would be left unconverted.
 import Foundation
 import SvpolicyLib
 
@@ -132,6 +138,17 @@ typealias Wide = (C??, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, In
             print("anymany", nils, kept.count, kept.map { anyShown($0) }.last ?? "")
         case "anybox":
             print("anybox", shown(captured(C??.none as Any)() as! C??))
+        case "boxmix":
+            let b: Any = (C??.none, InlineArray<2, C>(repeating: C(7)), 1, 2) as (C??, InlineArray<2, C>, Int, Int)
+            print("boxmix", dropped((b, C(7))))
+        case "unrefbox":
+            print("unrefbox", dropped((Unreflected(t: .none), boxed())))
+        case "unrefopt":
+            let w = copied(Optional((Unreflected(t: .none), C??.none)))
+            print("unrefopt", w.map { shown($0.1) } ?? "none")
+        case "objcbad":
+            let w = copied((C??.none, unsafeBitCast(UInt(1), to: NSObject.self)))
+            print("objcbad", shown(w.0))
         case "unreflected":
             let w = copied((Unreflected(t: .none), C??.none))
             print("unreflected", w.0.t == nil, shown(w.1))

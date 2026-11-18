@@ -360,10 +360,14 @@ static int certified_patches(const void *type, const void *value, empty_patch *p
     if (!value) { decline(type,"null value storage",NULL,NULL,root,lr,pc); return 0; }
     int n = collect_value_patches(type,value,p,cap,&unresolved,existentials,known_layout,&passes);
     if (n >= 0) { pass_note(type,passes); return n; }
+    /* The walk stops at its first failure; the partial walk goes on past it
+     * and may find a known-wrong part beyond. */
+    unsigned rest = 0;
+    n = collect_partial_patches(type,value,p,cap,existentials,known_layout,&rest);
+    passes |= rest;
     if (passes & HAO_SV_UNCONVERTIBLE) why = "guest-encoded nil in a shared box cannot be converted";   /* known wrong */
     else if (passes & HAO_SV_KNOWN_WRONG) why = "value native code would misread";   /* Recipe.h HAO_SV_KNOWN_WRONG */
     decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc);
-    n = collect_partial_patches(type,value,p,cap,existentials,known_layout);
     return n < 0 ? 0 : n;
 }
 /* Whether a value of TYPE needs certification at a boundary: some node of
@@ -942,11 +946,19 @@ typedef struct { int count; empty_patch p[64]; } witness_patches;
  * inside a field of a guest-defined struct or enum is left out: native
  * witnesses hand that field to its own (guest) ones. */
 static bool witness_strip_guest(const void *type, witness_patches *w);
+/* Where the guest-defined fields lie is not known (past the walk's bound):
+ * with a nil one side must have converted, either side may misread it. */
+static const char *strip_refusal(const empty_patch *p, int count)
+{
+    for (int i = 0; i < count; ++i)
+        if (p[i].bits != p[i].receiver_bits) return "nil to convert beside guest-defined fields past the walk's bound";
+    return "guest-defined fields past the walk's bound";
+}
 static void witness_walk(const void *type, const void *value, witness_patches *w, const char *why, uint64_t lr, uint64_t pc)
 {
     w->count = certified_patches(type,value,w->p,64,1 | HAO_SV_SOURCE_GUEST,NULL,why,type,lr,pc);   /* guest storage */
     if (w->count > 0 && !witness_strip_guest(type,w)) {   /* which nils lie in guest-defined fields is not known */
-        decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,lr,pc);
+        decline(type,strip_refusal(w->p,w->count),NULL,NULL,type,lr,pc);   /* the patches as found: a failed strip keeps them */
         w->count = 0;
     }
 }
@@ -1326,7 +1338,7 @@ static void storage_value(const void *type, char *value, bool guest_made, empty_
     if (guest_made) {
         count = certified_patches(type,value,p,cap,1 | HAO_SV_SOURCE_GUEST,NULL,why,type,0,0);
         if (count > 0 && !strip_guest(type,p,&count)) {
-            decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,0,0);
+            decline(type,strip_refusal(p,count),NULL,NULL,type,0,0);
             count = 0;
         }
     } else {
