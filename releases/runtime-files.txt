@@ -722,6 +722,7 @@ tests/tools/test_contract.py
 tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
 tests/tools/test_install_live.py
+tests/tools/test_install_overlay.py
 tests/tools/test_release.py
 tests/tools/test_aot_use.py
 tests/tools/test_root.py

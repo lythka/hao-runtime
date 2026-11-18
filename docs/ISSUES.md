@@ -776,6 +776,19 @@ the commands `--dry-run` prints; its first real run is on a laptop or QEMU. An i
 are not deleted; the whole-volume legacy-stub scan of hao-install.py step 5 is not repeated;
 `/private/var/db/hao` caches on the Data volume are left for hao to reject and remake.
 
+## A payload update had no form the live-patch backend applies
+
+`hao patch --live` applies pack overlays (manifest.json format 1 + files/) with its own snapshot, backups, check
+after writing and revert; the runtime pack's embedded stubs and install.json were made only on the target, by
+hao-install.py writing in place. `hao-install.py --overlay OUT SYSTEM PAYLOAD` now plans the install with the same
+steps and checks and writes the result as such an overlay (pack hao_runtime, live-capable): changed root/ files,
+programs to embed or restub and pending replacements with the target's attributes, and the new install.json;
+"remove" lists the old libhao's AOT caches. install.json records the payload identity; `--installed SYSTEM`
+prints it. Test: `tests/tools/test_install_overlay.py` (an applied overlay equals `--install-live`'s result).
+Limits: a changed file with another hard link refuses the overlay (a rename would split the link) where
+hao-install.py writes in place; extended attributes of a rewritten program are those the backend gives a new
+file; the live patch does not yet act on "remove"; the whole-volume legacy-stub scan (step 5) is not repeated.
+
 ## The payload tools needed the cryptexes grafted into ROOT
 
 `hao-image-payload`, `hao-embed`, `hao-trust-list`, `stub_identity_gate.py` and the AOT list read the OS and
