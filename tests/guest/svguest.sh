@@ -14,6 +14,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-svguest)}
 HAO=${HAO:-$repo/build-ts/hao}
+# Uncertified values are refused here, as they are by default only once their rows land (a test build).
+export HAO_SWIFT_VALUE_STRICT=1
 T=${T:-60}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 # svguest.writable: the arm64e guest with its constant data (static metadata, witness tables) linked into
