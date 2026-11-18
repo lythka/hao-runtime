@@ -6,9 +6,12 @@
  *                       ("" when not generic; comma-separated walk or guest keys), "mangled name", verdict,
  *                       size, stride, align, arm64 VW flags, arm64 XI count, x86_64 XI count, XI class,
  *                       XI word offset, payload cases, empty cases, first field, field count, first image,
- *                       image count, "slice cdhash"}
+ *                       image count, "slice cdhash", metadata initialization, static metadata offset}
  *                      The row applies only to the slice whose CodeDirectory hash (as hao verified its pages,
- *                      40 hex digits) is this; a non-generic type only to its canonical metadata.
+ *                      40 hex digits) is this, and only while the descriptor's metadata initialization is the
+ *                      row's (SWIFTGUEST_INIT_NONE: static metadata; SWIFTGUEST_INIT_SINGLETON: the runtime
+ *                      completes it); a non-generic type only to its canonical metadata: for INIT_NONE the static
+ *                      metadata at this offset from the mach header (0 for the others).
  *                      The runtime uses a row only when the live guest metadata has this size, stride, VW flags
  *                      and XI count; otherwise the type has no row. Verdict, XI class and images: as in
  *                      swiftwalk_gen.inc.
