@@ -14,7 +14,7 @@
 # assigned over): equal native arm64, converted at destruction. "frozen": a native frozen enum the guest built is
 # examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64. The refusals run under the test
 # switch HAO_SWIFT_VALUE_STRICT=1; by default "refuse" is reported (report-only) and goes on, equal native,
-# and "boxed" and "task" (known wrong: a nil native code would misread) are still refused.
+# and "boxed", "task", "boxmix" and "objcbad" (known wrong: native code would misread them) are still refused.
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svpolicy.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -70,7 +70,7 @@ refused wide jit "type graph past the walk's bounds" env HAO_NO_AOT=1 "$HAO"
 refused result jit "native result has unresolved active representation" env HAO_NO_AOT=1 "$HAO"
 refused boxed jit "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 "$HAO"
 refused task jit "child task result" env HAO_NO_AOT=1 "$HAO"
-refused unreflected jit "unresolved active representation .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 "$HAO"
+refused unreflected jit "value native code would misread .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 "$HAO"
 # The pass classes, named under HAO_BRIDGE_CHECK.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" pass >"$OUT/check.out" 2>"$OUT/check.err"
 for c in "owner-opaque .*NSObject" "identical-representation .*Int) -> Swift.Int" "inactive-payload .*Optional<Swift.Int>"; do
@@ -102,7 +102,8 @@ if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/passthrough.out" &&
 echo "passthrough rc=$rc $r"
 [ $r = SAME ] || { diff "$OUT/native.refuse.out" "$OUT/passthrough.out" | sed 's/^/    /' | head -8; tail -3 "$OUT/passthrough.err" | sed 's/^/    /'; }
 # The default (v0.0.1): an uncertified value is reported once and goes on, equal native; a known-wrong one
-# (a guest-encoded nil in a shared box, a child task's C?? result) is still refused.
+# (a guest-encoded nil in a shared box, also beside a part with no rule; a child task's C?? result; an ObjC
+# reference word that is no object) is still refused.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO" "$OUT/svpolicy.arm64e" refuse \
     >"$OUT/report.out" 2>"$OUT/report.err"; rc=$?
 if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/report.out" && ! grep -q 'boundary refused' "$OUT/report.err" &&
@@ -112,5 +113,10 @@ echo "report-only rc=$rc $r"
 [ $r = SAME ] || tail -3 "$OUT/report.err" | sed 's/^/    /'
 refused boxed default "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
 refused task default "child task result has a nil native code would copy" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+refused boxmix default "guest-encoded nil in a shared box cannot be converted" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+refused unrefbox default "guest-encoded nil in a shared box cannot be converted" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+refused unreflected default "value native code would misread .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+refused unrefopt default "value native code would misread" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+refused objcbad default "value native code would misread" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
 [ $fail = 0 ] && echo "svpolicy: PASS" || echo "svpolicy: FAIL"
 exit $fail

@@ -196,12 +196,12 @@ static int tag_byte_case(const void *type, const unsigned char *value, fixed_enu
     unsigned empty_tags = !empty ? 0 : used >= 32 ? 1 : (unsigned)((empty + (UINT64_C(1) << used) - 1) >> used);
     if ((unsigned)count + empty_tags > 256 || v->extra != 256 - (unsigned)count - empty_tags) return 0;
     unsigned tag = value[maximum];
-    if (tag >= (unsigned)count + empty_tags) return 0;
+    if (tag >= (unsigned)count + empty_tags) { out->malformed = 1; return 0; }
     if (tag >= (unsigned)count) {
         uint32_t index = 0;
         memcpy(&index, value, maximum < 4 ? (size_t)maximum : 4);   /* little-endian */
         uint64_t e = used >= 32 ? index : (uint64_t)(tag - (unsigned)count) << used | index;
-        if (e >= empty) return 0;
+        if (e >= empty) { out->malformed = 1; return 0; }
     }
     out->payload = tag < (unsigned)count ? payloads[tag] : NULL;   /* an empty case: nothing to walk */
     out->tag = tag;
@@ -325,7 +325,7 @@ static int spare_bit_case(const void *type, const void *value, fixed_enum_case *
         }
     }
     unsigned tag = get_tag(value, type);
-    if (tag >= (unsigned)count + (tabled ? empty : 0)) return 0;
+    if (tag >= (unsigned)count + (tabled ? empty : 0)) { out->malformed = 1; return 0; }
     out->tag = tag;
     out->spare = 1;
     if (tag >= (unsigned)count) { out->payload = NULL; return 1; }   /* an empty case: nothing to walk */
@@ -449,14 +449,14 @@ static int guest_spare_bit_case(const void *type, const unsigned char *value, fi
     uint64_t t = 0;
     for (uint64_t i = 0, k = 0; i < bits; ++i)
         if (bit_at(tag, i)) t |= (uint64_t)bit_at(value, i) << k++;
-    if (t >= g.tags) return 0;
+    if (t >= g.tags) { out->malformed = 1; return 0; }
     out->spare = 1;
     if (t >= (uint64_t)g.count) {
         uint64_t index = 0;
         for (uint64_t i = 0, k = 0; i < bits && k < 32 && k < g.used; ++i)
             if (!bit_at(g.spare, i)) index |= (uint64_t)bit_at(value, i) << k++;
         uint64_t e = g.used >= 32 ? index : (t - (uint64_t)g.count) << g.used | index;
-        if (e >= g.empty) return 0;
+        if (e >= g.empty) { out->malformed = 1; return 0; }
         out->payload = NULL;   /* an empty case: nothing to walk */
         out->tag = (uint32_t)(g.count + e);
         return 1;
@@ -513,6 +513,7 @@ static int fixed_case(const void *type, const void *value, fixed_enum_case *out,
     if (!type || !value || !out) return 0;
     memset(out, 0, sizeof *out);
     if (tag_byte_case(type, value, out)) return 1;
+    if (out->malformed) return 0;
 #ifdef HAO_SWIFT_VALUE_RUNTIME
     if (spare_bit_case(type, value, out, row)) return 1;
     if (guest_spare_bit_case(type, value, out)) return 1;

@@ -74,7 +74,7 @@ int collect_value_patches(const void *type, const void *value, empty_patch *out,
  * certify, nothing inside a refusing type. For the experimental unrestricted
  * pass-through only (swiftvalue.c decline), which otherwise drops them. */
 int collect_partial_patches(const void *type, const void *value, empty_patch *out, unsigned capacity,
-                            int existentials, int (*known_layout)(const void *));
+                            int existentials, int (*known_layout)(const void *), unsigned *passes);
 /* Whether the representation of TYPE's own storage is, from its metadata
  * alone, the same on both architectures or its native owner's alone, for
  * every value (the rules collect applies without reading the value). Its
