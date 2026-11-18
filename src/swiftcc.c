@@ -42,6 +42,7 @@
 #include "hao/runtime.h"
 #include "hao/bridge.h"
 #include "hao/gmap.h"
+#include <stddef.h>
 #include "hao/x86args.h"
 #include <dlfcn.h>
 #include <objc/runtime.h>
@@ -1354,9 +1355,10 @@ static bool viewself_conforms(uint64_t wt, uint64_t desc)
 typedef struct { uint64_t m; uint32_t state; } assoc_response;
 typedef assoc_response __attribute__((swiftcall)) assoc_witness_fn(uint64_t, const void *, const void *, const void *, const void *);
 typedef struct { uint64_t proto, reqbase, body, type; } body_proto;   /* body 0: none */
-enum { BODY_PROTOS = 128 };
-static body_proto body_protos[BODY_PROTOS];
-static unsigned body_nprotos;                                         /* published count */
+/* protocol descriptor -> its body_proto (the entry's words are one), once per
+ * protocol: any witness table argument of a callee is looked at, so a process
+ * meets many protocols; a full table would compute (dlsym) on every call. */
+static hao_gmap body_protos = HAO_GMAP_INIT(4, 1, 6, 16);
 static assoc_witness_fn *body_assoc;
 
 /* N bytes of the NUL-terminated string at A into out (false if longer or unreadable) */
@@ -1378,17 +1380,19 @@ static bool body_rel(uint64_t a, bool indirect, uint64_t *out)
     return !(indirect && (r & 1)) || genres_read(*out, out, 8);
 }
 
-static void body_proto_compute(uint64_t proto, body_proto *bp)
+/* false: PROTO is no protocol descriptor in a module (any word of a callee's
+ * arguments is looked at); otherwise BP's body is 0 where the protocol has none */
+static bool body_proto_compute(uint64_t proto, body_proto *bp)
 {
     uint32_t h[6];   /* flags, parent, name, requirements in signature, requirements, associated type names */
     uint64_t parent, pname, name, names;
     char mod[64], nm[64], assoc[256], sym[256];
     bp->proto = proto;
-    if (!genres_read(proto, h, sizeof h) || (h[0] & 0x1f) != 3 || h[4] > 256) return;   /* a protocol */
-    if (!body_rel(proto + 4, true, &parent) || !genres_read(parent, h, 4) || (h[0] & 0x1f) != 0) return;   /* a module */
-    if (!body_rel(parent + 8, false, &pname) || !body_string(pname, mod, sizeof mod)) return;
-    if (!body_rel(proto + 8, false, &name) || !body_string(name, nm, sizeof nm)) return;
-    if (!body_rel(proto + 20, false, &names) || !body_string(names, assoc, sizeof assoc)) return;
+    if (!genres_read(proto, h, sizeof h) || (h[0] & 0x1f) != 3 || h[4] > 256) return false;   /* a protocol */
+    if (!body_rel(proto + 4, true, &parent) || !genres_read(parent, h, 4) || (h[0] & 0x1f) != 0) return false;   /* a module */
+    if (!body_rel(parent + 8, false, &pname) || !body_string(pname, mod, sizeof mod)) return true;
+    if (!body_rel(proto + 8, false, &name) || !body_string(name, nm, sizeof nm)) return true;
+    if (!body_rel(proto + 20, false, &names) || !body_string(names, assoc, sizeof assoc)) return true;
     uint32_t nsig, nreq;
     genres_read(proto + 12, &nsig, 4);
     genres_read(proto + 16, &nreq, 4);
@@ -1399,43 +1403,41 @@ static void body_proto_compute(uint64_t proto, body_proto *bp)
         uint64_t vm = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT, "$s7SwiftUI12ViewModifierP4body7content4BodyQzAA01_cD8_ContentVyxG_tFTq");
         if (vm >= req && vm < req + 8 * (uint64_t)nreq) body = vm;
     }
-    if (body < req || body >= req + 8 * (uint64_t)nreq || (body - req) % 8) return;
+    if (body < req || body >= req + 8 * (uint64_t)nreq || (body - req) % 8) return true;
     /* Body's position among the associated type names, then that associated type access function */
     int at = -1, k = 0;
     for (char *save = NULL, *w = strtok_r(assoc, " ", &save); w; w = strtok_r(NULL, " ", &save), k++) if (!strcmp(w, "Body")) at = k;
-    if (at < 0) return;
+    if (at < 0) return true;
     for (uint32_t i = 0, j = 0; i < nreq; i++) {
         uint32_t f;
-        if (!genres_read(req + 8 * (uint64_t)i, &f, 4)) return;
+        if (!genres_read(req + 8 * (uint64_t)i, &f, 4)) return true;
         if ((f & 0xf) == 7 && (int)j++ == at) { bp->type = req + 8 * (uint64_t)i; break; }
     }
-    if (!bp->type) return;
+    if (!bp->type) return true;
     bp->reqbase = req - 8;   /* the witness table's slot of requirement k: 1 + k (0: the conformance descriptor) */
     bp->body = body;
+    return true;
 }
 
-/* the body requirement of the protocol at PROTO, computed once per protocol (NULL: the table is full) */
+/* the body requirement of the protocol at PROTO, computed once per protocol (NULL: no protocol, or the table is full) */
 static const body_proto *body_proto_of(uint64_t proto)
 {
-    unsigned n = __atomic_load_n(&body_nprotos, __ATOMIC_ACQUIRE);
-    for (unsigned k = 0; k < n; k++)
-        if (body_protos[k].proto == proto) return &body_protos[k];
+    _Static_assert(sizeof(body_proto) == 4 * sizeof(uint64_t) && offsetof(body_proto, proto) == 0, "gmap entry");
+    const uint64_t *e = hao_gmap_get1(&body_protos, proto);
+    if (e) return (const body_proto *)(const void *)e;
     body_proto bp = {0};
-    body_proto_compute(proto, &bp);
+    if (!body_proto_compute(proto, &bp)) return NULL;   /* not remembered: rejected by its first reads */
     hao_crit_enter();
     pthread_mutex_lock(&genres_lock);
-    const body_proto *r = NULL;
-    n = body_nprotos;
-    for (unsigned k = 0; k < n && !r; k++)
-        if (body_protos[k].proto == proto) r = &body_protos[k];
-    if (!r && n < BODY_PROTOS) {
-        body_protos[n] = bp;
-        __atomic_store_n(&body_nprotos, n + 1, __ATOMIC_RELEASE);
-        r = &body_protos[n];
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim1(&body_protos, proto, &fresh);
+    if (slot && fresh) {
+        slot[1] = bp.reqbase; slot[2] = bp.body; slot[3] = bp.type;
+        hao_gmap_publish1(&body_protos, slot, proto);
     }
     pthread_mutex_unlock(&genres_lock);
     hao_crit_leave();
-    return r;
+    return slot ? (const body_proto *)(const void *)slot : NULL;
 }
 
 /* WT: a witness table whose protocol's body requirement slot holds an entry of TARGET */

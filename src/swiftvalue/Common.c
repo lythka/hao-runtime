@@ -43,9 +43,9 @@ static bool scalar_shape(const void *m, unsigned depth)
     if (m == HAO_DLSYM("$sSiN") || m == HAO_DLSYM("$sSfN") ||
         m == HAO_DLSYM("$sSdN")) return true;
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     if (!kind || !count || !offset || !field || kind(m) != 0x200 || count(m) != 1 || offset(m,0)) return false;
     field_info info = {0};
     const void *child = field(m,0,&info);
@@ -70,9 +70,9 @@ static bool reference_shape(const void *m, unsigned depth)
         return (u64((const char *)m + 32) & 3) && (u32((const char *)m + 40) & 2);
     }
     if (k != 0x200) return false;
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     if (!count || !offset || !field || count(m) != 1 || offset(m,0) != 0) return false;
     field_info info = {0};
     const void *child = field(m,0,&info);
@@ -179,9 +179,9 @@ static bool one_witness_class_existential(const void *m)
 static const void *existential_wrapper(const void *m)
 {
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     if (!m || !kind || !count || !offset || !field || kind(m) != 0x200 || count(m) != 1 || offset(m,0) != 0) return NULL;
     field_info info = {0};
     const void *child = field(m,0,&info);
@@ -479,9 +479,9 @@ int common_byte_optional_case(const void *type, const void *value)
 {
     byte_xi_reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"),
         HAO_DLSYM("$sSiN"), HAO_DLSYM("$sSdN"),
         HAO_DLSYM("$sSfN"), HAO_DLSYM("$ss6UInt32VN"),
@@ -587,9 +587,9 @@ static bool scalar_record(const void *type, const unsigned char *value, unsigned
         return tag == 1 || (tag == 0 && scalar_record(m[2],value,depth + 1));
     }
     if (k != 0x301) return false;
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     if (!count || !offset || !field || count(type) != 1 || offset(type,0)) return false;
     field_info info = {0};
     const void *child = field(type,0,&info);
@@ -634,9 +634,9 @@ static bool string_payload(const void *m, const unsigned char *value, unsigned d
     if (m == HAO_DLSYM("$sSSN"))
         return v->size == 16 && (!value || u64(value + 8) > 2);
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     if (!kind || !count || !offset || !field || kind(m) != 0x301) return false;
     intptr_t n = count(m);
     if (n < 1 || n > 64) return false;

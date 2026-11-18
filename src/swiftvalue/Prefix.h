@@ -48,6 +48,9 @@
 #define walk_fact_payload hao_sv_walk_fact_payload
 #define walk_facts_fork_child hao_sv_walk_facts_fork_child
 #define recipe_fork_child hao_sv_recipe_fork_child
+#define reflect_count_fn hao_sv_reflect_count_fn
+#define reflect_offset_fn hao_sv_reflect_offset_fn
+#define reflect_field_fn hao_sv_reflect_field_fn
 #define walk_facts_load hao_sv_walk_facts_load
 #define collect_audit_patches hao_sv_collect_audit_patches
 #endif
