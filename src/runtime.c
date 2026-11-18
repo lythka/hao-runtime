@@ -3659,7 +3659,21 @@ static void *native_dlsym(void *h, const char *sym, bool flat)
 static bool defined_in(void *p, const char *lib)
 {
     Dl_info di;
-    return dladdr(p, &di) && di.dli_fname && !strcmp(di.dli_fname, lib);
+    if (!dladdr(p, &di) || !di.dli_fbase) return false;
+    const struct mach_header_64 *mh = di.dli_fbase;
+    if (mh->magic != MH_MAGIC_64) return false;
+    const uint8_t *c = (const uint8_t *)(mh + 1), *end = c + mh->sizeofcmds;
+    for (uint32_t i = 0; i < mh->ncmds && end - c >= (ptrdiff_t)sizeof(struct load_command); i++) {
+        const struct load_command *lc = (const void *)c;
+        if (lc->cmdsize < sizeof *lc || lc->cmdsize > (size_t)(end - c)) return false;
+        if (lc->cmd == LC_ID_DYLIB) {
+            const struct dylib_command *d = (const void *)c;
+            size_t off = d->dylib.name.offset, n = lc->cmdsize;
+            return off < n && strnlen((const char *)c + off, n - off) < n - off && !strcmp((const char *)c + off, lib);
+        }
+        c += lc->cmdsize;
+    }
+    return false;
 }
 
 /* A C++ import with BOOL in its signature (bridge.h hao_cxx_bool_types):
