@@ -545,6 +545,9 @@ tests/guest/swift-reverse-native.swift
 tests/guest/swift-reverse.swift
 tests/guest/swiftargs.swift
 tests/guest/swiftboxes.swift
+tests/guest/swiftcallee.sh
+tests/guest/swiftcallee.swift
+tests/guest/swiftcalleehelper.swift
 tests/guest/swiftcc.swift
 tests/guest/swiftcchelper.swift
 tests/guest/swiftentry.swift

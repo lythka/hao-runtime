@@ -1644,6 +1644,24 @@ Limits:
   witness the guest calls, sees the guest's encoding, as for the entries
   below.
 
+## Swift callees that dladdr cannot name
+
+A guest function passed to a native Swift function is a Swift function
+value: its entry is marked so that a native call into it passes rax (the
+x86_64 indirect result) as x8. Whether the callee was Swift came from
+dladdr of the native address, which names no symbol for many exported
+shared-cache functions. A closure given to such a generic function then
+wrote its result into hao's scratch area, and the native caller read its
+own uninitialized buffer (a `swift_retain` fault at 0x10).
+
+The plan now also records it from the Swift mangled name the guest bound
+the import under (`hao_plan.swiftfn`, `src/bridge.c` make_plan), kept by
+every later plan of the address; dladdr still answers for the rest.
+`tests/guest/swiftcallee` empties a helper's symbol table and strips the
+guest's local symbols. Limits: a Swift function reached only through a
+bare native pointer or a non-Swift alias that dladdr cannot name still
+gets a plain entry; its indirect results still go to the scratch area.
+
 ## Guest-made views lent to native View modifiers
 
 A native protocol extension method of SwiftUI.View (`sheet`, `padding`,

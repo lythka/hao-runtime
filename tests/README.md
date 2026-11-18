@@ -159,6 +159,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/swifttextalign | PASS | 30 | `NSTextAlignment` (Center and Right are 1 and 2 on arm64, 2 and 1 on x86_64) through a native Swift library: a property setter and getter, a parameter after a `String?` and an object, an unlabeled parameter and a result, converted by their demangled names; native arm64 results under JIT, `--interp`, helpers-only and AOT. Before the conversion the native side read a guest's center as right |
 | guest/svconformance | PASS | 2 | published existentials: a guest conformance to a native protocol (class-bound and opaque) refused, a guest protocol's existential with guest conformances admitted |
 | guest/swift-object-callbacks | PASS | 5 | |
+| guest/swiftcallee | PASS | 1 | guest closures passed to a native generic Swift function return T through its indirect result buffer; the native helper's symbol table is emptied so dladdr names nothing, and the callee is Swift by the guest's bound import name |
 | guest/swiftlate | PASS | 4 | |
 | guest/swiftls | PASS | 5 | |
 | guest/swiftmeta | PASS | 8 | |
