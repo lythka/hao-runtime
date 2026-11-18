@@ -582,8 +582,16 @@ symbol table, no dladdr), one handed to a native function whose own
 exported symbol is a Swift mangled name (its entry is marked the same
 way: `hao_swift_thunk_for`), or a native function the guest called that
 jumped on to guest code (its return address is hao_native_call's, which
-put the guest's own x8 in rax); a value that cannot be a data pointer is
-never taken. The caller's image does not count. Guest functions handed
+put the guest's own x8 in rax), or a guest function whose own code takes
+x8 as an input called from native code in an image with Swift metadata
+(`__swift5_types`, `__swift5_typeref` or `__swift5_proto`). A function
+takes x8 as an input when a walk of its first 64 instructions
+(`a64_x8_live_in`, `src/a64_regs.c`: straight-line code, B, and both ways
+of B.cond, CBZ/CBNZ and TBZ/TBNZ; hints such as PACIBSP and BTI are
+neutral) reads x8 on some path before writing it; a write to x8, a call,
+an indirect branch or return, or an unclassified instruction naming
+register 8 ends a path first. The answer is remembered per address. A
+value that cannot be a data pointer is never taken. Guest functions handed
 to native Swift code get the marked entry wherever hao sees them cross:
 in x0-x7 and in the stack arguments of a native Swift callee (by its
 symbol or the import's bound name; the 8-byte stack arguments of the
@@ -604,6 +612,15 @@ guest's result: that needs the signature.
 An unsupported signature that cannot get its refusing signature thunk
 (HAO_NO_CLOSURES, the area full) is refused when it is registered,
 never given a plain thunk or a signature noted for its address before.
+
+Test: `guest/indirect-x8` (JIT and --interp) calls guest functions with a
+pointer in rax from a native image with a `__swift5_types` section and from
+one without: only the function that reads x8 at its entry, called from the
+first, writes through it; one that stores through x8 only in a callee it
+calls, and one called from the second, leave the pointed-to word intact.
+`guest/stripview` passes with the hand-off sites' entries and also with
+this rule alone (a local build without the sites). Unit cases of the walk
+are in `tests/a64/test_imm_cond.c`.
 
 Test: `guest/refuse` (JIT and --interp). An 8 KB result: the guest's
 stack canary was overwritten, now intact. A 96 KB result: it ran over
