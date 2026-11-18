@@ -465,8 +465,9 @@ static bool guest_swift_symbol(uint64_t pc)
 
 /* Is the native function at pc a Swift function by its own symbol (an exported Swift mangled name at
  * exactly pc)? Guest functions passed to it are Swift function values: their entries are marked
- * (hao_swift_thunk_for). Asked when the guest calls it, never on a callback's path; remembered per
- * address in a direct-mapped table. */
+ * (hao_swift_thunk_for). Also asked when the plan's names are not Swift ones (hao_plan swiftfn, which
+ * dladdr cannot replace: it names no symbol for many exported shared-cache functions). Asked when the guest calls it, never on a callback's
+ * path; remembered per address in a direct-mapped table. */
 static bool native_swift_symbol(uint64_t pc)
 {
     enum { N = 4096 };
@@ -669,7 +670,8 @@ static void native_step(void *arg)
     }
     /* guest function pointers and blocks passed to native code get thunks:
      * in the argument slots the plan names, or in all of them */
-    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL, native_swift_symbol(pc));
+    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL,
+                               (p && p->swiftfn) || native_swift_symbol(pc));
     t->native_calls++;
     unsigned objc_enum_result = p && p->src == HAO_BRS_OBJCIMP ? hao_objc_enum_args(c, pc, false) : 0;
     unsigned swift_enum = p ? __atomic_load_n(&p->swift_enum, __ATOMIC_RELAXED) : 0;   /* NSTextAlignment in a Swift signature (swiftcc.c) */
