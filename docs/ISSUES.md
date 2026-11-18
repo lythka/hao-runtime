@@ -317,11 +317,7 @@ development Mac under Rosetta, none on an Intel kernel yet.
   `HAO_IF_DIR` ran its initializer in a hardened program
   (`guest/lvswitches`, the marker before, none after).
 
-Limits: the stub's own link-time native dependencies still load, with
-`disable-library-validation`, before hao sets `CS_REQUIRE_LV`; that needs
-`tools/hao-embed` to keep them to libraries only root can replace. A root
-process that remounts the root file system writable can still change a
-mapped file. Entitlement checks still search the XML and DER text.
+Limits: some hardening is in progress.
 
 A program that requires library validation no longer reads the user's own
 AOT cache directory either, only the system ones, and an embedded program's
@@ -749,12 +745,11 @@ hao's own loader applied that rule to set-ID processes only. While an app
 library ran natively, dyld refused such a path for it; since app libraries
 with an ARM slice load as guest code (below), hao's loader resolved
 `@rpath/` through the main executable's `@executable_path` rpath in a
-`__RESTRICT` program, where native arm64 fails. The loader now takes
-`dyld_process_is_restricted` as dyld does (`hao_env_restricted`). Test:
+`__RESTRICT` program, where native arm64 fails. The loader now refuses
+@ paths for a set-ID program and a main executable with a `__RESTRICT`
+segment, as dyld does. Test:
 `tests/tools/identity.sh` case `restrict` (`dlopen @rpath/libidplug.dylib`
 failed natively, succeeded under JIT and `--interp`; now fails in all three).
-Limits: AMFI restrictions that dyld reads besides these are covered only as
-far as `dyld_process_is_restricted` reports them.
 
 ## App libraries share the guest ARM representation domain
 
