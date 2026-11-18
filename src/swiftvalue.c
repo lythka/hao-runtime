@@ -17,6 +17,7 @@
 #include "swiftvalue/NativeLeaf.h"
 #include "swiftvalue/Tables.h"
 #include "swiftvalue/Facts.h"
+#include "hao/macho.h"
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -1366,7 +1367,11 @@ static bool storage_hook_locked(uint64_t *metadata, heap_destroy_fn *original, h
 {
     uint64_t now = __atomic_load_n(&metadata[-2],__ATOMIC_ACQUIRE);
     if (now == (uint64_t)(uintptr_t)wrapper) return true;
-    if (!original || now != (uint64_t)(uintptr_t)original || !storage_writable(&metadata[-2])) return false;
+    if (!original || now != (uint64_t)(uintptr_t)original) return false;
+    if (hao_image_sealed_at((uint64_t)(uintptr_t)&metadata[-2],8))   /* a guest's constant metadata (prespecialized) */
+        return hao_image_sealed_cas((uint64_t)(uintptr_t)&metadata[-2],now,(uint64_t)(uintptr_t)wrapper) ||
+               __atomic_load_n(&metadata[-2],__ATOMIC_ACQUIRE) == (uint64_t)(uintptr_t)wrapper;
+    if (!storage_writable(&metadata[-2])) return false;
     return __atomic_compare_exchange_n(&metadata[-2],&now,(uint64_t)(uintptr_t)wrapper,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE) ||
            now == (uint64_t)(uintptr_t)wrapper;
 }
