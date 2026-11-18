@@ -1,4 +1,6 @@
-# Fixture row of the Swift value walk's facts table (src/swiftvalue/Facts.c), for tests/guest/svnoncopy.sh:
+# Fixture rows of the Swift value walk's facts table (src/swiftvalue/Facts.c), for tests/guest/svnoncopy.sh:
 #   type MANGLED-KEY VERDICT
+# The last two name guest types (a guest generic argument; svnoncopy_fake.swift's own Mutex): refused.
 type 15Synchronization5MutexVySiG SAME
 type 15Synchronization5MutexVyScS12ContinuationVyyyYbc_GG SAME
+type 15Synchronization5MutexVy9svnoncopy5GuestVG SAME

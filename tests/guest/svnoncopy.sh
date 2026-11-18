@@ -4,7 +4,8 @@
 # ("stream"), value witness flag IsNonCopyable. Under the test switch
 # HAO_SWIFT_WALK_FACTS=tests/guest/svnoncopy.facts (a TEST_SWITCHES build) their SAME rows (the second with
 # the generated table's key) admit them: equal to native arm64 under JIT, --interp and AOT. Without the
-# fixture each is refused.
+# fixture each is refused. A SAME row admits only the native type: with the fixture a Mutex<Guest> ("guestarg")
+# and a guest Mutex<Int> of a module named Synchronization (tests/guest/svnoncopy_fake.swift) are refused.
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svnoncopy.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -18,6 +19,9 @@ for a in arm64e arm64; do
         "$here/svnoncopy.swift" 2>"$OUT/build.$a.err" || { cat "$OUT/build.$a.err"; exit 2; }
     codesign -s - -f "$OUT/svnoncopy.$a" 2>/dev/null
 done
+xcrun swiftc -O -parse-as-library -module-name Synchronization -target arm64e-apple-macos27.0 -o "$OUT/fake.arm64e" \
+    "$here/svnoncopy_fake.swift" 2>"$OUT/build.fake.err" || { cat "$OUT/build.fake.err"; exit 2; }
+codesign -s - -f "$OUT/fake.arm64e" 2>/dev/null
 rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
 timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/svnoncopy.arm64e" >"$OUT/aot.gen" 2>&1 || echo "svnoncopy: aot generation failed"
 facts=$here/svnoncopy.facts
@@ -44,6 +48,15 @@ for part in mutex stream; do
     if [ $rc != 0 ] && grep -q "Swift value boundary refused: .*$want" "$OUT/nofacts.$part.err"
     then r=REFUSED; else r=NOT-REFUSED; fail=1; fi
     printf '%-6s nofacts rc=%s %s\n' $part "$rc" "$r"
+done
+for part in guestarg fake; do
+    case $part in
+    guestarg) set -- "$OUT/svnoncopy.arm64e" guestarg; want='type=Synchronization.Mutex<svnoncopy.Guest>' ;;
+    *) set -- "$OUT/fake.arm64e"; want='type=Synchronization.Mutex<Swift.Int>' ;;
+    esac
+    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_WALK_FACTS="$facts" "$HAO" "$@" >"$OUT/$part.out" 2>"$OUT/$part.err"; rc=$?
+    if [ $rc != 0 ] && grep -q "Swift value boundary refused: .*$want" "$OUT/$part.err"; then r=REFUSED; else r=NOT-REFUSED; fail=1; fi
+    printf '%-8s facts rc=%s %s\n' $part "$rc" "$r"
 done
 [ $fail = 0 ] && echo "svnoncopy: PASS" || echo "svnoncopy: FAIL"
 exit $fail
