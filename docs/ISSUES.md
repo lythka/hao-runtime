@@ -836,7 +836,11 @@ result with a nil to convert and no rule or hook, a lent value that needs
 conversion and cannot be copied, the ownership and ABI cases of an
 activation whose value needs conversion, malformed storage (null,
 overlapping, array extent), missing Optional metadata and failed
-allocations. Strictness returns per type as rows land (v0.0.2); the test
+allocations. A value holding a type whose fields are not known (no
+reflection metadata) is refused when beside it lies a nil to convert or a
+part the walk cannot read, such as an Optional around it whose case it
+cannot tell: such an Optional is refused also when it holds a value
+(over-refusal, the safe side). Strictness returns per type as rows land (v0.0.2); the test
 switch `HAO_SWIFT_VALUE_STRICT=1` (test builds) refuses uncertified values
 as before, and the Swift value tests run under it. Test: `guest/svpolicy`
 (report-only and a known-wrong refusal by default), `guest/svfacts`.
