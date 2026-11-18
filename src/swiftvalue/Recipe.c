@@ -9,6 +9,7 @@
 #include "Facts.h"
 #include "hao/macho.h"
 #include "hao/runtime.h"
+#include "hao/gmap.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -301,9 +302,9 @@ static int discover(const void *type, empty_plan *out, int existentials)
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, existentials,
     };
     nominals(&r);
@@ -505,9 +506,9 @@ int translated_nil_type(const void *type)
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
     };
     xi_enum e;
@@ -578,9 +579,9 @@ int arm_struct_xi(const void *const *fields, const uint8_t *tags, size_t n, uint
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 0,
     };
     if (!r.kind || !r.count || !r.field || !r.optional || n > 4096) return 0;
@@ -760,9 +761,9 @@ int xi_native_owned(const void *type)
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
     };
     if (!type || !r.kind || !r.count || !r.field || !r.optional) return 0;
@@ -792,9 +793,9 @@ int guest_owned_type(const void *type)
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
     };
     if (!type || !r.kind || !r.optional) return 0;
@@ -808,9 +809,9 @@ int settled_node(const void *type, int *whole)
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, 1,
     };
     nominals(&r);
@@ -1146,7 +1147,90 @@ static int injected_over(const void *type, unsigned which, int fill, uint64_t at
 
 /* case_images' buffers, too big for a guest stack. */
 static pthread_mutex_t images_lock = PTHREAD_MUTEX_INITIALIZER;
-void recipe_fork_child(void) { images_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+static pthread_mutex_t reflect_lock = PTHREAD_MUTEX_INITIALIZER;   /* reflect_counts, reflect_fields: writers */
+void recipe_fork_child(void)
+{
+    images_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    reflect_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
+
+/* The stored fields of a struct, tuple or class as the runtime's reflection
+ * reports them (ReflectionMirror.cpp: swift_reflectionMirror_recursiveCount,
+ * recursiveChildOffset, recursiveChildMetadata), remembered per metadata.
+ * They depend on the metadata alone, which is never freed, and a value of
+ * the type exists, so its metadata is complete. Each child lookup demangles
+ * the field's type name (swift_getTypeByMangledName) and a walk asks it for
+ * every field of every value at each guest call of a native witness: per
+ * call, that was most of a SwiftUI process's CPU time in its commit
+ * handlers. Field names are not kept (no caller reads them). A lookup that
+ * fails is not remembered; a full table only stops remembering. */
+static hao_gmap reflect_counts = HAO_GMAP_INIT(2, 1, 6, 14);   /* metadata -> count */
+static hao_gmap reflect_fields = HAO_GMAP_INIT(5, 2, 8, 16);   /* (metadata, index) -> child, offset, strong | var << 1 */
+static void reflect_remember(hao_gmap *m, const uint64_t *key, const uint64_t *value, unsigned n)
+{
+    hao_crit_enter(); pthread_mutex_lock(&reflect_lock);
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim(m,key,&fresh);
+    if (slot && fresh) {
+        memcpy(slot + m->keys,value,8 * (size_t)n);
+        hao_gmap_publish(m,slot,key);
+    }
+    pthread_mutex_unlock(&reflect_lock); hao_crit_leave();
+}
+static intptr_t SWIFT reflect_count(const void *type)
+{
+    const uint64_t *e = hao_gmap_get1(&reflect_counts,(uint64_t)(uintptr_t)type);
+    if (e) return (intptr_t)e[1];
+    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    intptr_t n = count(type);
+    uint64_t key = (uint64_t)(uintptr_t)type, value = (uint64_t)n;
+    if (type && n >= 0) reflect_remember(&reflect_counts,&key,&value,1);
+    return n;
+}
+static const uint64_t *reflect_entry(const void *type, intptr_t i)
+{
+    uint64_t key[2] = {(uint64_t)(uintptr_t)type, (uint64_t)i};
+    const uint64_t *e = hao_gmap_get(&reflect_fields,key);
+    if (e) return e;
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    field_info info = {0};
+    const void *child = field(type,i,&info);
+    if (info.free_name) info.free_name(info.name);
+    intptr_t at = offset(type,i);
+    if (!type || !child || at < 0) return NULL;
+    uint64_t value[3] = {(uint64_t)(uintptr_t)child, (uint64_t)at, (uint64_t)info.strong | (uint64_t)info.var << 1};
+    reflect_remember(&reflect_fields,key,value,3);
+    return hao_gmap_get(&reflect_fields,key);
+}
+static intptr_t SWIFT reflect_offset(const void *type, intptr_t i)
+{
+    const uint64_t *e = reflect_entry(type,i);
+    if (e) return (intptr_t)e[3];
+    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    return offset(type,i);
+}
+static const void *SWIFT reflect_field(const void *type, intptr_t i, field_info *info)
+{
+    const uint64_t *e = reflect_entry(type,i);
+    if (!e) {
+        field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+        return field(type,i,info);
+    }
+    *info = (field_info){NULL, NULL, (e[4] & 1) != 0, (e[4] & 2) != 0};
+    return (const void *)(uintptr_t)e[2];
+}
+void *reflect_count_fn(void) { return HAO_DLSYM("swift_reflectionMirror_recursiveCount") ? (void *)reflect_count : NULL; }
+void *reflect_offset_fn(void)
+{
+    return HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset") &&
+           HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata") ? (void *)reflect_offset : NULL;
+}
+void *reflect_field_fn(void)
+{
+    return HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset") &&
+           HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata") ? (void *)reflect_field : NULL;
+}
 
 /* A CONVERT row (Facts.h): an enum whose empty cases' encodings differ by
  * architecture, every case listed with each architecture's image and mask
@@ -1831,9 +1915,9 @@ static int collect_patches(const void *type, const void *value, empty_patch *out
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, existentials,
         known_layout, 0, survey_mode,
     };
@@ -1884,9 +1968,9 @@ int collect_audit_patches(const void *type, const void *value, empty_patch *out,
 {
     reflection r = {
         HAO_DLSYM("swift_getMetadataKind"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveCount"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset"),
-        HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata"),
+        reflect_count_fn(),
+        reflect_offset_fn(),
+        reflect_field_fn(),
         HAO_DLSYM("$sSaMn"), HAO_DLSYM("$sSqMn"), HAO_DLSYM("$sSSN"), NULL, existentials,
         NULL, 0, 3,
     };

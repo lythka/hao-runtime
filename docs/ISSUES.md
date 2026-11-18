@@ -4280,6 +4280,33 @@ Remaining limitations:
 - Two consumed inhabitants are the bound, as for published values: a third
   nesting level is handed over unchanged.
 
+## Cost of the Swift value walk at guest calls of native witnesses
+
+A guest call of a native value witness on a type that is not settled walks
+the value (`src/swiftvalue.c` `witness_walk`), and the walk asked the Swift
+runtime's reflection for every field of every struct, tuple and class it
+passed through, at every call. Each child lookup demangles the field's type
+name (`swift_getTypeByMangledName`), so a SwiftUI process whose commit
+handlers copy such values in generic code spent most of its CPU there; one
+commit handler took minutes. The field count, offsets and child metadata
+are now remembered per metadata (`src/swiftvalue/Recipe.c`, reflection
+cache; metadata is never freed and the walk sees only complete metadata);
+field names are not kept. A guest callback with an indirect result also
+looked for a body witness table among its arguments in a 128-entry
+protocol table that, once full, recomputed with two `dlsym` lookups per
+call: it is now a growable map, and words that are no protocol descriptor
+are not entered.
+
+Measured on the development host (under Rosetta): a generic copy of a tuple
+of `DateComponents?`, `(any P)??`, `URLComponents?`, `String?` and
+`[Int]?`, 20000 times: 17.2 s -> 0.88 s (JIT).
+
+Remaining limitations:
+- The walk itself still runs per call for a type that is not settled
+  (about 40 us for that tuple); a per-type plan is not made.
+- The reflection cache holds at most 49152 fields; past it, lookups are
+  made each time as before.
+
 ## `Optional<AnyObject>` in a published Swift value
 
 A guest SwiftUI view value that held an `NSNotificationCenter.Publisher`
