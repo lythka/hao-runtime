@@ -268,6 +268,9 @@ tests/guest/callback-routes.sh
 tests/guest/callbacks.sh
 tests/guest/carrierdestroy.sh
 tests/guest/carrierdestroy.swift
+tests/guest/sealedstorage.s
+tests/guest/sealedstorage.sh
+tests/guest/sealedstorage.swift
 tests/guest/cbstructs.m
 tests/guest/cfnull.c
 tests/guest/cfnull.sh

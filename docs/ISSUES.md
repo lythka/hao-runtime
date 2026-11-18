@@ -1006,6 +1006,10 @@ refused and anything else left as found (the open entry above). Registered
 storage is kept in a set whose removed slots are reused and compacted
 (`svpolicy` anymany: 200000 arrays); a rebuild publishes the new table
 before freeing the old one, and a fork child recounts the table it holds.
+Metadata in a guest image's sealed constant data (prespecialized storage
+metadata) gets its hook through the loader's one-store window; before, its
+storage was refused when made (`guest/sealedstorage`, metadata hand-laid as
+swiftc prespecializes no stdlib class; a daemon's own copy is not measured).
 A box hao may not rewrite passes when every nil in it is already in its
 reader's encoding (`host/swiftvalue`: an `Any` boxing a native `C??` nil). This hook replaces symbol interposition of
 `swift_arrayDestroy`: the array storage's deinit calls it directly inside
