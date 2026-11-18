@@ -27,11 +27,11 @@ RECORDS.tsv, one exported symbol per line ('#' comments; '-' for an empty field)
   class    EXACT | TYPED | REFUSED | UNKNOWN
   kind     - | B c C s S (narrow C result) | b h H t T (Swift async narrow result)
            | A (call through abi.c with enc)
-           | K (Swift packed stack arguments, tools/gen_stackpack.py: class TYPED, enc lists for SysV
+           | K (Swift packed stack arguments: class TYPED, enc lists for SysV
              slots 2, 3, ... the arm64 byte offset and width of the argument each carries,
              "OFF.W,OFF.W,...", W in 1 2 4 8, at most 16, inside the 16 guest stack words hao copies)
            | Z (std::string parameters converted, src/cxxstr.c: enc is 'P' or '.' then one role
-             per register x0..x5, '-' r v w; tools/gen_cxxstr.py)
+             per register x0..x5, '-' r v w)
            | D (Foundation.Data? nils converted, hao/bridge.h: class TYPED, enc is 'R' (the result
              is a Data? too) or '.' then one role per register x0..x7, 'd' a Data?'s first word
              followed by '+' its second, '-' anything else, trailing '-' optional; at least one Data?)
@@ -41,7 +41,7 @@ RECORDS.tsv, one exported symbol per line ('#' comments; '-' for an empty field)
   enc      arm64 ObjC type encoding (required with kind A)
   why      reason (required for REFUSED)
   thunk    (optional 8th field) the generated thunk pair's key: the call goes through
-           _hao_gh_KEY / _hao_nh_KEY of a thunk library (tools/gen_bridge.py); class TYPED,
+           _hao_gh_KEY / _hao_nh_KEY of a thunk library; class TYPED,
            kind - or A (A: enc is the abi.c equivalent, used with HAO_NO_THUNKS=1)
 """
 import os, struct, sys

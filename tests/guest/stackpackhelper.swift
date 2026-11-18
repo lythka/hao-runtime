@@ -1,6 +1,6 @@
 // Native Swift functions whose arguments past x7 Apple arm64 packs at natural size
 // (tests/guest/stackpack.sh). Built without library evolution and without an interface, as a
-// private framework is: tools/gen_swift.py cannot declare these, tools/gen_stackpack.py types them
+// private framework is: the generated Swift declarations cannot declare these, the stack-pack table types them
 // from both slices' code. The shapes follow Photos' crash (PhotosUICore
 // PhotoKitItemListManagerOptions.init: three packed Bools, then an object reference that the
 // options' copy retains).

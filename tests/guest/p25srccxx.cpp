@@ -1,4 +1,4 @@
-// P25 step A's C++ source (tools/gen_bridge.py --cxx: the SDK's <new> and cxxabi.h by
+// P25 step A's C++ source (generated: the SDK's <new> and cxxabi.h by
 // mangled name): typed allocation's operator new/delete (built -ftyped-cxx-new-delete,
 // as the 27.0 callers were), the plain and sized operator new/delete, and the
 // __cxa_guard_acquire/release pair of a function-local static. tests/guest/p25src.sh.

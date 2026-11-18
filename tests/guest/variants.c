@@ -1,4 +1,4 @@
-// Symbol variants across the native boundary (tools/gen_variants.py, src/variants_gen.inc).
+// Symbol variants across the native boundary (src/variants_gen.inc).
 // Darwin exports some APIs under several names ($INODE64, $1050, $DARWIN_EXTSN,
 // $NOCANCEL, $LEGACYMAC). An arm64 import must bind to the x86_64 function that is the
 // same function: plain stat is stat$INODE64 there, plain select is select$1050, but plain

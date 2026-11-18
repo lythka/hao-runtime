@@ -1,10 +1,10 @@
 /* P25 step A's three new sources of native signatures, one representative call each
  * group (tests/guest/p25src.sh). `p25src CASE` runs one case; `p25src list` names them.
- *   oss-*   open-source Darwin prototypes no SDK header has (tools/gen_bridge.py --oss:
+ *   oss-*   open-source Darwin prototypes no SDK header has (generated:
  *           libplatform's os/log_simple_private_impl.h, os/lock_private.h, os/once_private.h;
  *           dyld's mach-o/dyld_priv.h). Declared here as those headers declare them.
  *   sys-*   libsystem_kernel syscall and Mach trap stubs typed from xnu's syscalls.master and
- *           syscall_sw.c (tools/gen_syscalls.py). Declared here as syscalls.master gives them.
+ *           syscall_sw.c (generated). Declared here as syscalls.master gives them.
  * The C++ representatives (typed operator new/delete, __cxa_guard_*) are p25srccxx.cpp.
  * Every case prints only what is the same natively and under hao (results, errno). */
 #include <errno.h>
