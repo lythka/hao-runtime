@@ -89,13 +89,13 @@ static const witnesses *vwt(const void *type)
 }
 
 /* The number of a struct's or tuple's fields reflection reports, or -1:
- * more than 64, or none for a value that has bytes (a struct compiled
+ * more than HAO_SV_FIELD_LIMIT, or none for a value that has bytes (a struct compiled
  * without reflection metadata reports none: its fields are not known, which
  * is not the same as having none). */
 static intptr_t known_fields(reflection *r, const void *type)
 {
     intptr_t count = r->count(type);
-    if (count < 0 || count > 64 || (!count && vwt(type)->size)) return -1;
+    if (count < 0 || count > HAO_SV_FIELD_LIMIT || (!count && vwt(type)->size)) return -1;
     return count;
 }
 
@@ -270,7 +270,7 @@ static int selected(reflection *r, const void *type, empty_plan *out, unsigned d
     }
     if (r->known_layout && !r->known_layout(type)) return 0;
     intptr_t count = r->count(type);
-    if (count < 1 || count > 64) return 0;
+    if (count < 1 || count > HAO_SV_FIELD_LIMIT) return 0;
     const void *best = NULL;
     uint32_t extra = 0;
     uint64_t offset = 0;
@@ -385,7 +385,7 @@ static int function_xi_word(reflection *r, const void *type, uint64_t *offset)
         }
         if (kind != 0x200 && kind != 0x301) return 0;
         intptr_t count = r->count(type);
-        if (count < 1 || count > 64) return 0;
+        if (count < 1 || count > HAO_SV_FIELD_LIMIT) return 0;
         const void *best = NULL;
         intptr_t best_at = -1;
         for (intptr_t i = 0; i < count; ++i) {
@@ -425,7 +425,7 @@ static const void *xi_carrier(reflection *r, const void *type, int known, uint64
         if (kind != 0x200 && kind != 0x301) return NULL;
         if (known && kind == 0x200 && r->known_layout && !r->known_layout(type)) return NULL;
         intptr_t count = r->count(type);
-        if (count < 1 || count > 64) return NULL;
+        if (count < 1 || count > HAO_SV_FIELD_LIMIT) return NULL;
         const void *best = NULL;
         intptr_t best_at = -1;
         for (intptr_t i = 0; i < count; ++i) {
@@ -549,7 +549,7 @@ static int arm_xi(reflection *r, const void *type, unsigned depth, uint32_t *out
     if (kind == 0x301 || (kind == 0x200 && native && native_frozen_type(type) && type != r->string &&
                           m[1] != r->array)) {
         intptr_t count = r->count(type);
-        if (count < 0 || count > 64) return 0;
+        if (count < 0 || count > HAO_SV_FIELD_LIMIT) return 0;
         uint32_t best = 0;
         int any = 0;
         for (intptr_t i = 0; i < count; ++i) {
@@ -637,7 +637,7 @@ static int byte_value_xi(reflection *r, const void *type, uint64_t *offset, unsi
         }
         if (kind != 0x200 && kind != 0x301) return 0;
         intptr_t count = r->count(type);
-        if (count < 1 || count > 64) return 0;
+        if (count < 1 || count > HAO_SV_FIELD_LIMIT) return 0;
         const void *best = NULL;
         intptr_t best_at = -1, best_i = -1, arm_i = -1;
         uint32_t arm_best = 0;

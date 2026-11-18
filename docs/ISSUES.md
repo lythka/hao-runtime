@@ -802,7 +802,11 @@ or `swift_arrayAssignWith*` called inside libswiftCore, and the element
 witnesses those call. A nil guest code wrote there in the arm64 encoding
 (an `Any` holding a `C??` nil in an `[Any]`, for example) then reaches a
 native witness unconverted, which can retain or release an invalid
-reference. Also not covered: Dictionary and Set storage, boxes whose
+reference. Since storage of an element type with a nil whose encoding
+differs is admitted as a carrier (entry below: `[Data?]`, `[C??]`, a struct
+holding them) instead of refused when made, this gap covers those element
+types too: a native copy of such an element out of guest-made storage reads
+the guest's nil. Also not covered: Dictionary and Set storage, boxes whose
 metadata no guest-made box hooked, and storage of an element type guest
 code never made storage of. In storage native code made, a value the walk
 cannot read is destroyed as found; one it finds in the guest's encoding
@@ -930,8 +934,15 @@ guest code fills and the runtime destroys with native witnesses wherever
 its last reference goes (array storage from `swift_allocObject` of
 `_ContiguousArrayStorage<E>` or `_allocateUninitializedArray<E>`, a
 generic box from `swift_allocBox`) is refused when it is made if its
-element type has a nil whose encoding differs, or is past the walk's
-bounds. Nils inside a positively resilient native type are written by its
+element type is past the walk's bounds. An element type with a nil whose
+encoding differs is admitted as a carrier when every such nil has a
+certified conversion (a walk rule, or a facts row with case images; a row
+without them, or a REFUSE row, still refuses) and the storage's destroy hook
+can be had: hooking and registering it are then conditions of admitting it,
+and its final destruction converts those nils (below). Before, such storage
+was refused when made (`guest/carrierdestroy`: arrays of `Data?`, `C??` and
+structs holding both, one of 241 stored fields, and generic boxes of them,
+released by native code). Nils inside a positively resilient native type are written by its
 native witnesses and do not count. An element type that is only not settled
 (an enum, an existential) is not refused there: its storage is certified at
 its final destruction instead. Once guest code makes array storage or a
@@ -957,6 +968,18 @@ not taken as empty. An element of a trivially destroyed (POD) type is not
 walked at its storage's final destruction, which reads nothing; before,
 such storage of `UnsafePointer<Int8>?` was refused there
 (`guest/poddestroy`: arrays and a generic box released by native code).
+The walk reads structs and tuples of up to 256 stored fields (before, 64:
+a larger type was uncertifiable); a final destruction takes its patches
+from a heap buffer of that many. A guest struct with layout-string value
+witnesses whose layout string the runtime builds from its fields' metadata
+(`swift_cvw_initStructMetadataWithLayoutString`, a struct holding a UUID)
+has its fields of native types read by the native witnesses in the native
+encoding (measured: a `C??` nil of 1 in it makes `swift_cvw_destroy`
+release address 1): its nils are converted at a final destruction, and
+guest calls of its witnesses convert like a frozen native struct's. One
+whose layout string guest code compiled has guest functions read its enum
+fields' cases (both encodings of a `C??` nil destroy cleanly): it keeps the
+guest's encoding, as one with guest witnesses does.
 
 Closed gaps: guest calls of native Optional, tuple and array witnesses
 handed an uncertified value over unchanged without any decision; a lent
@@ -992,7 +1015,10 @@ captured `Any` holding one, equal native arm64 (all four faulted before);
 covers: both are refused by default (checked for `optwitness`), and their
 engines run with the switch. `guest/overlaynil` now stops by default at an
 `Optional<Optional<P>>` whose nil is a third pointer inhabitant; its three
-engines run with the switch.
+engines run with the switch. Since storage of such element types is admitted as a
+carrier (entry above), `svpolicy`'s array of `C??` and captured `C??` and
+`optwitness` by default equal native arm64, converted at destruction, and
+`svpolicy`'s past-the-bounds tuple has 257 elements.
 
 Impact, from the survey lines of 26B131 runs (types seen, all of the
 "unresolved active representation" reason, in calls and in published

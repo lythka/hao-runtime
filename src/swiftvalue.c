@@ -51,6 +51,7 @@ typedef struct {
     unsigned nnode, nentry;
     bool failed, existentials;
     bool converts;   /* some node has a nil whose encoding differs (a conversion the walk knows) */
+    bool unproven;   /* for one such node the facts table has no case images, or refuses it */
 } builder;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t witness_setup_lock = PTHREAD_MUTEX_INITIALIZER;   /* guest calls of witnesses, below */
@@ -313,16 +314,16 @@ static void pass_note(const void *type, unsigned passes)
  * certify the value it is refused for WHY; under the experimental pass-
  * through the patches of the parts it could certify are returned instead,
  * so that a refusing field does not drop its siblings' patches. */
-static int certified_patches(const void *type, const void *value, empty_patch *p, int existentials,
+static int certified_patches(const void *type, const void *value, empty_patch *p, unsigned cap, int existentials,
                              int (*known_layout)(const void *), const char *why, const void *root, uint64_t lr, uint64_t pc)
 {
     const void *unresolved = type;
     unsigned passes = 0;
     if (!value) { decline(type,"null value storage",NULL,NULL,root,lr,pc); return 0; }
-    int n = collect_value_patches(type,value,p,64,&unresolved,existentials,known_layout,&passes);
+    int n = collect_value_patches(type,value,p,cap,&unresolved,existentials,known_layout,&passes);
     if (n >= 0) { pass_note(type,passes); return n; }
     decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc);
-    n = collect_partial_patches(type,value,p,64,existentials,known_layout);
+    n = collect_partial_patches(type,value,p,cap,existentials,known_layout);
     return n < 0 ? 0 : n;
 }
 /* Whether a value of TYPE needs certification at a boundary: some node of
@@ -348,6 +349,9 @@ static bool graph(builder *b, const void *type, unsigned depth)
     converts |= kind == 0x202 && translated_nil_type(type);   /* a spare-bit enum XI that differs (Data?) */
     converts &= !xi_native_owned(type);                        /* nils only native witnesses write */
     b->converts |= converts;
+    walk_fact fact;
+    if (converts && walk_fact_of(type,&fact) &&
+        (fact.verdict == WALK_FACT_REFUSE || (fact.verdict == WALK_FACT_CONVERT && !fact.nimages))) b->unproven = true;
     int whole = 0;
     bool settled = settled_node(type,&whole);
     bool affected = converts || !settled;
@@ -355,7 +359,7 @@ static bool graph(builder *b, const void *type, unsigned depth)
         /* nothing below needs looking at */
     } else if (kind == 0x200 || kind == 0x301) {
         intptr_t count = b->count(type);
-        if (count < 0 || count > 64) { b->failed = true; return false; }
+        if (count < 0 || count > HAO_SV_FIELD_LIMIT) { b->failed = true; return false; }
         if (!count && v->size) affected = true;   /* fields not reflected: only the walk can tell (it refuses) */
         for (intptr_t i = 0; i < count; ++i) {
             field_info info = {0};
@@ -486,14 +490,14 @@ static bool handle(hao_thread *t, const entry *e)
     void *destination = (void *)(uintptr_t)c->x[0];
     if (!source) DECLINE(e->type,"null value storage",NULL,NULL);
     empty_patch patches[64];
-    int count = certified_patches(e->type,source,patches,HAO_SV_SOURCE_GUEST,NULL,"unresolved active representation",root,c->x[30],e->pc);
+    int count = certified_patches(e->type,source,patches,64,HAO_SV_SOURCE_GUEST,NULL,"unresolved active representation",root,c->x[30],e->pc);
     bool foreign = false;
     for (int i = 0; i < count; ++i) foreign |= patches[i].bits != patches[i].receiver_bits;
     bool assignment = (e->slots & ((1u << 3) | (1u << 5))) != 0;
     if (assignment) {
         empty_patch old[64];
         if (!destination) DECLINE(e->type,"null assignment destination",NULL,NULL);
-        int n = certified_patches(e->type,destination,old,0,NULL,"unresolved assignment destination",root,c->x[30],e->pc);
+        int n = certified_patches(e->type,destination,old,64,0,NULL,"unresolved assignment destination",root,c->x[30],e->pc);
         for (int i = 0; i < n; ++i) foreign |= old[i].bits != old[i].receiver_bits;
     }
     if (!foreign) return false;   /* every nil already in the receiving encoding: identical */
@@ -579,7 +583,7 @@ void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
     if (t->swift_values != scope) refuse(scope->plan->type,"activation lifetime mismatch");
     hao_cpu saved = t->cpu;
     empty_patch patches[64];
-    int count = certified_patches(scope->plan->type,scope->output,patches,HAO_SV_SOURCE_GUEST,NULL,
+    int count = certified_patches(scope->plan->type,scope->output,patches,64,HAO_SV_SOURCE_GUEST,NULL,
                                   "result publication has unresolved active representation",scope->plan->type,saved.x[30],0);
     t->cpu = saved;
     unsigned changed = 0;
@@ -680,6 +684,12 @@ static void witness_add_locked(uint64_t pc, unsigned slot, uint64_t *lo, uint64_
     if (pc < *lo) *lo = pc;
     if (pc > *hi) *hi = pc;
 }
+/* The published range to widen, empty while no witness is added. */
+static void witness_range_now(uint64_t *lo, uint64_t *hi)
+{
+    *lo = witness_entries ? hao_swift_witness_lo : UINT64_MAX;
+    *hi = witness_entries ? hao_swift_witness_hi : 0;
+}
 /* Publish the widened range: hi before lo, which readers load first. */
 static void witness_range_publish(uint64_t lo, uint64_t hi)
 {
@@ -759,7 +769,9 @@ static void witness_setup_locked(void)
         any, one_table};
     for (unsigned k = 0; k < sizeof types / sizeof *types; ++k) if (!types[k]) return;
     static const unsigned slots[] = {0,1,2,3,4,5,6,7,11,12,13};
-    uint64_t lo = UINT64_MAX, hi = 0;
+    uint64_t lo, hi;
+    unsigned before = witness_entries;
+    witness_range_now(&lo,&hi);   /* a runtime-laid guest struct's, added before */
     for (unsigned k = 0; k < sizeof types / sizeof *types; ++k)
         for (unsigned i = 0; i < (k < 2 ? 11u : 8u); ++i) {   /* enum witnesses (11-13) only in an enum's table */
             uint64_t pc = (uint64_t)(uintptr_t)((void *const *)vwt(types[k]))[slots[i]];
@@ -771,7 +783,7 @@ static void witness_setup_locked(void)
         uint64_t pc = (uint64_t)(uintptr_t)dlsym(RTLD_DEFAULT,array_ops[k].name);
         if (native_function(pc)) witness_add_locked(pc,array_ops[k].slot,&lo,&hi);
     }
-    if (!witness_entries) return;
+    if (witness_entries == before) return;
     __atomic_store_n(&optional_metadata,opt,__ATOMIC_RELEASE);
     __atomic_store_n(&witness_ready,true,__ATOMIC_RELEASE);
     witness_range_publish(lo,hi);
@@ -784,7 +796,8 @@ static void witness_setup_locked(void)
 enum { WITNESS_CONVERTS = 1,    /* certification, and a nil whose encoding differs may need converting */
        WITNESS_SETTLED = 2,     /* nothing: every node settled */
        WITNESS_UNCERTIFIABLE = 3, /* refusal: the type graph is past the walk's bounds */
-       WITNESS_CERTIFY = 4 };   /* certification only */
+       WITNESS_CERTIFY = 4,     /* certification only */
+       WITNESS_UNPROVEN = 5 };  /* as CONVERTS, but a conversion has no certified rule (graph b->unproven) */
 static int witness_state(const void *type)
 {
     const uint64_t *e = hao_gmap_get1(&witness_types,(uint64_t)(uintptr_t)type);
@@ -799,7 +812,7 @@ static int witness_state(const void *type)
     bool ok = b->kind && b->count && b->offset && b->field;
     bool affected = ok && graph(b,type,0);
     int state = !ok || b->failed ? WITNESS_UNCERTIFIABLE : !affected ? WITNESS_SETTLED :
-                b->converts ? WITNESS_CONVERTS : WITNESS_CERTIFY;
+                b->unproven ? WITNESS_UNPROVEN : b->converts ? WITNESS_CONVERTS : WITNESS_CERTIFY;
     free(b);
     hao_crit_enter(); pthread_mutex_lock(&lock);
     bool fresh;
@@ -821,14 +834,21 @@ static bool witness_affected(const void *type, uint64_t lr, uint64_t pc)
 }
 
 /* The byte ranges in a value of TYPE (at BASE) of the fields whose struct or
- * enum a guest image defines: their value witnesses are guest code, which
- * reads its own encoding inside them, so a nil of an Optional there keeps
- * the guest's bits. Through struct and tuple fields only: an Optional
+ * enum a guest image defines: their value witnesses are guest code, or the
+ * runtime's layout-string ones following a layout string guest code
+ * compiled, which has guest functions read its enums' cases; either reads
+ * the guest's encoding inside them, so a nil of an Optional there keeps the
+ * guest's bits. A guest struct whose layout string the runtime built from
+ * its fields' metadata (runtime_laid) is walked through like a tuple: the
+ * native witnesses read its fields. Through struct and tuple fields only: an Optional
  * (or a native enum) around a guest type is read by its own native
  * witnesses, also where its nil is a word inside the guest type's bytes
  * (`Leaf?`, Leaf a guest struct holding a class reference). -1 when there
  * are more than CAP or the type is deeper than 16. */
 typedef struct { uint64_t lo, hi; } byte_range;
+/* Guest structs whose layout string the runtime built (hao_swift_struct_layout_done). */
+static hao_gmap laid_types = HAO_GMAP_INIT(2, 1, 6, 14);         /* guest struct metadata -> 1 */
+static bool runtime_laid(const void *type) { return hao_gmap_get1(&laid_types,(uint64_t)(uintptr_t)type) != NULL; }
 static int guest_ranges(const void *type, uint64_t base, byte_range *out, int n, int cap, int depth)
 {
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
@@ -838,14 +858,14 @@ static int guest_ranges(const void *type, uint64_t base, byte_range *out, int n,
     if (!kind || !count || !offset || !field || depth > 16) return -1;
     const void *const *m = type;
     uintptr_t k = kind(type);
-    if ((k == 0x200 || k == 0x201) && hao_image_for_addr((uint64_t)(uintptr_t)m[1])) {
+    if ((k == 0x200 || k == 0x201) && hao_image_for_addr((uint64_t)(uintptr_t)m[1]) && !runtime_laid(type)) {
         if (n >= cap) return -1;
         out[n++] = (byte_range){base, base + vwt(type)->size};
         return n;
     }
     if (k != 0x200 && k != 0x301) return n;   /* an Optional or a native enum: their witnesses are native */
     intptr_t fields = count(type);
-    if (fields < 0 || fields > 256) return -1;
+    if (fields < 0 || fields > HAO_SV_FIELD_LIMIT) return -1;
     for (intptr_t i = 0; i < fields; ++i) {
         field_info info = {0};
         const void *child = field(type,i,&info);
@@ -865,7 +885,7 @@ typedef struct { int count; empty_patch p[64]; } witness_patches;
 static bool witness_strip_guest(const void *type, witness_patches *w);
 static void witness_walk(const void *type, const void *value, witness_patches *w, const char *why, uint64_t lr, uint64_t pc)
 {
-    w->count = certified_patches(type,value,w->p,1 | HAO_SV_SOURCE_GUEST,NULL,why,type,lr,pc);   /* guest storage */
+    w->count = certified_patches(type,value,w->p,64,1 | HAO_SV_SOURCE_GUEST,NULL,why,type,lr,pc);   /* guest storage */
     if (w->count > 0 && !witness_strip_guest(type,w)) {   /* which nils lie in guest-defined fields is not known */
         decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,lr,pc);
         w->count = 0;
@@ -873,25 +893,27 @@ static void witness_walk(const void *type, const void *value, witness_patches *w
 }
 /* Drop the patches inside guest-defined struct and enum fields (their own
  * guest witnesses read them); false when those fields are past the bound. */
-static bool witness_strip_guest(const void *type, witness_patches *w)
+static bool strip_guest(const void *type, empty_patch *p, int *count)
 {
     byte_range guest[32];
     int ng = guest_ranges(type,0,guest,0,32,0);
     if (ng < 0) return false;
     int kept = 0;
-    for (int i = 0; i < w->count; ++i) {
+    for (int i = 0; i < *count; ++i) {
         bool inside = false;
-        for (int g = 0; g < ng && !inside; ++g) inside = w->p[i].offset >= guest[g].lo && w->p[i].offset < guest[g].hi;
-        if (!inside) w->p[kept++] = w->p[i];
+        for (int g = 0; g < ng && !inside; ++g) inside = p[i].offset >= guest[g].lo && p[i].offset < guest[g].hi;
+        if (!inside) p[kept++] = p[i];
     }
-    w->count = kept;
+    *count = kept;
     return true;
 }
+static bool witness_strip_guest(const void *type, witness_patches *w) { return strip_guest(type,w->p,&w->count); }
 /* Rewrite the walked outer nils to the witness's own encoding. */
-static void witness_encode(void *value, const witness_patches *w)
+static void encode(void *value, const empty_patch *p, int count)
 {
-    for (int i = 0; i < w->count; ++i) memcpy((char *)value + w->p[i].offset,&w->p[i].receiver_bits,8);
+    for (int i = 0; i < count; ++i) memcpy((char *)value + p[i].offset,&p[i].receiver_bits,8);
 }
+static void witness_encode(void *value, const witness_patches *w) { encode(value,w->p,w->count); }
 /* A word of VALUE at AT that a witness wrote as NATIVE and hao set to the
  * guest's ARM bits (hao_swift_witness_result). */
 static void guest_bits_note(hao_thread *t, const void *value, const void *at, uint64_t native, uint64_t arm)
@@ -1012,12 +1034,23 @@ int native_resilient_type(const void *type)
  * An Optional of the struct is then nil or present at random, and copies
  * and destroys through it release what they never retained. The count is
  * set to arm64's (Recipe.c arm_struct_xi) before the metadata is complete;
- * its witnesses then use Data's arm64 encoding, which only they read. */
+ * its witnesses then use Data's arm64 encoding, which only they read.
+ * The struct is noted (runtime_laid): its layout string, built by the
+ * runtime from the fields' metadata, has the native witnesses read the
+ * fields of native types themselves, in the native encoding, so guest calls
+ * of its witnesses convert like those of a frozen native struct's. */
+static void witness_add_type(const void *type);
 void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const *fields, const uint8_t *tags)
 {
     if (hao_opt.no_swift_values || !metadata || !fields || !tags) return;
     const void *const *m = metadata;
     if ((uintptr_t)m[0] != 0x200 || !hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return;   /* a guest struct */
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim1(&laid_types,(uint64_t)(uintptr_t)metadata,&fresh);
+    if (slot && fresh) { slot[1] = 1; hao_gmap_publish1(&laid_types,slot,(uint64_t)(uintptr_t)metadata); }
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    witness_add_type(metadata);
     witnesses *v = (witnesses *)vwt(metadata);
     uint32_t arm;
     if (!v || !arm_struct_xi(fields, tags, (size_t)n, &arm) || arm == v->extra) return;
@@ -1037,7 +1070,7 @@ void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const 
 static void witness_to_guest(hao_thread *t, const void *type, void *value, const char *why, uint64_t lr, uint64_t pc)
 {
     witness_patches w;
-    w.count = certified_patches(type,value,w.p,1 | HAO_SV_SOURCE_NATIVE,guest_layout,why,type,lr,pc);   /* native-made */
+    w.count = certified_patches(type,value,w.p,64,1 | HAO_SV_SOURCE_NATIVE,guest_layout,why,type,lr,pc);   /* native-made */
     for (int i = 0; i < w.count; ++i) {
         char *at = (char *)value + w.p[i].offset;
         if (w.p[i].arm_bits != w.p[i].bits) guest_bits_note(t,value,at,w.p[i].bits,w.p[i].arm_bits);
@@ -1082,16 +1115,23 @@ void hao_swift_task_result(const void *future, uint64_t lr)
  * and boxes (swift_allocBox of T). Guest code fills it, and when its last
  * reference goes, wherever that is released, the runtime destroys the
  * contents with the element type's native witnesses: no boundary hao sees.
- * An element type with a nil whose encoding differs, or past the walk's
- * bounds, is refused when the storage is made. An element type that is only
- * not settled (an enum, an existential) is not: refusing every [Any] would
- * stop nearly every program, and its contents are not certified at that
- * destruction (docs/ISSUES.md). */
-static void storage_element(const void *element, const char *why, uint64_t lr)
+ * An element type past the walk's bounds is refused when the storage is
+ * made. One with a nil whose encoding differs is admitted only as a carrier:
+ * each conversion it may need has a certified rule (no unproven node), and
+ * the storage's destroy hook can be had (below; hao_swift_storage_made then
+ * makes hooking and registering the object conditions of admitting it), so
+ * that its final destruction converts the guest's nils first. Native copies
+ * of its elements out of the storage are not converted (docs/ISSUES.md). An
+ * element type that is only not settled (an enum, an existential) is not
+ * refused: refusing every [Any] would stop nearly every program, and its
+ * contents are not certified at that destruction (docs/ISSUES.md). */
+static void storage_element(const void *element, bool box, const char *why, uint64_t lr)
 {
     if (hao_opt.no_swift_values || !element) return;
     int state = witness_state(element);
-    if (state == WITNESS_CONVERTS || state == WITNESS_UNCERTIFIABLE) decline(element,why,NULL,NULL,element,lr,0);
+    bool hook = box ? HAO_DLSYM("swift_allocBox") != NULL : HAO_DLSYM("$ss23_ContiguousArrayStorageCfD") != NULL;
+    if (state == WITNESS_UNCERTIFIABLE || state == WITNESS_UNPROVEN || (state == WITNESS_CONVERTS && !hook))
+        decline(element,why,NULL,NULL,element,lr,0);
 }
 void hao_swift_storage_alloc(const void *metadata, uint64_t lr)
 {
@@ -1103,12 +1143,12 @@ void hao_swift_storage_alloc(const void *metadata, uint64_t lr)
     uint32_t positive, immediate;   /* ClassDescriptor: MetadataPositiveSizeInWords, NumImmediateMembers */
     memcpy(&positive,desc + 28,4); memcpy(&immediate,desc + 32,4);
     if (positive <= immediate) return;
-    storage_element((const void *)(uintptr_t)m[positive - immediate],
+    storage_element((const void *)(uintptr_t)m[positive - immediate],false,
                     "array element type has a nil native code would destroy in the guest's encoding",lr);
 }
-void hao_swift_storage_element(const void *element, uint64_t lr)
+void hao_swift_storage_element(const void *element, bool box, uint64_t lr)
 {
-    storage_element(element,"storage element type has a nil native code would destroy in the guest's encoding",lr);
+    storage_element(element,box,"storage element type has a nil native code would destroy in the guest's encoding",lr);
 }
 
 /* ------------------------------------------- final destruction of storage
@@ -1210,27 +1250,38 @@ static bool storage_take(void *object)
     pthread_mutex_unlock(&storage_lock); hao_crit_leave();
     return registered;
 }
-static void storage_value(const void *type, char *value, bool guest_made)
+/* VALUE of TYPE at its final destruction, P the scratch for CAP patches
+ * (NULL: it could not be had). */
+static void storage_value(const void *type, char *value, bool guest_made, empty_patch *p, unsigned cap)
 {
-    witness_patches w;
     const char *why = "stored value has unresolved active representation at its final destruction";
+    int count = 0;
     if (!(vwt(type)->flags & 0x10000)) return;
-    if (guest_made) witness_walk(type,value,&w,why,0,0);
-    else {
+    if (!p) {
+        if (guest_made) decline(type,"scratch allocation",NULL,NULL,type,0,0);
+        return;
+    }
+    if (guest_made) {
+        count = certified_patches(type,value,p,cap,1 | HAO_SV_SOURCE_GUEST,NULL,why,type,0,0);
+        if (count > 0 && !strip_guest(type,p,&count)) {
+            decline(type,"guest-defined fields past the walk's bound",NULL,NULL,type,0,0);
+            count = 0;
+        }
+    } else {
         /* Storage native code made: what the walk proves is converted; a value
          * it finds in the guest's encoding but cannot convert (in a shared
          * existential box) is refused; anything else it cannot read is left
          * as found, native-made for all hao knows (docs/ISSUES.md). */
         const void *unresolved;
         unsigned passes = 0;
-        w.count = collect_value_patches(type,value,w.p,64,&unresolved,1,NULL,&passes);
-        if (w.count < 0 && (passes & HAO_SV_UNCONVERTIBLE))
+        count = collect_value_patches(type,value,p,cap,&unresolved,1,NULL,&passes);
+        if (count < 0 && (passes & HAO_SV_UNCONVERTIBLE))
             decline(unresolved ? unresolved : type,"guest-encoded nil in a shared box at its final destruction",type,value,type,0,0);
-        if (w.count > 0 && !witness_strip_guest(type,&w)) w.count = 0;
+        if (count > 0 && !strip_guest(type,p,&count)) count = 0;
     }
     unsigned changed = 0;
-    for (int i = 0; i < w.count; ++i) changed += w.p[i].bits != w.p[i].receiver_bits;
-    witness_encode(value,&w);
+    for (int i = 0; i < count; ++i) changed += p[i].bits != p[i].receiver_bits;
+    encode(value,p,count);
     if (changed && hao_opt.bridge_check)
         fprintf(HAO_DIAG,"hao: Swift storage destroyed by the runtime: %u nils converted (metadata=%p %s)\n",changed,type,
                 guest_made ? "guest-made" : "not guest-made");
@@ -1242,15 +1293,35 @@ static const void *array_element(const uint64_t *metadata)
     memcpy(&positive,desc + 28,4); memcpy(&immediate,desc + 32,4);
     return positive > immediate ? (const void *)(uintptr_t)metadata[positive - immediate] : NULL;
 }
+/* Scratch for the patches of one value at a final destruction: a value of
+ * HAO_SV_FIELD_LIMIT fields may have as many, more than a stack can spare
+ * on a native caller's thread. */
+static empty_patch *storage_scratch(void)
+{
+    hao_crit_enter();
+    empty_patch *p = malloc(HAO_SV_FIELD_LIMIT * sizeof *p);
+    hao_crit_leave();
+    return p;
+}
+static void storage_scratch_free(empty_patch *p)
+{
+    hao_crit_enter();
+    free(p);
+    hao_crit_leave();
+}
 static void SWIFT array_storage_destroy(void *__attribute__((swift_context)) object)
 {
     const uint64_t *o = object;
     const void *element = array_element((const uint64_t *)(uintptr_t)o[0]);
     bool guest_made = storage_take(object);
-    if (element && (int64_t)o[2] > 0) {   /* _ContiguousArrayStorage: HeapObject, count, capacity and flags, elements */
+    if (element && (int64_t)o[2] > 0 && (vwt(element)->flags & 0x10000)) {
+        /* _ContiguousArrayStorage: HeapObject, count, capacity and flags, elements */
         const witnesses *v = vwt(element);
         uint64_t mask = v->flags & 255, at = (32 + mask) & ~mask, n = o[2];
-        for (uint64_t i = 0; i < n && v->stride; ++i) storage_value(element,(char *)object + at + i * v->stride,guest_made);
+        empty_patch *p = storage_scratch();
+        for (uint64_t i = 0; i < n && v->stride; ++i)
+            storage_value(element,(char *)object + at + i * v->stride,guest_made,p,HAO_SV_FIELD_LIMIT);
+        storage_scratch_free(p);
     }
     array_destroy_original(object);
 }
@@ -1260,7 +1331,11 @@ static void SWIFT box_storage_destroy(void *__attribute__((swift_context)) objec
     uint32_t offset; memcpy(&offset,(const char *)m + 8,4);
     const void *boxed = (const void *)(uintptr_t)m[2];
     bool guest_made = storage_take(object);
-    if (boxed) storage_value(boxed,(char *)object + offset,guest_made);
+    if (boxed && (vwt(boxed)->flags & 0x10000)) {
+        empty_patch *p = storage_scratch();
+        storage_value(boxed,(char *)object + offset,guest_made,p,HAO_SV_FIELD_LIMIT);
+        storage_scratch_free(p);
+    }
     box_destroy_original(object);
 }
 /* Whether the page holding ADDR may be written (instantiated metadata is;
@@ -1327,18 +1402,20 @@ void hao_swift_storage_made(void *object)
 }
 
 /* The value witnesses (slots 0-5) of TYPE, a native struct or enum whose
- * values guest code builds inline (a View it lent to a native modifier), so
- * that its later guest calls of them (an outlined copy or destroy) convert
- * like those of an Optional's. */
+ * values guest code builds inline (a View it lent to a native modifier), or
+ * a guest struct the runtime laid out (runtime_laid), so that its later
+ * guest calls of them (an outlined copy or destroy) convert like those of an
+ * Optional's. */
 static void witness_add_type(const void *type)
 {
     const void *const *m = type;
     uintptr_t kind = (uintptr_t)m[0];
-    if ((kind != 0x200 && kind != 0x201) || hao_image_for_addr((uint64_t)(uintptr_t)m[1])) return;
+    if ((kind != 0x200 && kind != 0x201) || (hao_image_for_addr((uint64_t)(uintptr_t)m[1]) && !runtime_laid(type))) return;
     if (witness_has((uint64_t)(uintptr_t)vwt(type)->fn[1],1)) return;
     hao_crit_enter();
     pthread_mutex_lock(&witness_setup_lock);
-    uint64_t lo = hao_swift_witness_lo, hi = hao_swift_witness_hi;
+    uint64_t lo, hi;
+    witness_range_now(&lo,&hi);
     for (unsigned slot = 0; slot <= 5; ++slot) {
         uint64_t pc = (uint64_t)(uintptr_t)vwt(type)->fn[slot];
         if (native_function(pc)) witness_add_locked(pc,slot,&lo,&hi);
@@ -1398,7 +1475,8 @@ void *hao_swift_borrow_to_native(const void *type, const void *value)
     hao_swift_witness_setup();
     if (!optional_metadata || !witness_affected(type,0,0)) return NULL;
     const witnesses *v = vwt(type);
-    if (witness_state(type) == WITNESS_CONVERTS) witness_add_type(type);   /* the guest's later copies and destroys of it */
+    int state = witness_state(type);
+    if (state == WITNESS_CONVERTS || state == WITNESS_UNPROVEN) witness_add_type(type);   /* the guest's later copies and destroys of it */
     witness_patches w;
     witness_walk(type,value,&w,"lent value has unresolved active representation",0,0);
     unsigned changed = 0;

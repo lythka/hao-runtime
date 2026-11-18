@@ -11,3 +11,5 @@ int common_byte_optional_case(const void *type, const void *value);
 /* Exact ObjCRetainableBox metadata, not weak/foreign/existential storage. */
 int common_objc_reference_type(const void *type);
 int common_objc_reference_value(const void *type, const void *value);
+/* The most stored fields of a struct or tuple the walk reads through reflection. */
+enum { HAO_SV_FIELD_LIMIT = 256 };

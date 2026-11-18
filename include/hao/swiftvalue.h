@@ -49,10 +49,11 @@ void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const 
  * when its values need certification (swiftvalue.c). */
 void hao_swift_task_result(const void *future, uint64_t lr);
 /* swift_allocObject of METADATA (array storage), or storage of ELEMENT
- * (swift_allocBox, _allocateUninitializedArray): refused when native code
- * would destroy a nil of the element type in the guest's encoding. */
+ * (swift_allocBox with BOX, _allocateUninitializedArray): refused when native
+ * code would destroy a nil of the element type in the guest's encoding that
+ * the storage's final destruction cannot convert first. */
 void hao_swift_storage_alloc(const void *metadata, uint64_t lr);
-void hao_swift_storage_element(const void *element, uint64_t lr);
+void hao_swift_storage_element(const void *element, bool box, uint64_t lr);
 /* OBJECT, array storage or a generic box guest code just made: its element
  * type's storage gets hao's final-destruction conversion (swiftvalue.c). */
 void hao_swift_storage_made(void *object);
