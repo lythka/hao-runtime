@@ -1,9 +1,11 @@
 /*
- * Unit tests for src/a64_imm.c (logical immediates) and src/a64_cond.c
- * (ARM condition -> x86 condition). Run with `make unit`.
+ * Unit tests for src/a64_imm.c (logical immediates), src/a64_cond.c
+ * (ARM condition -> x86 condition) and src/a64_regs.c (x8 as an input).
+ * Run with `make unit`.
  */
 #include "hao/a64_imm.h"
 #include "hao/a64_cond.h"
+#include "hao/a64_regs.h"
 #include "hao/cpu.h"
 #include "hao/x86.h"
 #include <stdio.h>
@@ -218,11 +220,71 @@ static void test_cond(void)
     printf("cond: 16 conditions x 16 NZCV values\n");
 }
 
+/* ------------------------------------------------ x8 read before written */
+
+typedef struct { const uint32_t *w; unsigned n; } code;
+static bool fetch(void *ctx, uint64_t pc, uint32_t *i)
+{
+    const code *c = ctx;
+    if (pc >= 4ull * c->n) return false;
+    *i = c->w[pc / 4];
+    return true;
+}
+#define X8(want, ...) do { static const uint32_t w_[] = {__VA_ARGS__}; code c_ = {w_, sizeof w_ / 4}; \
+    CHECK(a64_x8_live_in(fetch, &c_, 0, 64) == (want), "x8 walk line %d: want %d", __LINE__, want); n_x8++; } while (0)
+
+enum {
+    PACIBSP = 0xd503237f, BTI_C = 0xd503245f, STP_FP_LR_PRE = 0xa9bf7bfd, MOV_FP_SP = 0x910003fd, RET = 0xd65f03c0,
+    MOV_X19_X8 = 0xaa0803f3, STR_X0_X8 = 0xf9000100, STR_W1_X8_8 = 0xb9000901, BL = 0x94000000, BLR_X9 = 0xd63f0120,
+    MOV_X8_X0 = 0xaa0003e8, MOV_W8_3 = 0x52800068, LDR_W8_X0 = 0xb9400008, ADD_X8_X8_1 = 0x91000508,
+    STP_D9_D8_PRE = 0x6dbf23e9, LDP_X8_X9_X0 = 0xa9402408, STP_X8_X9_SP = 0xa90027e8, FMOV_D8_X0 = 0x9e670008,
+    FMOV_X8_D0 = 0x9e660008, LDR_X0_X1_X8 = 0xf8686820, CSEL_X0_X8_X1 = 0x9a810100, LDR_X8_LIT = 0x58000008,
+    MOVK_X8 = 0xf2a00028, NOP = 0xd503201f,
+    CBZ_X0_P8 = 0xb4000040, CBZ_X8_P8 = 0xb4000048, B_P8 = 0x14000002, B_SELF = 0x14000000,
+};
+
+static void test_x8(void)
+{
+    int n_x8 = 0;
+    /* a Swift function with an indirect result: x8 kept or stored through after a PAC/BTI prologue */
+    X8(true, PACIBSP, STP_FP_LR_PRE, MOV_FP_SP, MOV_X19_X8, BL, RET);
+    X8(true, BTI_C, STR_X0_X8, RET);
+    X8(true, STR_W1_X8_8, RET);
+    X8(true, ADD_X8_X8_1, RET);
+    X8(true, STP_X8_X9_SP, RET);
+    X8(true, LDR_X0_X1_X8, RET);
+    X8(true, CSEL_X0_X8_X1, RET);
+    X8(true, MOVK_X8, RET);
+    X8(true, CBZ_X8_P8, RET, RET);
+    /* written first, a call first, or never used */
+    X8(false, PACIBSP, STP_FP_LR_PRE, MOV_FP_SP, RET);
+    X8(false, MOV_X8_X0, STR_X0_X8, RET);
+    X8(false, MOV_W8_3, STR_X0_X8, RET);
+    X8(false, LDR_W8_X0, STR_X0_X8, RET);
+    X8(false, LDP_X8_X9_X0, STR_X0_X8, RET);
+    X8(false, LDR_X8_LIT, STR_X0_X8, RET);
+    X8(false, PACIBSP, BL, MOV_X19_X8, RET);
+    X8(false, BLR_X9, STR_X0_X8, RET);
+    X8(false, FMOV_X8_D0, STR_X0_X8, RET);
+    /* v8/d8 is not x8; an instruction naming 8 that the walk does not classify ends it */
+    X8(false, STP_D9_D8_PRE, RET);
+    X8(false, FMOV_D8_X0, STR_X0_X8, RET);
+    /* branches: both ways of CBZ, B to its target, a loop ends at the budget, the end of the code */
+    X8(true, CBZ_X0_P8, RET, STR_X0_X8, RET);
+    X8(true, CBZ_X0_P8, STR_X0_X8, RET);
+    X8(true, B_P8, RET, STR_X0_X8);
+    X8(false, CBZ_X0_P8, MOV_X8_X0, RET, RET);
+    X8(false, NOP, B_SELF);
+    X8(false, NOP, NOP);
+    printf("x8 walk: %d cases\n", n_x8);
+}
+
 int main(void)
 {
     test_imm();
     test_bitfield();
     test_cond();
+    test_x8();
     printf("%s (%d failures)\n", fails ? "FAILED" : "OK", fails);
     return fails != 0;
 }

@@ -83,11 +83,9 @@ want=$(printf '%s.aot\n' "$U1" "$U2" "$U3" | sort | tr '\n' ' ')
     || bad "A caches: got [$got] want [$want]"
 modes=$(stat -f %Lp "$A" 2>/dev/null; for f in "$A"/*; do stat -f %Lp "$f"; done | sort -u)
 [ "$(echo $modes)" = "755 644" ] && pass "A cache directory 0755, caches 0644" || bad "A modes: $(echo $modes)"
-python3 - "$P" "$GEN" "$U1" "$U2" "$U3" <<'PY' && pass "A build.json aot and aot.json: 4 programs, 3 files, 3 caches, libhao $GEN, no skips or failures; every header names its guest and this libhao" || bad "A build.json aot"
+python3 - "$P" "$GEN" "$U1" "$U2" "$U3" <<'PY' && pass "A build.json aot and aot.json: 4 programs, 3 files, 3 caches, libhao $GEN, no skips or failures; every header names its guest and this libhao, format 8, a baseline CPU profile, recorded in payload-manifest.json" || bad "A build.json aot"
 import json, os, sys
 p, gen, *uu = sys.argv[1:]
-aes_gen = bytearray.fromhex(gen); aes_gen[15] ^= 1
-gen_profiles = {gen, aes_gen.hex()}
 b = json.load(open(os.path.join(p, 'build.json')))['aot']
 a = json.load(open(os.path.join(p, 'aot.json')))
 assert b == a['summary'], 'build.json aot differs from aot.json summary'
@@ -97,12 +95,18 @@ d = os.path.join(p, 'root/usr/lib/hao/aot')
 assert b['bytes'] == sum(os.path.getsize(os.path.join(d, n)) for n in os.listdir(d)), 'bytes'
 assert sorted(x['uuid'] for x in a['programs']) == sorted(uu), a['programs']
 assert [x['paths'] for x in a['programs'] if x['uuid'] == uu[2]] == [['usr/bin/prog', 'usr/sbin/prog2']], 'hard link'
+assert (b['format_version'], b['cpu']) == (8, 'baseline') and int(b['cpu_profile'], 16) & ~0x1F == 0, b
+assert json.load(open(os.path.join(p, 'payload-manifest.json')))['aot'] == {k: b[k] for k in ('format_version', 'cpu', 'cpu_profile', 'caches')}
+profiles = 0
 for n in os.listdir(d):
-    h = open(os.path.join(d, n), 'rb').read(136)
-    assert h[:8] == b'HAOAOT2\0' and h[16:32].hex() == n[:32] and h[32:48].hex() in gen_profiles, n
-    assert int.from_bytes(h[8:12], 'little') == 7 and int.from_bytes(h[12:16], 'little') == 136, 'format of ' + n
+    h = open(os.path.join(d, n), 'rb').read(144)
+    assert h[:8] == b'HAOAOT2\0' and h[16:32].hex() == n[:32] and h[32:48].hex() == gen, n
+    assert int.from_bytes(h[8:12], 'little') == 8 and int.from_bytes(h[12:16], 'little') == 144, 'format of ' + n
     assert int.from_bytes(h[96:100], 'little') == 1 and not any(h[124:136]), 'code identity kind of ' + n
+    cpu = int.from_bytes(h[136:144], 'little'); profiles |= cpu
+    assert cpu & ~0x1F == 0, 'CPU profile of %s: %#x is beyond the baseline' % (n, cpu)
     assert os.path.relpath(os.path.join(d, n), p) in json.load(open(os.path.join(p, 'build.json')))['files'], 'hash of ' + n
+assert int(b['cpu_profile'], 16) == profiles, b
 PY
 
 # payload-manifest.json: the runtime -> patcher contract, checked by the vendored hao-patcher checker with the
@@ -168,7 +172,8 @@ S=$OUT/sys
 cp -R "$R" "$S"
 mkdir -p "$S/usr/lib/hao/aot"
 f1=$(ls "$A" | head -1)
-python3 - "$A/$f1" "$S/usr/lib/hao/aot/0123456789abcdef0123456789abcdef.aot" "$S/usr/lib/hao/aot/fedcba9876543210fedcba9876543210.aot" <<'PY'
+python3 - "$A/$f1" "$S/usr/lib/hao/aot/0123456789abcdef0123456789abcdef.aot" "$S/usr/lib/hao/aot/fedcba9876543210fedcba9876543210.aot" \
+    "$S/usr/lib/hao/aot/abcdefabcdefabcdefabcdefabcdefab.aot" <<'PY'
 import sys
 b = bytearray(open(sys.argv[1], 'rb').read())
 b[16:32] = bytes.fromhex('0123456789abcdef0123456789abcdef')   # its own name ...
@@ -178,6 +183,10 @@ b = bytearray(open(sys.argv[1], 'rb').read())
 b[16:32] = bytes.fromhex('fedcba9876543210fedcba9876543210')   # its own name, this libhao ...
 b[96:100] = (2).to_bytes(4, 'little')                           # ... bound to an unsigned guest's code hash
 open(sys.argv[3], 'wb').write(b)
+b = bytearray(open(sys.argv[1], 'rb').read())
+b[16:32] = bytes.fromhex('abcdefabcdefabcdefabcdefabcdefab')   # its own name, this libhao ...
+b[136:144] = (0x80).to_bytes(8, 'little')                       # ... translated for AVX2, beyond the baseline
+open(sys.argv[4], 'wb').write(b)
 PY
 chmod 775 "$A"; chmod 664 "$A/$f1"
 python3 -I "$P/hao-install.py" "$S" "$P" >"$OUT/b.log" 2>&1; rc=$?
@@ -185,14 +194,16 @@ chmod 755 "$A"; chmod 644 "$A/$f1"
 SA=$S/usr/lib/hao/aot
 [ $rc = 0 ] && pass "B hao-install.py rc 0: $(grep -o 'AOT caches [^;]*' "$OUT/b.log")" || bad "B hao-install.py rc $rc: $(tail -5 "$OUT/b.log")"
 got=$(cd "$SA" && ls | sort | tr '\n' ' ')
-[ "$got" = "$want" ] && pass "B installed caches are the payload's; the stale one and the one for unsigned code are removed" || bad "B installed: [$got]"
+[ "$got" = "$want" ] && pass "B installed caches are the payload's; the stale one, the one for unsigned code and the one beyond the baseline CPU are removed" || bad "B installed: [$got]"
 modes=$(stat -f %Lp "$SA"; for f in "$SA"/*; do stat -f %Lp "$f"; done | sort -u)
 [ "$(echo $modes)" = "755 644" ] && pass "B installed cache directory 0755, caches 0644 (payload had 0775/0664)" || bad "B modes: $(echo $modes)"
 python3 -c '
 import json, sys
-r = json.load(open(sys.argv[1]))["aot_caches"]
-assert (r["caches"], r["libhao_uuid"], r["removed_stale"]) == (3, sys.argv[2], ["0123456789abcdef0123456789abcdef.aot", "fedcba9876543210fedcba9876543210.aot"]), r
-' "$S/usr/lib/hao/install.json" "$GEN" && pass "B install.json aot_caches: 3 caches of libhao $GEN, 2 removed (another libhao; unsigned code)" || bad "B install.json aot_caches: $(grep -A6 aot_caches "$S/usr/lib/hao/install.json")"
+a = json.load(open(sys.argv[1]))
+r = a["aot_caches"]
+assert (r["caches"], r["libhao_uuid"], r["removed_stale"]) == (3, sys.argv[2], []), r
+assert "usr/lib/hao/aot (3 earlier files removed)" in a["aot_dirs"], a["aot_dirs"]
+' "$S/usr/lib/hao/install.json" "$GEN" && pass "B install.json: 3 caches of libhao $GEN; the 3 files already there (another libhao; beyond the baseline CPU; unsigned code) removed, not adopted" || bad "B install.json aot_caches: $(grep -A8 aot_ "$S/usr/lib/hao/install.json")"
 for f in "$SA"/*.aot; do cmp -s "$f" "$A/$(basename "$f")" || bad "B $(basename "$f") differs from the payload's"; done
 
 # --- C: the installed (embedded) program loads its installed cache

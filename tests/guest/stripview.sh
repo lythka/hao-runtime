@@ -1,0 +1,38 @@
+#!/bin/sh
+# Stripped guest closures that native SwiftUI code calls with an indirect result in rax: an alert's message
+# closure passed in a stack slot and a GeometryReader's content stored in a guest-built value
+# (tests/guest/stripview.swift). The program is arm64 natively and arm64e under hao (JIT, --interp, AOT), the
+# arm64e build with its local symbols stripped as a release build is; every line must equal native arm64.
+#   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/stripview.sh
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+OUT=${OUT:-$(mktemp -d -t hao-stripview)}
+HAO=${HAO:-$repo/build/hao}
+T=${T:-60}
+mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
+for a in arm64e arm64; do
+    xcrun swiftc -O -parse-as-library -target $a-apple-macos27.0 -o "$OUT/stripview.$a" "$here/stripview.swift" \
+        2>"$OUT/build.$a.err" || { cat "$OUT/build.$a.err"; exit 2; }
+done
+strip -x "$OUT/stripview.arm64e" 2>/dev/null || exit 2
+for a in arm64e arm64; do codesign -s - -f "$OUT/stripview.$a" 2>/dev/null; done
+rm -rf "$OUT/aot"; mkdir -m 700 "$OUT/aot"
+timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/aot" "$OUT/stripview.arm64e" >"$OUT/aot.gen" 2>&1 || echo "stripview: aot generation failed"
+timeout -s KILL "$T" "$OUT/stripview.arm64" >"$OUT/native.out" 2>/dev/null; nrc=$?
+echo "native    rc=$nrc lines=$(wc -l <"$OUT/native.out" | tr -d ' ')"
+fail=0
+[ $nrc = 0 ] || fail=1
+for mode in jit interp aot; do
+    case $mode in
+    jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
+    interp) set -- env HAO_NO_AOT=1 "$HAO" --interp ;;
+    aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
+    esac
+    timeout -s KILL "$T" "$@" "$OUT/stripview.arm64e" >"$OUT/$mode.out" 2>"$OUT/$mode.err"; rc=$?
+    if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
+    printf '%-9s rc=%s %s\n' "$mode" "$rc" "$r"
+    [ $r = SAME ] || diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16
+done
+[ $fail = 0 ] && echo "stripview: PASS" || echo "stripview: FAIL"
+exit $fail

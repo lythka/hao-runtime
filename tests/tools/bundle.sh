@@ -132,6 +132,13 @@ want = [{"slot": -1, "sha256": h("Info.plist"), "file": "Applications/Fix.app/Co
 sys.exit(0 if e["bound"] == want else "bound " + repr(e["bound"]))
 PY
     pass "manifest: bound Info.plist and CodeResources with their hashes" || bad "manifest bound list"
+python3 -I - "$d/pay" <<'PY'
+import hashlib, json, os, sys
+p = sys.argv[1]   # payload-manifest.json as tools/hao-image-payload writes it: hao-install.py installs only what it lists
+files = {os.path.relpath(os.path.join(b, n), p): hashlib.sha256(open(os.path.join(b, n), "rb").read()).hexdigest()
+         for b, _, ns in os.walk(p) for n in ns}
+json.dump({"files": files}, open(os.path.join(p, "payload-manifest.json"), "w"))
+PY
 for kind in same infoplist coderesources; do
     s=$d/sys-$kind; mkdir -p "$s/usr/lib/hao"; cp -R "$d/src/Applications" "$s/"
     case $kind in

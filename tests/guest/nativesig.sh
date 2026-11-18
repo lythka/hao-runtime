@@ -19,6 +19,8 @@
 # through __sigreturn (kernel: switch)" in the kernel runs.
 #   OUT=dir HAO=build/hao [T=20] [MODES="crc ret ..."] tests/guest/nativesig.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-nativesig)}

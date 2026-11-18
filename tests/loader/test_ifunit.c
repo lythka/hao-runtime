@@ -92,7 +92,7 @@ static void e_typed_bare(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR
 static void e_sig_noenc(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 0; rec0(b)->flags = HAO_IFR_SIG; rec0(b)->enc = 0; }
 static void e_refused_nowhy(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_REFUSED; rec0(b)->kind = 0; rec0(b)->flags = 0; rec0(b)->why = 0; }
 static void e_unknown_mask(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_UNKNOWN; rec0(b)->kind = 0; rec0(b)->flags = HAO_IFR_MASKED; }
-/* kind K (tools/gen_stackpack.py): a layout the parser refuses, and one on an EXACT record */
+/* kind K: a layout the parser refuses, and one on an EXACT record */
 static void e_pack_bad(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_TYPED; rec0(b)->kind = 'K'; rec0(b)->flags = 0; rec0(b)->enc = rec0(b)->name; }
 static void e_pack_exact(uint8_t *b, size_t *n) { (void)n; rec0(b)->cls = HAO_BR_EXACT; rec0(b)->kind = 'K'; rec0(b)->flags = 0; rec0(b)->enc = rec0(b)->name; }
 

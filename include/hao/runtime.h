@@ -59,6 +59,7 @@ typedef struct hao_eh_rec {
 #define HAO_JIT_JC_SLOTS 2048   /* a power of two */
 #define HAO_NCACHE_SLOTS 256    /* a power of two */
 #define HAO_STEP_RING 16        /* a power of two */
+#define HAO_SWIFT_MADE_RING 64  /* a power of two */
 typedef struct hao_thread {
     hao_cpu cpu;               /* must be first (16-byte aligned) */
     uint8_t *stack;
@@ -72,8 +73,10 @@ typedef struct hao_thread {
     /* Nils a guest call of an Optional witness made and hao wrote in the
      * guest's encoding (swiftvalue.c witness_to_guest), a ring: a callback
      * returning such a value to native code as its indirect result gets the
-     * native encoding back (hao_swift_witness_result). */
-    struct { uint64_t value, at, native, arm; } swift_made[16];
+     * native encoding back (hao_swift_witness_result). Nested callbacks
+     * share it; each entry keeps its index, so one a later note overwrote
+     * is seen as lost (counted), not taken for another. */
+    struct { uint64_t value, at, native, arm; unsigned idx; } swift_made[HAO_SWIFT_MADE_RING];
     unsigned swift_made_n;
     /* The guest state a native-to-guest call saves and restores (1 KB),
      * from the fifth nesting level on kept here instead of on the native
@@ -81,6 +84,9 @@ typedef struct hao_thread {
      * cpu_save_push), reset by each segment to its entry count. */
     hao_cpu *cpu_saves;
     unsigned cpu_saves_n;
+    /* where a callback without a signature lets the guest store an indirect result the
+     * native caller gave no buffer for (runtime.c callback_plain): made at first use */
+    uint8_t *noret;
     hao_seg *seg;              /* innermost running segment */
     void *eh_landed;           /* exception that stopped at this segment's native-call guard */
     void *eh_resume;           /* exception to resume natively after the current native step */
@@ -148,6 +154,9 @@ typedef struct {
     uint64_t rbp;         /* the native caller's rbp at entry */
 } hao_cb_frame;
 #define HAO_CB_FAULT 1
+/* r10 of an island entry (swiftmeta.c), whose guest function is a Swift function: swiftcc passes an indirect
+ * result's buffer in rax, which hao_callback hands the guest as x8 (a plain C entry's rax is no buffer) */
+#define HAO_CB_SWIFTCC 4
 
 typedef void (*hao_trap_fn)(hao_thread *t, uint64_t arg);
 
@@ -181,10 +190,14 @@ uint64_t hao_call_guest(hao_thread *t, uint64_t fn, const uint64_t *args, int na
 uint64_t hao_trap_address(const char *name, hao_trap_fn fn, uint64_t arg);
 bool hao_is_trap(uint64_t pc);
 void hao_install_fault_handler(void);
-bool hao_bootarg_flag(const char *key);   /* boot argument "key=1" present (kern.bootargs) */
 /* trust.c: how far the environment is trusted (hao/aot.h); the switches
  * themselves are read once into hao_opt (hao/opts.h, hao_opts_init). */
 int hao_env_tier(void);                   /* HAO_ENV_OPEN / GUARDED / SETUGID */
+/* A set-ID process: dyld expands no @ path and takes no relative dependency
+ * path, which hao's own loader follows too (so does a __RESTRICT main
+ * executable). dyld_process_is_restricted is not this rule: it also holds
+ * for every hardened-runtime program, where dyld does expand @rpath. */
+bool hao_env_restricted(void);
 /* hao_opts_init for the CLI's stage 2: flags is the inherited HAO_FLAGS,
  * argv_flags the letters of hao's own command-line switches, each honoured
  * where the environment switch of the same effect is (trust.c). */
@@ -193,6 +206,12 @@ void hao_opts_init_cli(const char *flags, const char *argv_flags);
  * descriptor the loader then maps (hao_load_main_image); path names the file
  * in diagnostics. 0 = run it; -1 = refused, diagnostic printed. */
 int hao_guest_sig_enforce(int fd, const char *path);
+/* A main executable whose verified signature s requires library validation:
+ * the switches that add code or trust (HAO_CACHE, HAO_GUEST_ROOT,
+ * HAO_IF_DIR, HAO_ASYNC_CONTRACT_LIBRARY, HAO_TRUST_LIST) are cleared, each
+ * named on the diagnostics channel. Both front ends call it before the
+ * runtime starts (guest_sig.c). */
+void hao_guest_switches_for(const hao_codesig *s);
 const char *hao_env_tier_name(int tier);
 /* Fatal diagnostics: stderr, or the console with boot argument hao_crash=1
  * (daemons' stderr usually goes nowhere and AMFI denies their core dumps),
@@ -205,6 +224,11 @@ extern FILE *hao_diag_file;
 #define HAO_DIAG (hao_diag_file ? hao_diag_file : stderr)
 void hao_diag_init(void);                 /* once, at startup (hao_install_fault_handler) */
 void hao_diag_write(const char *b, size_t n);   /* async-signal-safe: console and log, whole */
+size_t hao_diag_fmt_u64(char *out, uint64_t v, unsigned base);   /* async-signal-safe: v in base 10 or 16 */
+void hao_diag_write_fatal(const char *b, size_t n);   /* the same for a fatal report: may also open a log still waiting for its volume */
+/* Async-signal-safe fatal line: "hao[PROG:PID]: what" and each of n values in hex, through
+ * hao_diag_write, then abort (no stdio, no dladdr, no allocation) */
+__attribute__((noreturn)) void hao_fatal_safe(const char *what, const uint64_t *v, int n);
 extern size_t hao_diag_log_cap;           /* the log's size limit (bytes) */
 /* A multi-line report written with one hao_diag_write (hao_diag_block_end):
  * fprintf into hao_diag_block's FILE (HAO_DIAG if no memory). Not in signal handlers. */
@@ -233,9 +257,10 @@ void hao_diag_guest_addr(FILE *f, uint64_t a);   /* " (image+off, file vmaddr V)
 const char *hao_diag_guest_where(uint64_t a, char *buf, size_t n);   /* the same text in buf ("" otherwise) */
 uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool weak, bool *found);
 /* Load the main executable from fd, the open descriptor its launcher has
- * checked (main.c); path only names it. The loader owns fd from here on.
- * hao_main_image is set before its imports bind. */
-hao_image *hao_load_main_image(const char *path, int fd, char *err, size_t errlen);
+ * checked (main.c); path only names it, entry is the launcher
+ * (HAO_ENTRY_CLI or HAO_ENTRY_EMBEDDED, hao/macho.h). The loader owns fd
+ * from here on. hao_main_image is set before its imports bind. */
+hao_image *hao_load_main_image(const char *path, int fd, int entry, char *err, size_t errlen);
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */
@@ -373,6 +398,8 @@ void hao_guest_svc(hao_thread *t);
 void hao_signals_init(void);
 int hao_signal_raw_sigaction(int sig, const void *nsa, void *osa);   /* a guest svc sigaction(2) */
 void hao_signals_stats(void);
+void hao_signals_fork_child(void);   /* the disposition lock */
+void hao_vafmt_fork_child(void);     /* vafmt.c: constant formats being made */
 bool hao_signal_forward(int sig, siginfo_t *info, void *uc);
 /* on_fault gives up on a fault: SIG_DFL, the signal and SIGILL/SIGTRAP unblocked (also in the
  * context the kernel restores), a sent signal raised again: the default action is certain */
@@ -438,18 +465,35 @@ bool hao_jit_init(void);      /* false: no executable memory (interpreter, no th
 bool hao_have_thunks(void);
 bool hao_thunk_range(uint64_t *lo, uint64_t *hi); /* entire reserved plain-thunk area */
 void hao_jit_stats(void);
-/* `hao --aot [--cache DIR] FILE`: write FILE's AOT cache into cache_dir (absolute), or with NULL into
- * the directory this process writes to; 0 or -1 (reported) */
-int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir);
-int hao_aot_check_file(const char *path, const char *cache_dir, bool print);
+/* `hao --aot [--cache DIR] [--cpu=SPEC] FILE`: write FILE's AOT cache into cache_dir (absolute), or with
+ * NULL into the directory this process writes to, translated for at most the CPU features cpu
+ * (hao/cpufeat.h; hao_cpu_profile_parse); 0 or -1 (reported) */
+int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir, uint64_t cpu);
+int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint64_t cpu);
+bool hao_aot_write_dir(char *out, size_t n);   /* the directory `hao --aot` with no --cache writes to; false: none */
 bool hao_aot_generation(uint8_t out[16]);
 uint64_t hao_thunk_for(uint64_t guest);
+uint64_t hao_swift_thunk_for(uint64_t guest);   /* passed to a native Swift function: entry marked HAO_CB_SWIFTCC */
 uint64_t hao_thunk_target(uint64_t thunk);
 bool hao_in_code_cache(uint64_t a);
 void hao_jit_alias(uint64_t entry, uint64_t guest);
 uint64_t hao_sig_thunk(uint64_t guest, void *sig);   /* sig: an hsig* (abi.c); 0 if none can be made */
 uint64_t hao_sig_thunk_target(uint64_t thunk);
 void hao_jit_fork_child(void);         /* fork child: re-initialise the module's mutexes */
+/* W^X (jit.c): hao's executable memory (code cache, Swift islands) is read/execute only. hao_wx_region
+ * makes MAP_JIT memory mapped read/write (not executable) such a region; a write maps the bytes it
+ * changes read/write elsewhere for its duration: hao_wx_begin (NULL: frozen, a fork child on an Intel
+ * Mac) .. hao_wx_end, in a hao critical section, no write inside another. */
+typedef struct { uintptr_t x, map, len; } hao_wx_win;
+bool hao_wx_region(void *x, size_t size);
+bool hao_wx_covers(uint64_t a, uint64_t n);
+/* interpose.c: a guest call that would change the mapping (map: map over, unmap) or the protection
+ * (prot) of [a, a+n) where it overlaps hao's executable memory, the thunks' table or (map, or prot with
+ * write or execute) an image's sealed constant data: refused (EACCES / KERN_PROTECTION_FAILURE) */
+bool hao_guest_vm_guarded(uint64_t a, uint64_t n, int prot, bool map);
+void *hao_wx_begin(void *x, size_t n, hao_wx_win *win);
+void hao_wx_end(hao_wx_win *win, size_t written);
+bool hao_wx_write(void *x, const void *src, size_t n);
 /* blocks.c */
 void hao_thunk_native_args(hao_thread *t);
 void hao_thunk_native_blocks(hao_thread *t);
@@ -462,12 +506,15 @@ void hao_dsc_fork_child(void);
 /* gss.c: GSS-API calls and data with x86_64 pack(2) layouts (gss_gen.inc) */
 bool hao_gss_interpose(const char *name, uint64_t *addr);
 void hao_gss_fork_child(void);
-void hao_objc_fork_child(void);      /* objc.c: the deferred-category lock */
+void hao_objc_fork_child(void);      /* objc.c: the deferred-category lock, type strings being made */
 /* objc.c: categories deferred to Swift-runtime realization, attached since, classes realized so */
 void hao_objc_late_stats(uint64_t *deferred, uint64_t *attached, uint64_t *classes);
 /* swiftcc.c: x86_64 swifttailcc argument area (callee pop) of a guest async
  * function from its own code, or -1 when it cannot be analysed */
 int64_t hao_swift_async_arg_area(uint64_t fn, const char **why);
+/* Whether hao gave TYPE's native metadata the arm64 layout and verified it
+ * (swift.c: Swift.Float16's 2-byte POD witnesses). */
+bool hao_swift_relaid_type(const void *type);
 /* its x86_64 stack-slot count (-1: not analysable), whether the arm64 pop at
  * an exit set it, and the instruction that did (offline checks) */
 int hao_swift_async_slots(uint64_t fn, int *from_pop, uint64_t *at);
@@ -503,6 +550,7 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
  * right or unproven. */
 int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width);
 void hao_swift_note_dispatch_thunk(const char *gname, uint64_t native);
+int hao_swift_callee_stack_slots(uint64_t native);   /* SysV stack arguments past x6, x7 its code reads; -1 not shown */
 /* interpose.c: a page the guest mapped or made executable itself (mmap,
  * mprotect): arm64 code generated at run time, which hao does not run */
 bool hao_guest_exec_mapped(uint64_t a);
@@ -597,6 +645,10 @@ bool hao_footprint_limit(uint64_t *footprint, uint64_t *limit);
 void hao_swift_object_prepare(uint64_t object);
 void hao_objc_prepare_generic_class(uint64_t metadata);
 void hao_swift_objects_args(hao_thread *t);
+/* a value of struct or tuple TYPE guest code made, lent to native Swift code: its closure fields get Swift entries */
+void hao_swift_value_closures(uint64_t type, uint64_t value);
+/* swiftcc.c: the Body a guest body witness returned in native memory (A: its x0-x5): its closures get Swift entries */
+void hao_swift_body_result(uint64_t target, const uint64_t *a, uint64_t value);
 void hao_swift_objects_result(hao_thread *t, uint64_t target, uint64_t indirect);
 bool hao_swift_objects_interpose(const char *name, uint64_t *addr);
 /* valist_builder.c: Swift's __VaListBuilder with the arm64 semantics guest code inlines */

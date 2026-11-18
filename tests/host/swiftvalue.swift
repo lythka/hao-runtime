@@ -39,3 +39,23 @@ for (label, e) in [("payload", Affected.some(.some(NSObject()))), ("inner nil", 
     run("URL? nil, \(label)", WithURL(e: e, url: nil))
     run("URL? live, \(label)", WithURL(e: e, url: URL(string: "https://www.apple.com/news")))
 }
+
+// A native-made Any whose value is out of line (a box) and holds a native nil, as native code makes it in
+// storage hao destroys (swiftvalue.c storage_value): the walk of a value for native code certifies it, a
+// box it may not rewrite holding the encoding native code reads. Before, any nil whose arm64 encoding
+// differs refused the box, so such storage aborted at its destruction.
+typealias Values = @convention(c) (UnsafeRawPointer, UnsafeRawPointer, UnsafeMutableRawPointer, UInt32,
+                                   UnsafeMutablePointer<UnsafeRawPointer?>, Int32, UnsafeRawPointer?,
+                                   UnsafeMutablePointer<UInt32>) -> Int32
+if let vs = dlsym(lib, "hao_sv_collect_value_patches") {
+    let values = unsafeBitCast(vs, to: Values.self)
+    for (label, inner) in [("outer nil", Optional<Optional<Box>>.none), ("inner nil", .some(nil))] {
+        var any: Any = (inner, 1, 2, 3)
+        var unresolved: UnsafeRawPointer? = nil
+        var passes: UInt32 = 0
+        let n = withUnsafePointer(to: &any) {
+            values(unsafeBitCast(Any.self, to: UnsafeRawPointer.self), UnsafeRawPointer($0), patches, 64, &unresolved, 1, nil, &passes)
+        }
+        print("boxed Any native \(label)", n >= 0 ? "walk \(n)" : "refused flags \(passes)")
+    }
+} else { print("boxed Any: no libhao value walk") }

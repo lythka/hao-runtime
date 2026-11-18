@@ -111,7 +111,7 @@ void hao_fnslots_address_taken(hao_image *img, const uint64_t *fn, size_t nfn, u
             uint64_t pc = a + 4 * i, t;
             if ((x & 0x9F000000u) == 0x90000000u) {                       /* ADRP */
                 uint32_t imm = ((x >> 29) & 3) | (((x >> 5) & 0x7FFFF) << 2);
-                page[x & 31] = (pc & ~0xFFFull) + (uint64_t)(sext21(imm) << 12);
+                page[x & 31] = (pc & ~0xFFFull) + ((uint64_t)sext21(imm) << 12);
                 at[x & 31] = i;
                 continue;
             }

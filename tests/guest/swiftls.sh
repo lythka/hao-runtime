@@ -13,6 +13,8 @@
 # with the same output (the negative control).
 #   OUT=dir HAO=/abs/build/hao [HAO_BASE=/abs/old/hao] [MODES="jit interp aot"] tests/guest/swiftls.sh
 set -u
+# This fixture exercises the guest/native bridge through its universal helper.
+export HAO_NATIVE_APP_LIBS=1
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 OUT=${OUT:-$(mktemp -d -t hao-swiftls)}

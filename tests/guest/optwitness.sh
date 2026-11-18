@@ -6,7 +6,8 @@
 # tuples of a C?? with guest multi-payload enums, which the tuple witnesses take whole: trailing tag bytes
 # (one, two and five empty cases) and tags in the payloads' spare bits (decoded from the image's record).
 # The program is arm64 natively and arm64e under hao (JIT, --interp, AOT); every line must equal
-# native arm64.
+# native arm64 with no refusal. It keeps its values in arrays of them, whose storage native code destroys:
+# admitted as carriers (swiftvalue.c storage_element), their nils converted at that final destruction.
 #   OUT=dir HAO=/abs/build/hao [T=60] tests/guest/optwitness.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -33,9 +34,10 @@ for mode in jit interp aot; do
     aot) set -- env HAO_CACHE="$OUT/aot" "$HAO" ;;
     esac
     timeout -s KILL "$T" "$@" "$OUT/optwitness.arm64e" >"$OUT/$mode.out" 2>"$OUT/$mode.err"; rc=$?
-    if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
+    if [ $rc = $nrc ] && cmp -s "$OUT/native.out" "$OUT/$mode.out" && ! grep -q 'Swift value boundary refused' "$OUT/$mode.err"
+    then r=SAME; else r=DIFF; fail=1; fi
     printf '%-9s rc=%s %s\n' "$mode" "$rc" "$r"
-    [ $r = SAME ] || diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16
+    [ $r = SAME ] || { diff "$OUT/native.out" "$OUT/$mode.out" | sed 's/^/    /' | head -16; grep -a 'Swift value' "$OUT/$mode.err" | head -4 | cut -c1-300; }
 done
 [ $fail = 0 ] && echo "optwitness: PASS" || echo "optwitness: FAIL"
 exit $fail

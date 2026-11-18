@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 import subprocess
 
+# Keep the authored helper native to exercise the bridge.
+os.environ["HAO_NATIVE_APP_LIBS"] = "1"
+
 root = Path(__file__).resolve().parents[2]
 here = Path(__file__).resolve().parent
 out = Path(os.environ.get('OUT', root / 'build/objcvascope')).resolve()

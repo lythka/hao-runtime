@@ -7,7 +7,7 @@
 # program at macOS 14.0/sdk 15.0 with LC_SOURCE_VERSION 1234.5.6, an @executable_path/plug LC_RPATH,
 # LC_DYLD_ENVIRONMENT DYLD_LIBRARY_PATH=@executable_path/envlib, LC_MAIN stacksize 16 MB, libSystem linked at
 # 1300.0.0, signed with the kill and hard CS flags; "restrict" also has a __RESTRICT,__restrict section. Cases:
-#  - a native helper (the x86_64 slice under hao) reports the main executable as native code reads it: header
+#  - a helper (an app library with an ARM slice, so guest code under hao) reports the main executable: header
 #    walk (source version, rpaths, environment, stacksize, __PAGEZERO, extra segments, MH flags),
 #    dyld_get_program_sdk_version/minos, NSVersionOfLinkTimeLibrary("System"), the process's CS kill/hard
 #    flags (csops), the main thread's stack size, a dlopen of an @rpath name (the main executable's rpath) and

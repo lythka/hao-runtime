@@ -445,6 +445,47 @@ static double now_us(void)
     return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3;
 }
 
+/* The switches that add code or trust to a process (open tier only; hao_opt
+ * holds them empty elsewhere): AOT caches (HAO_CACHE), guest OS libraries
+ * and shared cache from another root (HAO_GUEST_ROOT), interface units and
+ * the native thunk libraries beside them (HAO_IF_DIR), a native async
+ * provider (HAO_ASYNC_CONTRACT_LIBRARY), cdhashes taken as Apple's
+ * (HAO_TRUST_LIST). A program whose signature requires library validation
+ * keeps it natively whatever its environment says, so for one these are
+ * ignored, each named on the diagnostics channel; HAO_NO_LIBVAL is ignored
+ * the same way by libval.c. Called with the main executable's verified
+ * signature before anything reads them. The one exception is a test build's
+ * HAO_LIBVAL_USER (hao_opt.libval_user is never set in a release build),
+ * which keeps HAO_TRUST_LIST: the tests of the user-space route's list
+ * signer (tests/guest/libval.sh) need a list for programs that require
+ * library validation, and cannot write the system's. */
+void hao_guest_switches_for(const hao_codesig *s)
+{
+    if (!s->cd || !hao_codesig_library_validated(s)) return;
+    /* nor AOT caches the user can write: the user's own directory is not searched either */
+    hao_aot_system_only = true;
+    if (hao_env_tier() == HAO_ENV_OPEN && hao_opt.verbose) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "AOT: the user's cache directory is not read: the program requires library validation\n");
+    }
+    struct { const char *name; char *v; } sw[] = {
+        {"HAO_CACHE", hao_opt.cache}, {"HAO_GUEST_ROOT", hao_opt.guest_root}, {"HAO_IF_DIR", hao_opt.if_dir},
+        {"HAO_ASYNC_CONTRACT_LIBRARY", hao_opt.async_contract_library},
+        {"HAO_TRUST_LIST", hao_opt.libval_user ? (char[1]){0} : hao_opt.trust_list}};
+    for (size_t k = 0; k < sizeof sw / sizeof *sw; k++)
+        if (sw[k].v[0]) {
+            sw[k].v[0] = 0;
+            hao_diag_prefix(HAO_DIAG);
+            fprintf(HAO_DIAG, "%s ignored: the program requires library validation\n", sw[k].name);
+        }
+    /* app libraries load as guest code, under library validation, not natively first */
+    if (hao_opt.native_app_libs) {
+        hao_opt.native_app_libs = false;
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "HAO_NATIVE_APP_LIBS ignored: the program requires library validation\n");
+    }
+}
+
 /* The policy for the file open on fd, which the caller then hands to the
  * loader (hao_load_main_image). The slice is taken once here (hao_slice:
  * read into memory, unless only root can change the file) and left for the
@@ -498,6 +539,7 @@ int hao_guest_sig_enforce(int fd, const char *path)
         goto out;
     }
     const hao_codesig s = sl->sig;
+    hao_guest_switches_for(&s);   /* before the trust list below is read */
     /* who vouches for this CodeDirectory */
     if (s.flags & CS_ADHOC_) {
         kind = "ad hoc";

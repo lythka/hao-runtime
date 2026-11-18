@@ -32,6 +32,8 @@ guest/aotdefault	300	par	tests/guest/aotdefault.sh
 guest/fenv	300	par	tests/guest/fenv.sh
 guest/fma16	300	par	tests/guest/fma16.sh
 guest/fma32	300	par	tests/guest/fma32.sh
+guest/fma64	300	par	tests/guest/fma64.sh
+guest/ymmupper	120	par	tests/guest/ymmupper.sh
 guest/fmtpos	300	par	tests/guest/fmtpos.sh
 guest/footprint	600	par	tests/guest/footprint.sh
 guest/fork	600	par	tests/guest/fork.sh
@@ -44,6 +46,7 @@ guest/identity	300	par	tests/guest/identity.sh
 guest/indirect-x8	300	par	tests/guest/indirect-x8.sh
 guest/keypath	300	par	tests/guest/keypath.sh
 guest/libval	300	par	tests/guest/libval.sh
+guest/lvswitches	300	par	tests/guest/lvswitches.sh
 guest/msgfnptr	300	par	tests/guest/msgfnptr.sh
 guest/narrowret	300	par	tests/guest/narrowret.sh
 guest/nativesig	300	par	tests/guest/nativesig.sh
@@ -54,6 +57,15 @@ guest/objcva	300	par	tests/guest/objcva.sh
 guest/optwitness	300	par	tests/guest/optwitness.sh
 guest/overlaynil	300	par	tests/guest/overlaynil.sh
 guest/viewselfnil	300	par	tests/guest/viewselfnil.sh
+guest/stripview	300	par	tests/guest/stripview.sh
+guest/svpolicy	300	par	tests/guest/svpolicy.sh
+guest/svcarriers	300	par	tests/guest/svcarriers.sh
+guest/poddestroy	300	par	tests/guest/poddestroy.sh
+guest/carrierdestroy	300	par	tests/guest/carrierdestroy.sh
+guest/sealedstorage	300	par	tests/guest/sealedstorage.sh
+guest/svfacts	300	par	tests/guest/svfacts.sh
+guest/svguest	300	par	tests/guest/svguest.sh
+guest/svnoncopy	300	par	tests/guest/svnoncopy.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh
 guest/xpcrect	300	par	tests/guest/xpcrect.sh
@@ -73,6 +85,7 @@ guest/stackpackfp	300	par	tests/guest/stackpackfp.sh
 guest/swifttextalign	300	par	tests/guest/swifttextalign.sh
 guest/svconformance	300	par	tests/guest/svconformance.sh
 guest/swiftlate	300	par	tests/guest/swiftlate.sh
+guest/swiftcallee	300	par	tests/guest/swiftcallee.sh
 guest/swiftls	300	par	tests/guest/swiftls.sh
 guest/swiftmeta	300	par	tests/guest/swiftmeta.sh
 guest/swiftpop	300	par	tests/guest/swiftpop.sh
@@ -80,8 +93,12 @@ guest/swiftthunks	300	par	tests/guest/swiftthunks.sh
 guest/threads	300	par	tests/guest/threads.sh
 guest/uresume	300	par	tests/guest/uresume.sh
 guest/varsniff	300	par	tests/guest/varsniff.sh
-guest/xinhab	300	xfail	tests/guest/xinhab.sh
+guest/appdomain	300	par	tests/guest/appdomain.sh
+guest/xinhab	300	par	tests/guest/xinhab.sh
 guest/xpac	300	par	tests/guest/xpac.sh
+guest/wx	300	par	tests/guest/wx.sh
+guest/wxguard	120	par	tests/guest/wxguard.sh
+guest/refuse	300	par	tests/guest/refuse.sh
 guest/run-async	300	par	tests/guest/run-async.sh -k
 guest/keypath-identity	300	par	python3.14 -I tests/guest/keypath-identity/run.py
 guest/late-method-signatures	300	par	python3.14 -I tests/guest/late-method-signatures/run.py
@@ -91,6 +108,7 @@ guest/objcvascope	300	par	python3.14 -I tests/guest/objcvascope.py
 host/runtime	300	par	tests/host/runtime.sh
 host/chain	300	par	tests/host/chain.sh
 host/commpage	300	par	tests/host/commpage.sh
+host/diagsig	120	par	tests/host/diagsig.sh
 host/contract	60	par	python3.14 -I -B tests/tools/test_contract.py
 host/catalog-gate	60	par	python3.14 -I -B tests/tools/test_catalog_gate.py
 host/sigpolicy	300	par	tests/host/sigpolicy.sh
@@ -98,6 +116,7 @@ host/near-map	300	par	tests/host/near-map.sh
 host/dscselhoist	300	par	tests/host/dscselhoist.sh
 host/swiftvalue	300	par	tests/host/swiftvalue.sh
 host/swiftlayout	300	par	tests/host/swiftlayout.sh
+host/svidentity	120	par	tests/host/svidentity.sh
 objc	300	par	tests/objc/run.sh
 tools	300	par	tests/tools/run.sh
 tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py
@@ -122,8 +141,9 @@ aot/wide-fp-mutations	600	par	tests/aot/wide_fp_mutations.sh
 
 aot/estimate-mutations	600	par	tests/aot/estimate_mutations.sh
 
-aot/aes-mutations	600	par	tests/aot/aes_mutations.sh
-aot/aes-profile	120	par	tests/aot/aes_profile.sh
+aot/crypto-mutations	900	par	tests/aot/crypto_mutations.sh
+aot/cpu-profile	120	par	tests/aot/cpu_profile.sh
+aot/cpu-haswell	900	par	tests/aot/cpu_haswell.sh
 guest/satshift	900	par	tests/guest/satshift.sh
 guest/halfops	900	par	tests/guest/halfops.sh
 guest/satmul	300	par	tests/guest/satmul.sh

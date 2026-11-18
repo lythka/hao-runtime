@@ -813,8 +813,67 @@ bool fp_vec32_muladd(fpctx *x, const hao_vreg *d, const hao_vreg *a,
     return true;
 }
 
+/* Knuth's TwoSum: s = RN(a + b) and *e = (a + b) - s exactly. */
+static inline double two_sum(double a, double b, double *e)
+{
+    double s = a + b, bb = s - a;
+    *e = (a - (s - bb)) + (b - bb);
+    return s;
+}
+
+/* Veltkamp's split with C = 2^27 + 1: the high part has at most 26
+ * significant bits and a - high at most 26 and a sign. */
+static inline double split_hi(double a)
+{
+    double g = a * 134217729.0;
+    return g + (a - g);
+}
+
+/* Double fused multiply-add without an FMA instruction (Boldo and Melquiond,
+ * emulated FMA with rounding to odd):
+ *   uh + ul = a * b exactly (Dekker's product of Veltkamp halves);
+ *   th + tl = c + uh exactly (TwoSum);
+ *   v = tl + ul rounded to odd (TwoSum, then the step of fma32_odd);
+ *   the result is RN(th + v).
+ * If tl + ul is a double, v is that sum and the result is one rounding.
+ * Otherwise tl != 0, so c + uh was inexact and |tl + ul| <= 1.5 ulp(th);
+ * every rounding boundary of the result near th lies a nonzero multiple of
+ * ulp(th) / 4 from th, a double of at most four significant bits and so
+ * even, and v stays on the same side of each as tl + ul.
+ * Admits round to nearest without FTZ/DAZ, normal a and b with exponents in
+ * [-970, 994] whose sum is in [-918, 1021], and a zero or normal c with an
+ * exponent in [-970, 1021]. Every value formed is then a multiple of 2^-1022
+ * below 2^1024: zero or normal, never denormal, tiny before rounding or
+ * infinite, so only PE can be raised, and an exact zero is +0 as FPRound's
+ * cancellation rule gives in this mode. The intermediate steps raise PE
+ * whatever the result: when it was clear before, MXCSR is rewritten with
+ * PE from the two TwoSum errors alone (a nonzero first error leaves
+ * tl + ul off every double near the result, so the result is inexact). */
+static inline bool fma64(fpctx *x, uint64_t c, uint64_t a, uint64_t b, uint64_t *out)
+{
+    unsigned ea = a >> 52 & 0x7ff, eb = b >> 52 & 0x7ff, ec = c >> 52 & 0x7ff;
+    if (ea - 53 > 2017 - 53 || eb - 53 > 2017 - 53 || ea + eb - 1128 > 3067 - 1128) return false;
+    if ((c << 1) && ec - 53 > 2044 - 53) return false;
+    uint32_t saved = mxcsr_get();
+    if (saved & 0xe040) return false;                     /* RC, FTZ, DAZ */
+    double da = d_of(a), db = d_of(b);
+    double ah = split_hi(da), al = da - ah, bh = split_hi(db), bl = db - bh;
+    double uh = da * db;
+    double ul = al * bl - (((uh - ah * bh) - al * bh) - ah * bl);
+    double tl, th = two_sum(d_of(c), uh, &tl), e;
+    uint64_t v = bits_d(two_sum(tl, ul, &e));
+    if (e != 0 && !(v & 1)) v += (v ^ bits_d(e)) >> 63 ? -1 : 1;   /* one unit toward e */
+    double ez, z = two_sum(th, d_of(v), &ez);
+    if (!(saved & 0x20))
+        mxcsr_set(saved | ((e != 0 || ez != 0) && !x->no_exceptions ? 0x20 : 0));
+    *out = bits_d(z);
+    return true;
+}
+
 uint64_t fp_muladd(fpctx *x, int es, uint64_t addend, uint64_t a, uint64_t b)
 {
+    uint64_t r64;
+    if (es == 8 && !(x->c->fpcr & ~0x03c00000u) && fma64(x, addend, a, b, &r64)) return r64;
     if (es == 4 && !(x->c->fpcr & ~0x03c00000u)) {
         __m128i r;
         if (fma32(_mm_cvtsi32_si128((int)(uint32_t)addend), _mm_cvtsi32_si128((int)(uint32_t)a),

@@ -127,6 +127,15 @@ static uint64_t st_delivered, st_deferred, st_moved;
 uint64_t hao_sig_native_installs;
 static pthread_mutex_t disp_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* A thread inside st_gsig at the fork may have moved gsig_free without
+ * gsig_nfree: the child drops the rest of that page and maps another. */
+void hao_signals_fork_child(void)
+{
+    disp_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    gsig_free = NULL;
+    gsig_nfree = 0;
+}
+
 #define OWNED(s) ((s) == SIGSEGV || (s) == SIGBUS)
 /* the flags Darwin's sigaction reports back (kern_sig.c): never SA_RESETHAND */
 #define REPORTED_FLAGS (SA_ONSTACK | SA_RESTART | SA_SIGINFO | SA_NODEFER | SA_NOCLDSTOP | SA_NOCLDWAIT)
@@ -158,7 +167,7 @@ static void st_gsig(int s, uint64_t h, int fl, sigset_t m)
             r = gsig_free++;
             gsig_nfree--;
             *r = (gsig_t){h, fl, m, gsig_recs};
-            gsig_recs = r;
+            __atomic_store_n(&gsig_recs, r, __ATOMIC_RELEASE);   /* a fork child's list holds whole records */
         }
         g = r;
     }

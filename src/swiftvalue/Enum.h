@@ -31,6 +31,7 @@ typedef struct {
     int spare;             /* 1: walk COPY, the value with the tag bits MASK cleared;
                               0: walk the value itself, payload at offset 0 */
     uint64_t copy[HAO_SV_SPARE_WORDS], mask[HAO_SV_SPARE_WORDS];
+    int malformed;         /* on failure, 1: a layout holds and the value is no case of it */
 } fixed_enum_case;
 int discover_fixed_enum_case(const void *type, const void *value, fixed_enum_case *out);
 /* A compiler-laid-out multi-payload enum with one extra tag byte and no

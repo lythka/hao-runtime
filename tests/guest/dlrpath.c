@@ -1,7 +1,7 @@
 /* A program in an app bundle (Test.app/Contents/MacOS, LC_RPATH @executable_path/../Frameworks) that dlopens its
  * own libraries by @rpath, @executable_path and (from a library) @loader_path, as Xcode does with
  * @rpath/Frameworks/libIDEApplicationLoader.dylib (tests/guest/dlrpath.sh). libplug and libsub are ARM-only (guest
- * images under hao); libnat is universal (it opens natively). */
+ * images under hao); libnat is universal (its ARM slice runs under hao). */
 #include <dlfcn.h>
 #include <stdio.h>
 int main(void)

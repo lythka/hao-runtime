@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #define HAO_MAX_DEPS 256
 #define HAO_MAX_RANGES 16
@@ -53,6 +54,10 @@ struct hao_image {
     bool is_dylib, is_pie;
     uint64_t code_lo[HAO_MAX_RANGES], code_hi[HAO_MAX_RANGES];
     int ncode;
+    /* SG_READ_ONLY segments (__DATA_CONST, __AUTH_CONST) made read-only by hao_image_seal; hao's
+     * own later writes into them go through hao_image_sealed_write */
+    uint64_t sealed_lo[HAO_MAX_RANGES], sealed_hi[HAO_MAX_RANGES];
+    int nsealed;
     /* where hao reads the code ranges (hao/code.h): guest address + code_delta (0: the guest
      * mapping itself); code_alias/code_alias_size: an alias this image owns (on-disk images) */
     int64_t code_delta;
@@ -102,7 +107,8 @@ struct hao_image {
     uint64_t *fnslots;          /* chained-fixup rebase slots whose target is a guest function start */
     size_t nfnslots, capfnslots;
     void *jit_slot;             /* code-cache word holding `base` for PIC code */
-    void *aot;                  /* loaded AOT cache (aot.c) */
+    void *aot;                  /* loaded AOT cache in the code cache (jit.c aot_publish) */
+    uint64_t aot_size, aot_cpu; /* its size and the CPU profile it was translated under (hao/aot.h cpu_profile) */
     void *aot_lazy;             /* its lazy install record (jit.c aot_lazy), or NULL when installed whole */
     /* executable memory for the image's Swift metadata island entries (swiftmeta.c), mapped right after the
      * image when it was reserved (hao_island_reserve): [isl_lo, isl_hi), bump-allocated from isl_next */
@@ -131,19 +137,20 @@ uint64_t hao_island_room(uint64_t nfstarts_bound);
  * nothing does that for pages hao maps as data. So the slice is taken once,
  * and the mach header, the load commands, the signature, every hashed page,
  * the linkedit blobs and the segments all come from bytes:
- *  - copied: a file that somebody other than root may change. The slice was
+ *  - copied: every file not on the read-only System volume. The slice was
  *    read once into anonymous memory, and the image's segments are made of
  *    that memory (whole pages are handed over, not copied again). The image
  *    then shares no page with the file or with another process: it costs
  *    the slice's size for as long as it is loaded, in memory that can be
  *    compressed but not dropped (measured: 7.2 MB more peak footprint for an
  *    8.4 MB library, 66 MB for a 67 MB one; load time unchanged);
- *  - not copied: a file only root can change (root owns it, no group or
- *    other write bit, no ACL, on a local volume: the system's own files).
- *    bytes is the file, mapped, and the segments are mapped from the file
- *    as before, shared with every process that maps it.
+ *  - not copied: a file on the volume the system booted from, mounted
+ *    read-only (the System volume, sealed or a snapshot), that root owns
+ *    with no group or other write bit and no ACL. bytes is the file,
+ *    mapped, and the segments are mapped from the file as before, shared
+ *    with every process that maps it.
  * fd stays the file for what the kernel is asked about it (F_ADDFILESIGS_INFO,
- * F_CHECK_LV, F_GETSIGSINFO); the slice does not own it.
+ * F_CHECK_LV); the slice does not own it.
  */
 /* An embedded code signature as hao_codesig_parse (libval.c) read it: the
  * one reader, for the CLI's policy, integrity and library validation alike.
@@ -191,9 +198,13 @@ void hao_slice_close(hao_slice *sl);
  * caller that has checked these bytes and must load what it checked
  * (hao_guest_sig_enforce). */
 void hao_slice_hand(hao_slice *sl);
-/* The loader's unit tests: 1 maps every file, 2 copies every file (0: by
- * what the file's owner, mode, ACL and volume say). */
+/* The loader's unit tests: 1 maps every file, 2 copies every file (0: maps
+ * only a root-owned file without write bits or ACL on the read-only volume
+ * the system booted from). */
 extern int hao_slice_test_path;
+/* The rule hao_slice_open maps a file by: owner uid, mode, its volume's
+ * statfs flags, and whether the file has no ACL (the lookup said ENOENT). */
+bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none);
 
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply
  * fixups. The file is untrusted: every offset, size and count is validated
@@ -216,8 +227,10 @@ hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, 
 /* Native bundle fallback: recheck ARM-only MH_BUNDLE on the descriptor used
  * for signature validation and mapping, not only the preflight pathname. */
 bool hao_is_arm_only_bundle(const char *path);
+bool hao_is_arm_loadable(const char *path, bool dylib);        /* includes universal files; routing, not validation */
 bool hao_is_arm_only_loadable(const char *path, bool dylib);   /* an ARM-only MH_BUNDLE, or with dylib also an MH_DYLIB */
-hao_image *hao_load_dlopen_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen);
+/* universal: a guest-owned app library; otherwise recheck the ARM-only fallback on the open descriptor. */
+hao_image *hao_load_dlopen_cb(const char *path, bool universal, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen);
 hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                               char *err, size_t errlen);
 /* The generation of the native-target caches (runtime.c run_loop): what a guest branch to a
@@ -236,6 +249,18 @@ hao_image *hao_map_image_only(const char *path, char *err, size_t errlen);
  * listed image's struct and the arrays a lookup reaches stay allocated:
  * another thread may hold it from a lookup that raced the release. */
 void hao_unload_image(hao_image *img);
+/* After every adaptation of a loaded image (its registration, before its initializers), as dyld
+ * does: its SG_READ_ONLY segments become read-only. On-disk images only. False if a segment could
+ * not be sealed (the others are; a later call seals only what is left). */
+bool hao_image_seal(hao_image *img);
+/* Does [a, a+n) overlap a sealed segment of any image */
+bool hao_image_sealed_overlap(uint64_t a, uint64_t n);
+/* The image whose sealed segments hold the n bytes at a, or NULL */
+hao_image *hao_image_sealed_at(uint64_t a, size_t n);
+/* Compare-and-swap of the 8 bytes at a in a sealed segment: writable for the store only (one such
+ * store at a time), read-only again after it; a page that cannot be made read-only again stops the
+ * process. */
+bool hao_image_sealed_cas(uint64_t a, uint64_t expected, uint64_t desired);
 /* Validate a load-command area (cmdsize, per-command sizes, nsects, string
  * offsets, at most one LC_CODE_SIGNATURE); 0 if every command is well
  * formed, else -1 with why filled. *nsegs gets the LC_SEGMENT_64 count.
@@ -299,14 +324,32 @@ typedef struct {
 /* Is sl the slice the record names? The slice's signature is verified
  * (hao_slice_verify: structure, page hashes) and its CodeDirectory must be
  * the recorded one. 0: yes; -1: no, or the record is not one hao reads
- * (why). The loader's gate asks this for the main executable when the
- * process's own main executable has the section. */
+ * (why). The loader's gate asks this for the main executable of every
+ * embedded program (a stub without the section is refused), and of the CLI
+ * if its own main executable has the section. */
 int hao_libval_bound(const void *record, size_t size, hao_slice *sl, char *why, size_t n);
-enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL, HAO_LIBVAL_PLATFORM };
-/* The next image loaded is the main executable: its signature sets the
- * policy (enabled = false: off, HAO_NO_LIBVAL=1 in an ordinary process;
- * no boot argument turns it off). */
-void hao_libval_expect_main(bool enabled);
+/* hao_libval_bound with this process's own main executable's record: an
+ * embedded program's stub. A stub without one names no code: -1 (why). */
+int hao_libval_stub_bound(hao_slice *sl, char *why, size_t n);
+enum { HAO_LIBVAL_UNDECIDED, HAO_LIBVAL_OFF, HAO_LIBVAL_KERNEL };
+/* How the process started, said by the front end that started it (main.c):
+ * HAO_ENTRY_CLI, hao's own launcher (`hao PROGRAM`, every routed exec),
+ * which has checked the file it was given (hao_guest_sig_enforce); or
+ * HAO_ENTRY_EMBEDDED, an embedded program's stub, whose __hao_slice record
+ * must name the main executable's slice. */
+enum { HAO_ENTRY_CLI = 1, HAO_ENTRY_EMBEDDED = 2 };
+/* The next image loaded is the main executable, started through ENTRY
+ * (anything but HAO_ENTRY_CLI is taken as HAO_ENTRY_EMBEDDED): its
+ * signature sets the policy. enabled = false (HAO_NO_LIBVAL=1 in an
+ * ordinary process; no boot argument turns it off) turns library
+ * validation off for a program that does not require it, and is ignored,
+ * with a diagnostic, for one that does. A main executable that requires
+ * library validation is refused when the process cannot be made to
+ * require it (CS_REQUIRE_LV). */
+void hao_libval_expect_main(bool enabled, int entry);
+/* The loader's unit tests: 1 makes setting CS_REQUIRE_LV fail, 2 reading
+ * the status back fail, 3 the flag not stick. */
+extern int hao_libval_test_setlv;
 /* The loader's gate, after an image's load commands validate and before it
  * is mapped: sl is the slice the image is then built from. img->fd and the
  * slice fields are set. 0 = may load, else -1 with why filled. */
@@ -331,6 +374,8 @@ bool hao_is_guest_function(uint64_t a);
 /* Find the guest image containing a code address (NULL if none). Lock-free:
  * any thread, also in a signal handler, while another thread loads. */
 hao_image *hao_image_for_code(uint64_t addr);
+/* The same without updating the lookup hint: writes nothing (hao_jit_locate) */
+hao_image *hao_image_for_code_peek(uint64_t addr);
 hao_image *hao_image_for_addr(uint64_t addr);
 /* false: addr lies in no range a guest image was ever registered with, so both lookups above
  * return NULL for it (one search of the immutable range snapshot; any thread, signal handlers) */
