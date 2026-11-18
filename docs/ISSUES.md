@@ -442,6 +442,27 @@ the deferred library loads without library validation (the loader's
 fallback); dyld's handling of DYLD_* variables in a stub that is not
 hardened is unchanged.
 
+## A sandbox applied at exec refused CS_REQUIRE_LV
+
+A program whose entitlements name a sandbox profile the kernel applies at exec
+(`com.apple.private.sandbox.profile`, also `:macos`) runs sandboxed before
+hao starts. A profile may deny the process changing its own code-signing
+status. Then hao could not set `CS_REQUIRE_LV` after libhao loaded, and
+refused every start with status 126. On a 27.2 Intel image, sandboxd exited
+this way about every 10 s, which launchd logged as a respawn loop. Now
+`hao-embed` signs the stub of such a program with the library flag when
+the program requires library validation, so the kernel sets `CS_REQUIRE_LV`
+at exec. `src/libval.c` reads the status first and sets the flag only when
+it is missing. The private entitlement works on an ad hoc stub only where
+AMFI is relaxed, and libhao loads there under the flag (measured on the
+image). Start-up refusals also go to the unified log as a public record
+(`refused: ...`), because a sandboxed daemon's stderr goes nowhere and its
+private records show nothing. Tests: `test_macho` (flag set at exec,
+setting refused: library validation on) and `tests/tools/run.sh` (library
+flag only on such a stub). Limits: stubs from older payloads keep refusing
+until embedded again; with the JIT also denied (`dynamic-code-generation`),
+the program runs in the interpreter.
+
 ## hao-embed -o wrote through a fixed temporary name
 
 `hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
