@@ -60,6 +60,7 @@ guest/viewselfnil	300	par	tests/guest/viewselfnil.sh
 guest/svpolicy	300	par	tests/guest/svpolicy.sh
 guest/svcarriers	300	par	tests/guest/svcarriers.sh
 guest/poddestroy	300	par	tests/guest/poddestroy.sh
+guest/carrierdestroy	300	par	tests/guest/carrierdestroy.sh
 guest/svfacts	300	par	tests/guest/svfacts.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh
