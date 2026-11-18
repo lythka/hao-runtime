@@ -388,6 +388,21 @@ void hao_thunk_native_args_mask(hao_thread *t, unsigned mask, bool swiftcc)
 
 void hao_thunk_native_args(hao_thread *t) { hao_thunk_native_args_mask(t, HAO_BR_SCAN_ALL, false); }
 
+/* A native Swift function's stack arguments: the N 8-byte guest stack words at sp + off[k] are
+ * arguments (the call's layout says so), and a guest function among them gets a Swift entry, as one in
+ * x0-x7 does: a Swift function value is called with an indirect result's buffer in rax. mask: bits 8-15
+ * the argument slots a typed plan says may carry code (HAO_BR_SCAN_ALL: every one). */
+void hao_thunk_native_stack_swift(hao_thread *t, const uint16_t *off, int n, unsigned mask)
+{
+    uint64_t sp = t->cpu.x[31];
+    for (int k = 0; k < n; k++) {
+        if (mask != HAO_BR_SCAN_ALL && (k >= 8 || !(mask >> (8 + k) & 1))) continue;
+        if ((off[k] & 7) || !on_guest_stack(t, sp + off[k], 8)) continue;
+        uint64_t *slot = (uint64_t *)(uintptr_t)(sp + off[k]), a = *slot;
+        if (a && hao_guest_range_maybe(a) && hao_is_guest_function(a)) *slot = hao_swift_thunk_for(a);
+    }
+}
+
 /* One argument of a generated thunk pair's native half (hao/bridge.h) that
  * may carry guest code: what the argument scan does for one slot. A guest
  * function with a known, non-trivial signature gets a signature thunk. */

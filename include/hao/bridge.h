@@ -339,6 +339,7 @@ int hao_cxx_bool_types(const char *name, size_t off[HAO_CXX_BOOL_MAX]);
  * mask names (HAO_BR_SCAN_ALL: hao_thunk_native_args); hao_args_code_slots
  * reports, changing nothing, which slots the full scan would act on. */
 void hao_thunk_native_args_mask(struct hao_thread *t, unsigned mask, bool swiftcc);   /* swiftcc: a Swift callee */
+void hao_thunk_native_stack_swift(struct hao_thread *t, const uint16_t *off, int n, unsigned mask);   /* a Swift callee's stack words */
 unsigned hao_args_code_slots(struct hao_thread *t);
 
 /* cxxstr.c: native C++ functions outside libc++ that take a std::string

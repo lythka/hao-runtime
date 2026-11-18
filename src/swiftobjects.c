@@ -141,6 +141,57 @@ static void note_object(uint64_t a, uint64_t metadata, uint64_t size)
     __atomic_fetch_add(p ? &observed : &dropped, 1, __ATOMIC_RELAXED);
 }
 
+/* The guest function in the Swift function field at A gets a Swift entry, the field compared and swapped */
+static void prepare_field(uint64_t a, uint64_t fn)
+{
+    if (!hao_is_guest_function(fn)) return;
+    /* fields_of records only Swift-convention synchronous function fields: their callers pass an
+     * indirect result's buffer in rax, which only a marked entry hands on as x8 (callback_plain) */
+    uint64_t entry = hao_swift_thunk_for(fn);
+    if (entry == fn) return;
+    bool done;
+    if (hao_image_sealed_at(a, 8)) {   /* a value in a guest image's constant data: written for this one store */
+        hao_crit_enter();
+        done = hao_image_sealed_cas(a, fn, entry);
+        hao_crit_leave();
+    } else
+        done = __atomic_compare_exchange_n((uint64_t *)(uintptr_t)a, &fn, entry, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    if (done) __atomic_fetch_add(&prepared, 1, __ATOMIC_RELAXED);
+}
+
+static bool reflection(void)
+{
+    if (field_offset) return true;
+    metadata_kind = HAO_DLSYM("swift_getMetadataKind");
+    field_count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
+    field_type = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    void *off = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+    if (!metadata_kind || !field_count || !field_type || !off) return false;
+    __atomic_store_n(&field_offset, off, __ATOMIC_RELEASE);
+    return true;
+}
+
+/* A value guest code made, of the struct or tuple TYPE, that native Swift code receives (a View
+ * modifier's self, swiftcc.c): it may hold closures native code calls later (a GeometryReader's
+ * content, a guest View's @ViewBuilder property), with an indirect result's buffer in rax. Its
+ * synchronous Swift function fields, found by TYPE's reflection metadata as an object's are, get
+ * Swift entries in place. Enum payloads and existential contents are not looked into (fields_of). */
+void hao_swift_value_closures(uint64_t type, uint64_t value)
+{
+    if (!type || (type & 7) || !value || (value & 7) || hao_opt.no_swift_thunks || !reflection()) return;
+    hao_thread *t = hao_current();
+    if (t->swift_objects_building || t->sig_nest) return;
+    uint64_t kind, vw, size;
+    if (!read_memory(t, type, &kind, 8) || (kind != 0x200 && kind != 0x301)) return;   /* struct, tuple */
+    if (!read_memory(t, type - 8, &vw, 8) || !read_memory(t, vw + 64, &size, 8)) return;   /* value witnesses: size */
+    const recipe *r = recipe_for(type);
+    for (uint32_t k = 0; r && k < r->n; k++) {
+        uint64_t off = r->offsets[k], fn;
+        if (off + 16 > size || !read_memory(t, value + off, &fn, 8)) continue;
+        prepare_field(value + off, fn);
+    }
+}
+
 static void prepare(hao_thread *t, uint64_t a)
 {
     if (!a || (a & 7) || hao_opt.no_swift_thunks || !__atomic_load_n(&object_count, __ATOMIC_RELAXED)) return;
@@ -188,13 +239,7 @@ static void prepare(hao_thread *t, uint64_t a)
         if (offset > found.size - 16) continue;
         if (captured) memcpy(&fn, (const char *)snapshot + offset, sizeof fn);
         else if (!read_memory(t, a + offset, &fn, sizeof fn)) continue;
-        if (!hao_is_guest_function(fn)) continue;
-        /* fields_of records only Swift-convention synchronous function fields: their callers pass an
-         * indirect result's buffer in rax, which only a marked entry hands on as x8 (callback_plain) */
-        uint64_t entry = hao_swift_thunk_for(fn);
-        if (entry != fn && __atomic_compare_exchange_n((uint64_t *)(uintptr_t)(a + offset), &fn, entry,
-                false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
-            __atomic_fetch_add(&prepared, 1, __ATOMIC_RELAXED);
+        prepare_field(a + offset, fn);
     }
 }
 
@@ -295,12 +340,9 @@ bool hao_swift_objects_interpose(const char *name, uint64_t *address)
     }
     if (!native_alloc) {
         native_alloc = HAO_DLSYM("swift_allocObject");
-        metadata_kind = HAO_DLSYM("swift_getMetadataKind");
-        field_count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-        field_type = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
-        field_offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
+        reflection();
     }
-    if (!native_alloc || !metadata_kind || !field_count || !field_type || !field_offset) return false;
+    if (!native_alloc || !field_offset) return false;
     *address = hao_trap_address(name, trap_alloc, 0);
     return true;
 }
