@@ -15,6 +15,8 @@ typealias Image = @convention(c) (UInt64) -> UnsafeRawPointer?
 let lib=dlopen(CommandLine.arguments[1],RTLD_NOW)!
 let walk=unsafeBitCast(dlsym(lib,"hao_sv_collect_empty_patches_detail")!,to:Walk.self)
 let image=unsafeBitCast(dlsym(lib,"hao_image_for_addr")!,to:Image.self)
+typealias Verdict = @convention(c) (UnsafeRawPointer, UnsafeRawPointer, UnsafeMutableRawPointer, UInt32, UnsafeMutablePointer<UnsafeRawPointer?>, Int32, UnsafeRawPointer?, UnsafeMutablePointer<UInt32>) -> Int32
+let valueWalk=unsafeBitCast(dlsym(lib,"hao_sv_collect_value_patches")!,to:Verdict.self)
 let patches=UnsafeMutableRawPointer.allocate(byteCount:64*40,alignment:8)
 func table<W>(_ w: inout W) -> (Bool, Bool) {
  withUnsafeBytes(of:&w) { b in
@@ -28,6 +30,15 @@ func walked<V>(_ v: inout V) -> Int32 {
  let metadata=unsafeBitCast(V.self,to:UnsafeRawPointer.self)
  return withUnsafePointer(to:&v) { walk(metadata,UnsafeRawPointer($0),patches,64,&unresolved) }
 }
+// The published walk's verdict (guest storage; Recipe.h HAO_SV_KNOWN_WRONG = 16): "known wrong" is refused
+// even where an uncertified value is only reported (report-only).
+func verdict(_ metadata: Any.Type, _ p: UnsafeRawPointer) -> String {
+ var unresolved:UnsafeRawPointer?=nil
+ var passes:UInt32=0
+ let n=valueWalk(unsafeBitCast(metadata,to:UnsafeRawPointer.self),p,patches,64,&unresolved,2,nil,&passes)
+ return n >= 0 ? "certified" : passes & 16 != 0 ? "known wrong" : "uncertified"
+}
+func verdict<V>(_ v: inout V) -> String { withUnsafePointer(to:&v) { verdict(V.self,UnsafeRawPointer($0)) } }
 // A guest protocol's existential: admitted with its guest conformances.
 for (name,obj):(String,any R) in [("static",StaticR()),("generic",GenericR(7))] {
  var w=Wrap(object:obj)
@@ -43,6 +54,7 @@ for (name,obj):(String,any Identifiable & AnyObject) in [("native static",Static
  print(name,"table guest",t,"descriptor guest",d)
  var v=ValueN(e:nil,wrapped:w)
  print(name,"walk",walked(&v) < 0 ? "refused" : "admitted")
+ print(name,"verdict",verdict(&v))
 }
 // Opaque (not class-bound) existentials, as ControlCenter's `any ControlCenterDisplayable`: the same rule.
 protocol D { func name() -> String }
@@ -57,3 +69,10 @@ for (name,obj):(String,any D) in [("opaque small",SmallD()),("opaque big",BigD()
 }
 var s=ValueS(e:nil,d:BigD())
 print("opaque native","walk",walked(&s) < 0 ? "refused" : "admitted")
+// Not certified, yet nothing in it is known wrong: under report-only it goes on as found.
+print("opaque native","verdict",verdict(&s))
+// Its witness table word zeroed (a copy never destroyed): no conformance, known wrong.
+let bad=UnsafeMutableRawPointer.allocate(byteCount:MemoryLayout<ValueS>.size,alignment:16)
+withUnsafeBytes(of:&s) { bad.copyMemory(from:$0.baseAddress!,byteCount:$0.count) }
+bad.storeBytes(of:0,toByteOffset:MemoryLayout<ValueS>.offset(of:\ValueS.d)! + 32,as:UInt.self)
+print("no table","verdict",verdict(ValueS.self,UnsafeRawPointer(bad)))

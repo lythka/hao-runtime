@@ -1700,7 +1700,11 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
      * each witness table must be native, its conformance descriptor in no
      * guest image (a guest conformance's table is arm64 code; a generic one's
      * table is instantiated on the heap), and a Swift object word a heap
-     * pointer. A guest call of a native witness only copies them. */
+     * pointer. A guest call of a native witness only copies them. Not
+     * certified, but nothing known wrong either: a special representation
+     * (the Error box) and a guest conformance to a native protocol, whose
+     * calls native code makes through hao's callbacks; its payload is still
+     * walked for a part that is known wrong. */
     if ((kind == 0x303 || kind == 0) && !r->existentials) {
         r->passes |= HAO_SV_PASS_OWNED;
         if (kind == 0) {
@@ -1709,7 +1713,8 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
         }
         uint32_t flags, protocols; memcpy(&flags,(const char *)type + 8,4); memcpy(&protocols,(const char *)type + 12,4);
         uint64_t tables = flags & 0xffffff, first = (flags & 0x80000000u) ? 32 : 8;
-        if ((flags & 0x3f000000u) || first + 8 * tables > v->size) return WRONG(r);
+        if (flags & 0x3f000000u) return 0;   /* a special representation: no rule */
+        if (first + 8 * tables > v->size) return WRONG(r);
         /* Every protocol a Swift protocol defined in a guest image
          * (TargetExistentialTypeMetadata: kind, flags, protocol count, then
          * the superclass constraint if flag bit 30, then the protocol
@@ -1722,13 +1727,15 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             uint64_t ref; memcpy(&ref,(const char *)type + 16 + 8 * i,8);
             if ((ref & 1) || !hao_image_for_addr(ref)) guest_protocols = 0;
         }
+        int guest_conformance = 0;
         for (uint64_t i = 0; i < tables; ++i) {
             uint64_t table, conformance = 0;
             memcpy(&table,value + first + 8 * i,8);
-            if (!table || !hao_probe_read8(table,&conformance) || !conformance) return WRONG(r);
-            if (!guest_protocols && (hao_image_for_addr(table) || hao_image_for_addr(conformance))) return WRONG(r);
+            if (!table || !hao_probe_read8(table,&conformance) || !conformance) return WRONG(r);   /* no conformance */
+            guest_conformance |= !guest_protocols && (hao_image_for_addr(table) || hao_image_for_addr(conformance));
         }
-        return existential_payload(r,type,value,base,out,capacity,used,depth);
+        int ok = existential_payload(r,type,value,base,out,capacity,used,depth);
+        return guest_conformance ? 0 : ok;   /* not certified, not known wrong */
     }
     if (kind == 0x303) {   /* a guest call of a native witness (r->existentials) */
         uint32_t flags; memcpy(&flags,(const char *)type + 8,4);
