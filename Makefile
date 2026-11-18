@@ -42,7 +42,7 @@ OSO       := -Wl,-oso_prefix,$(CURDIR)/
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
 
 CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c \
-        src/a64_imm.c src/a64_cond.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c
+        src/a64_imm.c src/a64_cond.c src/a64_regs.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
 RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
@@ -181,10 +181,10 @@ oracle-asan: $(B)/oracle-native $(B)/asan/oracle-check $(B)/asan/oracle-atomic
 	if grep -lE 'runtime error:|ERROR: AddressSanitizer' $(B)/asan/oracle-*.log; then echo "sanitizer reports in the logs above"; fail=1; fi; \
 	exit $$fail
 
-# Unit tests of the A64 immediate decoder and condition mapping.
-$(B)/test_imm_cond: tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c include/hao/a64_imm.h include/hao/a64_cond.h include/hao/cpu.h include/hao/x86.h $(MIN_STAMP)
+# Unit tests of the A64 immediate decoder, condition mapping and x8 input walk.
+$(B)/test_imm_cond: tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c src/a64_regs.c include/hao/a64_imm.h include/hao/a64_cond.h include/hao/a64_regs.h include/hao/cpu.h include/hao/x86.h $(MIN_STAMP)
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) -o $@ tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c && codesign -s - -f $@
+	$(CC) $(CFLAGS) -o $@ tests/a64/test_imm_cond.c src/a64_imm.c src/a64_cond.c src/a64_regs.c && codesign -s - -f $@
 
 # Unit test of the switch snapshot parser (src/opts.c) with the tier rules.
 $(B)/opts_test: tests/aot/opts_test.c $(B)/libhaocore.a

@@ -11,7 +11,9 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include <mach-o/getsect.h>
 #include <mach-o/nlist.h>
+#include "hao/a64_regs.h"
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
@@ -460,6 +462,52 @@ static bool guest_swift_symbol(uint64_t pc)
         }
     }
     __atomic_store_n(m, pc << 1 | sw, __ATOMIC_RELAXED);
+    return sw;
+}
+
+/* The guest instruction at pc, if it lies in the code ranges of the image the walk began in. */
+static bool guest_insn(void *ctx, uint64_t pc, uint32_t *insn)
+{
+    const hao_image *im = ctx;
+    int n = __atomic_load_n(&im->ncode, __ATOMIC_ACQUIRE);
+    for (int k = 0; k < n; k++)
+        if (pc >= im->code_lo[k] && pc + 4 <= im->code_hi[k]) { memcpy(insn, hao_code_ptr_im(im, pc), 4); return true; }
+    return false;
+}
+
+/* Does the guest function at pc take x8 as an input, an indirect result's buffer (a64_x8_live_in: its own
+ * code reads x8 before writing it within its first instructions and simple branches)? Read from the
+ * image's code; remembered per address in a direct-mapped table. */
+static bool guest_reads_x8(uint64_t pc)
+{
+    enum { N = 2048 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *m = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(m, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    hao_image *im = hao_image_for_code(pc);
+    bool x8 = im && a64_x8_live_in(guest_insn, im, pc, 64);
+    __atomic_store_n(m, pc << 1 | x8, __ATOMIC_RELAXED);
+    return x8;
+}
+
+/* Is the native code at pc in an image with Swift metadata (libswiftCore, SwiftUI and other Swift
+ * frameworks)? Their Swift functions are mostly not exported, so no symbol tells. dladdr only on a miss;
+ * remembered per address in a direct-mapped table. */
+static bool native_swift_image(uint64_t pc)
+{
+    enum { N = 4096 };
+    static uint64_t memo[N];   /* pc << 1 | answer */
+    uint64_t *e = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
+    if (v && v >> 1 == pc) return v & 1;
+    Dl_info di;
+    bool sw = false;
+    if (dladdr((void *)(uintptr_t)pc, &di) && di.dli_fbase) {
+        const struct mach_header_64 *mh = di.dli_fbase;
+        unsigned long n = 0;
+        sw = mh->magic == MH_MAGIC_64 && (getsectiondata(mh, "__TEXT", "__swift5_typeref", &n) || getsectiondata(mh, "__TEXT", "__swift5_types", &n) ||
+                                          getsectiondata(mh, "__TEXT", "__swift5_proto", &n));
+    }
+    __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
     return sw;
 }
 
@@ -1166,10 +1214,12 @@ uint64_t hao_callback(hao_cb_frame *f)
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
     if (sig) { hao_callback_with_sig(f, sig); return 0; }
     /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry, or
-     * the entry hao gave it where guest code handed it to native Swift code), its own symbol does, or a
+     * the entry hao gave it where guest code handed it to native Swift code), its own symbol does, a
      * native function the guest called jumped on to it (a dispatch thunk's tail call returns to
-     * hao_native_call, which put the guest's own x8 in rax) */
-    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target);
+     * hao_native_call, which put the guest's own x8 in rax), or its own code takes x8 as an input and
+     * its caller is in an image with Swift metadata (a closure no hand-off site marked) */
+    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target) ||
+                   (guest_reads_x8(f->target) && native_swift_image(f->ret));
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);

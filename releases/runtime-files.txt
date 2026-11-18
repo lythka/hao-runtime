@@ -18,6 +18,7 @@ docs/security-model.md
 docs/swift-metadata.md
 include/hao/a64_cond.h
 include/hao/a64_imm.h
+include/hao/a64_regs.h
 include/hao/aot.h
 include/hao/async_contract.h
 include/hao/bridge.h
@@ -53,6 +54,7 @@ src/a64_fp.c
 src/a64_fp.h
 src/a64_imm.c
 src/a64_interp.c
+src/a64_regs.c
 src/a64_simd.c
 src/abi.c
 src/aggspi_gen.inc
@@ -598,6 +600,7 @@ tests/guest/wx.swift
 tests/guest/wxguard.c
 tests/guest/wxguard.sh
 tests/guest/x8.c
+tests/guest/x8calls.S
 tests/guest/x8helper.c
 tests/guest/x8helper.h
 tests/guest/xinhab.sh
