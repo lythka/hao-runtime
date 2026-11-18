@@ -62,6 +62,7 @@ guest/svcarriers	300	par	tests/guest/svcarriers.sh
 guest/poddestroy	300	par	tests/guest/poddestroy.sh
 guest/carrierdestroy	300	par	tests/guest/carrierdestroy.sh
 guest/svfacts	300	par	tests/guest/svfacts.sh
+guest/svnoncopy	300	par	tests/guest/svnoncopy.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh
 guest/xpcrect	300	par	tests/guest/xpcrect.sh
@@ -111,6 +112,7 @@ host/near-map	300	par	tests/host/near-map.sh
 host/dscselhoist	300	par	tests/host/dscselhoist.sh
 host/swiftvalue	300	par	tests/host/swiftvalue.sh
 host/swiftlayout	300	par	tests/host/swiftlayout.sh
+host/svidentity	120	par	tests/host/svidentity.sh
 objc	300	par	tests/objc/run.sh
 tools	300	par	tests/tools/run.sh
 tools/release	300	par	python3.14 -B -m unittest discover -s tests/tools -p test_release.py

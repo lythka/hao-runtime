@@ -472,6 +472,10 @@ tests/guest/svcarriers.swift
 tests/guest/svfacts.facts
 tests/guest/svfacts.sh
 tests/guest/svfacts.swift
+tests/guest/svnoncopy.facts
+tests/guest/svnoncopy.sh
+tests/guest/svnoncopy.swift
+tests/guest/svnoncopy_fake.swift
 tests/guest/layoutxi.sh
 tests/guest/layoutxi.swift
 tests/guest/xpcrect.m
@@ -628,6 +632,8 @@ tests/host/swiftlayout.sh
 tests/host/swiftlayout.swift
 tests/host/swiftvalue.sh
 tests/host/swiftvalue.swift
+tests/host/svidentity.sh
+tests/host/svidentity.swift
 tests/host/test_x86_emit.c
 tests/host/traps.c
 tests/host/x86args.c
