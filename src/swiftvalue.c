@@ -847,7 +847,7 @@ static bool witness_affected(const void *type, uint64_t lr, uint64_t pc)
  * are more than CAP or the type is deeper than 16. */
 typedef struct { uint64_t lo, hi; } byte_range;
 /* Guest structs whose layout string the runtime built (hao_swift_struct_layout_done). */
-static hao_gmap laid_types = HAO_GMAP_INIT(2, 1, 6, 14);         /* guest struct metadata -> 1 */
+static hao_gmap laid_types = HAO_GMAP_INIT(2, 1, 6, 20);         /* guest struct metadata -> 1 */
 static bool runtime_laid(const void *type) { return hao_gmap_get1(&laid_types,(uint64_t)(uintptr_t)type) != NULL; }
 static int guest_ranges(const void *type, uint64_t base, byte_range *out, int n, int cap, int depth)
 {
@@ -1050,6 +1050,8 @@ void hao_swift_struct_layout_done(void *metadata, uint64_t n, const void *const 
     uint64_t *slot = hao_gmap_claim1(&laid_types,(uint64_t)(uintptr_t)metadata,&fresh);
     if (slot && fresh) { slot[1] = 1; hao_gmap_publish1(&laid_types,slot,(uint64_t)(uintptr_t)metadata); }
     pthread_mutex_unlock(&lock); hao_crit_leave();
+    /* Unrecorded, its fields would be taken as read in the guest's encoding. */
+    if (!slot) decline(metadata,"layout record allocation",NULL,NULL,metadata,0,0);
     witness_add_type(metadata);
     witnesses *v = (witnesses *)vwt(metadata);
     uint32_t arm;
@@ -1645,6 +1647,10 @@ bool hao_swift_witness_native(hao_thread *t, uint64_t pc)
         const void *type = (const void *)(uintptr_t)c->x[witness_metadata_reg(slot)];
         if (slot >= ARRAY_DESTROY) return type && witness_array(t,pc,slot,type);
         if (!type || (uint64_t)(uintptr_t)((void *const *)vwt(type))[slot] != pc) continue;
+        const void *const *tm = type;
+        if (slot <= 5 && ((uintptr_t)tm[0] == 0x200 || (uintptr_t)tm[0] == 0x201) &&
+            hao_image_for_addr((uint64_t)(uintptr_t)tm[1]) && !runtime_laid(type))
+            return false;   /* a guest type whose layout string guest code compiled reads its own encoding */
         /* Single-payload tag witnesses act on an enclosing enum of the
          * type; with one empty case that is the type's own Optional. A
          * tuple's table has no enum witnesses (11-13): only an Optional's
