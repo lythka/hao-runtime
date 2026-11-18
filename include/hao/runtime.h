@@ -550,6 +550,7 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
  * right or unproven. */
 int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width);
 void hao_swift_note_dispatch_thunk(const char *gname, uint64_t native);
+int hao_swift_callee_stack_slots(uint64_t native);   /* SysV stack arguments past x6, x7 its code reads; -1 not shown */
 /* interpose.c: a page the guest mapped or made executable itself (mmap,
  * mprotect): arm64 code generated at run time, which hao does not run */
 bool hao_guest_exec_mapped(uint64_t a);
@@ -644,6 +645,10 @@ bool hao_footprint_limit(uint64_t *footprint, uint64_t *limit);
 void hao_swift_object_prepare(uint64_t object);
 void hao_objc_prepare_generic_class(uint64_t metadata);
 void hao_swift_objects_args(hao_thread *t);
+/* a value of struct or tuple TYPE guest code made, lent to native Swift code: its closure fields get Swift entries */
+void hao_swift_value_closures(uint64_t type, uint64_t value);
+/* swiftcc.c: the Body a guest body witness returned in native memory (A: its x0-x5): its closures get Swift entries */
+void hao_swift_body_result(uint64_t target, const uint64_t *a, uint64_t value);
 void hao_swift_objects_result(hao_thread *t, uint64_t target, uint64_t indirect);
 bool hao_swift_objects_interpose(const char *name, uint64_t *addr);
 /* valist_builder.c: Swift's __VaListBuilder with the arm64 semantics guest code inlines */
