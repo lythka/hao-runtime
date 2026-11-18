@@ -106,6 +106,7 @@ src/stackargs_gen.inc
 src/stubs_oracle.c
 src/swift.c
 src/swiftcc.c
+src/swiftguest_gen.inc
 src/swiftmeta.c
 src/swiftobjects.c
 src/swiftresult.c
@@ -472,6 +473,8 @@ tests/guest/svcarriers.swift
 tests/guest/svfacts.facts
 tests/guest/svfacts.sh
 tests/guest/svfacts.swift
+tests/guest/svguest.sh
+tests/guest/svguest.swift
 tests/guest/svnoncopy.facts
 tests/guest/svnoncopy.sh
 tests/guest/svnoncopy.swift

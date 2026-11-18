@@ -57,6 +57,7 @@ typedef struct {
     char diag_dir[1024];        /* HAO_DIAG_DIR: diagnostics log directory (runtime.c; "" = unset: hao_crash=1's) */
     char swift_walk_facts[1024]; /* HAO_SWIFT_WALK_FACTS: a fixture of the Swift walk's facts table (tests;
                                     swiftvalue/Facts.c; "" = unset) */
+    char swift_guest_facts[1024]; /* HAO_SWIFT_GUEST_FACTS: a fixture of the guest-type rows (tests; Facts.c) */
     char swift_pop[16];         /* HAO_SWIFT_POP: "signature" or "frame" ("" = both; runtime.c callee_pop) */
     char ignored[512];          /* comma-separated switches the tier ignored */
     bool ready;

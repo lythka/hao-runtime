@@ -356,7 +356,8 @@ static bool graph(builder *b, const void *type, unsigned depth)
     b->converts |= converts;
     walk_fact fact;
     if (converts && walk_fact_of(type,&fact) &&
-        (fact.verdict == WALK_FACT_REFUSE || (fact.verdict == WALK_FACT_CONVERT && !fact.nimages))) b->unproven = true;
+        (fact.verdict == WALK_FACT_REFUSE || (fact.verdict == WALK_FACT_CONVERT && !fact.nimages && !fact.guest)))
+        b->unproven = true;
     int whole = 0;
     bool settled = settled_node(type,&whole);
     bool affected = converts || !settled;
