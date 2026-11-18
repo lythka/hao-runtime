@@ -189,7 +189,9 @@ static void prepare(hao_thread *t, uint64_t a)
         if (captured) memcpy(&fn, (const char *)snapshot + offset, sizeof fn);
         else if (!read_memory(t, a + offset, &fn, sizeof fn)) continue;
         if (!hao_is_guest_function(fn)) continue;
-        uint64_t entry = hao_thunk_for(fn);
+        /* fields_of records only Swift-convention synchronous function fields: their callers pass an
+         * indirect result's buffer in rax, which only a marked entry hands on as x8 (callback_plain) */
+        uint64_t entry = hao_swift_thunk_for(fn);
         if (entry != fn && __atomic_compare_exchange_n((uint64_t *)(uintptr_t)(a + offset), &fn, entry,
                 false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
             __atomic_fetch_add(&prepared, 1, __ATOMIC_RELAXED);
