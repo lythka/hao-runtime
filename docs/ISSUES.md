@@ -583,11 +583,17 @@ exported symbol is a Swift mangled name (its entry is marked the same
 way: `hao_swift_thunk_for`), or a native function the guest called that
 jumped on to guest code (its return address is hao_native_call's, which
 put the guest's own x8 in rax); a value that cannot be a data pointer is
-never taken. A native caller in an image with Swift metadata counts
-again: SwiftUI calls stripped guest closures from unexported code
-through no entry hao made (a closure passed in a stack slot, one stored
-in a value guest code built), and without it their results in memory
-went to hao's area, leaving SwiftUI's buffer uninitialized.
+never taken. The caller's image does not count. Guest functions handed
+to native Swift code get the marked entry wherever hao sees them cross:
+in x0-x7 and in the stack arguments of a native Swift callee (by its
+symbol or the import's bound name; the 8-byte stack arguments of the
+call's packed layout, else as many words as the callee's code reads), in
+the closure fields of a guest-made Swift object, in the closure fields
+of self lent to a native View modifier, and in the closure fields of the
+Body a guest body witness returns to native code (View, ViewModifier
+and the other SwiftUI protocols with a `body` returning `Body`; Body's
+metadata from the witness table). Fields are found from the type's
+reflection metadata, through structs and tuples, and swapped in place.
 Otherwise x8 points into the thread's own area: 64 KB for each of the
 first 16 nesting levels, each followed by a 64 KB guard, so a larger
 result faults in its level's guard; a deeper level gets a guard itself.
@@ -608,12 +614,18 @@ registration. A release-style build (local symbols stripped) of
 `guest/swiftthunks`, whose closures native Swift generics call: same
 output as native (it relies on the native callee's symbol).
 `guest/indirect-x8` and the guest and host entries of tests/check.list
-pass. `guest/stripview` (stripped): an alert's message closure and a
-GeometryReader's content, called by SwiftUI; without the caller's image
-rule swift_retain of 0x20 (the Calculator and Bluetooth Settings alert
-crash), now the same output as native. Limits: a stripped guest Swift
-function reached by a native C caller outside a Swift image gets hao's
-area: a result it returns in memory is lost.
+pass. `guest/stripview` (stripped): an alert's message closure in a
+stack slot, GeometryReader contents in self lent to `sheet` (in a body
+and in main), in a bare body, in a `background` argument, behind a guest
+View's @ViewBuilder property and in a guest ViewModifier's body, all
+called by SwiftUI: swift_retain of 0x20 (the Calculator and Bluetooth
+Settings alert crash) without these entries, now the same output as
+native under JIT, `--interp` and AOT. Limits: a stripped guest Swift
+function that reaches native code by none of these paths gets hao's
+area, and a result it returns in memory is lost: a closure inside an
+enum payload or existential, or in a value passed to a native generic
+function as an ordinary argument outside a body (`ImageRenderer(content:)`
+given a GeometryReader built in main).
 
 ## Translated code, thunks and Swift island entries were writable and executable
 

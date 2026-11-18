@@ -11,7 +11,6 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
-#include <mach-o/getsect.h>
 #include <mach-o/nlist.h>
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
@@ -464,31 +463,6 @@ static bool guest_swift_symbol(uint64_t pc)
     return sw;
 }
 
-/* Is the native code at pc in an image with Swift metadata (libswiftCore, SwiftUI and other Swift
- * frameworks)? Their Swift functions are mostly not exported, so no symbol tells, and they call guest
- * Swift functions no entry marks: a closure stored in a value guest code built (a GeometryReader's
- * content, a ViewBuilder closure in a guest View struct), one passed in a stack slot. A plain callback
- * from such code takes rax as x8 (callback_plain; a value that cannot be a data pointer still is not),
- * as before dd2778e: a stripped closure's indirect result written to hao's own area leaves the native
- * caller's buffer uninitialized. dladdr only on a miss; remembered per address (a direct-mapped table). */
-static bool native_swift_image(uint64_t pc)
-{
-    enum { N = 4096 };
-    static uint64_t memo[N];   /* pc << 1 | answer */
-    uint64_t *e = &memo[(pc >> 2) & (N - 1)], v = __atomic_load_n(e, __ATOMIC_RELAXED);
-    if (v && v >> 1 == pc) return v & 1;
-    Dl_info di;
-    bool sw = false;
-    if (dladdr((void *)(uintptr_t)pc, &di) && di.dli_fbase) {
-        const struct mach_header_64 *mh = di.dli_fbase;
-        unsigned long n = 0;
-        sw = mh->magic == MH_MAGIC_64 && (getsectiondata(mh, "__TEXT", "__swift5_typeref", &n) || getsectiondata(mh, "__TEXT", "__swift5_types", &n) ||
-                                          getsectiondata(mh, "__TEXT", "__swift5_proto", &n));
-    }
-    __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
-    return sw;
-}
-
 /* Is the native function at pc a Swift function by its own symbol (an exported Swift mangled name at
  * exactly pc)? Guest functions passed to it are Swift function values: their entries are marked
  * (hao_swift_thunk_for). Also asked when the plan's names are not Swift ones (hao_plan swiftfn, which
@@ -505,6 +479,27 @@ static bool native_swift_symbol(uint64_t pc)
     bool sw = n[0] == '$' && (n[1] == 's' || n[1] == 'S');
     __atomic_store_n(e, pc << 1 | sw, __ATOMIC_RELAXED);
     return sw;
+}
+
+/* A native Swift function's arguments past x7 that are guest functions get Swift entries
+ * (hao_thunk_native_stack_swift): the 8-byte ones of a packed layout (an interface unit's or the call
+ * site's, as native_call_stackpack places them), else the words the word copy passes, as many as the
+ * callee's code reads. A callee whose code does not show its stack arguments has none rewritten. */
+static void swift_stack_args(hao_thread *t, uint64_t pc, const hao_plan *p, unsigned mask)
+{
+    hao_cpu *c = &t->cpu;
+    uint8_t o[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
+    uint16_t off[HAO_IF_MAX_PACK];
+    char kind = p ? p->kind : 0;
+    int n = kind == HAO_IF_KIND_STACKPACK ? hao_ifunit_stackpack(p->enc, o, w) : kind == HAO_KIND_SITEPACK ? hao_swift_sitepack(c, pc, o, w) : 0;
+    if (n > 0) {
+        for (int k = 0; k < n; k++) off[k] = w[k] == 8 ? o[k] : 1;   /* 1: not a word, skipped */
+    } else {
+        n = hao_swift_callee_stack_slots(pc);
+        if (n > HAO_IF_MAX_PACK) n = HAO_IF_MAX_PACK;
+        for (int k = 0; k < n; k++) off[k] = (uint16_t)(8 * k);
+    }
+    if (n > 0) hao_thunk_native_stack_swift(t, off, n, mask);
 }
 
 static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
@@ -696,8 +691,10 @@ static void native_step(void *arg)
     }
     /* guest function pointers and blocks passed to native code get thunks:
      * in the argument slots the plan names, or in all of them */
-    hao_thunk_native_args_mask(t, p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL,
-                               (p && p->swiftfn) || native_swift_symbol(pc));
+    unsigned mask = p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL;
+    bool swiftfn = (p && p->swiftfn) || native_swift_symbol(pc);
+    hao_thunk_native_args_mask(t, mask, swiftfn);
+    if (swiftfn) swift_stack_args(t, pc, p, mask);
     t->native_calls++;
     unsigned objc_enum_result = p && p->src == HAO_BRS_OBJCIMP ? hao_objc_enum_args(c, pc, false) : 0;
     unsigned swift_enum = p ? __atomic_load_n(&p->swift_enum, __ATOMIC_RELAXED) : 0;   /* NSTextAlignment in a Swift signature (swiftcc.c) */
@@ -1168,11 +1165,11 @@ uint64_t hao_callback(hao_cb_frame *f)
      * have a signature noted for its target (abi.c) */
     void *sig = in > HAO_CB_FAULT ? (void *)(uintptr_t)in : hao_guest_sig(f->target);
     if (sig) { hao_callback_with_sig(f, sig); return 0; }
-    /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry), its
-     * own symbol does, its native caller is Swift code (native_swift_image), or a native function the
-     * guest called jumped on to it (a dispatch thunk's tail call returns to hao_native_call, which put
-     * the guest's own x8 in rax) */
-    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target) || native_swift_image(f->ret);
+    /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry, or
+     * the entry hao gave it where guest code handed it to native Swift code), its own symbol does, or a
+     * native function the guest called jumped on to it (a dispatch thunk's tail call returns to
+     * hao_native_call, which put the guest's own x8 in rax) */
+    bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target);
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
@@ -1256,9 +1253,9 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
      * A C caller leaves anything there, often the function pointer it just
      * called (the thunk) or al = the vector-register count of a variadic
      * call, and a C caller's indirect result buffer is in rdi. So rax is
-     * passed through only to a Swift function (its entry says so, or its
-     * native caller is Swift code: hao_callback), and then only a value that
-     * can be a data pointer; otherwise x8 is noret_area's. */
+     * passed through only to a Swift function (its entry or its own symbol
+     * says so: hao_callback), and then only a value that can be a data
+     * pointer; otherwise x8 is noret_area's. */
     uint64_t r = f->swift[3];
     bool data = swiftcc && r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) &&
                 !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) && !hao_is_trap(r);
@@ -1269,12 +1266,15 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     c->native_pop = 0;       /* per activation; nested callbacks restore it */
     unsigned objc_enum_result = hao_objc_enum_args(c, f->target, true);
     unsigned made = t->swift_made_n;
+    uint64_t a[6];
+    memcpy(a, c->x, sizeof a);
     hao_run(t, saved);
     hao_objc_enum_result(c, objc_enum_result);
     hao_swift_objects_result(t, f->target, data ? r : 0);
     hao_swift_witness_result(t, made, data ? r : 0);
     for (int k = 0; k < 4; k++) { f->gpr[k] = c->x[k]; memcpy(f->xmm[k], &c->v[k], 16); }
     f->swift[0] = c->x[21];
+    if (data) hao_swift_body_result(f->target, a, r);   /* may run guest code: after the results are taken */
     const char *why;
     uint64_t pop = callee_pop(f, saved, (int64_t)c->native_pop, &why);
     if (pop && hao_verbose > 1) callback_trace_pop(f, pop, why, c->native_pop);

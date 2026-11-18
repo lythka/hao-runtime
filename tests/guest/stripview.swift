@@ -1,11 +1,14 @@
 // A release build's closures have no symbols (strip -x). SwiftUI calls them
-// from code with no exported symbol and through no entry hao made: the
+// later, from code with no exported symbol: the
 // alert(_:isPresented:actions:message:) message closure, passed in a stack
-// slot, and a GeometryReader's content, stored in a value guest code built.
-// Each returns its view in memory through rax (x8 on arm64); hao must hand
-// the caller's buffer over, or SwiftUI reads an uninitialized one
-// (swift_retain of a small address). ImageRenderer evaluates the bodies
-// with no window. tests/guest/stripview.sh; output must equal native arm64.
+// slot, and GeometryReader contents stored in values guest code built: two
+// lent to a modifier as self (in a body, in main), one a body returns bare, one in a modifier's
+// argument, one a guest View's @ViewBuilder property returns, one in a
+// guest ViewModifier's body. Each returns its view in memory through rax (x8 on
+// arm64); hao must hand the caller's buffer over, or SwiftUI reads an
+// uninitialized one (swift_retain of a small address). ImageRenderer
+// evaluates the bodies with no window. tests/guest/stripview.sh; output
+// must equal native arm64.
 import SwiftUI
 
 final class Model: ObservableObject { @Published var show = false; @Published var items = [1, 2, 3] }
@@ -32,6 +35,29 @@ struct Measured: View {
         .sheet(isPresented: .constant(false)) { Text("s") }
     }
 }
+struct Bare: View {
+    @ObservedObject var m: Model
+    var body: some View { GeometryReader { g in Text("b \(Int(g.size.width)) \(m.items.count)") } }
+}
+struct Holder<C: View>: View {
+    @ViewBuilder let content: () -> C
+    var body: some View { content() }
+}
+struct Wrapped: View {
+    @ObservedObject var m: Model
+    var body: some View {
+        Holder { GeometryReader { g in Text("h \(Int(g.size.height))") } }
+            .background(GeometryReader { g in Color.clear.frame(width: g.size.width / 2) })
+    }
+}
+struct Measure: ViewModifier {
+    let n: Int
+    func body(content: Content) -> some View { content.overlay(GeometryReader { g in Text("o \(Int(g.size.width)) \(n)") }) }
+}
+struct Modified: View {
+    @ObservedObject var m: Model
+    var body: some View { Text("m").modifier(Measure(n: m.items.count)) }
+}
 @main struct Main {
     @MainActor static func main() {
         setbuf(stdout, nil)
@@ -42,6 +68,12 @@ struct Measured: View {
             let a = ImageRenderer(content: Alerting(m: m).frame(width: 50, height: 50)).cgImage
             let b = ImageRenderer(content: Measured(m: m).frame(width: 80, height: 120)).cgImage
             print("render", k, a?.width ?? -1, b?.height ?? -1)
+            let c = ImageRenderer(content: Bare(m: m).frame(width: 60, height: 30)).cgImage
+            let d = ImageRenderer(content: Wrapped(m: m).frame(width: 70, height: 40)).cgImage
+            let e = ImageRenderer(content: Modified(m: m).frame(width: 90, height: 20)).cgImage
+            let f = ImageRenderer(content: GeometryReader { g in Text("l \(Int(g.size.width))") }
+                .sheet(isPresented: .constant(false)) { Text("s") }).cgImage
+            print("more", k, c?.width ?? -1, d?.height ?? -1, e?.width ?? -1, f?.width ?? -1)
         }
         print("done")
     }
