@@ -854,6 +854,39 @@ native metadata are refused (`guest/svnoncopy`, `host/svidentity`). A
 function type's row admits any signature (its value's layout is fixed).
 Not measured: the generated rows on 26B131.
 
+Guest-defined types (`src/swiftguest_gen.inc`, generated; under the test
+switch `HAO_SWIFT_GUEST_FACTS` a fixture's rows): a guest struct or enum with
+no walk row gets the row of its identity, never of its name: its nominal
+descriptor in a loaded guest image of the row's LC_UUID at the row's offset,
+the image's verified CodeDirectory hash the row's, a non-generic type's
+metadata its descriptor's singleton metadata cache (a type without one, its
+witnesses guest-compiled, has no row), a generic one's what
+`swift_getGenericMetadata` returns for the row's arguments (native ones by
+walk key and native row, guest ones by their rows), and the live witness
+table's size, stride, flags and XI count the row's. Every field (an enum's
+cases, by its field descriptor) must be the row's, through each nested guest
+row, bounded at 9 levels and 256 nodes; a native generic over a guest type
+(`Sa` with a guest index: `[K]`) is checked by its native descriptor, its
+argument's row and its key. A row whose fields are not the live type's is
+REFUSE, and none of it (XI class, images) is used; a remembered row is
+used again only while identity, layout and fields still hold (a walk plan
+built from it is not rebuilt: rows assume guest metadata is not rewritten
+after the runtime completes it, nor its image unloaded while in use). A SAME field needs a
+SAME row (a native generic over a guest type: Array, Dictionary, Set
+storage, whose elements are certified where the storage is made, an
+Optional proven SAME with its argument's XIs, or a SAME argument row). SAME settles the type (also storage element types); CONVERT walks a
+struct field by field at the live offsets, an enum by its case images (one
+case must match; differing tag words patched) and then the active payload by
+its field row, only where no tag bit lies inside the payload; an Optional of
+a guest row's type of XI class SAME has its nil read from its own injected
+image. `guest/svguest`: multi-payload enums over a resilient native struct
+(runtime-laid, native witnesses), one with a `Data?` payload, and a struct
+of `Status?`, `Data?`, `String?`, `[Fault]`, through native Optional and
+Array witnesses, and nils alone: refused without rows and with rows of
+another UUID, cdhash, offset, size or field; equal to native under JIT, `--interp`, AOT with
+them. The shipped table has no rows yet. Not covered: an indirect case
+other than SAME, payload walks of spare-bit tags, guest classes.
+
 Source encoding: from three Optional levels a pointer word's encodings
 overlap (arm64's 2 is x86_64's first inhabitant). The walk is told who wrote
 the bytes (`Recipe.h` `HAO_SV_SOURCE_*`): guest storage (results of guest
