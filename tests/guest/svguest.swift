@@ -6,12 +6,16 @@
 //   status: a multi-payload enum, two empty cases; its row says SAME.
 //   fault:  a multi-payload enum with a Data? payload (an arm64 nil); its row says CONVERT, with case images.
 //   record: a struct of a Status?, a Data?, a String? and a [Fault]; its row says CONVERT, by its fields' rows.
+//   holder: a multi-payload enum (SAME) whose payload Code has static metadata (no metadata
+//           initialization: its row needs it in the slice's sealed constant data) and guest witnesses.
 //   nil:    only nils of Status? and Fault?, which their rows' XI class (SAME) reads.
 //   images: the case images of these types and of Data? on this architecture (the test's fixture).
 import Foundation
 
 enum Status { case curated(PersonNameComponents), one(PersonNameComponents), none, diff }
 enum Fault: Error { case name(PersonNameComponents), blob(Data?), gone, lost }
+enum Code { case text(String?), id(Int), gone, lost }
+enum Holder { case code(Code), name(PersonNameComponents), none, diff }
 struct Record { var status: Status?; var data: Data?; var text: String?; var faults: [Fault] = [] }
 
 @_semantics("optimize.sil.specialize.generic.never") @inline(never)
@@ -26,6 +30,14 @@ func shown(_ f: Fault) -> String {
     switch f { case .name(let p): return "name(\(p.givenName!))"; case .blob(let d): return "blob(\(d.map { "\($0.count)" } ?? "nil"))"
     case .gone: return "gone"; case .lost: return "lost" }
 }
+func shown(_ c: Code) -> String {
+    switch c { case .text(let t): return "text(\(t ?? "nil"))"; case .id(let n): return "id(\(n))"; case .gone: return "gone"
+    case .lost: return "lost" }
+}
+func shown(_ h: Holder) -> String {
+    switch h { case .code(let c): return "code(\(shown(c)))"; case .name(let p): return "name(\(p.givenName!))"
+    case .none: return "none"; case .diff: return "diff" }
+}
 func shown(_ r: Record) -> String {
     "\(r.status.map(shown) ?? "nil") \(r.data.map { "\($0.count)" } ?? "nil") \(r.text ?? "nil") \(r.faults.map(shown))"
 }
@@ -39,7 +51,9 @@ func images(_ name: String, _ t: Any.Type, _ cases: Int) {
     let size = vwt.load(fromByteOffset: 64, as: Int.self)
     let inject = unsafeBitCast(vwt.load(fromByteOffset: 13 * 8, as: UnsafeRawPointer.self), to: Inject.self)
     func hex(_ b: [UInt8]) -> String { b.map { String(format: "%02x", $0) }.joined() }
-    print("layout", name, size, vwt.load(fromByteOffset: 72, as: Int.self), String(vwt.load(fromByteOffset: 80, as: UInt32.self), radix: 16),
+    let desc = meta.load(fromByteOffset: 8, as: UnsafeRawPointer.self)
+    let initKind = meta.load(as: Int.self) == 0x202 ? "-" : (desc.load(as: UInt32.self) >> 16 & 3) == 1 ? "SINGLETON" : "NONE"
+    print("layout", name, initKind, size, vwt.load(fromByteOffset: 72, as: Int.self), String(vwt.load(fromByteOffset: 80, as: UInt32.self), radix: 16),
           vwt.load(fromByteOffset: 84, as: UInt32.self))
     for c in 0..<cases {
         var z = [UInt8](repeating: 0, count: size), o = [UInt8](repeating: 0xff, count: size)
@@ -57,6 +71,11 @@ func images(_ name: String, _ t: Any.Type, _ cases: Int) {
             let all: [Status] = [.curated(person("a")), .one(person("b")), .none, .diff]
             for v in all { print(shown(copied(v)), copied(Optional(v)).map(shown) ?? "nil", copied(Status?.none) == nil) }
             print(copied(all).map(shown))
+        case "holder":
+            let all: [Holder] = [.code(.text("a")), .code(.text(nil)), .code(.id(4)), .code(.gone), .code(.lost),
+                                 .name(person("n")), .none, .diff]
+            for v in all { print(shown(copied(v)), copied(Optional(v)).map(shown) ?? "nil") }
+            print(copied(all).map(shown))
         case "nil":
             print(copied(Status?.none).map(shown) ?? "nil", copied(Fault?.none).map(shown) ?? "nil")
         case "fault":
@@ -70,8 +89,8 @@ func images(_ name: String, _ t: Any.Type, _ cases: Int) {
             print(copied(all).map(shown))
         case "images":
             images("status", Status.self, 4); images("fault", Fault.self, 4); images("data", Data?.self, 2)
-            images("record", Record.self, 0)
-        default: print("status, nil, fault, record or images")
+            images("record", Record.self, 0); images("code", Code.self, 0); images("holder", Holder.self, 0)
+        default: print("status, holder, nil, fault, record or images")
         }
     }
 }
