@@ -8,7 +8,7 @@
 # tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
 # tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
 # tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/onmac_pin_check.py; --install-live,
-# tests/tools/test_install_live.py),
+# tests/tools/test_install_live.py; hao-install.py --overlay and --installed, tests/tools/test_install_overlay.py),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike) and
 # tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file) and
@@ -190,6 +190,10 @@ else bad "hao-install.py path rules: $(tail -15 "$d/paths.log")"; fi
 if python3 -I "$here/test_install_live.py" >"$d/live.log" 2>&1; then
     pass "hao-runtime-on-mac --install-live: $(grep '^Ran' "$d/live.log") (libhao-only update, restub, refusals; the running-Mac path as far as --dry-run)"
 else bad "hao-runtime-on-mac --install-live: $(tail -15 "$d/live.log")"; fi
+# --- hao-install.py --overlay: the live-patch overlay of a payload update equals --install-live; --installed
+if python3 -I "$here/test_install_overlay.py" >"$d/overlay.log" 2>&1; then
+    pass "hao-install.py --overlay/--installed: $(grep '^Ran' "$d/overlay.log") (same files as --install-live, flags kept, refusals leave no folder)"
+else bad "hao-install.py --overlay/--installed: $(tail -15 "$d/overlay.log")"; fi
 # --- tools/hao_ifunit.py match: each interface unit names an image of the x86_64 cache (hao-image-payload --units)
 if python3 -I "$here/test_ifunit_match.py" >"$d/ifmatch.log" 2>&1; then
     pass "interface units against the x86_64 cache: $(grep '^Ran' "$d/ifmatch.log") (another library's or another name's unit refused)"
