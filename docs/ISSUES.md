@@ -859,8 +859,12 @@ switch `HAO_SWIFT_GUEST_FACTS` a fixture's rows): a guest struct or enum with
 no walk row gets the row of its identity, never of its name: its nominal
 descriptor in a loaded guest image of the row's LC_UUID at the row's offset,
 the image's verified CodeDirectory hash the row's, a non-generic type's
-metadata its descriptor's singleton metadata cache (a type without one, its
-witnesses guest-compiled, has no row), a generic one's what
+metadata its descriptor's singleton metadata cache, or, for a type with no
+metadata initialization, static metadata at the row's offset whose words
+and value witness table lie in the slice's sealed constant data (`SG_READ_ONLY`, read-only
+since its fixups: a writable copy, or static metadata linked into
+`__DATA`, has no row); the row's metadata initialization (NONE or
+SINGLETON) must be the descriptor's. A generic one's is what
 `swift_getGenericMetadata` returns for the row's arguments (native ones by
 walk key and native row, guest ones by their rows), and the live witness
 table's size, stride, flags and XI count the row's. Every field (an enum's
@@ -881,9 +885,11 @@ its field row, only where no tag bit lies inside the payload; an Optional of
 a guest row's type of XI class SAME has its nil read from its own injected
 image. `guest/svguest`: multi-payload enums over a resilient native struct
 (runtime-laid, native witnesses), one with a `Data?` payload, and a struct
-of `Status?`, `Data?`, `String?`, `[Fault]`, through native Optional and
-Array witnesses, and nils alone: refused without rows and with rows of
-another UUID, cdhash, offset, size or field; equal to native under JIT, `--interp`, AOT with
+of `Status?`, `Data?`, `String?`, `[Fault]`, an enum whose payload has
+static metadata, through native Optional and Array witnesses, and nils
+alone: refused without rows, with rows of another UUID, cdhash, offset,
+size, metadata initialization, static metadata offset or field, and
+with the static metadata linked into writable `__DATA`; equal to native under JIT, `--interp`, AOT with
 them. The shipped table has no rows yet. Not covered: an indirect case
 other than SAME, payload walks of spare-bit tags, guest classes.
 

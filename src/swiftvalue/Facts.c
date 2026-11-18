@@ -385,13 +385,16 @@ static bool same_xi_optional(const void *type, guest_proof *p);
  * Under the test switch HAO_SWIFT_GUEST_FACTS=FILE (a HAO_TEST_SWITCHES
  * build, an open process) a fixture's rows follow the table's, in any
  * process, one a line ("#" a comment; tests/guest/svguest.sh writes one):
- *   guest UUID CDHASH OFFSET ARGS VERDICT SIZE STRIDE FLAGS XI [XI-CLASS XI-OFFSET]
+ *   guest UUID CDHASH INIT METADATA OFFSET ARGS VERDICT SIZE STRIDE FLAGS XI [XI-CLASS XI-OFFSET]
+ *        (INIT NONE or SINGLETON; METADATA the static metadata's offset, hex, or "-")
  *        (hex OFFSET and FLAGS; ARGS "-" or the generic arguments' keys, comma-separated; XI-CLASS as in "type")
  *   field INDEX KEY GUEST VERDICT [INDIRECT]              (of the last guest row; KEY or GUEST "-" for none)
  *   image CASE ARM64-IMAGE ARM64-MASK X86_64-IMAGE X86_64-MASK   (of the last guest row; hex)
  * A guest key ("@N", in ARGS and GUEST) names the table's row N, or in a
  * fixture its Nth guest line. */
 #define SWIFTGUEST_SAME WALK_FACT_SAME
+#define SWIFTGUEST_INIT_NONE 0
+#define SWIFTGUEST_INIT_SINGLETON 1
 #define SWIFTGUEST_DYNAMIC WALK_FACT_DYNAMIC
 #define SWIFTGUEST_CONVERT WALK_FACT_CONVERT
 #define SWIFTGUEST_REFUSE WALK_FACT_REFUSE
@@ -411,13 +414,15 @@ typedef struct {
     uint32_t payload, empty;
     int32_t first_field, fields, first_image, images;
     const char *cdhash;   /* the slice's CodeDirectory hash, as hao verified its pages (hex) */
+    int init;             /* the descriptor's metadata initialization: SWIFTGUEST_INIT_NONE or _SINGLETON */
+    uint64_t metadata;    /* INIT_NONE, not generic: the static metadata's offset from the mach header */
 } guest_type;
 typedef struct { int32_t type, index; const char *key; int32_t guest; char verdict; int32_t indirect; } guest_field;
 static const guest_type gtypes[] = {
 #define SWIFTGUEST_TYPES
 #include "swiftguest_gen.inc"
 #undef SWIFTGUEST_TYPES
-    {NULL, 0, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, NULL},
+    {NULL, 0, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, NULL, -1, 0},
 };
 static const guest_field gfields[] = {
 #define SWIFTGUEST_FIELDS
@@ -472,23 +477,24 @@ static void load_guest_fixture(void)
     if (!guest_fixture_loaded && hao_test_switches && path[0]) {
         FILE *f = fopen(path, "r");
         if (!f) HAO_LOG(0, "HAO_SWIFT_GUEST_FACTS: cannot open %s\n", path);
-        char line[4096], uuid[64], cdhash[64], args[2048], key[2048], guest[32], verdict[16], a[300], b[300], c[300], d[300];
+        char line[4096], uuid[64], cdhash[64], init[16], meta[32], args[2048], key[2048], guest[32], verdict[16], a[300], b[300], c[300], d[300];
         unsigned long long offset, size, stride;
         unsigned flags, xi, index, indirect;
         char xc[16];
         int xo;
         while (f && fgets(line, sizeof line, f) && nfgtypes < 256 && nfgfields < 4096 && nfgimages < 1024) {
-            if (sscanf(line, "guest %63s %63s %llx %2047s %15s %llu %llu %x %u", uuid, cdhash, &offset, args, verdict, &size,
-                       &stride, &flags, &xi) == 9) {
+            if (sscanf(line, "guest %63s %63s %15s %31s %llx %2047s %15s %llu %llu %x %u", uuid, cdhash, init, meta, &offset, args,
+                       verdict, &size, &stride, &flags, &xi) == 11) {
                 guest_type *g = realloc(fgtypes, (nfgtypes + 1) * sizeof *fgtypes);
                 if (!g) break;
                 fgtypes = g;
-                if (sscanf(line, "guest %*s %*s %*s %*s %*s %*s %*s %*s %*s %15s %d", xc, &xo) != 2) { strcpy(xc, "OTHER"); xo = -1; }
+                if (sscanf(line, "guest %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %15s %d", xc, &xo) != 2) { strcpy(xc, "OTHER"); xo = -1; }
                 char c = !strcmp(xc, "SAME") ? WALK_XI_SAME : !strcmp(xc, "POINTER") ? WALK_XI_POINTER :
                          !strcmp(xc, "NONE") ? WALK_XI_NONE : WALK_XI_OTHER;
                 fgtypes[nfgtypes++] = (guest_type){strdup(uuid), offset, strdup(strcmp(args, "-") ? args : ""), "",
                     verdict_of(verdict), size, stride, 0, flags, xi, xi, c, xo, 0, 0,
-                    (int32_t)nfgfields, 0, (int32_t)nfgimages, 0, strdup(cdhash)};
+                    (int32_t)nfgfields, 0, (int32_t)nfgimages, 0, strdup(cdhash),
+                    !strcmp(init, "NONE") ? 0 : !strcmp(init, "SINGLETON") ? 1 : -1, strtoull(meta, NULL, 16)};
             } else if (nfgtypes && sscanf(line, "field %u %2047s %31s %15s %u", &index, key, guest, verdict, &indirect) >= 4) {
                 guest_field *g = realloc(fgfields, (nfgfields + 1) * sizeof *fgfields);
                 if (!g) break;
@@ -596,15 +602,20 @@ static long guest_identity(const void *type, guest_proof *p)
         const guest_type *g = grow(i);
         if (i < (long)NGTYPES && !table_applies()) { i = (long)NGTYPES - 1; continue; }
         if (!g || g->offset != offset || strcasecmp(g->uuid, uuid) || !g->cdhash || strcasecmp(g->cdhash, cdhash) ||
-            v.size != g->size || v.stride != g->stride || v.flags != g->flags || v.extra != g->arm_xi) continue;
+            v.size != g->size || v.stride != g->stride || v.flags != g->flags || v.extra != g->arm_xi ||
+            g->init != (int)(dflags >> 16 & 3)) continue;
         long base = i < (long)NGTYPES ? 0 : (long)NGTYPES;
-        /* A generic type is the runtime's for the row's arguments; a plain one's metadata is its descriptor's
-         * singleton metadata, the one the runtime completed in its cache (a type the runtime lays out; one
-         * without such a cache, whose witnesses guest code compiled, has no row). */
+        /* A generic type is the runtime's for the row's arguments. A plain one's metadata is its descriptor's
+         * singleton metadata, the one the runtime completed in its cache; or, a type with no metadata
+         * initialization, its static metadata: at the row's offset in the slice, its words and its value
+         * witness table in the slice's sealed constant data (SG_READ_ONLY, read-only since its fixups, which
+         * no guest call or system call makes writable again: hao_image_seal), so no copy and no later write. */
         uint64_t cache, canonical;
         if (dflags & 0x80 ? guest_args_are(type, m[1], g->args, base, p) :
-            !g->args[0] && hao_image_for_addr(t) == img && (dflags >> 16 & 3) == 1 && rel32(m[1] + 28, &cache) &&
-            peek(cache, &canonical, 8) && canonical == t)
+            !g->args[0] && hao_image_for_addr(t) == img &&
+            (((dflags >> 16 & 3) == 1 && rel32(m[1] + 28, &cache) && peek(cache, &canonical, 8) && canonical == t) ||
+             ((dflags >> 16 & 3) == 0 && g->metadata && t == img->base + g->metadata &&
+              hao_image_sealed_at(t - 8, 24) == img && hao_image_sealed_at(vwt, 88) == img)))
             return i;
     }
     return -1;
