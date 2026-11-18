@@ -236,7 +236,11 @@ hardened-runtime or library-flag binary without its own
 - sets `CS_REQUIRE_LV` on the process once `libhao` is mapped, so the kernel
   refuses non-platform native libraries of another Team ID. If the kernel
   does not take the flag, the program is not run (status 126): it would
-  otherwise load native libraries that it cannot load natively;
+  otherwise load native libraries that it cannot load natively. A sandbox
+  the kernel applies at exec (a sandbox profile entitlement) may deny the
+  process setting it, so `tools/hao-embed` signs such a stub with the
+  library flag and the kernel sets `CS_REQUIRE_LV` at exec; hao sets it only
+  when the status lacks it;
 - checks every guest library with `F_CHECK_LV`, and where the kernel cannot
   hold the 16 KiB-page signature, applies the same rule itself: a platform
   file (trusted list, else `anchor apple`), or a file of the main executable's

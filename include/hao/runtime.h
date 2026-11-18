@@ -236,6 +236,7 @@ typedef struct { FILE *f; char *buf; size_t len; } hao_diag_blk;
 FILE *hao_diag_block(hao_diag_blk *b);
 void hao_diag_block_end(hao_diag_blk *b);
 void hao_diag_prefix(FILE *f);            /* "hao[prog:pid]: " */
+void hao_diag_public(const char *line);   /* a start-up refusal, also public in the unified log */
 /* hao's diagnostic line: HAO_LOG(level, fmt, ...) writes "hao[prog:pid]: "
  * and the message to HAO_DIAG (stderr, or the console and hao_crash's log)
  * in one write, when level <= hao_verbose: 0 always, 1 under -v, 2 under

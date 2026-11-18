@@ -1205,6 +1205,15 @@ def bound_data(path, data):
     return out
 
 
+EXEC_SANDBOX_PROFILE = "com.apple.private.sandbox.profile"
+
+
+def exec_sandboxed(ents):
+    """True if ENTS name a sandbox profile the kernel applies at exec (com.apple.private.sandbox.profile,
+    or its :macos or other platform-qualified form)."""
+    return any(k == EXEC_SANDBOX_PROFILE or k.startswith(EXEC_SANDBOX_PROFILE + ":") for k in ents)
+
+
 def cs_copied_flags(mo):
     """codesign -o names of the arm slice MO's CodeDirectory flags the stub copies."""
     if mo is None:
@@ -1313,6 +1322,13 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
     # The kernel's treatment of invalid pages (CS_KILL, CS_HARD, CS_ENFORCEMENT)
     # is the program's (tools/stub_identity_gate.py CS_COPIED_FLAGS).
     opts = (["runtime"] if hardened(data) else []) + cs_copied_flags(arm)
+    # A sandbox the kernel applies at exec (a profile entitlement) may deny the process changing its own
+    # code-signing status, so src/libval.c could not set CS_REQUIRE_LV after libhao loads: such a stub of a
+    # program that requires library validation asks for it in its signature, and the kernel sets it at exec.
+    # The entitlement is Apple's private one, honoured for an ad hoc stub only where AMFI admits libhao.
+    if exec_sandboxed(ents) and data is not None and \
+            hao_codesig.library_validated(hao_codesig.info(arm_slice(data) or b"")):
+        opts.append("library")
     # Launch and library constraints: the kernel evaluates the stub's signature, not the arm slice's, so the
     # program's constraints go into the stub's (or the program is refused).
     lc, have, carried, dropped = constraint_options(arm, work)
