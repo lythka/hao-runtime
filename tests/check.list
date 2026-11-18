@@ -82,6 +82,7 @@ guest/stackpackfp	300	par	tests/guest/stackpackfp.sh
 guest/swifttextalign	300	par	tests/guest/swifttextalign.sh
 guest/svconformance	300	par	tests/guest/svconformance.sh
 guest/swiftlate	300	par	tests/guest/swiftlate.sh
+guest/swiftcallee	300	par	tests/guest/swiftcallee.sh
 guest/swiftls	300	par	tests/guest/swiftls.sh
 guest/swiftmeta	300	par	tests/guest/swiftmeta.sh
 guest/swiftpop	300	par	tests/guest/swiftpop.sh
