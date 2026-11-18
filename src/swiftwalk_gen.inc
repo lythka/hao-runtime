@@ -106,72 +106,75 @@
     {"9SwiftData18ModelConfigurationV14GroupContainerV", SWIFTWALK_SAME, 24, 24, 8, 0x2010007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 16, 0, 0, 224, 3, 10, 0}, /* SwiftData.ModelConfiguration.GroupContainer */
     {"9SwiftData18ModelConfigurationV16CloudKitDatabaseV", SWIFTWALK_SAME, 24, 24, 8, 0x2010007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 16, 0, 0, 227, 3, 10, 0}, /* SwiftData.ModelConfiguration.CloudKitDatabase */
     {"9SwiftData6SchemaC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 230, 0, 10, 0}, /* SwiftData.Schema */
-    {"9SwiftData6SchemaCSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 230, 2, 10, 0}, /* Swift.Optional<SwiftData.Schema> */
-    {"Bb", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 232, 0, 10, 0}, /* Builtin.BridgeObject */
-    {"Bf64_", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 232, 0, 10, 0}, /* Builtin.FPIEEE64 */
-    {"Bi1_", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 232, 0, 10, 0}, /* Builtin.Int1 */
-    {"Bi32_", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 232, 0, 10, 0}, /* Builtin.Int32 */
-    {"Bi64_", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 232, 0, 10, 0}, /* Builtin.Int64 */
-    {"Bi8_", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 232, 0, 10, 0}, /* Builtin.Int8 */
-    {"SD8_VariantVyS2S_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 232, 1, 10, 0}, /* Swift.Dictionary<Swift.String, Swift.String>._Variant */
-    {"SDyS2SG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 233, 1, 10, 0}, /* Swift.Dictionary<Swift.String, Swift.String> */
-    {"SDyS2SGSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 234, 2, 10, 0}, /* Swift.Optional<Swift.Dictionary<Swift.String, Swift.String>> */
-    {"SS", SWIFTWALK_SAME, 16, 16, 8, 0x2010007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 236, 1, 10, 0}, /* Swift.String */
-    {"SS5light_SS4darkSo8NSBundleCSg6bundlet", SWIFTWALK_SAME, 40, 40, 8, 0x2030007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 237, 3, 10, 0}, /* (light: Swift.String, dark: Swift.String, bundle: Swift.Optional<__C.NSBundle>) */
-    {"SSSg", SWIFTWALK_SAME, 16, 16, 8, 0x2210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 8, 1, 1, 240, 2, 10, 0}, /* Swift.Optional<Swift.String> */
-    {"SSSg5title_AA8subtitlet", SWIFTWALK_SAME, 32, 32, 8, 0x2030007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 8, 0, 0, 242, 2, 10, 0}, /* (title: Swift.Optional<Swift.String>, subtitle: Swift.Optional<Swift.String>) */
-    {"SSSg5title_AA8subtitletSg", SWIFTWALK_CONVERT, 32, 32, 8, 0x2230007, 2147483645, 2147483645, SWIFTWALK_XI_POINTER, 8, 1, 1, 244, 2, 10, 2}, /* Swift.Optional<(title: Swift.Optional<Swift.String>, subtitle: Swift.Optional<Swift.String>)>; case encodings differ: cases [1] */
-    {"Say7SwiftUI4TextV8ModifierOG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 246, 1, 12, 0}, /* Swift.Array<SwiftUI.Text.Modifier> */
-    {"Say7SwiftUI8MaterialVAAE5LayerVG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 247, 1, 12, 0}, /* Swift.Array<(extension in SwiftUI):SwiftUI.Material.Layer> */
-    {"Sb", SWIFTWALK_SAME, 1, 1, 1, 0x0, 254, 254, SWIFTWALK_XI_SAME, -1, 0, 0, 248, 1, 12, 0}, /* Swift.Bool */
-    {"ScS12ContinuationVyyyYbc_G", SWIFTWALK_SAME, 8, 8, 8, 0x2010007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 249, 1, 12, 0}, /* Swift.AsyncStream<@Sendable () -> ()>.Continuation */
-    {"ScS8_StorageCyyyYbc_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 250, 0, 12, 0}, /* Swift.AsyncStream<@Sendable () -> ()>._Storage */
-    {"Sd", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 250, 1, 12, 0}, /* Swift.Double */
-    {"Sh8_VariantVy9SwiftData6SchemaC6EntityC_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 251, 1, 12, 0}, /* Swift.Set<SwiftData.Schema.Entity>._Variant */
-    {"Sh8_VariantVySo11AGAttributea_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 252, 1, 12, 0}, /* Swift.Set<__C.AGAttribute>._Variant */
-    {"Shy9SwiftData6SchemaC6EntityCG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 253, 1, 12, 0}, /* Swift.Set<SwiftData.Schema.Entity> */
-    {"Shy9SwiftData6SchemaC6EntityCGSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 254, 2, 12, 0}, /* Swift.Optional<Swift.Set<SwiftData.Schema.Entity>> */
-    {"ShySo11AGAttributeaG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 256, 1, 12, 0}, /* Swift.Set<__C.AGAttribute> */
-    {"Si", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 257, 1, 12, 0}, /* Swift.Int */
-    {"Snys5Int32VG", SWIFTWALK_SAME, 8, 8, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 258, 2, 12, 0}, /* Swift.Range<Swift.Int32> */
-    {"So10CGImageRefa", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 260, 0, 12, 0}, /* __C.CGImageRef */
-    {"So10CGImageRefaSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 260, 2, 12, 0}, /* Swift.Optional<__C.CGImageRef> */
-    {"So10CGImageRefaSgSg", SWIFTWALK_CONVERT, 8, 8, 8, 0x210007, 2147483645, 2147483645, SWIFTWALK_XI_POINTER, 0, 1, 1, 262, 2, 12, 2}, /* Swift.Optional<Swift.Optional<__C.CGImageRef>>; case encodings differ: cases [1] */
-    {"So11AGAttributea", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 264, 1, 14, 0}, /* __C.AGAttribute */
-    {"So13AGSubgraphRefa", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 265, 0, 14, 0}, /* __C.AGSubgraphRef */
-    {"So16os_unfair_lock_sV", SWIFTWALK_SAME, 4, 4, 4, 0x2000003, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 265, 1, 14, 0}, /* __C.os_unfair_lock_s */
-    {"So20NSFileProtectionTypea", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 266, 1, 14, 0}, /* __C.NSFileProtectionType */
-    {"So20NSFileProtectionTypeaSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 267, 2, 14, 0}, /* Swift.Optional<__C.NSFileProtectionType> */
-    {"So8NSBundleC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 269, 0, 14, 0}, /* NSBundle */
-    {"So8NSBundleCSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 269, 2, 14, 0}, /* Swift.Optional<__C.NSBundle> */
-    {"So8NSObjectC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 271, 0, 14, 0}, /* NSObject */
-    {"So8NSStringC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 271, 0, 14, 0}, /* NSString */
-    {"Su", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 271, 1, 14, 0}, /* Swift.UInt */
-    {"s11AnyHashableV", SWIFTWALK_DYNAMIC, 40, 40, 8, 0x30007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 24, 0, 0, 272, 1, 14, 0}, /* Swift.AnyHashable; field _box: DYNAMIC */
-    {"s11_StringGutsV", SWIFTWALK_SAME, 16, 16, 8, 0x2010007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 273, 1, 14, 0}, /* Swift._StringGuts */
-    {"s12_ArrayBufferVy7SwiftUI4TextV8ModifierOG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 274, 1, 14, 0}, /* Swift._ArrayBuffer<SwiftUI.Text.Modifier> */
-    {"s12_ArrayBufferVy7SwiftUI8MaterialVACE5LayerVG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 275, 1, 14, 0}, /* Swift._ArrayBuffer<(extension in SwiftUI):SwiftUI.Material.Layer> */
-    {"s13_StringObjectV", SWIFTWALK_SAME, 16, 16, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 276, 2, 14, 0}, /* Swift._StringObject */
-    {"s14_BridgeStorageVys015__RawDictionaryB0CG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 278, 1, 14, 0}, /* Swift._BridgeStorage<Swift.__RawDictionaryStorage> */
-    {"s14_BridgeStorageVys017__ContiguousArrayB4BaseCG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 279, 1, 14, 0}, /* Swift._BridgeStorage<Swift.__ContiguousArrayStorageBase> */
-    {"s14_BridgeStorageVys08__RawSetB0CG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 280, 1, 14, 0}, /* Swift._BridgeStorage<Swift.__RawSetStorage> */
-    {"s15_AnyHashableBox_p", SWIFTWALK_DYNAMIC, 40, 40, 8, 0x30007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 24, 0, 0, 281, 0, 14, 0}, /* Swift._AnyHashableBox; existential: certify the contained value by its dynamic type (inline when size <= 24, align <= 8 and bitwise-takable, else boxed) */
-    {"s4Int8V", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 281, 1, 14, 0}, /* Swift.Int8 */
-    {"s5Int32V", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 282, 1, 14, 0}, /* Swift.Int32 */
-    {"s5UInt8V", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 283, 1, 14, 0}, /* Swift.UInt8 */
-    {"s5UInt8V_A13Bt", SWIFTWALK_SAME, 14, 14, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 284, 14, 14, 0}, /* (Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8) */
-    {"s6UInt32V", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 298, 1, 14, 0}, /* Swift.UInt32 */
-    {"s6UInt64V", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 299, 1, 14, 0}, /* Swift.UInt64 */
-    {"yXl", SWIFTWALK_DYNAMIC, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 300, 0, 14, 0}, /* Swift.AnyObject; existential: certify the contained value by its dynamic type (inline when size <= 24, align <= 8 and bitwise-takable, else boxed) */
+    {"9SwiftData6SchemaC9AttributeC6OptionV6CodersO", SWIFTWALK_CONVERT, 16, 16, 8, 0x200007, 2147483645, 2147483645, SWIFTWALK_XI_POINTER, 0, 1, 2, 230, 3, 10, 3}, /* SwiftData.Schema.Attribute.Option.Coders; case encodings differ: cases [2] */
+    {"9SwiftData6SchemaC9AttributeC6OptionV6CodersO11CustomCoder_pXp", SWIFTWALK_SAME, 16, 16, 8, 0x7, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 233, 0, 13, 0}, /* SwiftData.Schema.Attribute.Option.Coders.CustomCoder.Type */
+    {"9SwiftData6SchemaC9AttributeC6OptionV6CodersOSg", SWIFTWALK_CONVERT, 16, 16, 8, 0x200007, 2147483644, 2147483644, SWIFTWALK_XI_POINTER, 0, 1, 1, 233, 2, 13, 2}, /* Swift.Optional<SwiftData.Schema.Attribute.Option.Coders>; case encodings differ: cases [1] */
+    {"9SwiftData6SchemaCSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 235, 2, 15, 0}, /* Swift.Optional<SwiftData.Schema> */
+    {"Bb", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 237, 0, 15, 0}, /* Builtin.BridgeObject */
+    {"Bf64_", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 237, 0, 15, 0}, /* Builtin.FPIEEE64 */
+    {"Bi1_", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 237, 0, 15, 0}, /* Builtin.Int1 */
+    {"Bi32_", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 237, 0, 15, 0}, /* Builtin.Int32 */
+    {"Bi64_", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 237, 0, 15, 0}, /* Builtin.Int64 */
+    {"Bi8_", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 237, 0, 15, 0}, /* Builtin.Int8 */
+    {"SD8_VariantVyS2S_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 237, 1, 15, 0}, /* Swift.Dictionary<Swift.String, Swift.String>._Variant */
+    {"SDyS2SG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 238, 1, 15, 0}, /* Swift.Dictionary<Swift.String, Swift.String> */
+    {"SDyS2SGSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 239, 2, 15, 0}, /* Swift.Optional<Swift.Dictionary<Swift.String, Swift.String>> */
+    {"SS", SWIFTWALK_SAME, 16, 16, 8, 0x2010007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 241, 1, 15, 0}, /* Swift.String */
+    {"SS5light_SS4darkSo8NSBundleCSg6bundlet", SWIFTWALK_SAME, 40, 40, 8, 0x2030007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 242, 3, 15, 0}, /* (light: Swift.String, dark: Swift.String, bundle: Swift.Optional<__C.NSBundle>) */
+    {"SSSg", SWIFTWALK_SAME, 16, 16, 8, 0x2210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 8, 1, 1, 245, 2, 15, 0}, /* Swift.Optional<Swift.String> */
+    {"SSSg5title_AA8subtitlet", SWIFTWALK_SAME, 32, 32, 8, 0x2030007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 8, 0, 0, 247, 2, 15, 0}, /* (title: Swift.Optional<Swift.String>, subtitle: Swift.Optional<Swift.String>) */
+    {"SSSg5title_AA8subtitletSg", SWIFTWALK_CONVERT, 32, 32, 8, 0x2230007, 2147483645, 2147483645, SWIFTWALK_XI_POINTER, 8, 1, 1, 249, 2, 15, 2}, /* Swift.Optional<(title: Swift.Optional<Swift.String>, subtitle: Swift.Optional<Swift.String>)>; case encodings differ: cases [1] */
+    {"Say7SwiftUI4TextV8ModifierOG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 251, 1, 17, 0}, /* Swift.Array<SwiftUI.Text.Modifier> */
+    {"Say7SwiftUI8MaterialVAAE5LayerVG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 252, 1, 17, 0}, /* Swift.Array<(extension in SwiftUI):SwiftUI.Material.Layer> */
+    {"Sb", SWIFTWALK_SAME, 1, 1, 1, 0x0, 254, 254, SWIFTWALK_XI_SAME, -1, 0, 0, 253, 1, 17, 0}, /* Swift.Bool */
+    {"ScS12ContinuationVyyyYbc_G", SWIFTWALK_SAME, 8, 8, 8, 0x2010007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 254, 1, 17, 0}, /* Swift.AsyncStream<@Sendable () -> ()>.Continuation */
+    {"ScS8_StorageCyyyYbc_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 255, 0, 17, 0}, /* Swift.AsyncStream<@Sendable () -> ()>._Storage */
+    {"Sd", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 255, 1, 17, 0}, /* Swift.Double */
+    {"Sh8_VariantVy9SwiftData6SchemaC6EntityC_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 256, 1, 17, 0}, /* Swift.Set<SwiftData.Schema.Entity>._Variant */
+    {"Sh8_VariantVySo11AGAttributea_G", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 257, 1, 17, 0}, /* Swift.Set<__C.AGAttribute>._Variant */
+    {"Shy9SwiftData6SchemaC6EntityCG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 258, 1, 17, 0}, /* Swift.Set<SwiftData.Schema.Entity> */
+    {"Shy9SwiftData6SchemaC6EntityCGSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 259, 2, 17, 0}, /* Swift.Optional<Swift.Set<SwiftData.Schema.Entity>> */
+    {"ShySo11AGAttributeaG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 261, 1, 17, 0}, /* Swift.Set<__C.AGAttribute> */
+    {"Si", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 262, 1, 17, 0}, /* Swift.Int */
+    {"Snys5Int32VG", SWIFTWALK_SAME, 8, 8, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 263, 2, 17, 0}, /* Swift.Range<Swift.Int32> */
+    {"So10CGImageRefa", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 265, 0, 17, 0}, /* __C.CGImageRef */
+    {"So10CGImageRefaSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 265, 2, 17, 0}, /* Swift.Optional<__C.CGImageRef> */
+    {"So10CGImageRefaSgSg", SWIFTWALK_CONVERT, 8, 8, 8, 0x210007, 2147483645, 2147483645, SWIFTWALK_XI_POINTER, 0, 1, 1, 267, 2, 17, 2}, /* Swift.Optional<Swift.Optional<__C.CGImageRef>>; case encodings differ: cases [1] */
+    {"So11AGAttributea", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 269, 1, 19, 0}, /* __C.AGAttribute */
+    {"So13AGSubgraphRefa", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 270, 0, 19, 0}, /* __C.AGSubgraphRef */
+    {"So16os_unfair_lock_sV", SWIFTWALK_SAME, 4, 4, 4, 0x2000003, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 270, 1, 19, 0}, /* __C.os_unfair_lock_s */
+    {"So20NSFileProtectionTypea", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 271, 1, 19, 0}, /* __C.NSFileProtectionType */
+    {"So20NSFileProtectionTypeaSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 272, 2, 19, 0}, /* Swift.Optional<__C.NSFileProtectionType> */
+    {"So8NSBundleC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 274, 0, 19, 0}, /* NSBundle */
+    {"So8NSBundleCSg", SWIFTWALK_SAME, 8, 8, 8, 0x210007, 2147483646, 2147483646, SWIFTWALK_XI_POINTER, 0, 1, 1, 274, 2, 19, 0}, /* Swift.Optional<__C.NSBundle> */
+    {"So8NSObjectC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 276, 0, 19, 0}, /* NSObject */
+    {"So8NSStringC", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 276, 0, 19, 0}, /* NSString */
+    {"Su", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 276, 1, 19, 0}, /* Swift.UInt */
+    {"s11AnyHashableV", SWIFTWALK_DYNAMIC, 40, 40, 8, 0x30007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 24, 0, 0, 277, 1, 19, 0}, /* Swift.AnyHashable; field _box: DYNAMIC */
+    {"s11_StringGutsV", SWIFTWALK_SAME, 16, 16, 8, 0x2010007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 278, 1, 19, 0}, /* Swift._StringGuts */
+    {"s12_ArrayBufferVy7SwiftUI4TextV8ModifierOG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 279, 1, 19, 0}, /* Swift._ArrayBuffer<SwiftUI.Text.Modifier> */
+    {"s12_ArrayBufferVy7SwiftUI8MaterialVACE5LayerVG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 280, 1, 19, 0}, /* Swift._ArrayBuffer<(extension in SwiftUI):SwiftUI.Material.Layer> */
+    {"s13_StringObjectV", SWIFTWALK_SAME, 16, 16, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 8, 0, 0, 281, 2, 19, 0}, /* Swift._StringObject */
+    {"s14_BridgeStorageVys015__RawDictionaryB0CG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 283, 1, 19, 0}, /* Swift._BridgeStorage<Swift.__RawDictionaryStorage> */
+    {"s14_BridgeStorageVys017__ContiguousArrayB4BaseCG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 284, 1, 19, 0}, /* Swift._BridgeStorage<Swift.__ContiguousArrayStorageBase> */
+    {"s14_BridgeStorageVys08__RawSetB0CG", SWIFTWALK_SAME, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 285, 1, 19, 0}, /* Swift._BridgeStorage<Swift.__RawSetStorage> */
+    {"s15_AnyHashableBox_p", SWIFTWALK_DYNAMIC, 40, 40, 8, 0x30007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 24, 0, 0, 286, 0, 19, 0}, /* Swift._AnyHashableBox; existential: certify the contained value by its dynamic type (inline when size <= 24, align <= 8 and bitwise-takable, else boxed) */
+    {"s4Int8V", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 286, 1, 19, 0}, /* Swift.Int8 */
+    {"s5Int32V", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 287, 1, 19, 0}, /* Swift.Int32 */
+    {"s5UInt8V", SWIFTWALK_SAME, 1, 1, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 288, 1, 19, 0}, /* Swift.UInt8 */
+    {"s5UInt8V_A13Bt", SWIFTWALK_SAME, 14, 14, 1, 0x0, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 289, 14, 19, 0}, /* (Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8, Swift.UInt8) */
+    {"s6UInt32V", SWIFTWALK_SAME, 4, 4, 4, 0x3, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 303, 1, 19, 0}, /* Swift.UInt32 */
+    {"s6UInt64V", SWIFTWALK_SAME, 8, 8, 8, 0x7, 0, 0, SWIFTWALK_XI_NONE, -1, 0, 0, 304, 1, 19, 0}, /* Swift.UInt64 */
+    {"yXl", SWIFTWALK_DYNAMIC, 8, 8, 8, 0x10007, 2147483647, 2147483647, SWIFTWALK_XI_POINTER, 0, 0, 0, 305, 0, 19, 0}, /* Swift.AnyObject; existential: certify the contained value by its dynamic type (inline when size <= 24, align <= 8 and bitwise-takable, else boxed) */
 #endif
 #if defined(SWIFTWALK_CHILDREN)
     {2, 0, 0, 0}, /* _url */
     {3, 0, 8, 0}, /* _representation */
-    {4, 0, 134, 0}, /* bytes */
-    {4, 14, 133, 0}, /* length */
+    {4, 0, 137, 0}, /* bytes */
+    {4, 14, 136, 0}, /* length */
     {5, 0, 7, 0}, /* slice */
     {5, 8, 1, 0}, /* storage */
-    {6, 0, 108, 0}, /* slice */
+    {6, 0, 111, 0}, /* slice */
     {6, 8, 1, 0}, /* storage */
     {8, -1, 4, 0}, /* inline */
     {8, -1, 6, 0}, /* slice */
@@ -179,15 +182,15 @@
     {8, -1, -1, 0}, /* empty */
     {9, -1, 3, 0}, /* some */
     {9, -1, -1, 0}, /* none */
-    {10, 0, 101, 0}, /* native */
-    {11, 0, 112, 0}, /* identifier */
-    {12, 0, 112, 0}, /* identifier */
-    {13, 0, 112, 0}, /* identifier */
+    {10, 0, 104, 0}, /* native */
+    {11, 0, 115, 0}, /* identifier */
+    {12, 0, 115, 0}, /* identifier */
+    {13, 0, 115, 0}, /* identifier */
     {14, 0, 17, 0}, /* value */
     {15, 0, 14, 0}, /* handle */
     {15, 8, 16, 0}, /* value */
-    {16, 0, 99, 0}, /* _rawLayout */
-    {17, 0, 114, 0}, /* _rawLayout */
+    {16, 0, 102, 0}, /* _rawLayout */
+    {17, 0, 117, 0}, /* _rawLayout */
     {19, 0, 10, 0}, /* top */
     {19, 8, 10, 0}, /* leading */
     {19, 16, 10, 0}, /* bottom */
@@ -197,8 +200,8 @@
     {22, -1, -1, 0}, /* automatic */
     {22, -1, -1, 0}, /* visible */
     {22, -1, -1, 0}, /* hidden */
-    {23, 0, 135, 0}, /* rawValue */
-    {24, 0, 121, 0}, /* bits */
+    {23, 0, 138, 0}, /* rawValue */
+    {24, 0, 124, 0}, /* bits */
     {26, 0, 28, 0}, /* elements */
     {28, -1, 27, 0}, /* some */
     {28, -1, -1, 0}, /* none */
@@ -209,17 +212,17 @@
     {29, 28, 12, 0}, /* transaction */
     {29, 32, 23, 0}, /* changedDebugProperties */
     {29, 36, 30, 0}, /* options */
-    {29, 40, 106, 0}, /* mergedInputs */
-    {30, 0, 135, 0}, /* rawValue */
+    {29, 40, 109, 0}, /* mergedInputs */
+    {30, 0, 138, 0}, /* rawValue */
     {31, 0, 32, 0}, /* root */
     {31, 16, 56, 0}, /* content */
     {32, 0, 67, 0}, /* alignment */
     {34, 0, 53, 0}, /* edges */
     {34, 8, 20, 0}, /* insets */
     {35, 0, 18, 0}, /* factory */
-    {35, 16, 112, 0}, /* content */
+    {35, 16, 115, 0}, /* content */
     {35, 24, 66, 0}, /* childID */
-    {35, 32, 113, 0}, /* contentSubgraph */
+    {35, 32, 116, 0}, /* contentSubgraph */
     {35, 40, 29, 0}, /* inputs */
     {36, -1, 35, 0}, /* some */
     {36, -1, -1, 0}, /* none */
@@ -231,12 +234,12 @@
     {39, -1, -1, 0}, /* none */
     {40, 0, 47, 0}, /* placement */
     {40, 48, 54, 0}, /* content */
-    {40, 80, 98, 0}, /* isEmpty */
+    {40, 80, 101, 0}, /* isEmpty */
     {41, -1, 40, 0}, /* some */
     {41, -1, -1, 0}, /* none */
     {42, 0, 47, 0}, /* placement */
     {42, 41, 68, 0}, /* content */
-    {42, 41, 98, 0}, /* isEmpty */
+    {42, 41, 101, 0}, /* isEmpty */
     {43, -1, 42, 0}, /* some */
     {43, -1, -1, 0}, /* none */
     {44, 0, 26, 0}, /* value */
@@ -244,7 +247,7 @@
     {46, 0, 24, 0}, /* key */
     {47, 0, 48, 0}, /* role */
     {48, -1, 22, 0}, /* primaryAction */
-    {48, -1, 122, 0}, /* accessoryBar */
+    {48, -1, 125, 0}, /* accessoryBar */
     {48, -1, -1, 0}, /* automatic */
     {48, -1, -1, 0}, /* principal */
     {48, -1, -1, 0}, /* navigation */
@@ -284,23 +287,23 @@
     {51, -1, -1, 0}, /* active */
     {51, -1, -1, 0}, /* inactive */
     {51, -1, -1, 0}, /* matchWindow */
-    {52, 0, 98, 0}, /* allowsHitTesting */
-    {53, 0, 131, 0}, /* rawValue */
+    {52, 0, 101, 0}, /* allowsHitTesting */
+    {53, 0, 134, 0}, /* rawValue */
     {54, 0, 55, 0}, /* storage */
-    {54, 24, 96, 0}, /* modifiers */
-    {55, -1, 91, 0}, /* verbatim */
+    {54, 24, 99, 0}, /* modifiers */
+    {55, -1, 94, 0}, /* verbatim */
     {55, -1, 33, 0}, /* anyTextStorage */
     {56, -1, 54, 0}, /* some */
     {56, -1, -1, 0}, /* none */
     {57, 0, 31, 0}, /* _tree */
-    {58, 0, 107, 0}, /* rawValue */
+    {58, 0, 110, 0}, /* rawValue */
     {59, 0, 61, 0}, /* role */
     {59, 8, 44, 0}, /* plist */
     {59, 16, 58, 0}, /* addedOptions */
     {59, 24, 58, 0}, /* removedOptions */
     {60, 0, 59, 0}, /* from */
     {60, 32, 59, 0}, /* to */
-    {60, 64, 101, 0}, /* fraction */
+    {60, 64, 104, 0}, /* fraction */
     {61, -1, 60, 1}, /* mix */
     {61, -1, 62, 1}, /* explicit */
     {61, -1, -1, 0}, /* regular */
@@ -330,8 +333,8 @@
     {62, 0, 64, 0}, /* id */
     {62, 12, 63, 0}, /* flags */
     {62, 16, 50, 0}, /* activeAppearance */
-    {63, 0, 135, 0}, /* rawValue */
-    {64, -1, 92, 1}, /* coreMaterial */
+    {63, 0, 138, 0}, /* rawValue */
+    {64, -1, 95, 1}, /* coreMaterial */
     {64, -1, 49, 0}, /* provider */
     {64, -1, 65, 0}, /* layers */
     {64, -1, -1, 0}, /* ultraThin */
@@ -346,125 +349,130 @@
     {64, -1, -1, 0}, /* secondaryBackground */
     {64, -1, -1, 0}, /* tertiaryBackground */
     {64, -1, -1, 0}, /* quaternaryBackground */
-    {65, 0, 97, 0}, /* layers */
-    {66, 0, 121, 0}, /* value */
+    {65, 0, 100, 0}, /* layers */
+    {66, 0, 124, 0}, /* value */
     {67, 0, 46, 0}, /* horizontal */
     {67, 8, 45, 0}, /* vertical */
     {69, 0, 2, 0}, /* url */
-    {69, 16, 91, 0}, /* name */
-    {69, 32, 93, 0}, /* groupAppContainerIdentifier */
-    {69, 48, 93, 0}, /* cloudKitContainerIdentifier */
+    {69, 16, 94, 0}, /* name */
+    {69, 32, 96, 0}, /* groupAppContainerIdentifier */
+    {69, 48, 96, 0}, /* cloudKitContainerIdentifier */
     {69, 64, 78, 0}, /* groupContainer */
     {69, 88, 79, 0}, /* cloudKitDatabase */
-    {69, 112, 81, 0}, /* schema */
-    {69, 120, 98, 0}, /* allowsSave */
-    {69, 121, 98, 0}, /* isStoredInMemoryOnly */
-    {69, 122, 98, 0}, /* _isDocumentSource */
+    {69, 112, 84, 0}, /* schema */
+    {69, 120, 101, 0}, /* allowsSave */
+    {69, 121, 101, 0}, /* isStoredInMemoryOnly */
+    {69, 122, 101, 0}, /* _isDocumentSource */
     {69, 128, 77, 0}, /* overrideOptions */
-    {69, 226, 98, 0}, /* defaultURL */
-    {69, 232, 81, 0}, /* containerSchema */
-    {70, 0, 90, 0}, /* sqlitePragmas */
-    {70, 8, 98, 0}, /* shouldMigrateStoreAutomatically */
-    {70, 9, 98, 0}, /* shouldInferMappingModelAutomatically */
-    {70, 10, 98, 0}, /* enableRemoteChangeNotifications */
+    {69, 226, 101, 0}, /* defaultURL */
+    {69, 232, 84, 0}, /* containerSchema */
+    {70, 0, 93, 0}, /* sqlitePragmas */
+    {70, 8, 101, 0}, /* shouldMigrateStoreAutomatically */
+    {70, 9, 101, 0}, /* shouldInferMappingModelAutomatically */
+    {70, 10, 101, 0}, /* enableRemoteChangeNotifications */
     {70, 16, 76, 0}, /* _encryptionKey */
-    {70, 24, 98, 0}, /* serviceConfiguration */
-    {70, 32, 116, 0}, /* fileProtection */
+    {70, 24, 101, 0}, /* serviceConfiguration */
+    {70, 32, 119, 0}, /* fileProtection */
     {70, 40, 72, 0}, /* historyTracking */
     {70, 64, 74, 0}, /* xpcStoreSettings */
-    {71, 0, 105, 0}, /* includedEntities */
-    {71, 8, 105, 0}, /* excludedEntities */
-    {71, 16, 98, 0}, /* contextObjectForDelete */
-    {71, 17, 98, 0}, /* allowPartialHistoryMigration */
+    {71, 0, 108, 0}, /* includedEntities */
+    {71, 8, 108, 0}, /* excludedEntities */
+    {71, 16, 101, 0}, /* contextObjectForDelete */
+    {71, 17, 101, 0}, /* allowPartialHistoryMigration */
     {72, -1, 71, 0}, /* some */
     {72, -1, -1, 0}, /* none */
-    {73, 0, 93, 0}, /* serviceName */
-    {73, 16, 93, 0}, /* machServiceName */
-    {73, 32, 98, 0}, /* skipModelCheck */
-    {73, 33, 98, 0}, /* skipRetryWait */
+    {73, 0, 96, 0}, /* serviceName */
+    {73, 16, 96, 0}, /* machServiceName */
+    {73, 32, 101, 0}, /* skipModelCheck */
+    {73, 33, 101, 0}, /* skipRetryWait */
     {74, -1, 73, 0}, /* some */
     {74, -1, -1, 0}, /* none */
-    {75, 0, 119, 0}, /* keychainItem */
+    {75, 0, 122, 0}, /* keychainItem */
     {76, -1, 75, 0}, /* some */
     {76, -1, -1, 0}, /* none */
     {77, -1, 70, 0}, /* some */
     {77, -1, -1, 0}, /* none */
-    {78, 0, 98, 0}, /* _automatic */
-    {78, 1, 98, 0}, /* _none */
-    {78, 8, 93, 0}, /* _identifier */
-    {79, 0, 98, 0}, /* _automatic */
-    {79, 1, 98, 0}, /* _none */
-    {79, 8, 93, 0}, /* _privateDBName */
-    {81, -1, 80, 0}, /* some */
-    {81, -1, -1, 0}, /* none */
-    {88, 0, 127, 0}, /* object */
-    {89, 0, 88, 0}, /* _variant */
-    {90, -1, 89, 0}, /* some */
-    {90, -1, -1, 0}, /* none */
-    {91, 0, 123, 0}, /* _guts */
-    {92, 0, 91, 0}, /* # */
-    {92, 16, 91, 0}, /* # */
-    {92, 32, 118, 0}, /* # */
-    {93, -1, 91, 0}, /* some */
+    {78, 0, 101, 0}, /* _automatic */
+    {78, 1, 101, 0}, /* _none */
+    {78, 8, 96, 0}, /* _identifier */
+    {79, 0, 101, 0}, /* _automatic */
+    {79, 1, 101, 0}, /* _none */
+    {79, 8, 96, 0}, /* _privateDBName */
+    {81, -1, 82, 0}, /* custom */
+    {81, -1, -1, 0}, /* json */
+    {81, -1, -1, 0}, /* plist */
+    {83, -1, 81, 0}, /* some */
+    {83, -1, -1, 0}, /* none */
+    {84, -1, 80, 0}, /* some */
+    {84, -1, -1, 0}, /* none */
+    {91, 0, 130, 0}, /* object */
+    {92, 0, 91, 0}, /* _variant */
+    {93, -1, 92, 0}, /* some */
     {93, -1, -1, 0}, /* none */
-    {94, 0, 93, 0}, /* # */
-    {94, 16, 93, 0}, /* # */
-    {95, -1, 94, 0}, /* some */
-    {95, -1, -1, 0}, /* none */
-    {96, 0, 124, 0}, /* _buffer */
-    {97, 0, 125, 0}, /* _buffer */
-    {98, 0, 84, 0}, /* _value */
-    {99, 0, 100, 0}, /* storage */
-    {101, 0, 83, 0}, /* _value */
-    {102, 0, 129, 0}, /* object */
-    {103, 0, 129, 0}, /* object */
-    {104, 0, 102, 0}, /* _variant */
-    {105, -1, 104, 0}, /* some */
-    {105, -1, -1, 0}, /* none */
-    {106, 0, 103, 0}, /* _variant */
-    {107, 0, 86, 0}, /* _value */
-    {108, 0, 132, 0}, /* lowerBound */
-    {108, 4, 132, 0}, /* upperBound */
-    {110, -1, 109, 0}, /* some */
-    {110, -1, -1, 0}, /* none */
-    {111, -1, 110, 0}, /* some */
-    {111, -1, -1, 0}, /* none */
-    {112, 0, 135, 0}, /* rawValue */
-    {114, 0, 135, 0}, /* _os_unfair_lock_opaque */
-    {115, 0, 120, 0}, /* _rawValue */
-    {116, -1, 115, 0}, /* some */
-    {116, -1, -1, 0}, /* none */
-    {118, -1, 117, 0}, /* some */
-    {118, -1, -1, 0}, /* none */
-    {121, 0, 86, 0}, /* _value */
-    {122, 0, 130, 0}, /* _box */
-    {123, 0, 126, 0}, /* _object */
-    {124, 0, 128, 0}, /* _storage */
-    {125, 0, 128, 0}, /* _storage */
-    {126, 0, 136, 0}, /* _countAndFlagsBits */
-    {126, 8, 82, 0}, /* _object */
-    {127, 0, 82, 0}, /* rawValue */
-    {128, 0, 82, 0}, /* rawValue */
-    {129, 0, 82, 0}, /* rawValue */
-    {131, 0, 87, 0}, /* _value */
-    {132, 0, 85, 0}, /* _value */
-    {133, 0, 87, 0}, /* _value */
-    {134, 0, 133, 0}, /* # */
-    {134, 1, 133, 0}, /* # */
-    {134, 2, 133, 0}, /* # */
-    {134, 3, 133, 0}, /* # */
-    {134, 4, 133, 0}, /* # */
-    {134, 5, 133, 0}, /* # */
-    {134, 6, 133, 0}, /* # */
-    {134, 7, 133, 0}, /* # */
-    {134, 8, 133, 0}, /* # */
-    {134, 9, 133, 0}, /* # */
-    {134, 10, 133, 0}, /* # */
-    {134, 11, 133, 0}, /* # */
-    {134, 12, 133, 0}, /* # */
-    {134, 13, 133, 0}, /* # */
-    {135, 0, 85, 0}, /* _value */
-    {136, 0, 86, 0}, /* _value */
+    {94, 0, 126, 0}, /* _guts */
+    {95, 0, 94, 0}, /* # */
+    {95, 16, 94, 0}, /* # */
+    {95, 32, 121, 0}, /* # */
+    {96, -1, 94, 0}, /* some */
+    {96, -1, -1, 0}, /* none */
+    {97, 0, 96, 0}, /* # */
+    {97, 16, 96, 0}, /* # */
+    {98, -1, 97, 0}, /* some */
+    {98, -1, -1, 0}, /* none */
+    {99, 0, 127, 0}, /* _buffer */
+    {100, 0, 128, 0}, /* _buffer */
+    {101, 0, 87, 0}, /* _value */
+    {102, 0, 103, 0}, /* storage */
+    {104, 0, 86, 0}, /* _value */
+    {105, 0, 132, 0}, /* object */
+    {106, 0, 132, 0}, /* object */
+    {107, 0, 105, 0}, /* _variant */
+    {108, -1, 107, 0}, /* some */
+    {108, -1, -1, 0}, /* none */
+    {109, 0, 106, 0}, /* _variant */
+    {110, 0, 89, 0}, /* _value */
+    {111, 0, 135, 0}, /* lowerBound */
+    {111, 4, 135, 0}, /* upperBound */
+    {113, -1, 112, 0}, /* some */
+    {113, -1, -1, 0}, /* none */
+    {114, -1, 113, 0}, /* some */
+    {114, -1, -1, 0}, /* none */
+    {115, 0, 138, 0}, /* rawValue */
+    {117, 0, 138, 0}, /* _os_unfair_lock_opaque */
+    {118, 0, 123, 0}, /* _rawValue */
+    {119, -1, 118, 0}, /* some */
+    {119, -1, -1, 0}, /* none */
+    {121, -1, 120, 0}, /* some */
+    {121, -1, -1, 0}, /* none */
+    {124, 0, 89, 0}, /* _value */
+    {125, 0, 133, 0}, /* _box */
+    {126, 0, 129, 0}, /* _object */
+    {127, 0, 131, 0}, /* _storage */
+    {128, 0, 131, 0}, /* _storage */
+    {129, 0, 139, 0}, /* _countAndFlagsBits */
+    {129, 8, 85, 0}, /* _object */
+    {130, 0, 85, 0}, /* rawValue */
+    {131, 0, 85, 0}, /* rawValue */
+    {132, 0, 85, 0}, /* rawValue */
+    {134, 0, 90, 0}, /* _value */
+    {135, 0, 88, 0}, /* _value */
+    {136, 0, 90, 0}, /* _value */
+    {137, 0, 136, 0}, /* # */
+    {137, 1, 136, 0}, /* # */
+    {137, 2, 136, 0}, /* # */
+    {137, 3, 136, 0}, /* # */
+    {137, 4, 136, 0}, /* # */
+    {137, 5, 136, 0}, /* # */
+    {137, 6, 136, 0}, /* # */
+    {137, 7, 136, 0}, /* # */
+    {137, 8, 136, 0}, /* # */
+    {137, 9, 136, 0}, /* # */
+    {137, 10, 136, 0}, /* # */
+    {137, 11, 136, 0}, /* # */
+    {137, 12, 136, 0}, /* # */
+    {137, 13, 136, 0}, /* # */
+    {138, 0, 88, 0}, /* _value */
+    {139, 0, 89, 0}, /* _value */
 #endif
 #if defined(SWIFTWALK_IMAGES)
     {9, 0, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
@@ -477,8 +485,13 @@
     {74, 1, "\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
     {77, 0, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
     {77, 1, "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
-    {95, 0, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
-    {95, 1, "\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
-    {111, 0, "\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00"},
-    {111, 1, "\x01\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff", "\x02\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff"},
+    {81, 0, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {81, 1, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {81, 2, "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00", "\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {83, 0, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {83, 1, "\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00", "\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {98, 0, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {98, 1, "\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {114, 0, "\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00", "\x00\x00\x00\x00\x00\x00\x00\x00"},
+    {114, 1, "\x01\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff", "\x02\x00\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff\xff\xff"},
 #endif
