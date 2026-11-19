@@ -67,6 +67,20 @@ What it runs:
 
    With no PROGRAM it caches every program in /usr/lib/hao/aot-list (`aot-list.txt` here).
 
+## Updating a Mac that already runs hao
+
+On a Mac installed from a {os_build} image with hao, once the command above has completed the payload:
+
+       sudo python3 tools/hao-runtime-on-mac --install-live payload [--dry-run]
+
+It writes only what differs from the installed payload (runtime files, programs whose stub changed, replaced
+files), removes AOT caches made by the old libhao and rewrites `/usr/lib/hao/install.json`. It refuses a payload
+for another macOS build or x86_64 cache, one built from a dirty tree, and a system without `install.json`.
+The system volume is sealed, so SIP's authenticated-root protection must be off (`csrutil authenticated-root
+disable`, in Recovery): the tool mounts the system volume, updates it and blesses a new boot snapshot. Restart
+once to use it. `--dry-run` prints the changes and the commands without running anything. The installed system
+has no Python of its own: use a Python 3.12 or later you bring (`sudo /path/to/python3 tools/hao-runtime-on-mac ...`).
+
 ## Building this archive from source
 
 With Xcode 27.2 and Python 3.14, from a clone of hao-runtime at the commit above:

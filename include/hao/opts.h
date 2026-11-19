@@ -38,14 +38,24 @@ typedef struct {
                                     triage only, accepting memory corruption: a Swift value hao cannot certify goes on
                                     to native code instead of being refused (swiftvalue.c decline) */
          swift_value_strict,     /* HAO_SWIFT_VALUE_STRICT (tests; a HAO_TEST_SWITCHES build only): refuse a Swift
-                                    value no row or rule certifies, which the default reports and passes as found
-                                    (swiftvalue.c uncertified) */
+                                    value no row or rule certifies even where its types are listed for report-only
+                                    (swiftvalue.c uncertified, report_listed) */
+         swift_value_report,     /* boot argument hao_swift_value_report=1 (every process, every build) or
+                                    HAO_SWIFT_VALUE_REPORT (open tier): a Swift value no row or rule certifies is
+                                    reported and passed as found whatever its types, as in v0.0.1, accepting the
+                                    corruption a wrong guess causes; for a boot that lists them
+                                    (tools/hao_sv_reportlist.py) or one an unlisted type stops */
          swift_value_audit,      /* boot argument hao_swift_value_audit=1 (every process, every tier) or
                                     HAO_SWIFT_VALUE_AUDIT (open tier): a survey image's setting, accepting memory
                                     corruption as the pass-through does: a value hao cannot certify goes on, and one
                                     machine-readable "hao-swift-audit" record per (type, reason) names it
                                     (swiftvalue.c audit_record); only in a survey build (make SURVEY=1) or a
                                     test build */
+         aot_use,                /* HAO_AOT_USE (guarded too) / boot argument hao_aot_use=1: AOT use records to the
+                                    unified log (aot_use.c, tools/hao-aot-use) */
+         swift_keys,             /* HAO_SWIFT_KEYS, boot argument hao_swift_keys=1 (every process): one
+                                    machine-readable "hao-swift-key" record per Swift type the value walk looks up
+                                    in its facts table (swiftvalue/Facts.c key_met); prints only */
          crash;                  /* boot argument hao_crash=1 (every process; HAO_CRASH in tests): diagnostics also to
                                     /dev/console and /private/var/log/hao (runtime.c hao_diag_init) */
     bool swift_value_audit_ignored;  /* the audit was asked for and this build ignores it (said once, swiftvalue.c) */
@@ -60,6 +70,8 @@ typedef struct {
     char diag_dir[1024];        /* HAO_DIAG_DIR: diagnostics log directory (runtime.c; "" = unset: hao_crash=1's) */
     char swift_walk_facts[1024]; /* HAO_SWIFT_WALK_FACTS: a fixture of the Swift walk's facts table (tests;
                                     swiftvalue/Facts.c; "" = unset) */
+    char swift_value_list[1024]; /* HAO_SWIFT_VALUE_LIST: more report-only type keys, one per line (tests;
+                                    swiftvalue.c report_listed) */
     char swift_guest_facts[1024]; /* HAO_SWIFT_GUEST_FACTS: a fixture of the guest-type rows (tests; Facts.c) */
     char swift_pop[16];         /* HAO_SWIFT_POP: "signature" or "frame" ("" = both; runtime.c callee_pop) */
     char ignored[512];          /* comma-separated switches the tier ignored */
@@ -75,7 +87,7 @@ extern hao_opts_t hao_opt;
  *
  * Boot arguments are set by root and apply in every tier, so only these are
  * read: in every process hao_crash=1, hao_nx_stats=1, hao_crash_trace=1,
- * hao_bridge_stats=1, hao_diag_time=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1,
+ * hao_bridge_stats=1, hao_diag_time=1, hao_swift_keys=1, hao_aot_use=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1,
  * hao_swift_value_audit=1 (a survey build only, make SURVEY=1: swiftvalue.c audit_record);
  * in PID 1 also hao=FLAGS (v, V, i, s) and hao_verbose=N. No boot argument
  * turns a check off (there is no hao_no_libval and no hao=u). A build with

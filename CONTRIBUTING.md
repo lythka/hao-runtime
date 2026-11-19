@@ -97,6 +97,12 @@ image works; those are tested on the target system.
   never an address or a path (`swiftvalue.c` `audit_record`).
   `HAO_SWIFT_VALUE_AUDIT=1` does the same for one program in a survey or
   test build.
+- The report-only list (`src/swiftvalue_report.inc`): boot an image with
+  `hao_crash=1 hao_swift_value_report=1`, so that every uncertified Swift
+  value is reported and goes on with its `hao-swift-audit` records, collect
+  the `console.log` files under `/private/var/log/hao`, and run
+  `python3 tools/hao_sv_reportlist.py --merge LOG...`. Without the boot
+  argument an uncertified value of a type not on the list is refused.
 - `HAO_DIAG_TIME=1` (boot argument `hao_diag_time=1`) starts each diagnostics
   line with `@SECONDS ` on the mach clock, the clock of the kernel's and the
   unified log's timestamps, and prints one `phase NAME at S s (+MS ms)` line per

@@ -59,6 +59,7 @@ src/a64_simd.c
 src/abi.c
 src/aggspi_gen.inc
 src/aot_policy.c
+src/aot_use.c
 src/archdiff_gen.inc
 src/async_contract.c
 src/blocks.c
@@ -114,6 +115,7 @@ src/swiftobjects.c
 src/swiftresult.c
 src/swiftschema.c
 src/swiftvalue.c
+src/swiftvalue_report.inc
 src/swiftvalue/Aggregate.c
 src/swiftvalue/Aggregate.h
 src/swiftvalue/Common.c
@@ -691,7 +693,11 @@ tests/tools/test_catalog_gate.py
 tests/tools/test_contract.py
 tests/tools/test_ifunit_match.py
 tests/tools/test_install.py
+tests/tools/test_install_live.py
+tests/tools/test_install_overlay.py
 tests/tools/test_release.py
+tests/tools/test_aot_use.py
+tests/tools/test_swift_keys.py
 tests/tools/test_root.py
 tests/tools/test_trustlist.py
 tests/translate/run.sh
@@ -699,6 +705,7 @@ tools/check_distribution.py
 tools/check_x86.sh
 tools/dyld-ignition-fix.py
 tools/hao-aot-extend
+tools/hao-aot-use
 tools/hao-contract/PIN
 tools/hao-contract/hao_contract.py
 tools/hao-embed
@@ -716,6 +723,8 @@ tools/hao_ifunit.py
 tools/hao_macho.py
 tools/hao_release.py
 tools/hao_root.py
+tools/hao_swift_keys.py
+tools/hao_sv_reportlist.py
 tools/stub_identity_gate.py
 tools/value-contracts/README.md
 tools/value-contracts/optional-data-26A428.json

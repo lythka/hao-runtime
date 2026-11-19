@@ -146,6 +146,35 @@ name-to-descriptor slots that point into libraries loaded from disk nulled, on t
 `ACCEPT_EDITS` set to that edit list; without it, gate 3 fails libswiftCore's interface unit, as it should for
 changed code under an unchanged UUID.
 
+## Recording the Swift keys a program meets
+
+The value walk looks each Swift type it meets up in its facts table (`src/swiftwalk_gen.inc`). hao counts every
+metadata it looks up once per process, by the table's answer and by where the metadata lies, and `--stats` prints
+the counts (`hao-swift-keys: met=N same=N ... none=N ...; cache=N guest=N heap=N`). With `HAO_SWIFT_KEYS=1`
+(a printing switch, honoured in guarded processes too) or the boot argument `hao_swift_keys=1` (every process),
+each one is also written once where hao's diagnostics go:
+
+    hao-swift-key {"v":1,"process":P,"key":K,"row":R,"where":W,"kind":N,"size":N,"stride":N,"flags":N,"xi":N,"x86_cache":U}
+
+- `key`: the table key, the mangled name without `$s` and with private contexts' addresses removed (the key
+  `hao-swift-audit` records use);
+- `row`: `same`, `dynamic`, `convert` or `refuse` (a native row), `guest`, `guest-incomplete` or `guest-optional`
+  (a guest-defined type's row, `src/swiftguest_gen.inc`), `none` (no row), `layout` (a row whose size, stride,
+  flags or XI count is not the live type's), `identity` (a SAME row the identity check declined), `other-cache`
+  (the table is for another x86_64 cache);
+- `where`: `cache` (inside a section of a shared cache image that is not zero-fill: static or prespecialized
+  metadata), `guest` (a guest image's type) or `heap` (made at run time; libswiftCore's first allocations, in
+  its zero-fill initial pool inside the cache range, count here);
+- no address and no path.
+
+`tools/hao_swift_keys.py LOG...` reads these records and `hao-swift-audit` records from logs and reports
+coverage: keys with a row against keys looked up, the uncertified ones, keys under another cache that
+`--walk-table src/swiftwalk_gen.inc` lists, and keys by where their metadata lay; with `--cache` (read as
+`hao_catalog_gate.py` does) or `--catalog-names`, which heap keys a catalog names. `--tsv` writes one row per key,
+`--specs` the keys without a row and those of uncertified values as walk-facts generator input. Limits: only
+types the walk looks up are recorded (values crossing a native boundary that need certifying), not every
+metadata request; conformances are seen only as the existential types that carry them.
+
 ## Where prespecialized metadata comes from
 
 Prespecialized metadata is part of the x86_64 shared cache the image installs. hao-runtime neither builds nor

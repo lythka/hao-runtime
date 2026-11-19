@@ -186,16 +186,17 @@ int hao_env_tier_for(const hao_proc_facts *f)
  * HAO_JIT_HELPERS_ONLY), an exit not chained yet (HAO_NO_CHAIN). They change
  * speed, not what is bound or how a native call is made. */
 static const char *const engine_switches[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", NULL};
-/* Print to the process's own stderr or the console. They bind nothing and
- * turn nothing off (HAO_NX_STATS adds a thread that only prints). */
-static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME", NULL};
+/* Print to the process's own stderr, the console or the unified log. They bind
+ * nothing and turn nothing off (HAO_NX_STATS and HAO_AOT_USE add a thread that only prints). */
+static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME",
+                                            "HAO_AOT_USE", "HAO_SWIFT_KEYS", NULL};
 /* For hao's own tests: they replace a kernel or CPUID answer or a resource
  * limit with a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
                                             "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_CPU_FEATURES",
                                             "HAO_AOT_FREE_MB", "HAO_CRASH", "HAO_SWIFT_WALK_FACTS", "HAO_SWIFT_GUEST_FACTS",
-                                            "HAO_SWIFT_VALUE_STRICT", NULL};
+                                            "HAO_SWIFT_VALUE_STRICT", "HAO_SWIFT_VALUE_LIST", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {
@@ -226,7 +227,7 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *    the untyped bridge or are refused, bridge.c), HAO_NATIVE_LIBCXX (guest code meets a libc++ with another
  *    std::string layout, runtime.c), HAO_NATIVE_APP_LIBS (app values cross representation domains), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
- *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH and HAO_SWIFT_VALUE_AUDIT (a Swift value hao cannot certify
+ *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH, HAO_SWIFT_VALUE_REPORT and HAO_SWIFT_VALUE_AUDIT (a Swift value hao cannot certify
  *    reaches native code, swiftvalue.c; the audit only in a SURVEY or test build, its boot argument in every
  *    tier there, opts.c BOOT_SURVEY);
  *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the

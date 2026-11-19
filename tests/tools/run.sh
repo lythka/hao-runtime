@@ -7,11 +7,13 @@
 # tests/tools/platform.sh (the stub's LC_BUILD_VERSION is the program's: Mac Catalyst, macOS),
 # tests/tools/identity.sh (the stub's load-time identity by rule, tools/stub_identity_gate.py),
 # tests/tools/aotpayload.sh (AOT caches shipped in the payload, installed and trusted; stub-identities),
-# tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/onmac_pin_check.py),
+# tools/hao-runtime-on-mac (the archive's on-Mac files; tests/tools/onmac_pin_check.py; --install-live,
+# tests/tools/test_install_live.py; hao-install.py --overlay and --installed, tests/tools/test_install_overlay.py),
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike) and
 # tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file) and
-# tests/tools/test_root.py (--cryptex: a cryptex beside ROOT, the same outputs as in place).
+# tests/tools/test_root.py (--cryptex: a cryptex beside ROOT, the same outputs as in place) and
+# tests/tools/test_aot_use.py (tools/hao-aot-use: AOT use records to an AOT list).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
 # Supply KC explicitly for read-only kernel collection checks; stamp cases
 # are skipped without it. Exit 1 if any case failed.
@@ -185,6 +187,14 @@ else bad "hao-install.py twice: rc $r1 $r2: $(cat "$d/2.log")"; fi
 if python3 -I "$here/test_install.py" >"$d/paths.log" 2>&1; then
     pass "hao-install.py path rules: $(grep '^Ran' "$d/paths.log") (unsafe manifest names and symlinks refused)"
 else bad "hao-install.py path rules: $(tail -15 "$d/paths.log")"; fi
+# --- hao-runtime-on-mac --install-live: only what differs is written, with hao-install.py's checks; other systems refused
+if python3 -I "$here/test_install_live.py" >"$d/live.log" 2>&1; then
+    pass "hao-runtime-on-mac --install-live: $(grep '^Ran' "$d/live.log") (libhao-only update, restub, refusals; the running-Mac path as far as --dry-run)"
+else bad "hao-runtime-on-mac --install-live: $(tail -15 "$d/live.log")"; fi
+# --- hao-install.py --overlay: the live-patch overlay of a payload update equals --install-live; --installed
+if python3 -I "$here/test_install_overlay.py" >"$d/overlay.log" 2>&1; then
+    pass "hao-install.py --overlay/--installed: $(grep '^Ran' "$d/overlay.log") (same files as --install-live, flags kept, refusals leave no folder)"
+else bad "hao-install.py --overlay/--installed: $(tail -15 "$d/overlay.log")"; fi
 # --- tools/hao_ifunit.py match: each interface unit names an image of the x86_64 cache (hao-image-payload --units)
 if python3 -I "$here/test_ifunit_match.py" >"$d/ifmatch.log" 2>&1; then
     pass "interface units against the x86_64 cache: $(grep '^Ran' "$d/ifmatch.log") (another library's or another name's unit refused)"
@@ -328,6 +338,10 @@ else bad "hao-trust-list: $(echo "$r" | grep FAIL)"; fi
 if r=$(timeout 300 python3 -I "$here/test_root.py" "$OUT/root" "$G" /bin/ls "$B/hao-stub" "$X86" 2>&1); then
     pass "--cryptex: $(echo "$r" | tr '\n' ';')"
 else bad "--cryptex: $(echo "$r" | grep FAIL)"; fi
+# --- hao-aot-use: AOT use records (src/aot_use.c) -> the AOT list hao-image-payload --aot-list takes
+if r=$(timeout 120 python3 -I "$here/test_aot_use.py" "$OUT/aotuse" 2>&1); then
+    pass "hao-aot-use: $(echo "$r" | tr '\n' ';')"
+else bad "hao-aot-use: $(echo "$r" | grep FAIL)"; fi
 # --- codesign's working copies only under a parent nobody else can change; the directory and files checked by
 # inode before codesign reads them
 d=$OUT/private; rm -rf "$d"; mkdir -p "$d"

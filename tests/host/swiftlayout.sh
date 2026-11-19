@@ -527,6 +527,7 @@ W M Optional<Optional<MetaHolder>> arm64 outer nil walk 1 0:1>2
 W K 7SwiftUI12$7ff82d37b2d0yXZ19ViewFactoryProtocol_pXp 1 7SwiftUI$yXZ19ViewFactoryProtocol_pXp
 W K 7SwiftUI15BoundInputsViewVSg 1 7SwiftUI15BoundInputsViewVSg
 W K 7SwiftUI24MaterialActiveAppearanceV7$10a5c9350yXZ7StorageO 1 7SwiftUI24MaterialActiveAppearanceV$yXZ7StorageO
+W K 7SwiftUI13LegacyStorage13$7ffa2167102cLLCSg 1 7SwiftUI13LegacyStorage$LLCSg
 W K Si 1 Si
 W F FBox??? word 2 source=4 walk 1 0:2>2~1
 W F FBox??? word 4 source=4 walk 1 0:4>4~2

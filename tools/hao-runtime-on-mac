@@ -12,8 +12,11 @@ Each output is written to a new file in a private directory and renamed into pla
 through a symbolic link. Runs as an ordinary user (it refuses root): nothing it does needs privileges.
 Needs Python 3.12 or later and codesign; no compiler, linker or Xcode. Exit 0 only when every sha256 matches and
 nothing else is there.
+
+hao-runtime-on-mac --install-live PAYLOAD [--system DIR] [--x86-cache DIR] [--dry-run]: as root, update the hao
+payload of an installed system in place (see LIVE_USAGE below).
 """
-import hashlib, json, os, shutil, stat, struct, subprocess, sys, tempfile
+import hashlib, json, os, posixpath, shutil, stat, struct, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hao_codesig
@@ -174,7 +177,343 @@ def inventory(pay, files):
     return bad, ok, later
 
 
+LIVE_USAGE = """hao-runtime-on-mac --install-live PAYLOAD [--system DIR] [--x86-cache DIR] [--dry-run]: update the hao
+payload of an installed system in place, as root.
+
+PAYLOAD is a complete payload (payload-manifest.json, clean, for the installed os_build and x86_64 cache UUID). The
+system must have SYSTEM/usr/lib/hao/install.json (hao-install.py). Only what differs is written, with hao-install.py's
+own checks: root/ files whose sha256 or mode differs, programs whose embedded stub differs (restubbed), replace/
+entries not yet applied; AOT caches in usr/lib/hao/aot not bound to the new libhao are removed; install.json is
+rewritten. With --system DIR the install goes into DIR. Without it, on the running Mac: authenticated-root
+protection must be off (csrutil authenticated-root disable, from Recovery); the booted system volume is mounted
+writable at a private mount point, updated, and blessed as a new boot snapshot; one reboot is needed. --dry-run
+writes nothing: it prints the changes and the commands it would run. --x86-cache names the directory of the
+dyld_shared_cache_x86_64 to identify (default: the system's). --booted DIR reads the running system from DIR
+instead of / (tests)."""
+
+LIVE_CACHES = ('System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld', 'System/Cryptexes/OS/System/Library/dyld',
+               'System/Library/dyld', 'System/Volumes/Preboot/Cryptexes/Rosetta/System/Library/dyld')
+
+
+class Refused(Exception):
+    pass
+
+
+def load_installer(payload):
+    """tools/hao-install.py beside this script, else the payload's own copy (its sha256 checked against
+    payload-manifest.json first), as a module."""
+    import importlib.machinery, importlib.util
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hao-install.py')
+    path = here if os.path.isfile(here) else os.path.join(payload, 'hao-install.py')
+    if path != here:
+        want = json.load(open(os.path.join(payload, 'payload-manifest.json')))['files'].get('hao-install.py')
+        if os.path.islink(path) or not os.path.isfile(path) or sha256(path) != want:
+            raise Refused('no hao-install.py beside this tool, and the payload\'s is missing or not the one its manifest lists')
+    loader = importlib.machinery.SourceFileLoader('hao_install', path)
+    spec = importlib.util.spec_from_loader('hao_install', loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    for f in ('load_payload', 'embed_programs', 'replace_files', 'install_record', 'write_record', 'root_mode'):
+        if not hasattr(m, f):
+            raise Refused('%s predates --install-live (no %s)' % (path, f))
+    return m
+
+
+def cache_uuid(path):
+    """The UUID (upper-case hex, as payload-manifest.json cache_uuid) of the x86_64 dyld shared cache PATH."""
+    with open(path, 'rb') as f:
+        h = f.read(0x68)
+    if len(h) < 0x68 or not h.startswith(b'dyld_v1') or b'x86_64' not in h[:16]:
+        raise Refused('%s is not an x86_64 dyld shared cache' % path)
+    return h[0x58:0x68].hex().upper()
+
+
+def installed_identity(inst, system, booted, x86):
+    """(os_build, x86_64 cache UUID) of the installed system: SYSTEM's SystemVersion.plist and the cache of the
+    running system BOOTED (the Preboot cryptexes are not on the system volume), or the cache in X86."""
+    import plistlib
+    try:
+        ver = plistlib.loads(inst.read_nofollow(os.path.join(system, 'System/Library/CoreServices/SystemVersion.plist')))
+        build = ver['ProductBuildVersion']
+    except (OSError, ValueError, KeyError) as e:
+        raise Refused('cannot read the installed os_build (System/Library/CoreServices/SystemVersion.plist: %s)' % e)
+    dirs = [x86] if x86 else [os.path.join(booted, d) for d in LIVE_CACHES]
+    for d in dirs:
+        f = os.path.join(d, 'dyld_shared_cache_x86_64')
+        if os.path.isfile(f):
+            return build, cache_uuid(f)
+    raise Refused('no dyld_shared_cache_x86_64 found to identify the installed cache (%s); name it with --x86-cache DIR'
+                  % ', '.join(dirs))
+
+
+def live_plan(inst, system, payload, admitted, staged):
+    """What the install of PAYLOAD changes in SYSTEM, found with hao-install.py's own checks and nothing written."""
+    manifest, replace, record_path = inst.load_payload(system, payload, admitted, staged)
+    root = []
+    for rel in sorted(r for r in staged if r.startswith('root/')):
+        p = inst.inside(system, rel[len('root/'):])
+        try:
+            st = os.lstat(p)
+            same = stat.S_ISREG(st.st_mode) and st.st_mode & 0o7777 == inst.root_mode(admitted, rel) and \
+                (os.geteuid() != 0 or (st.st_uid, st.st_gid) == (0, 0)) and \
+                hashlib.sha256(inst.read_nofollow(p)).hexdigest() == admitted[rel][0]
+        except OSError:   # missing, or a file in the way (install_root refuses that)
+            same = False
+        if not same:
+            root.append(rel)
+    errors, targets, replaced_new = [], [], []
+    try:
+        emb = inst.embed_programs(system, manifest, staged, targets, errors, write=False)
+        inst.replace_files(system, replace, staged, targets, errors, write=False, changed=replaced_new)
+    finally:
+        inst.close_all(targets)
+    lib = 'root/usr/lib/hao/libhao.dylib'
+    gen = inst.macho_uuid(None, staged.read(lib)) if lib in staged else None
+    aot = inst.check_aot_caches(system, errors, gen=gen, remove=False)
+    ours = {posixpath.basename(r) for r in staged if posixpath.dirname(r) == 'root/' + inst.AOT_DIRS[0]}
+    aot['removed_stale'] = [n for n in aot['removed_stale'] if n not in ours]   # the payload's own replace them
+    for r in manifest.get('required', inst.LEGACY_REQUIRED):
+        if r not in emb['done']:
+            errors.append(r + ' (required, not embedded)')
+    return {'manifest': manifest, 'replace': replace, 'record_path': record_path, 'root': root,
+            'embedded': [p for p in emb['done'] if p not in emb['already'] and p not in emb['restubbed']],
+            'restubbed': emb['restubbed'], 'replaced': replaced_new, 'aot_removed': aot['removed_stale'], 'errors': errors}
+
+
+def live_install(inst, system, admitted, staged, plan, old, identity):
+    """Write PLAN into SYSTEM with hao-install.py's functions; rewrite install.json; the exit status."""
+    manifest = plan['manifest']
+    inst.install_root(admitted, staged, system, only=set(plan['root']))
+    errors, targets, replaced_new = [], [], []
+    try:
+        emb = inst.embed_programs(system, manifest, staged, targets, errors)
+        replaced = inst.replace_files(system, plan['replace'], staged, targets, errors, changed=replaced_new)
+    finally:
+        inst.close_all(targets)
+    aot = inst.check_aot_caches(system, errors)
+    required = manifest.get('required', inst.LEGACY_REQUIRED)
+    errors += [r + ' (required, not embedded)' for r in required if r not in emb['done']]
+    # The record is the one hao-install.py would write for PAYLOAD on this system: every root/ file is installed
+    # (the unchanged ones already were); "already_embedded" stays what the first install found embedded before it ran.
+    record = inst.install_record(sum(r.startswith('root/') for r in staged), emb, required,
+                                 [(p, '') for p in old.get('legacy_stubs', [])],
+                                 replaced, old.get('aot_dirs', []), aot, errors, manifest)
+    if isinstance(old.get('already_embedded'), int):
+        record['already_embedded'] = old['already_embedded']
+    record['payload'] = identity
+    record['live'] = {'root_written': plan['root'], 'embedded': [p for p in emb['done'] if p not in emb['already']
+                                                                 and p not in emb['restubbed']],
+                      'restubbed': emb['restubbed'], 'replaced': replaced_new, 'previous': old.get('payload')}
+    inst.write_record(system, plan['record_path'], record)
+    print('hao-runtime-on-mac: install-live: %d files written, %d programs embedded, %d stubs restubbed, %d files '
+          'replaced, %d AOT caches removed; install.json rewritten; %d errors'
+          % (len(plan['root']), len(record['live']['embedded']), len(emb['restubbed']), len(replaced_new),
+             len(aot['removed_stale']), len(errors)), flush=True)
+    for x in errors[:20]:
+        print('hao-runtime-on-mac: error:', x, flush=True)
+    return 1 if errors else 0
+
+
+def show_plan(plan, how):
+    for what, key in (('write', 'root'), ('embed', 'embedded'), ('restub', 'restubbed'), ('replace', 'replaced'),
+                      ('remove AOT cache', 'aot_removed')):
+        for p in plan[key]:
+            print('hao-runtime-on-mac: %s %s %s' % (how, what, p[len('root/'):] if key == 'root' else p))
+    print('hao-runtime-on-mac: %s write usr/lib/hao/install.json' % how)
+
+
+def authenticated_root_on(text):
+    """True, False or None (unknown) from `csrutil authenticated-root status` output."""
+    t = text.lower()
+    return False if 'disabled' in t else True if 'enabled' in t else None
+
+
+def booted_volume(booted):
+    """(device of the volume BOOTED is mounted from, or None, why not): the system volume under its snapshot."""
+    import ctypes, re
+    class StatFS(ctypes.Structure):   # struct statfs, 64-bit inodes
+        _fields_ = [('f_bsize', ctypes.c_uint32), ('f_iosize', ctypes.c_int32)] + \
+                   [(n, ctypes.c_uint64) for n in ('f_blocks', 'f_bfree', 'f_bavail', 'f_files', 'f_ffree')] + \
+                   [('f_fsid', ctypes.c_int32 * 2), ('f_owner', ctypes.c_uint32), ('f_type', ctypes.c_uint32),
+                    ('f_flags', ctypes.c_uint32), ('f_fssubtype', ctypes.c_uint32), ('f_fstypename', ctypes.c_char * 16),
+                    ('f_mntonname', ctypes.c_char * 1024), ('f_mntfromname', ctypes.c_char * 1024),
+                    ('f_flags_ext', ctypes.c_uint32), ('f_reserved', ctypes.c_uint32 * 7)]
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        fn = libc['statfs$INODE64']   # x86_64: the plain symbol has 32-bit inodes
+    except AttributeError:
+        fn = libc.statfs
+    st = StatFS()
+    if fn(os.fsencode(booted), ctypes.byref(st)) != 0:
+        return None, 'statfs %s: %s' % (booted, os.strerror(ctypes.get_errno()))
+    src, kind = st.f_mntfromname.decode(errors='replace'), st.f_fstypename.decode(errors='replace')
+    src = src.split('@', 1)[-1]   # com.apple.os.update-...@/dev/diskNsM
+    m = re.fullmatch(r'(/dev/disk\d+s\d+)s\d+', src)
+    if kind != 'apfs':
+        return src, '%s is on %s, not APFS' % (booted, kind)
+    if not m:
+        return src, '%s is mounted from %s, not from a snapshot of a system volume' % (booted, src)
+    return m.group(1), None
+
+
+def install_live(argv):
+    """--install-live PAYLOAD [--system DIR] [--x86-cache DIR] [--dry-run] [--booted DIR]"""
+    opts, rest, args = {'--system': None, '--x86-cache': None, '--booted': None}, [], list(argv)
+    dry = False
+    while args:
+        a = args.pop(0)
+        if a == '--dry-run':
+            dry = True
+        elif a in opts and args:
+            opts[a] = os.path.realpath(args.pop(0))
+        elif a.startswith('-'):
+            sys.exit(LIVE_USAGE)
+        else:
+            rest.append(a)
+    if len(rest) != 1:
+        sys.exit(LIVE_USAGE)
+    payload = os.path.realpath(rest[0])
+    system, live = opts['--system'], opts['--system'] is None
+    booted = opts['--booted'] or (system if system else '/')
+    try:
+        return live_run(payload, system or booted, booted, opts['--x86-cache'], live, dry)
+    except Refused as x:
+        print('hao-runtime-on-mac: install-live refused: %s' % x, file=sys.stderr)
+        return 1
+
+
+def live_run(payload, system, booted, x86, live, dry):
+    if live and not dry and os.geteuid() != 0:
+        raise Refused('run it as root (sudo): it writes the system volume')
+    inst = load_installer(payload)
+    try:
+        pm = json.loads(inst.read_nofollow(os.path.join(payload, 'payload-manifest.json')))
+        identity = {k: pm.get(k) for k in ('version', 'commit', 'os_build', 'cache_uuid', 'layout_version')}
+    except (OSError, ValueError, AttributeError) as x:
+        raise Refused('payload-manifest.json: missing or malformed (%s)' % x)
+    if pm.get('clean') is not True:
+        raise Refused('the payload is dirty (built from a tree with uncommitted changes: clean is %r)' % pm.get('clean'))
+    if not identity['os_build'] or not identity['cache_uuid']:
+        raise Refused('payload-manifest.json names no os_build or cache_uuid')
+    old = read_record(inst, system)
+    build, cache = installed_identity(inst, system, booted, x86)
+    prev = old.get('payload') or {}
+    want_cache = str(identity['cache_uuid']).replace('-', '').upper()
+    for what, have, want in (('os_build', build, identity['os_build']), ('x86_64 cache UUID', cache, want_cache),
+                             ('os_build (install.json)', prev.get('os_build', build), identity['os_build']),
+                             ('x86_64 cache UUID (install.json)', str(prev.get('cache_uuid', cache)).replace('-', '').upper(),
+                              want_cache)):
+        if have != want:
+            raise Refused('the payload is for %s %s, the installed system has %s' % (what, want, have))
+    try:
+        admitted = inst.payload_inventory(payload)
+    except inst.Unsafe as x:
+        raise Refused(x)
+    print('hao-runtime-on-mac: install-live: payload %s over %s (%s, x86_64 cache %s)'
+          % (identity['version'], prev.get('version', 'an image install'), build, cache), flush=True)
+    if not live:
+        return stage_and_install(inst, system, payload, admitted, old, identity, dry) or 0
+    dev, why = booted_volume(booted)
+    mnt = '/private/var/run/hao-live.XXXXXX'
+    commands = [['/usr/bin/csrutil', 'authenticated-root', 'status'],
+                ['/sbin/mount_apfs', '-o', 'nobrowse', dev or '?', mnt],
+                ['/usr/sbin/bless', '--mount', mnt, '--bootefi', '--create-snapshot'],
+                ['/sbin/umount', mnt]]
+    if dry:
+        if why:
+            print('hao-runtime-on-mac: note: %s (a real run refuses)' % why)
+        print('hao-runtime-on-mac: would run (the install goes between mount_apfs and bless):')
+        for c in commands:
+            print('+ ' + ' '.join(c))
+        return stage_and_install(inst, booted, payload, admitted, old, identity, True) or 0
+    p = subprocess.run(commands[0], capture_output=True, text=True)
+    on = authenticated_root_on(p.stdout + p.stderr)
+    if on is not False:
+        raise Refused('SIP authenticated-root protection is %s: the system volume cannot be blessed as a new snapshot. '
+                      'In Recovery run `csrutil authenticated-root disable`, then run this again'
+                      % ('on' if on else 'in an unknown state (%s)' % (p.stdout + p.stderr).strip()))
+    if why:
+        raise Refused(why)
+    mnt = tempfile.mkdtemp(prefix='hao-live.', dir='/private/var/run')
+    commands = [[mnt if a == '/private/var/run/hao-live.XXXXXX' else a for a in c] for c in commands]
+    rc = run_live(commands[1])
+    if rc:
+        os.rmdir(mnt)
+        raise Refused('%s failed (exit %d)' % (' '.join(commands[1]), rc))
+    try:
+        mold = read_record(inst, mnt)
+        if installed_identity(inst, mnt, booted, x86) != (build, cache):
+            raise Refused('the mounted system volume %s is another system than the running one' % dev)
+        rc = stage_and_install(inst, mnt, payload, admitted, mold, identity, False)
+        if rc is None:
+            return 0
+        if rc == 0:
+            rc = run_live(commands[2])
+            if rc:
+                print('hao-runtime-on-mac: error: %s failed (exit %d): the volume is updated but no new boot snapshot '
+                      'was made; the Mac still boots the old one' % (' '.join(commands[2]), rc), file=sys.stderr)
+        else:
+            print('hao-runtime-on-mac: errors: no new boot snapshot was made; the Mac still boots the old one',
+                  file=sys.stderr)
+    finally:
+        run_live(commands[3])
+        try:
+            os.rmdir(mnt)
+        except OSError:
+            pass
+    if rc == 0:
+        print('hao-runtime-on-mac: install-live: new boot snapshot blessed; restart the Mac once to use it')
+    return 1 if rc else 0
+
+
+def run_live(cmd):
+    print('+ ' + ' '.join(cmd), flush=True)
+    return subprocess.run(cmd).returncode
+
+
+def read_record(inst, system):
+    p = os.path.join(system, 'usr/lib/hao/install.json')
+    try:
+        rec = json.loads(inst.read_nofollow(p))
+    except FileNotFoundError:
+        raise Refused('%s missing: hao was not installed on this system by hao-install.py' % p)
+    except (OSError, ValueError) as x:
+        raise Refused('%s: unreadable (%s)' % (p, x))
+    if not isinstance(rec, dict):
+        raise Refused('%s: malformed' % p)
+    return rec
+
+
+def stage_and_install(inst, system, payload, admitted, old, identity, dry):
+    """Plan the install of PAYLOAD into SYSTEM and, unless DRY, perform it: the exit status, None if nothing differs."""
+    staged = inst.Staging()
+    try:
+        try:
+            plan = live_plan(inst, system, payload, admitted, staged)
+        except inst.Unsafe as x:
+            raise Refused(x)
+        if plan['errors']:
+            for x in plan['errors'][:20]:
+                print('hao-runtime-on-mac: error:', x, file=sys.stderr)
+            raise Refused('%d errors before the first write; nothing was written' % len(plan['errors']))
+        changes = any(plan[k] for k in ('root', 'embedded', 'restubbed', 'replaced', 'aot_removed'))
+        if not changes and old.get('payload') == identity:
+            print('hao-runtime-on-mac: install-live: this payload is installed already; nothing to do')
+            return None
+        if dry:
+            show_plan(plan, 'would')
+            return 0
+        try:
+            return live_install(inst, system, admitted, staged, plan, old, identity)
+        except inst.Unsafe as x:
+            raise Refused(x)
+    finally:
+        staged.close()
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == '--install-live':
+        return install_live(argv[2:])
     cryptex = []   # --cryptex NAME=DIR: the IPSW's cryptex NAME mounted at DIR, not under ROOT (tools/hao_root.py)
     while len(argv) >= 3 and argv[1] == '--cryptex':
         cryptex += ['--cryptex', argv[2]]

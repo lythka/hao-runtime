@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach-o/loader.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -191,6 +192,13 @@ int walk_fact_key(const char *s, uint64_t n, char *out, uint64_t cap)
                     if (o + 4 >= cap) return 0;
                     memcpy(out + o, "$yXZ", 4); o += 4;
                     i = k + 3;
+                    continue;
+                }
+                /* "<digits>$<hex>LL": a private discriminator naming a context by its address */
+                if (k > j + 1 && k + 2 <= n && !memcmp(s + k, "LL", 2)) {
+                    if (o + 3 >= cap) return 0;
+                    memcpy(out + o, "$LL", 3); o += 3;
+                    i = k + 2;
                     continue;
                 }
             }
@@ -776,6 +784,133 @@ static bool same_xi_optional(const void *type, guest_proof *p)
     }
     return false;
 }
+/* The keys the walk meets (Facts.h walk_keys_counts): each metadata the
+ * lookup sees is counted once per process by how the table answered and
+ * where the metadata lies, and under HAO_SWIFT_KEYS (boot argument
+ * hao_swift_keys=1) written once as one line
+ *   hao-swift-key {"v":1,"process":P,"key":K,"row":R,"where":W,"kind":N,"size":N,"stride":N,"flags":N,"xi":N,"x86_cache":U}
+ * K the table key (walk_fact_key: no address), R one of walk_key_rows, W
+ * "cache" (laid down in a cache image: static or prespecialized metadata,
+ * in_cache_data), "guest" (in a guest image) or "heap" (made at run time), U this
+ * process's x86_64 cache UUID. No address and no path. The line goes where
+ * hao's diagnostics go, as hao-swift-audit's do (swiftvalue.c). */
+static const char *const walk_key_rows[WALK_KEY_NROWS] = {
+    [WALK_KEY_SAME] = "same", [WALK_KEY_DYNAMIC] = "dynamic", [WALK_KEY_CONVERT] = "convert", [WALK_KEY_REFUSE] = "refuse",
+    [WALK_KEY_GUEST] = "guest", [WALK_KEY_GUEST_INCOMPLETE] = "guest-incomplete", [WALK_KEY_GUEST_OPTIONAL] = "guest-optional",
+    [WALK_KEY_NONE] = "none", [WALK_KEY_LAYOUT] = "layout", [WALK_KEY_IDENTITY] = "identity",
+    [WALK_KEY_OTHER_CACHE] = "other-cache",
+};
+static hao_gmap keys_seen = HAO_GMAP_INIT(1, 1, 6, 18);   /* the metadata already met */
+static uint64_t key_rows[WALK_KEY_NROWS], key_where[3], keys_dropped;
+static int verdict_row(char v)
+{
+    return v == WALK_FACT_SAME ? WALK_KEY_SAME : v == WALK_FACT_DYNAMIC ? WALK_KEY_DYNAMIC :
+           v == WALK_FACT_CONVERT ? WALK_KEY_CONVERT : WALK_KEY_REFUSE;
+}
+/* Whether metadata at T was laid down in a cache image's file: inside the
+ * shared cache region (which is reserved far past the cache's mappings, so
+ * run-time allocations can land in it), inside an image's section (dladdr),
+ * and not a zero-fill one, where libswiftCore's first metadata allocations
+ * are made (its initial allocation pool). */
+static bool in_cache_data(uint64_t t)
+{
+    static uint64_t cache_lo, cache_hi;
+    if (!__atomic_load_n(&cache_hi, __ATOMIC_ACQUIRE)) {
+        extern const void *_dyld_get_shared_cache_range(size_t *length);
+        size_t size = 0;
+        uint64_t lo = (uint64_t)(uintptr_t)_dyld_get_shared_cache_range(&size);
+        __atomic_store_n(&cache_lo, lo, __ATOMIC_RELAXED);
+        __atomic_store_n(&cache_hi, lo && size ? lo + size : 1, __ATOMIC_RELEASE);
+    }
+    Dl_info info;
+    if (t < __atomic_load_n(&cache_lo, __ATOMIC_RELAXED) || t >= cache_hi || !dladdr((const void *)(uintptr_t)t, &info) ||
+        !info.dli_fbase)
+        return false;
+    const struct mach_header_64 *h = info.dli_fbase;
+    if (h->magic != MH_MAGIC_64 || h->sizeofcmds > (1u << 24)) return false;
+    const uint8_t *p = (const uint8_t *)(h + 1), *end = p + h->sizeofcmds;
+    uint64_t slide = 0;
+    bool text = false;
+    for (int pass = 0; pass < 2; ++pass) {   /* the slide from __TEXT first, then the sections */
+        p = (const uint8_t *)(h + 1);
+        for (uint32_t k = 0; k < h->ncmds && p + sizeof(struct load_command) <= end; ++k) {
+            const struct load_command *lc = (const void *)p;
+            if (lc->cmdsize < sizeof *lc || lc->cmdsize > (uint64_t)(end - p)) return false;
+            if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof(struct segment_command_64)) {
+                const struct segment_command_64 *sg = (const void *)lc;
+                if (!pass && !strcmp(sg->segname, "__TEXT")) { slide = (uint64_t)(uintptr_t)h - sg->vmaddr; text = true; }
+                const struct section_64 *sc = (const void *)(sg + 1);
+                for (uint32_t i = 0; pass && i < sg->nsects && (const uint8_t *)(sc + i + 1) <= p + lc->cmdsize; ++i) {
+                    uint64_t a = sc[i].addr + slide;
+                    if (t < a || t - a >= sc[i].size) continue;
+                    uint32_t type = sc[i].flags & SECTION_TYPE;
+                    return type != S_ZEROFILL && type != S_GB_ZEROFILL && type != S_THREAD_LOCAL_ZEROFILL;
+                }
+            }
+            p += lc->cmdsize;
+        }
+        if (!text) return false;
+    }
+    return false;
+}
+/* TYPE met with answer ROW; KEY its table key when the caller has it. Once
+ * per metadata: a lock-free check, then the claim under the table's lock. */
+static void key_met(const void *type, const char *key, int row)
+{
+    uint64_t t = (uint64_t)(uintptr_t)type;
+    if (!t || hao_gmap_get1(&keys_seen, t)) return;
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    bool fresh = false;
+    uint64_t *slot = hao_gmap_claim1(&keys_seen, t, &fresh);
+    if (slot && fresh) hao_gmap_publish1(&keys_seen, slot, t);
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    if (!slot) { __atomic_add_fetch(&keys_dropped, 1, __ATOMIC_RELAXED); return; }   /* the map is full */
+    if (!fresh) return;
+    int where = hao_image_for_addr(t) ? 1 : in_cache_data(t) ? 0 : 2;
+    __atomic_add_fetch(&key_rows[row], 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&key_where[where], 1, __ATOMIC_RELAXED);
+    if (!hao_opt.swift_keys) return;
+    uint64_t n = 0, vwt = 0;
+    struct { uint64_t size, stride; uint32_t flags, extra; } v = {0};
+    char own[4096];
+    if (peek(t - 8, &vwt, 8) && peek(vwt + 64, &v, sizeof v) && !key) {
+        const char *name = walk_fact_mangled(type, &n);
+        if (name && walk_fact_key(name, n, own, sizeof own)) key = own;
+    }
+    typedef uintptr_t SWIFT kind_fn(const void *);
+    kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
+    extern bool _dyld_get_shared_cache_uuid(unsigned char uuid[16]);
+    unsigned char cache[16] = {0};
+    (void)_dyld_get_shared_cache_uuid(cache);
+    static const char *const places[3] = {"cache", "guest", "heap"};
+    hao_crit_enter();   /* no guest signal handler runs inside the record */
+    FILE *f = HAO_DIAG;
+    flockfile(f);
+    fputs("hao-swift-key {\"v\":1,\"process\":\"", f);
+    for (const char *p = getprogname(); *p; ++p) if (*p != '"' && *p != '\\' && *p >= 0x20 && *p < 0x7f) fputc(*p, f);
+    fputs("\",\"key\":\"", f);
+    for (const char *p = key ? key : ""; *p; ++p) {   /* mangled names are ASCII; anything else is escaped */
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') fprintf(f, "\\%c", c);
+        else if (c < 0x20 || c >= 0x7f) fprintf(f, "\\u%04x", c);
+        else fputc(c, f);
+    }
+    fprintf(f, "\",\"row\":\"%s\",\"where\":\"%s\",\"kind\":%lu,\"size\":%llu,\"stride\":%llu,\"flags\":%u,\"xi\":%u,\"x86_cache\":\"",
+            walk_key_rows[row], places[where], kind ? (unsigned long)kind(type) : 0ul, (unsigned long long)v.size,
+            (unsigned long long)v.stride, v.flags, v.extra);
+    for (unsigned k = 0; k < 16; ++k) fprintf(f, "%02X", cache[k]);
+    fputs("\"}\n", f);
+    funlockfile(f);
+    hao_crit_leave();
+}
+void walk_keys_counts(uint64_t rows[WALK_KEY_NROWS], uint64_t where[3], uint64_t *dropped)
+{
+    for (unsigned k = 0; k < WALK_KEY_NROWS; ++k) rows[k] = __atomic_load_n(&key_rows[k], __ATOMIC_RELAXED);
+    for (unsigned k = 0; k < 3; ++k) where[k] = __atomic_load_n(&key_where[k], __ATOMIC_RELAXED);
+    *dropped = __atomic_load_n(&keys_dropped, __ATOMIC_RELAXED);
+}
+const char *walk_key_row_name(int row) { return row >= 0 && row < WALK_KEY_NROWS ? walk_key_rows[row] : "?"; }
+
 /* With GUESTS false a guest type's row is not looked for (and a type with
  * none is not remembered): a field's native row, inside a guest row's proof. */
 static int fact_lookup(const void *type, walk_fact *out, bool guests)
@@ -784,7 +919,10 @@ static int fact_lookup(const void *type, walk_fact *out, bool guests)
     load_fixture();
     load_guest_fixture();
     bool table = table_applies();
-    if (!table && !nftypes && !nfgtypes) return 0;   /* no row for this process: nothing to look up */
+    if (!table && !nftypes && !nfgtypes) {   /* no row for this process: nothing to look up */
+        key_met(type, NULL, WALK_KEY_OTHER_CACHE);
+        return 0;
+    }
     const uint64_t *e = hao_gmap_get1(&by_type, (uint64_t)(uintptr_t)type);
     uint64_t found = e ? e[1] : 0;
     if (!e) {
@@ -795,7 +933,9 @@ static int fact_lookup(const void *type, walk_fact *out, bool guests)
         const char *name = readable ? walk_fact_mangled(type, &n) : NULL;
         char key[4096];
         found = UINT64_C(1) << 63;
-        if (name && walk_fact_key(name, n, key, sizeof key)) {
+        int met = table ? WALK_KEY_NONE : WALK_KEY_OTHER_CACHE;   /* the answer key_met records */
+        bool named = name && walk_fact_key(name, n, key, sizeof key);
+        if (named) {
             for (unsigned i = 0; i < nftypes; ++i)
                 if (!strcmp(ftypes[i].key, key)) { found = (UINT64_C(1) << 32) + i + 1; break; }
             for (long lo = 0, hi = (long)NTYPES - 1; table && found >> 63 && lo <= hi;) {   /* sorted by key */
@@ -805,6 +945,7 @@ static int fact_lookup(const void *type, walk_fact *out, bool guests)
                     /* The row describes this type only while its live layout is the row's. */
                     if (v.size == types[mid].size && v.stride == types[mid].stride && v.flags == types[mid].flags &&
                         v.extra == types[mid].x86_xi) found = (uint64_t)mid + 1;
+                    else met = WALK_KEY_LAYOUT;
                     break;
                 }
                 if (c < 0) hi = mid - 1; else lo = mid + 1;
@@ -812,15 +953,25 @@ static int fact_lookup(const void *type, walk_fact *out, bool guests)
         }
         bool fixture = !(found >> 63) && (found >> 32);
         char verdict = found >> 63 ? 0 : fixture ? ftypes[(found & 0xffffffffu) - 1].verdict : types[found - 1].verdict;
-        if (verdict == WALK_FACT_SAME && !(fixture && ftypes[(found & 0xffffffffu) - 1].unchecked) && !native_identity(type, 0))
+        if (verdict) met = verdict_row(verdict);
+        if (verdict == WALK_FACT_SAME && !(fixture && ftypes[(found & 0xffffffffu) - 1].unchecked) && !native_identity(type, 0)) {
             found = UINT64_C(1) << 63;
-        if (found >> 63 && !guests) return 0;
+            met = WALK_KEY_IDENTITY;
+        }
+        if (found >> 63 && !guests) { key_met(type, named ? key : NULL, met); return 0; }
         if (found >> 63 && readable) {   /* a guest type's row, by identity; one whose fields are not the row's refuses */
             guest_proof proof = {{0}, 0, 0, 0};
             long row = guest_identity(type, &proof);
-            if (row >= 0) found = (UINT64_C(2) << 32) + (uint64_t)row + 1 + (guest_complete(type, row, &proof) ? 0 : UINT64_C(1) << 40);
-            else if (same_xi_optional(type, &proof)) found = UINT64_C(3) << 32;
+            if (row >= 0) {
+                bool complete = guest_complete(type, row, &proof);
+                found = (UINT64_C(2) << 32) + (uint64_t)row + 1 + (complete ? 0 : UINT64_C(1) << 40);
+                met = complete ? WALK_KEY_GUEST : WALK_KEY_GUEST_INCOMPLETE;
+            } else if (same_xi_optional(type, &proof)) {
+                found = UINT64_C(3) << 32;
+                met = WALK_KEY_GUEST_OPTIONAL;
+            }
         }
+        key_met(type, named ? key : NULL, met);
         hao_crit_enter(); pthread_mutex_lock(&lock);
         bool fresh;
         uint64_t *slot = hao_gmap_claim1(&by_type, (uint64_t)(uintptr_t)type, &fresh);

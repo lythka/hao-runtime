@@ -82,6 +82,13 @@ typedef struct {
 typedef struct { uint32_t guest_off, code_off; } hao_aot_ent;      /* strictly increasing code_off */
 typedef struct { uint32_t site, target; } hao_aot_link;           /* rel32 at code+site jumps to ents[target] */
 
+/* What hao_aot_load found for an image (hao_image.aot_state), for the AOT
+ * use records (HAO_AOT_USE, src/aot_use.c): not tried (no AOT in this
+ * process: HAO_NO_AOT, no executable memory, no LC_UUID), a cache loaded, no
+ * cache file in any directory read, only files that were rejected, or a valid
+ * cache not loaded under the process's memory limit. */
+enum { HAO_AOT_STATE_OFF = 0, HAO_AOT_STATE_LOADED, HAO_AOT_STATE_NONE, HAO_AOT_STATE_REJECTED, HAO_AOT_STATE_UNFIT };
+
 /* What the loading image expects. Code ranges are image-relative [lo, hi).
  * id_kind says whether the image is signed; code_id (with id_hash) is its
  * code identity, or NULL while it has not been computed (see hao_aot_check).
@@ -140,7 +147,7 @@ void hao_aot_code_id(const void *mach_header, uint64_t cmds_len, const uint64_t 
  *          calls are bridged: only the engine switches (HAO_NO_AOT,
  *          HAO_INTERP, HAO_NO_CHAIN, HAO_JIT_HELPERS_ONLY) and the printing
  *          ones (HAO_VERBOSE, HAO_CRASH_TRACE, HAO_NX_STATS,
- *          HAO_BRIDGE_STATS, HAO_DIAG_TIME) are honoured.
+ *          HAO_BRIDGE_STATS, HAO_DIAG_TIME, HAO_SWIFT_KEYS) are honoured.
  * SETUGID: credentials changed at exec (issetugid(), or uid != euid, or
  *          gid != egid). No switch is honoured, and dependency paths follow
  *          dyld's rule for such a process (hao_dep_path_allowed).

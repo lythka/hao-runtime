@@ -1,5 +1,17 @@
 # Runtime issues and measured scope
 
+## Swift keys the value walk meets
+
+There was no record of which Swift types the value walk met without a row in its facts table, only of the
+values it then refused or reported. Now every metadata the walk looks up is counted once per process by the
+table's answer and by where the metadata lies (`--stats`: `hao-swift-keys`), and `HAO_SWIFT_KEYS=1` or the boot
+argument `hao_swift_keys=1` writes one `hao-swift-key` record each (docs/swift-metadata.md, "Recording the Swift
+keys a program meets"). `tools/hao_swift_keys.py` turns the records into coverage and generator input. Cost: one
+lock-free map lookup per walk lookup; the first sight of a metadata takes the table's lock and, for `where`,
+`dladdr`. Limits: types are recorded only where the walk looks them up, not at every metadata request; the map
+of metadata met holds 196,608 entries, later ones are counted as `uncounted`; a fork child does not record again
+what its parent recorded. `host/swift-keys`, `guest/svfacts` (keys).
+
 ## CPU profiles for translation and AOT caches
 
 The JIT knew one optional CPU feature, AES-NI, from a global flag, and an AOT
@@ -273,6 +285,34 @@ rest and the marker). Limits: the 4 GB is the payload's list measured once,
 not an estimate from the programs left to cache; a single cache larger than
 the 2 GB kept is not foreseen.
 
+## AOT chosen from recorded use
+
+The payload's AOT list was fixed (every embedded program, or a hand-made
+`--aot-list`); nothing said which programs a Mac runs. With `HAO_AOT_USE=1`
+(guarded processes too) or boot argument `hao_aot_use=1`, every hao process
+logs AOT use records to the unified log (subsystem `com.hao`, category `use`;
+`src/aot_use.c`): per guest image, once at initialisation, the run, its
+LC_UUID, what AOT found (off, aot, none, rejected, unfit) and its path; at
+exit, 60 s after the start and then every 10 minutes while it grows, the
+blocks the JIT translated per image. The hot path adds one atomic add per
+translated block under the JIT lock; nothing runs in a signal handler.
+`tools/hao-aot-use` turns the records of any number of boots into a list
+(most runs first, then most translated blocks; `--root` keeps files with an
+arm64 slice, `--base` adds a fixed list, `--report` the per-image table),
+which `hao-image-payload --aot-list` takes; the caches stay bound to cdhash
+and libhao and load only from trusted directories. Tests: `aot` (U),
+`tests/tools/test_aot_use.py`. Limits: paths are logged public (a test-image
+switch, off by default); a process killed before its first report (60 s)
+leaves only its image records; a fork child reports only at its exit;
+arm64e shared-cache images have no file of their own and are left out.
+
+## A listed native program failed `hao --aot --check` and `--auto`
+
+A program of the list with no arm64 or arm64e slice (an image that ships a
+native build) was "not checkable": `--check` exited 1 on a complete set and
+`--auto` never wrote its done marker. Such a program is now counted apart
+("native, nothing to cache") and fails neither. Test: `guest/aotdefault`.
+
 ## Guest files read before or around the signature check
 
 Five checks of guest files and their metadata were weaker than their
@@ -493,6 +533,40 @@ missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
 (hao-runtime-on-mac cases). Limits: the image builder's own check of a
 payload (the contract checker the patcher vendors) still checks only listed
 files.
+
+## Updating a running Mac's payload needed a new image
+
+A changed runtime reached an installed Mac only through a rebuilt image. `hao-runtime-on-mac --install-live
+PAYLOAD` updates it in place: it refuses a dirty payload, one for another os_build or x86_64 cache UUID than the
+system's (SystemVersion.plist, the cache header) and a system without `usr/lib/hao/install.json`; it plans with
+hao-install.py's own functions (refactored into `load_payload`, `embed_programs`, `replace_files`, `install_record`,
+`write_record`; its CLI and record are unchanged), refuses any embed or replace error before the first write, then
+writes only root/ files whose sha256 or mode differs, programs to embed or restub and pending replacements, removes
+usr/lib/hao/aot caches not bound to the new libhao (the payload's own caches replace theirs by name) and rewrites
+install.json as hao-install.py would write it for the new payload (every runtime file counted, `already_embedded` as
+the first install found it) plus `live` (what this run wrote, the previous payload). hao-install.py now records the
+payload's identity (`payload`: version, commit, os_build, cache_uuid, layout_version) that the next update compares;
+a record without it (a hand-edited one, an older image) is updated once, then reported as installed. Without `--system`
+it checks `csrutil authenticated-root status`, mounts the booted system volume (`mount_apfs -o nobrowse`) at a
+private mount point, installs there and runs `bless --mount MNT --bootefi --create-snapshot`. Test:
+`tests/tools/test_install_live.py` (`tests/tools/run.sh`). Limits: the running-Mac path is tested only as far as
+the commands `--dry-run` prints; its first real run is on a laptop or QEMU. An installed image has no Python
+(`/usr/bin/python3` is the developer-tools shim): the tool needs a Python 3.12 or later brought along. Files a newer payload no longer has
+are not deleted; the whole-volume legacy-stub scan of hao-install.py step 5 is not repeated;
+`/private/var/db/hao` caches on the Data volume are left for hao to reject and remake.
+
+## A payload update had no form the live-patch backend applies
+
+`hao patch --live` applies pack overlays (manifest.json format 1 + files/) with its own snapshot, backups, check
+after writing and revert; the runtime pack's embedded stubs and install.json were made only on the target, by
+hao-install.py writing in place. `hao-install.py --overlay OUT SYSTEM PAYLOAD` now plans the install with the same
+steps and checks and writes the result as such an overlay (pack hao_runtime, live-capable): changed root/ files,
+programs to embed or restub and pending replacements with the target's attributes, and the new install.json;
+"remove" lists the old libhao's AOT caches. install.json records the payload identity; `--installed SYSTEM`
+prints it. Test: `tests/tools/test_install_overlay.py` (an applied overlay equals `--install-live`'s result).
+Limits: a changed file with another hard link refuses the overlay (a rename would split the link) where
+hao-install.py writes in place; extended attributes of a rewritten program are those the backend gives a new
+file; the live patch does not yet act on "remove"; the whole-volume legacy-stub scan (step 5) is not repeated.
 
 ## The payload tools needed the cryptexes grafted into ROOT
 
@@ -898,11 +972,34 @@ code calls through hao's callbacks), or of a special representation such as
 the Error box, is not certified but not known wrong: reported, its payload
 still walked for a known-wrong part; only a witness table word that is no
 conformance is known wrong. Beside a type whose fields are not known it is
-still refused, as above. Strictness returns per type as rows land (v0.0.2); the test
+still refused, as above. The test
 switch `HAO_SWIFT_VALUE_STRICT=1` (test builds) refuses uncertified values
 as before, and the Swift value tests run under it. Test: `guest/svpolicy`
-(report-only and a known-wrong refusal by default), `guest/svfacts`,
+(report-only, and a known-wrong refusal either way), `guest/svfacts`,
 `guest/svconformance` (the existential verdicts).
+
+Strict refusal returns per type (v0.0.2). Report-only now applies only to a
+value whose innermost uncertified types (those its `hao-swift-audit`
+records name) are all on the report-only list, `src/swiftvalue_report.inc`:
+the types one boot of the 27.2.1 image logged as uncertified, written by
+`tools/hao_sv_reportlist.py` from those records; a generic type outside
+the standard library is listed with all its instantiations (by its name
+without generic arguments: an app's `ForEach` of its own element type is
+the boot's `ForEach`'s generator type). Any other uncertified
+value is refused, after its audit record and a `Swift value survey: not
+certified and not listed for report-only` line. A type leaves the list
+when a row certifies it. The boot argument `hao_swift_value_report=1`
+(every process and build; `HAO_SWIFT_VALUE_REPORT=1` in an open process)
+restores report-only for every type: for the boot that collects a list,
+or when an unlisted type stops a program. The admission is made once per
+(type, reason), as the report is. Limits: the list covers only what that
+boot ran and logged; App-Sandboxed processes log to the unified log as
+private records, so their types are missing until a boot with private
+data logging collects them (until then such a process needs the boot
+argument); a guest type is
+listed by name, so another program's type of the same name is admitted
+too. Test: `guest/svpolicy` (an unlisted value refused by default,
+admitted listed and under `HAO_SWIFT_VALUE_REPORT=1`), `aot/opts`.
 
 ## Swift value walk: per-type facts, carrier rules, the survey image's audit
 

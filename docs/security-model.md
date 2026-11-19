@@ -322,7 +322,7 @@ or `0`.
 | Process | Switches honoured |
 |---|---|
 | Open: an ordinary user's process | all |
-| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS`, `HAO_DIAG_TIME` |
+| Guarded: PID 1, any process with effective uid 0, a process dyld treats as restricted, one holding entitlements beyond hao's own | `HAO_NO_AOT`, `HAO_INTERP`, `HAO_NO_CHAIN`, `HAO_JIT_HELPERS_ONLY`, `HAO_VERBOSE`, `HAO_CRASH_TRACE`, `HAO_NX_STATS`, `HAO_BRIDGE_STATS`, `HAO_DIAG_TIME`, `HAO_AOT_USE`, `HAO_SWIFT_KEYS` |
 | Set-ID: credentials changed at exec | none |
 
 The guarded list holds only switches that run the same code through another
@@ -337,7 +337,7 @@ ignored.
 
 Boot arguments reach every process of a boot, set-ID programs and PID 1
 included, so hao reads a fixed list: `hao_crash=1`, `hao_nx_stats=1`,
-`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_diag_time=1`, `hao_no_aot=1`, `hao_no_chain=1`,
+`hao_crash_trace=1`, `hao_bridge_stats=1`, `hao_diag_time=1`, `hao_swift_keys=1`, `hao_aot_use=1`, `hao_no_aot=1`, `hao_no_chain=1`,
 `hao_jit_helpers_only=1`, and in PID 1 `hao=FLAGS` (`v`, `V`, `i`, `s`) and
 `hao_verbose=N`. No boot argument turns library validation or the signature
 check off. One relaxes a check, and only a survey build (`make SURVEY=1`,
@@ -346,7 +346,12 @@ Swift value hao cannot certify go on to native code in every process
 (accepting the memory corruption that refusal prevents) and records each such
 type (`swiftvalue.c` `audit_record`); from the environment
 (`HAO_SWIFT_VALUE_AUDIT`) only an open process takes it. A release build
-ignores both, says so once, and refuses.
+ignores both, says so once, and refuses. Every build reads
+`hao_swift_value_report=1`: a Swift value no row or rule certifies either way
+(not one hao knows native code would misread) is reported and goes on in every
+process, as for the types on the report-only list (`swiftvalue.c`
+`report_listed`); from the environment (`HAO_SWIFT_VALUE_REPORT`) only an open
+process takes it.
 
 `HAO_NATIVE_APP_LIBS=1` is an OPEN-tier diagnostic switch, read once at
 startup. It restores native-first loading of app libraries, including guest
@@ -441,12 +446,20 @@ image with that cdhash ever loads the cache.
 not a root-owned regular file writable only by root (mode and ACL), or whose
 directories from / are not, is not used. `hao --aot --auto` marks a run done
 only when every listed program is there and succeeded, and believes a marker
-only under the same ownership rules. A program whose cache in a directory this process reads already passes the
+only under the same ownership rules. A listed program with no arm64 or arm64e slice is native: it has no cache and
+fails neither `--check` nor `--auto`. A program whose cache in a directory this process reads already passes the
 loader's checks is skipped; `hao --aot --check` runs those checks and writes
 nothing. Both first verify the program's signature and, for a program that
 requires library validation, look in the system directories only, as a run
 of it does; without `--cache`, `hao --aot` writes no cache for such a
 program into a directory a run of it does not read.
+
+Which programs the list names can come from recorded use: `hao_aot_use=1`
+makes every process log the guest images it ran and whether a cache served
+them (`src/aot_use.c`), and `tools/hao-aot-use` makes a list of them. The
+records choose what is cached, never what a cache stands for: each cache is
+still made by `hao --aot` from the image's own file and loaded under the
+rules above.
 
 System directories hold caches for signed code only. `hao --aot` writes none
 for an unsigned guest there (as root without `--cache`, or with `--cache` or
