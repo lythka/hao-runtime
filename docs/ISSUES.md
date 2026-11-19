@@ -39,6 +39,19 @@ convert after the report") did not reach the unified log from the
 sandboxed app, whose post-start lines the fallback channel dropped. No host
 test reproduces the SwiftUI path.
 
+## Copy-on-write defeatured processes run interpreted
+
+A process whose signature carries `com.apple.security.hardened-process.containment.vm.cow-defeatured`
+(WebKit's content processes) may not take a memory entry of its private memory: on an Intel Mac xnu ends it
+with `EXC_GUARD` (`GUARD_EXC_COW_DEFEATURED_EXTRACT_DENIED`) inside `mach_make_memory_entry_64`, so the W^X
+setup of the code cache killed it before the guest ran. `hao_wx_region` now refuses every region there before
+asking: the code cache is not made, guest code is interpreted and native-to-guest calls take the fault path.
+
+- Measured: `make wx-cow-test` (host, Rosetta) shows the refusal with the entitlement and JIT without it. The
+  host kernel does not raise the guard, so the kill itself is shown only by the Intel crash report.
+- Limitation: these processes lose JIT and AOT speed. A W^X scheme that needs no memory entry of private memory
+  is not written yet.
+
 ## JIT arena data redirected outside relative-address reach
 
 At 256dd30 the MAP_JIT code cache could succeed while the separate ordinary

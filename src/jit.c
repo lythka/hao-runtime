@@ -20,6 +20,7 @@
  */
 #include "hao/runtime.h"
 #include <errno.h>
+#include <libkern/OSByteOrder.h>
 #include "hao/cpufeat.h"
 #include "hao/x86.h"
 #include "hao/a64_cond.h"
@@ -347,7 +348,13 @@ static void block_commit(uint8_t *start, size_t len)
  * and the child's executable memory is frozen: hao_wx_begin returns NULL,
  * new guest code is interpreted and new callbacks take the NX-fault path.
  * hao_wx_region runs in a hao critical section; writers hold one and open
- * no write inside another. */
+ * no write inside another.
+ *
+ * A process entitled to a copy-on-write defeatured map (hardened-process
+ * containment.vm.cow-defeatured: WebKit's content processes) may not take a
+ * memory entry of its private memory: xnu answers with a fatal EXC_GUARD
+ * (GUARD_EXC_COW_DEFEATURED_EXTRACT_DENIED), not an error. There every region
+ * is refused before the memory entry is asked for. */
 #define WX_PAGE 4096u
 #define WX_REGIONS 8192
 typedef struct { uintptr_t x, size; mach_port_t entry; } wx_region;
@@ -363,6 +370,44 @@ static uintptr_t wx_window;            /* reserved (no access) for the write map
 static uint64_t wx_busy;               /* a bit per slot with a write mapping in it */
 static uint64_t wx_rand;               /* xorshift state: no lock (arc4random has one) */
 static uint64_t st_wx;
+static int wx_cow_defeatured;          /* no memory entries of private memory: every region refused */
+
+int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+#define WX_CS_OPS_ENTITLEMENTS_BLOB 7
+#define WX_CS_OPS_DER_ENTITLEMENTS_BLOB 16
+#define WX_COW_KEY "com.apple.security.hardened-process.containment.vm.cow-defeatured"
+
+/* Does this process's signature carry the copy-on-write defeature entitlement? A blob that cannot be
+ * read counts as carrying it (the cost is translated code; the other way the kernel kills the process).
+ * No malloc: hao_wx_region may run in a callback a signal interrupted. */
+static bool wx_entitled_cow_defeatured(void)
+{
+    uint8_t hdr[8] = {0};
+    for (int der = 0; der < 2; der++) {
+        unsigned op = der ? WX_CS_OPS_DER_ENTITLEMENTS_BLOB : WX_CS_OPS_ENTITLEMENTS_BLOB;
+        memset(hdr, 0, sizeof hdr);
+        if (csops(getpid(), op, hdr, sizeof hdr) != 0 && errno != ERANGE) {
+            if (der && (errno == EINVAL || errno == ENOTSUP)) return false;
+            return true;
+        }
+        uint32_t len = OSReadBigInt32(hdr, 4);
+        if (len == 0) continue;                 /* none of this form */
+        if (len <= 8) return false;
+        if (len > (64u << 20)) return true;
+        void *buf = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (buf == MAP_FAILED) return true;
+        bool on = true;
+        if (csops(getpid(), op, buf, len) == 0) {
+            const char *body = (const char *)buf + 8;
+            size_t n = len - 8;
+            /* XML: its value; DER: the key's presence (its value is not parsed) */
+            on = der ? memmem(body, n, WX_COW_KEY, sizeof WX_COW_KEY - 1) != NULL : hao_entitlement_on(body, n, WX_COW_KEY);
+        }
+        munmap(buf, len);
+        return on;
+    }
+    return false;
+}
 
 static void wx_fail(const char *what, uintptr_t lo, uintptr_t hi, int err)
 {
@@ -412,11 +457,12 @@ bool hao_wx_region(void *x, size_t size)
                         VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY) == KERN_SUCCESS)
             wx_window = (uintptr_t)win;
         wx_rand = ((uint64_t)arc4random() << 32 | arc4random()) | 1;
+        wx_cow_defeatured = wx_entitled_cow_defeatured();
     }
     uint32_t k = wx_n;
     for (uint32_t i = 0; i < k; i++)
         if (wx_reg[i].x == a) { ok = true; goto out; }
-    if (k == WX_REGIONS || (a | size) & (WX_PAGE - 1) || !wx_window) goto out;
+    if (k == WX_REGIONS || (a | size) & (WX_PAGE - 1) || !wx_window || wx_cow_defeatured) goto out;
     mach_port_t entry = wx_entry(a, size);
     if (entry == MACH_PORT_NULL) goto out;
     if (!wx_seal_rx(a, size)) {
