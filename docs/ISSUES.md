@@ -1,5 +1,27 @@
 # Runtime issues and measured scope
 
+## Runtime-laid multi-payload enums with several empty cases
+
+A guest enum with two or more payload cases, one of them a resilient native
+type, is laid out at run time by the native runtime
+(swift_initEnumMetadataMultiPayload): an extra tag byte after the largest
+payload, the empty cases sharing tags with their index in the payload area,
+the unused tag values its extra inhabitants. Its witnesses are the runtime's,
+and guest code reaches its case only through them, so the tag and the empty
+cases are one encoding on both sides. The walk accepted this layout only
+with at most one empty case; with more (Weather 26B131: a 33-byte view-state
+enum, two payloads and three empty cases, xi 253, at offset 16 of a struct
+whose Optional guest code copies through a native witness) it called the
+value unresolved, and since the type was on no report-only list the process
+aborted at start. The rule now takes any number of empty cases with the
+runtime's tag count (Enum.cpp getEnumTagCounts), confirms an empty case by
+swift_getEnumCaseMultiPayload, and walks an active payload as before, so
+such a value is certified, not reported. Test: `guest/svmpenum` (refused
+before, equal to native under JIT, `--interp`, AOT and strict after);
+`guest/svguest` without rows now passes for the same reason. Limits: one
+extra tag byte only (fewer than 256 tags); a compiler-laid enum is still
+rule C's; the laptop run of Weather is not yet recorded here.
+
 ## Report-only Swift values: patches from the walk after the report
 
 63c872d moved the partial walk in certified_patches ahead of the report so
@@ -1075,10 +1097,11 @@ image. `guest/svguest`: multi-payload enums over a resilient native struct
 (runtime-laid, native witnesses), one with a `Data?` payload, and a struct
 of `Status?`, `Data?`, `String?`, `[Fault]`, an enum whose payload has
 static metadata, through native Optional and Array witnesses, and nils
-alone: refused without rows, with rows of another UUID, cdhash, offset,
-size, metadata initialization, static metadata offset or field, and
-with the static metadata linked into writable `__DATA`; equal to native under JIT, `--interp`, AOT with
-them. The shipped table has no rows yet. Not covered: an indirect case
+alone: equal to native under JIT, `--interp`, AOT with them, and since the
+runtime-laid enum rule below also without rows or with rows of another
+UUID, cdhash, offset, size or metadata initialization; refused with a row
+of another field or static metadata offset, and with the static metadata
+linked into writable `__DATA`. The shipped table has no rows yet. Not covered: an indirect case
 other than SAME, payload walks of spare-bit tags, guest classes.
 
 Source encoding: from three Optional levels a pointer word's encodings
@@ -3601,8 +3624,8 @@ three shapes, and a refusal at publication ends the process:
   40, flags 0x2230007, xi 0xfd).
 
 `enum_payloads()` accepts only runtime-laid-out enums (the runtime's
-multi-payload tag witness and a payload-size word in the metadata), which
-the two enum shapes do not have.
+multi-payload tag witness and a payload-size word in the metadata, any
+number of empty cases), which the two enum shapes do not have.
 
 Measured in one program built natively for arm64 and for x86_64
 (`tests/host/swiftlayout.swift`, arm64 natively and x86_64 under Rosetta

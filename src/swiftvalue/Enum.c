@@ -117,6 +117,19 @@ int enum_inline_payloads(const void *type, const void **payloads)
     return n;
 }
 
+/* The tags of a runtime-laid-out multi-payload enum's extra tag byte:
+ * Enum.cpp getEnumTagCounts, the same code in both runtimes. Each payload
+ * case has a tag; the empty cases share tags, each holding 2^(8 * payload
+ * size) of them by their index in the payload area, one tag for all from a
+ * 4-byte payload up. */
+static unsigned runtime_tags(uint64_t payload_size, unsigned payload_cases, unsigned empty)
+{
+    if (!empty) return payload_cases;
+    if (payload_size >= 4) return payload_cases + 1;
+    unsigned bits = 8 * (unsigned)payload_size;
+    return payload_cases + (unsigned)((empty + (UINT64_C(1) << bits) - 1) >> bits);
+}
+
 int enum_payloads(const void *type, const void **payloads, uint64_t *extent)
 {
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
@@ -130,10 +143,13 @@ int enum_payloads(const void *type, const void **payloads, uint64_t *extent)
     unsigned count = u32(desc + 20) & 0xffffff;
     unsigned empty = u32(desc + 24);
     unsigned word_offset = u32(desc + 20) >> 24;
-    if ((u32(desc) & 0x1f) != 0x12 || word_offset < 2 || word_offset > 64 || empty > 1 ||
-        v->functions[6] != runtime_tag || v->extra != 256 - count - empty) return 0;
+    if ((u32(desc) & 0x1f) != 0x12 || word_offset < 2 || word_offset > 64 || empty > MAX_EMPTY ||
+        v->functions[6] != runtime_tag) return 0;
     uint64_t payload_extent = ((const uint64_t *)m)[word_offset];
-    if (payload_extent + 1 != v->size) return 0;
+    /* One extra tag byte: its unused values are the inhabitants (Enum.cpp
+     * swift_initEnumMetadataMultiPayload). */
+    unsigned tags = runtime_tags(payload_extent, count, empty);
+    if (payload_extent + 1 != v->size || tags < 2 || tags > 255 || v->extra != 256 - tags) return 0;
     uint64_t maximum;
     int n = direct_cases(type, 2, payloads, &empty, &maximum);
     if (!n || maximum != payload_extent) return 0;
@@ -151,11 +167,14 @@ int discover_enum_case(const void *type, const void *value, enum_case_plan *out)
     unsigned tag = ((const unsigned char *)value)[extent];
     if (tag >= (unsigned)count) {
         const char *desc = ((const void *const *)type)[1];
+        unsigned empty = u32(desc + 24);
         case_fn *get_case = HAO_DLSYM("swift_getEnumCaseMultiPayload");
-        /* Empty cases also use payload storage as a discriminator. Even with
-         * one empty case, a trailing tag alone does not establish validity. */
-        if (tag != (unsigned)count || u32(desc + 24) != 1 || !get_case ||
-            get_case(value,type) != (unsigned)count) return 0;
+        /* Empty cases also use payload storage as a discriminator (their
+         * index): a trailing tag alone does not establish validity, the
+         * runtime's own reading must name an empty case. */
+        if (tag >= runtime_tags(extent, (unsigned)count, empty) || !get_case) return 0;
+        unsigned which = get_case(value,type);
+        if (which < (unsigned)count || which >= (unsigned)count + empty) return 0;
         *out = (enum_case_plan){NULL, vwt(type)->size, 0, extent, tag, 0};
         return 1;
     }
