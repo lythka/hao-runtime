@@ -304,7 +304,13 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
         fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1)\n");
     }
     bool pass = hao_opt.swift_value_passthrough;
-    if (!pass && !hao_opt.swift_value_strict && uncertified(why)) {
+    /* Known-wrong values are reported too: their rules (malformed tags, nils
+     * with no encoding, flags from a partial walk) are not yet proven against
+     * a crash, and refusing them aborted applications that ran before. */
+    bool known_wrong = !strcmp(why,"value native code would misread") ||
+                       !strcmp(why,"guest-encoded nil in a shared box cannot be converted") ||
+                       !strcmp(why,"child task result has a nil native code would copy in the guest's encoding");
+    if (!pass && !hao_opt.swift_value_strict && (uncertified(why) || known_wrong)) {
         if (!first_report(type,why)) return;
         hao_crit_enter();   /* no guest signal handler runs inside the report */
         audit(type,why,walked,value,existentials,root,lr,pc,false);
