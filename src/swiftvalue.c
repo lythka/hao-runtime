@@ -510,6 +510,15 @@ static int certified_patches(const void *type, const void *value, empty_patch *p
     if (passes & HAO_SV_UNCONVERTIBLE) why = "guest-encoded nil in a shared box cannot be converted";   /* known wrong */
     else if (passes & HAO_SV_KNOWN_WRONG) why = "value native code would misread";   /* Recipe.h HAO_SV_KNOWN_WRONG */
     decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc);
+    /* The patches come from a walk after the report: reporting names the
+     * types it walked, which completes metadata the first walk found
+     * incomplete, and the walk after it then finds the nils to convert. A
+     * value passed as found with them unconverted is misread by native code
+     * (a guest nil where native code reads a count or a pointer). */
+    int after = collect_partial_patches(type,value,p,cap,existentials,known_layout,NULL);
+    if (after != n && hao_verbose && first_report(type,"partial walk after the report"))
+        HAO_LOG(1, "Swift value: %d nils to convert after the report, %d before it (metadata=%p)\n", after, n, type);
+    n = after;
     return n < 0 ? 0 : n;
 }
 /* Whether a value of TYPE needs certification at a boundary: some node of

@@ -1,5 +1,22 @@
 # Runtime issues and measured scope
 
+## Report-only Swift values: patches from the walk after the report
+
+63c872d moved the partial walk in certified_patches ahead of the report so
+that its flags could choose the refusal reason; the same walk's result also
+became the patches applied to a value passed as found. With that order a
+Catalyst SwiftUI app (Maps, 26B131) faulted on open in a native preference
+lookup during layout, right after the report-only survey of
+UIKit._Glass._GlassVariant values from a guest call of a native witness.
+The patches again come from a partial walk run after the report; the walk
+before it only supplies the flags. Measured on the laptop with the JIT-arena
+runtime: without the change Maps segfaulted at every start, with it Maps
+stayed up at every start (45 s each). Why the walk before the report finds
+other patches is not established: the trace line (HAO_VERBOSE, "nils to
+convert after the report") did not reach the unified log from the
+sandboxed app, whose post-start lines the fallback channel dropped. No host
+test reproduces the SwiftUI path.
+
 ## JIT arena data redirected outside relative-address reach
 
 At 256dd30 the MAP_JIT code cache could succeed while the separate ordinary
