@@ -101,7 +101,7 @@ int main(void)
                                      !hao_env_test_switch(up), "%s: boot argument everywhere, environment open only", up);
             }
         }
-        CHECK(nknobs == 23, "boot-argument lists name 23 knobs (%d)", nknobs);
+        CHECK(nknobs == 24, "boot-argument lists name 24 knobs (%d)", nknobs);
     }
     /* the test switches: read from an ordinary environment by a HAO_TEST_SWITCHES build only */
     {
