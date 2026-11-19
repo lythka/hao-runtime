@@ -472,6 +472,8 @@ tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
 tests/guest/stripview.sh
 tests/guest/stripview.swift
+tests/guest/viewbuffer.sh
+tests/guest/viewbuffer.swift
 tests/guest/svpolicy.sh
 tests/guest/svpolicy.swift
 tests/guest/svpolicy_lib.swift
