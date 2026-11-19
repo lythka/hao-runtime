@@ -66,10 +66,11 @@ static void test_tiers(void)
                                       "HAO_NO_LIBVAL", "HAO_NO_VARSNIFF", "HAO_NO_IFUNITS", "HAO_NO_THUNKS",
                                       "HAO_NATIVE_LIBCXX", "HAO_NO_FIXUP_THUNKS", "HAO_NO_STRUCT_THUNKS",
                                       "HAO_NO_SWIFT_THUNKS", "HAO_NO_SWIFT_VALUES", "HAO_SWIFT_POP", "HAO_BRIDGE_CHECK",
-                                      "HAO_SIGRETURN_KERNEL", "HAO_NO_PROBE", "HAO_WATCHDOG", "HAO_JIT_CACHE_MB", NULL};
+                                      "HAO_SIGRETURN_KERNEL", "HAO_NO_PROBE", "HAO_WATCHDOG", "HAO_JIT_CACHE_MB",
+                                      "HAO_SWIFT_VALUE_REPORT", NULL};
     /* the same code by another engine, and printing: guarded too, never set-ID */
     static const char *guarded[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_NO_CHAIN", "HAO_JIT_HELPERS_ONLY", "HAO_VERBOSE",
-                                    "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME", NULL};
+                                    "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME", "HAO_AOT_USE", NULL};
     static const char *test_only[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
                                       "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", NULL};
     for (const char **s = open_only; *s; s++) {

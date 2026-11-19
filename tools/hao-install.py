@@ -60,7 +60,9 @@ Runs as root inside an image builder (pure Python, no developer tools):
      aot_caches records the count, bytes and removals.
   5. Every fat file in SYSTEM whose x86_64 slice is a hao stub must name its
      arm slice (legacy_stubs): one that does not is an error, wherever it is.
-  6. Writes SYSTEM/usr/lib/hao/install.json.
+  6. Writes SYSTEM/usr/lib/hao/install.json, with "payload": the identity
+     payload-manifest.json gives (version, commit, os_build, cache_uuid,
+     layout_version), which --install-live compares with the next payload.
 Every name a manifest supplies ("path", "stub", "file", a bound "file") is a
 relative path under SYSTEM or PAYLOAD by the rule of tools/hao_release.py
 (relative, safe): not absolute, no "..", no backslash or NUL, already
@@ -73,6 +75,28 @@ counts as a missing program, as before).
 Exit 1 on any error or if a path the payload requires was not embedded: the
 manifest's "required" list (empty for a runtime-only payload), or for
 payloads that predate it, sbin/launchd and usr/libexec/xpcproxy.
+tools/hao-runtime-on-mac --install-live imports the steps (load_payload,
+install_root, embed_programs, replace_files, check_aot_caches, install_record,
+write_record) to update an installed system with these same checks.
+install.json "payload" records the payload's identity (payload-manifest.json
+version, commit, os_build, cache_uuid, layout_version).
+
+hao-install.py --overlay OUT SYSTEM PAYLOAD [--x86-cache DIR] [--json] writes
+nothing under SYSTEM: it makes OUT (a new 0700 folder), the pack overlay
+`hao patch --live` applies (OUT/manifest.json format 1, pack hao_runtime,
+phase live-capable, files/<path>), holding what installing PAYLOAD over the
+installed SYSTEM would write: changed root/ files (root:wheel, the installed
+file's chflags kept), programs to embed or restub and pending replacements
+(the target's mode, numeric owner and flags), and the new install.json.
+"remove" lists the AOT caches of the old libhao. It refuses, with OUT not
+made, a dirty payload, one for another os_build or x86_64 cache (SYSTEM's,
+or --x86-cache DIR), a SYSTEM without install.json, any error steps 0-3
+would report, a changed file with another hard link (the overlay is applied
+by rename) and a flag the overlay format has no name for. Up to date: no
+files. --json prints the report (also manifest.json "hao_runtime").
+hao-install.py --installed SYSTEM prints install.json's payload identity, the
+installed libhao LC_UUID, os_build and cache UUID as JSON (exit 1 when
+SYSTEM has no install.json).
 """
 import hashlib
 import io
@@ -144,6 +168,18 @@ MANIFEST = "payload-manifest.json"
 # Listed by the payload build, made on the installed system when absent: tools/hao-public-archive leaves the AOT
 # caches out, and `hao --aot` makes them after the first boot.
 MADE_LATER = "root/usr/lib/hao/aot/"
+
+
+IDENTITY = ("version", "commit", "os_build", "cache_uuid", "layout_version")
+
+
+def payload_identity(payload):
+    """The identity fields of PAYLOAD's payload-manifest.json (None where it has none); Unsafe if unreadable."""
+    try:
+        m = json.loads(read_nofollow(os.path.join(payload, MANIFEST)))
+        return {k: m.get(k) for k in IDENTITY}
+    except (OSError, ValueError, AttributeError) as x:
+        raise Unsafe("%s: missing or malformed (%s)" % (MANIFEST, x))
 
 
 def read_nofollow(path):
@@ -315,13 +351,18 @@ def publish(dfd, name, src, mode):
     os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
 
 
-def install_root(admitted, staged, dst):
-    """Install the staged root/ files onto DST, root:wheel, 0755 or 0644 (the payload file's execute bit), making
-    their directories and usr/lib/hao (the record's, the AOT caches' parent) 0755. Every path is checked before
-    the first write (Unsafe for a symbolic link or a non-directory/non-file in the way); the writes then go
-    through directory descriptors and replace each file by rename (publish)."""
+def root_mode(admitted, rel):
+    """The mode the payload's root/ file REL is installed with: 0755 if it has an execute bit, else 0644."""
+    return 0o755 if admitted[rel][1] & 0o111 else 0o644
+
+
+def install_root(admitted, staged, dst, only=None):
+    """Install the staged root/ files (those in ONLY, if given) onto DST, root:wheel, 0755 or 0644 (the payload
+    file's execute bit), making their directories and usr/lib/hao (the record's, the AOT caches' parent) 0755.
+    Every path is checked before the first write (Unsafe for a symbolic link or a non-directory/non-file in the
+    way); the writes then go through directory descriptors and replace each file by rename (publish)."""
     plan = []
-    for rel in sorted(r for r in staged if r.startswith("root/")) + [None]:
+    for rel in sorted(r for r in staged if r.startswith("root/") and (only is None or r in only)) + [None]:
         name = rel[len("root/"):] if rel else "usr/lib/hao/install.json"
         d = inside(dst, name)
         p = dst
@@ -340,7 +381,7 @@ def install_root(admitted, staged, dst):
             try:
                 if rel:
                     with staged.open(rel) as src:
-                        publish(dfd, parts[-1], src, 0o755 if admitted[rel][1] & 0o111 else 0o644)
+                        publish(dfd, parts[-1], src, root_mode(admitted, rel))
                     n += 1
             finally:
                 os.close(dfd)
@@ -536,13 +577,14 @@ def ensure_aot_dirs(system, errors, keep=()):
     return done
 
 
-def macho_uuid(path):
-    """LC_UUID (hex) of a thin 64-bit Mach-O, or None."""
+def macho_uuid(path, mo=None):
+    """LC_UUID (hex) of a thin 64-bit Mach-O (the file PATH, or its bytes MO), or None."""
     try:
-        mo = open(path, "rb").read()
+        if mo is None:
+            mo = open(path, "rb").read()
         if mo[:4] != b"\xcf\xfa\xed\xfe":
             return None
-        for cmd, off, size in hao_fat.load_commands(mo, path):
+        for cmd, off, size in hao_fat.load_commands(mo, path or "Mach-O"):
             if cmd == 0x1B:   # LC_UUID
                 return mo[off + 8:off + 24].hex() if size >= 24 else None
     except (OSError, ValueError):
@@ -554,16 +596,18 @@ def macho_uuid(path):
 AOT_CPU_BASELINE = 0x1f
 
 
-def check_aot_caches(system, errors):
+def check_aot_caches(system, errors, gen=None, remove=True):
     """The caches in usr/lib/hao/aot (include/hao/aot.h: magic, version 8, the
     guest UUID at 16, the generating libhao at 32, the kind of code identity at
     96 and the CPU profile at 136, in a 144-byte header): keep those of the
     installed libhao that are bound to a signed guest's cdhash (kind 1; hao
     serves no other kind from a system directory) and need no CPU feature
     beyond the baseline (an image's caches must load on every Mac it boots),
-    remove the rest; returns a record."""
+    remove the rest (only list them unless REMOVE); returns a record. GEN is the libhao UUID the caches must
+    name (default: the installed usr/lib/hao/libhao.dylib's)."""
     d = os.path.join(system, AOT_DIRS[0])
-    gen = macho_uuid(os.path.join(system, "usr/lib/hao/libhao.dylib"))
+    if gen is None:
+        gen = macho_uuid(os.path.join(system, "usr/lib/hao/libhao.dylib"))
     rec = {"libhao_uuid": gen, "caches": 0, "bytes": 0, "removed_stale": []}
     if not os.path.isdir(d) or os.path.islink(d):
         return rec
@@ -582,7 +626,8 @@ def check_aot_caches(system, errors):
             rec["caches"] += 1
             rec["bytes"] += os.path.getsize(f)
         else:
-            os.unlink(f)
+            if remove:
+                os.unlink(f)
             rec["removed_stale"].append(name)
     if gen is None and rec["removed_stale"]:
         errors.append("usr/lib/hao/libhao.dylib has no LC_UUID: AOT caches removed")
@@ -657,9 +702,9 @@ def hash_rest(payload, admitted, staged):
             raise Unsafe("payload %s does not match its sha256 in %s" % (rel, MANIFEST))
 
 
-def open_target(system, rel):
-    """REL under SYSTEM opened for reading and writing in place, through directory descriptors that follow no
-    link; None if it is missing, a link or not a regular file."""
+def open_target(system, rel, write=True):
+    """REL under SYSTEM opened for reading and writing in place (only reading unless WRITE), through directory
+    descriptors that follow no link; None if it is missing, a link or not a regular file."""
     parts = relative(rel)
     top = os.open(system, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -669,7 +714,7 @@ def open_target(system, rel):
     finally:
         os.close(top)
     try:
-        fd = os.open(parts[-1], os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        fd = os.open(parts[-1], (os.O_RDWR if write else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
     except OSError:
         return None
     finally:
@@ -677,7 +722,7 @@ def open_target(system, rel):
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         return None
-    return os.fdopen(fd, "r+b")
+    return os.fdopen(fd, "r+b" if write else "rb")
 
 
 def close_all(files):
@@ -706,11 +751,36 @@ def write_in_place(path, data):
 
 
 def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--overlay"]:
+        return overlay_main(args[1:])
+    if args[:1] == ["--installed"]:
+        return installed_main(args[1:])
+    if len(args) != 2 or args[0].startswith("-"):
+        print(USAGE, file=sys.stderr)
+        return 2
     try:
-        return install(os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2]))
+        return install(os.path.realpath(args[0]), os.path.realpath(args[1]))
     except Unsafe as x:
         print("hao: error: install refused:", x, flush=True)
         return 1
+
+
+USAGE = """usage: hao-install.py SYSTEM PAYLOAD
+       hao-install.py --overlay OUT SYSTEM PAYLOAD [--x86-cache DIR] [--json]
+       hao-install.py --installed SYSTEM"""
+
+
+IDENTITY = ("version", "commit", "os_build", "cache_uuid", "layout_version")
+
+
+def payload_identity(payload):
+    """The identity fields of PAYLOAD's payload-manifest.json (install.json "payload"; None when unreadable)."""
+    try:
+        pm = json.loads(read_nofollow(os.path.join(payload, MANIFEST)))
+        return {k: pm.get(k) for k in IDENTITY}
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def install(system, payload):
@@ -722,7 +792,9 @@ def install(system, payload):
         work.close()
 
 
-def install_staged(system, payload, admitted, staged):
+def load_payload(system, payload, admitted, staged):
+    """Steps 0 and the checks before the first write: stage the manifests and every file the install reads, check
+    the names they give and the payload's other files; (embed manifest, replace manifest or None, record path)."""
     names = ["embed/manifest.json"] + (["replace/manifest.json"] if "replace/manifest.json" in admitted else [])
     stage(payload, admitted, names, staged)
     try:
@@ -738,9 +810,15 @@ def install_staged(system, payload, admitted, staged):
     stage(payload, admitted, rels, staged)
     check_names(r[len("root/"):] for r in staged if r.startswith("root/"))
     hash_rest(payload, admitted, staged)
-    installed = install_root(admitted, staged, system)
-    done, already, native, missing, errors, bound, restubbed, kept_stubs = [], [], [], [], [], [], [], []
-    targets = []   # the file opened for embedding or replacing (one at a time)
+    return manifest, replace, record_path
+
+
+def embed_programs(system, manifest, staged, targets, errors, write=True, sink=None):
+    """Step 2 for every entry of the embed MANIFEST: a record of what was embedded (done, already, native,
+    missing, bound, restubbed, kept_stubs); errors go to ERRORS. TARGETS holds the file last opened. Without
+    WRITE nothing is written: the record says what would be. SINK(path, bytes, stat), if given, receives each
+    file's new content (and the target's os.stat_result) instead of the write."""
+    done, already, native, missing, bound, restubbed, kept_stubs = [], [], [], [], [], [], []
     for e in manifest["files"]:
         if e["path"] in done or e["path"] in missing:
             continue  # listed twice (payloads built before hao-embed skipped repeats)
@@ -750,7 +828,7 @@ def install_staged(system, payload, admitted, staged):
             errors.append("%s (%s; not embedded)" % (e["path"], x))
             continue
         close_all(targets)
-        f = open_target(system, e["path"])
+        f = open_target(system, e["path"], write)
         if f is None:
             missing.append(e["path"])
             continue
@@ -799,8 +877,18 @@ def install_staged(system, payload, admitted, staged):
         if why:
             errors.append("%s (the payload's stub is %s; not embedded)" % (e["path"], why))
             continue
-        rewrite(f, merged)
+        if sink is not None:
+            sink(e["path"], merged, os.fstat(f.fileno()))
+        elif write:
+            rewrite(f, merged)
         done.append(e["path"])
+    return {"done": done, "already": already, "native": native, "missing": missing, "bound": bound,
+            "restubbed": restubbed, "kept_stubs": kept_stubs}
+
+
+def replace_files(system, replace, staged, targets, errors, write=True, changed=None, sink=None):
+    """Step 3: the paths replaced (or already replaced); errors go to ERRORS, the paths written (or, without
+    WRITE, that would be) to CHANGED. Without WRITE nothing is written. SINK as for embed_programs."""
     replaced = []
     for e in (replace["files"] if replace is not None else []):
         try:
@@ -809,7 +897,7 @@ def install_staged(system, payload, admitted, staged):
             errors.append("%s (%s; not replaced)" % (e["path"], x))
             continue
         close_all(targets)
-        f = open_target(system, e["path"])
+        f = open_target(system, e["path"], write)
         targets.append(f)
         data = f.read() if f is not None else b""
         new = staged.read(posixpath.join("replace", e["file"]))
@@ -822,8 +910,49 @@ def install_staged(system, payload, admitted, staged):
         elif os.fstat(f.fileno()).st_nlink != 1:
             errors.append(e["path"] + " (has another hard link; not replaced)")
         else:
-            rewrite(f, new)
+            if sink is not None:
+                sink(e["path"], new, os.fstat(f.fileno()))
+            elif write:
+                rewrite(f, new)
+            if changed is not None:
+                changed.append(e["path"])
             replaced.append(e["path"])
+    return replaced
+
+
+def install_record(installed, emb, required, legacy, replaced, aot_dirs, aot_caches, errors, manifest):
+    """The install.json record (step 6)."""
+    done = emb["done"]
+    return {"installed_files": installed, "embedded": len(done), "already_embedded": len(emb["already"]),
+            "required": required, "kept_native": emb["native"], "restubbed": emb["restubbed"],
+            "kept_stubs": emb["kept_stubs"], "legacy_stubs": [p for p, _ in legacy],
+            "bundle_bound": sum(p in done for p in emb["bound"]),
+            "missing": emb["missing"], "replaced": replaced, "aot_dirs": aot_dirs, "aot_caches": aot_caches,
+            "errors": errors, "stub_sha256": manifest["stub_sha256"]}
+
+
+def write_record(system, record_path, record):
+    """RECORD as install.json in its directory under SYSTEM, replaced by rename (publish)."""
+    top = os.open(system, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        dfd = dir_at(top, relative(os.path.relpath(os.path.dirname(record_path), system)))
+    finally:
+        os.close(top)
+    try:
+        publish(dfd, "install.json", io.BytesIO((json.dumps(record, indent=1) + "\n").encode()), 0o644)
+    finally:
+        os.close(dfd)
+
+
+def install_staged(system, payload, admitted, staged):
+    manifest, replace, record_path = load_payload(system, payload, admitted, staged)
+    installed = install_root(admitted, staged, system)
+    errors = []
+    targets = []   # the file opened for embedding or replacing (one at a time)
+    emb = embed_programs(system, manifest, staged, targets, errors)
+    done, native, missing, bound, restubbed, kept_stubs = (emb[k] for k in (
+        "done", "native", "missing", "bound", "restubbed", "kept_stubs"))
+    replaced = replace_files(system, replace, staged, targets, errors)
     aot_dirs = ensure_aot_dirs(system, errors, {posixpath.basename(r) for r in staged
                                                 if posixpath.dirname(r) == "root/" + AOT_DIRS[0]})
     aot_caches = check_aot_caches(system, errors)
@@ -835,22 +964,10 @@ def install_staged(system, payload, admitted, staged):
     for r in required:
         if r not in done:
             errors.append(r + " (required, not embedded)")
-    record = {"installed_files": installed, "embedded": len(done), "already_embedded": len(already),
-              "required": required, "kept_native": native, "restubbed": restubbed, "kept_stubs": kept_stubs,
-              "legacy_stubs": [p for p, _ in legacy],
-              "bundle_bound": sum(p in done for p in bound),
-              "missing": missing, "replaced": replaced, "aot_dirs": aot_dirs, "aot_caches": aot_caches, "errors": errors,
-              "stub_sha256": manifest["stub_sha256"]}
+    record = install_record(installed, emb, required, legacy, replaced, aot_dirs, aot_caches, errors, manifest)
+    record["payload"] = payload_identity(payload)
     close_all(targets)
-    top = os.open(system, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        dfd = dir_at(top, relative(os.path.relpath(os.path.dirname(record_path), system)))
-    finally:
-        os.close(top)
-    try:
-        publish(dfd, "install.json", io.BytesIO((json.dumps(record, indent=1) + "\n").encode()), 0o644)
-    finally:
-        os.close(dfd)
+    write_record(system, record_path, record)
     print(f"hao: installed {installed} runtime files; embedded {len(done)} executables; "
           f"{sum(p in done for p in bound)} bind their bundle's Info.plist; kept {len(native)} native; {len(restubbed)} restubbed; {len(kept_stubs)} kept hao stubs of another build; "
           f"{len(legacy)} unbound hao stubs; {len(missing)} missing; replaced {replaced}; AOT dirs {aot_dirs}; "
@@ -859,6 +976,284 @@ def install_staged(system, payload, admitted, staged):
     for x in errors[:20]:
         print("hao: error:", x, flush=True)
     return 1 if errors else 0
+
+
+# --- The live-update overlay: what installing PAYLOAD over an installed SYSTEM would write, as the pack overlay
+# `hao patch` applies (OUT/manifest.json format 1 + OUT/files/<path>), so the live-patch backend owns the
+# snapshot, the backups, the writes, the check after them and the revert. Nothing under SYSTEM is written.
+
+# Where the x86_64 dyld shared cache of a system is (the macOS 13+ cryptex, then older layouts), under SYSTEM
+CACHE_DIRS = ("System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld", "System/Cryptexes/OS/System/Library/dyld",
+              "System/Library/dyld", "System/Volumes/Preboot/Cryptexes/Rosetta/System/Library/dyld")
+# chflags names the overlay format knows (tools/hao livepatch FLAG_BITS); UF_COMPRESSED is storage, not an attribute
+FLAG_NAMES = (("restricted", 0x80000), ("schg", 0x20000), ("sunlnk", 0x100000), ("uchg", 0x2), ("hidden", 0x8000),
+              ("nodump", 0x1))
+UF_COMPRESSED = 0x20
+OVERLAY_PACK = "hao_runtime"
+
+
+def x86_cache_uuid(path):
+    """The UUID (upper-case hex, as payload-manifest.json cache_uuid) of the x86_64 dyld shared cache PATH."""
+    h = read_head(path, 0x68)
+    if len(h) < 0x68 or not h.startswith(b"dyld_v1") or b"x86_64" not in h[:16]:
+        raise Unsafe("%s is not an x86_64 dyld shared cache" % path)
+    return h[0x58:0x68].hex().upper()
+
+
+def read_head(path, n):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        return os.read(fd, n)
+    finally:
+        os.close(fd)
+
+
+def os_build(system):
+    """SYSTEM's ProductBuildVersion (System/Library/CoreServices/SystemVersion.plist)."""
+    import plistlib
+    try:
+        return plistlib.loads(read_nofollow(inside(system, "System/Library/CoreServices/SystemVersion.plist")))[
+            "ProductBuildVersion"]
+    except (OSError, ValueError, KeyError, TypeError) as x:
+        raise Unsafe("cannot read the installed os_build (System/Library/CoreServices/SystemVersion.plist: %s)" % x)
+
+
+def system_identity(system, x86=None):
+    """(os_build, x86_64 cache UUID) of SYSTEM: its SystemVersion.plist, and the cache in X86 or under SYSTEM."""
+    build = os_build(system)
+    dirs = [x86] if x86 else [os.path.join(system, d) for d in CACHE_DIRS]
+    for d in dirs:
+        f = os.path.join(d, "dyld_shared_cache_x86_64")
+        if os.path.isfile(f):
+            return build, x86_cache_uuid(f)
+    raise Unsafe("no dyld_shared_cache_x86_64 in %s; name its directory with --x86-cache" % ", ".join(dirs))
+
+
+def read_record(system):
+    """SYSTEM's install.json, or Unsafe: an overlay updates only a system hao-install.py installed."""
+    p = os.path.join(system, "usr/lib/hao/install.json")
+    try:
+        rec = json.loads(read_nofollow(p))
+    except FileNotFoundError:
+        raise Unsafe("%s missing: hao was not installed on this system by hao-install.py" % p)
+    except (OSError, ValueError) as x:
+        raise Unsafe("%s: unreadable (%s)" % (p, x))
+    if not isinstance(rec, dict):
+        raise Unsafe("%s: malformed" % p)
+    return rec
+
+
+def check_identity(system, payload, x86=None):
+    """(payload identity, installed record): Unsafe unless PAYLOAD is clean and for SYSTEM's os_build and x86_64
+    cache, and SYSTEM has install.json naming no other os_build or cache."""
+    try:
+        pm = json.loads(read_nofollow(os.path.join(payload, MANIFEST)))
+        ident = {k: pm.get(k) for k in IDENTITY}
+    except (OSError, ValueError, AttributeError) as x:
+        raise Unsafe("%s: missing or malformed (%s)" % (MANIFEST, x))
+    if pm.get("clean") is not True:
+        raise Unsafe("the payload is dirty (built from a tree with uncommitted changes: clean is %r)" % pm.get("clean"))
+    if not ident["os_build"] or not ident["cache_uuid"]:
+        raise Unsafe("%s names no os_build or cache_uuid" % MANIFEST)
+    old = read_record(system)
+    build, cache = system_identity(system, x86)
+    prev = old.get("payload") or {}
+    want = str(ident["cache_uuid"]).replace("-", "").upper()
+    for what, have, need in (("os_build", build, ident["os_build"]), ("x86_64 cache UUID", cache, want),
+                             ("os_build (install.json)", prev.get("os_build", build), ident["os_build"]),
+                             ("x86_64 cache UUID (install.json)",
+                              str(prev.get("cache_uuid", cache)).replace("-", "").upper(), want)):
+        if have != need:
+            raise Unsafe("the payload is for %s %s, the installed system has %s" % (what, need, have))
+    return ident, old
+
+
+def attributes(st):
+    """{mode, owner, flags} of a target file's os.stat_result, in the overlay format; Unsafe for a flag it has
+    no name for."""
+    flags = getattr(st, "st_flags", 0) & ~UF_COMPRESSED
+    names = [n for n, b in FLAG_NAMES if flags & b]
+    rest = flags & ~sum(b for n, b in FLAG_NAMES)
+    if rest:
+        raise Unsafe("flags 0x%x" % rest)
+    return {"mode": "%04o" % stat.S_IMODE(st.st_mode), "owner": "%d:%d" % (st.st_uid, st.st_gid), "flags": names}
+
+
+class Overlay:
+    """OUT/files/<path> and their manifest entries, each file created exclusively under OUT (a new 0700 folder)."""
+
+    def __init__(self, out):
+        self.out = out
+        self.files = {}
+        os.mkdir(out, 0o700)
+
+    def add(self, rel, data, attrs):
+        if rel in self.files:
+            raise Unsafe("%s is written twice" % rel)
+        p = inside(self.out, "files/" + "/".join(relative(rel)))
+        os.makedirs(os.path.dirname(p), 0o700, exist_ok=True)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        self.files[rel] = dict(attrs, sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+
+
+def plan_overlay(system, payload, admitted, staged, ov, old, ident):
+    """Fill OV with what installing PAYLOAD over SYSTEM writes; returns the report, or Unsafe on any error found
+    (an error is never left for the live patch to find)."""
+    manifest, replace, record_path = load_payload(system, payload, admitted, staged)
+    errors, pending = [], []
+
+    def collect(rel, data, st):
+        if st.st_nlink != 1:   # the live patch replaces a file by rename: another link would keep the old bytes
+            errors.append(rel + " (has another hard link; a live update would split it)")
+            return
+        try:
+            pending.append((rel, data, attributes(st)))
+        except Unsafe as x:
+            errors.append("%s (%s: not in the overlay format)" % (rel, x))
+
+    root = []
+    for rel in sorted(r for r in staged if r.startswith("root/")):
+        name = rel[len("root/"):]
+        p = inside(system, name)
+        want = root_mode(admitted, rel)
+        try:
+            st = os.lstat(p)
+            same = stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == want and \
+                (os.geteuid() != 0 or (st.st_uid, st.st_gid) == (0, 0)) and hashlib.sha256(read_nofollow(p)).hexdigest() == admitted[rel][0]
+            flags = attributes(st)["flags"] if stat.S_ISREG(st.st_mode) else []
+        except FileNotFoundError:
+            same, flags = False, []
+        except Unsafe as x:
+            errors.append("%s (%s: not in the overlay format)" % (name, x))
+            continue
+        except OSError as x:
+            errors.append("%s (%s)" % (name, x.strerror))
+            continue
+        if not same:   # the installed file's flags are kept (the image build may set restricted)
+            root.append(rel)
+            pending.append((name, staged.read(rel), {"mode": "%04o" % want, "owner": "root:wheel", "flags": flags}))
+    targets, replaced_new = [], []
+    try:
+        emb = embed_programs(system, manifest, staged, targets, errors, write=False, sink=collect)
+        replaced = replace_files(system, replace, staged, targets, errors, write=False, changed=replaced_new,
+                                 sink=collect)
+    finally:
+        close_all(targets)
+    lib = "root/usr/lib/hao/libhao.dylib"
+    gen = macho_uuid(None, staged.read(lib)) if lib in staged else None
+    aot = check_aot_caches(system, errors, gen=gen, remove=False)
+    required = manifest.get("required", LEGACY_REQUIRED)
+    errors += [r + " (required, not embedded)" for r in required if r not in emb["done"]]
+    if errors:
+        raise Unsafe("%d errors; no overlay was made:\n  %s" % (len(errors), "\n  ".join(errors[:20])))
+    embedded = [p for p in emb["done"] if p not in emb["already"] and p not in emb["restubbed"]]
+    changes = bool(pending or aot["removed_stale"])
+    if changes or old.get("payload") != ident:
+        # the record hao-install.py writes for PAYLOAD here (as --install-live): every root/ file counts as
+        # installed, and "already_embedded" stays what the first install found
+        record = install_record(sum(r.startswith("root/") for r in staged), emb, required,
+                                [(p, "") for p in old.get("legacy_stubs", [])], replaced,
+                                old.get("aot_dirs", []), aot, [], manifest)
+        if isinstance(old.get("already_embedded"), int):
+            record["already_embedded"] = old["already_embedded"]
+        record["payload"] = ident
+        record["live"] = {"root_written": root, "embedded": embedded, "restubbed": emb["restubbed"],
+                          "replaced": replaced_new, "previous": old.get("payload"), "via": "overlay"}
+        pending.append(("usr/lib/hao/install.json", (json.dumps(record, indent=1) + "\n").encode(),
+                        {"mode": "0644", "owner": "root:wheel", "flags": []}))
+    for rel, data, attrs in pending:
+        ov.add(rel, data, attrs)
+    return {"payload": ident, "previous": old.get("payload"), "root": [r[len("root/"):] for r in root],
+            "embedded": embedded, "restubbed": emb["restubbed"], "replaced": replaced_new,
+            "remove": [posixpath.join(AOT_DIRS[0], n) for n in aot["removed_stale"]],
+            "libhao_uuid": gen, "up_to_date": not changes and old.get("payload") == ident}
+
+
+def make_overlay(system, payload, out, x86=None):
+    """The overlay at OUT (manifest.json, files/) and its report; Unsafe before OUT is made for a payload that is
+    not for SYSTEM, and with OUT removed for any other refusal."""
+    ident, old = check_identity(system, payload, x86)
+    admitted = payload_inventory(payload)
+    if os.path.lexists(out):
+        raise Unsafe("%s exists: the overlay goes into a new folder" % out)
+    staged = Staging()
+    ov = Overlay(out)
+    try:
+        report = plan_overlay(system, payload, admitted, staged, ov, old, ident)
+        manifest = {"format": 1, "pack": OVERLAY_PACK, "phase": "live-capable", "files": ov.files,
+                    "remove": report["remove"], "hao_runtime": report}
+        fd = os.open(os.path.join(out, "manifest.json"), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(manifest, f, indent=1, sort_keys=True)
+            f.write("\n")
+    except BaseException:
+        shutil.rmtree(out, ignore_errors=True)
+        raise
+    finally:
+        staged.close()
+    return manifest
+
+
+def overlay_main(args):
+    """--overlay OUT SYSTEM PAYLOAD [--x86-cache DIR] [--json]"""
+    x86, js, pos = None, False, []
+    while args:
+        a = args.pop(0)
+        if a == "--x86-cache" and args:
+            x86 = os.path.realpath(args.pop(0))
+        elif a == "--json":
+            js = True
+        elif a.startswith("-"):
+            print(USAGE, file=sys.stderr)
+            return 2
+        else:
+            pos.append(a)
+    if len(pos) != 3:
+        print(USAGE, file=sys.stderr)
+        return 2
+    out, system, payload = (os.path.abspath(pos[0]), os.path.realpath(pos[1]), os.path.realpath(pos[2]))
+    try:
+        m = make_overlay(system, payload, out, x86)
+    except Unsafe as x:
+        print("hao: error: overlay refused:", x, file=sys.stderr, flush=True)
+        return 1
+    r = m["hao_runtime"]
+    if js:
+        json.dump(dict(r, overlay=out, files=len(m["files"]), bytes=sum(e["size"] for e in m["files"].values())),
+                  sys.stdout, indent=1, sort_keys=True)
+        print()
+    else:
+        print("hao: overlay %s: payload %s over %s: %d files (%d runtime, %d embedded, %d restubbed, %d replaced), "
+              "%d AOT caches to remove%s" % (out, r["payload"]["version"], (r["previous"] or {}).get("version"),
+                                            len(m["files"]), len(r["root"]), len(r["embedded"]), len(r["restubbed"]),
+                                            len(r["replaced"]), len(r["remove"]),
+                                            "; up to date" if r["up_to_date"] else ""), flush=True)
+    return 0
+
+
+def installed_main(args):
+    """--installed SYSTEM: the installed payload's identity, the libhao it runs and the system's os_build, as JSON."""
+    if len(args) != 1:
+        print(USAGE, file=sys.stderr)
+        return 2
+    system = os.path.realpath(args[0])
+    out = {"system": system, "payload": None, "libhao_uuid": macho_uuid(os.path.join(system, "usr/lib/hao/libhao.dylib")),
+           "os_build": None, "installed": False}
+    try:
+        rec = read_record(system)
+        out.update(installed=True, payload=rec.get("payload"), errors=len(rec.get("errors", [])))
+    except Unsafe as x:
+        out["why"] = str(x)
+    for key, get in (("os_build", os_build), ("cache_uuid", lambda s: system_identity(s)[1])):
+        try:
+            out[key] = get(system)
+        except Unsafe as x:
+            out.setdefault("why", str(x))
+    json.dump(out, sys.stdout, indent=1, sort_keys=True)
+    print()
+    return 0 if out["installed"] else 1
 
 
 if __name__ == "__main__":

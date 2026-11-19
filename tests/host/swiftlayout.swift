@@ -751,12 +751,14 @@ do {   // guest-made (arm64) nils of the metatype word: XI1 1
     p.deallocate()
 }
 
-// K. The facts table's key of a mangled name (Facts.c walk_fact_key): a private context's address removed.
+// K. The facts table's key of a mangled name (Facts.c walk_fact_key): a private context's address removed
+// ("<n>$<hex>yXZ" and the "<n>$<hex>LL" private discriminator).
 typealias KeyFn = @convention(c) (UnsafePointer<CChar>, UInt64, UnsafeMutablePointer<CChar>, UInt64) -> Int32
 if CommandLine.arguments.count > 1, let lib = dlopen(CommandLine.arguments[1], RTLD_NOW), let k = dlsym(lib, "hao_sv_walk_fact_key") {
     let key = unsafeBitCast(k, to: KeyFn.self)
     for name in ["7SwiftUI12$7ff82d37b2d0yXZ19ViewFactoryProtocol_pXp", "7SwiftUI15BoundInputsViewVSg",
-                 "7SwiftUI24MaterialActiveAppearanceV7$10a5c9350yXZ7StorageO", "Si"] {
+                 "7SwiftUI24MaterialActiveAppearanceV7$10a5c9350yXZ7StorageO",
+                 "7SwiftUI13LegacyStorage13$7ffa2167102cLLCSg", "Si"] {
         var out = [CChar](repeating: 0, count: 256)
         let ok = name.withCString { key($0, UInt64(strlen($0)), &out, 256) }
         print("W K \(name) \(ok) \(String(cString: out))")
