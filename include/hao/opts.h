@@ -48,6 +48,9 @@ typedef struct {
                                     test build */
          aot_use,                /* HAO_AOT_USE (guarded too) / boot argument hao_aot_use=1: AOT use records to the
                                     unified log (aot_use.c, tools/hao-aot-use) */
+         swift_keys,             /* HAO_SWIFT_KEYS, boot argument hao_swift_keys=1 (every process): one
+                                    machine-readable "hao-swift-key" record per Swift type the value walk looks up
+                                    in its facts table (swiftvalue/Facts.c key_met); prints only */
          crash;                  /* boot argument hao_crash=1 (every process; HAO_CRASH in tests): diagnostics also to
                                     /dev/console and /private/var/log/hao (runtime.c hao_diag_init) */
     bool swift_value_audit_ignored;  /* the audit was asked for and this build ignores it (said once, swiftvalue.c) */
@@ -77,7 +80,7 @@ extern hao_opts_t hao_opt;
  *
  * Boot arguments are set by root and apply in every tier, so only these are
  * read: in every process hao_crash=1, hao_nx_stats=1, hao_crash_trace=1,
- * hao_bridge_stats=1, hao_diag_time=1, hao_aot_use=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1,
+ * hao_bridge_stats=1, hao_diag_time=1, hao_swift_keys=1, hao_aot_use=1, hao_no_aot=1, hao_no_chain=1, hao_jit_helpers_only=1,
  * hao_swift_value_audit=1 (a survey build only, make SURVEY=1: swiftvalue.c audit_record);
  * in PID 1 also hao=FLAGS (v, V, i, s) and hao_verbose=N. No boot argument
  * turns a check off (there is no hao_no_libval and no hao=u). A build with

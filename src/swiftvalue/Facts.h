@@ -74,6 +74,21 @@ const char *walk_fact_mangled(const void *type, uint64_t *length);
  * Into OUT (CAP bytes, NUL-terminated); 0 when it does not fit. */
 int walk_fact_key(const char *mangled, uint64_t n, char *out, uint64_t cap);
 void walk_facts_fork_child(void);
+/* How the table answered for each metadata the walk met (Facts.c key_met),
+ * once per metadata per process: a native row by its verdict; a guest row
+ * (GUEST_INCOMPLETE: its fields are not the row's, refused), or an Optional
+ * of a guest row's type with the same XIs; NONE no row for the key; LAYOUT a
+ * row for the key whose size, stride, flags or XI count is not the live
+ * type's; IDENTITY a SAME row the native identity check declined;
+ * OTHER_CACHE the table is not for this process's x86_64 cache. Counted
+ * always; written as "hao-swift-key" records under HAO_SWIFT_KEYS. */
+enum { WALK_KEY_SAME, WALK_KEY_DYNAMIC, WALK_KEY_CONVERT, WALK_KEY_REFUSE, WALK_KEY_GUEST, WALK_KEY_GUEST_INCOMPLETE,
+       WALK_KEY_GUEST_OPTIONAL, WALK_KEY_NONE, WALK_KEY_LAYOUT, WALK_KEY_IDENTITY, WALK_KEY_OTHER_CACHE, WALK_KEY_NROWS };
+/* The counts by answer, by where the metadata lies (0 the x86_64 shared
+ * cache, 1 a guest image, 2 elsewhere: instantiated at run time), and the
+ * metadata not counted because the map of those met was full. */
+void walk_keys_counts(uint64_t rows[WALK_KEY_NROWS], uint64_t where[3], uint64_t *dropped);
+const char *walk_key_row_name(int row);
 /* A test build only: the fixture at PATH (format above), before the first
  * lookup, for tests that load libhao into a native program. */
 int walk_facts_load(const char *path);

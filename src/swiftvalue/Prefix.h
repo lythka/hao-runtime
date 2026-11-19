@@ -52,5 +52,7 @@
 #define reflect_offset_fn hao_sv_reflect_offset_fn
 #define reflect_field_fn hao_sv_reflect_field_fn
 #define walk_facts_load hao_sv_walk_facts_load
+#define walk_keys_counts hao_sv_walk_keys_counts
+#define walk_key_row_name hao_sv_walk_key_row_name
 #define collect_audit_patches hao_sv_collect_audit_patches
 #endif

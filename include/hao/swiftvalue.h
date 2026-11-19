@@ -28,7 +28,8 @@ void hao_swift_witness_probe(struct hao_thread *, uint64_t pc);
  * there since MARK (t->swift_made_n at the callback's entry) get the native
  * encoding back; the ring is then reset to MARK. */
 void hao_swift_witness_result(struct hao_thread *, unsigned mark, uint64_t indirect);
-/* --stats: intercepted witnesses, those a full table dropped, nils not tracked */
+/* --stats: intercepted witnesses, those a full table dropped, nils not tracked; the Swift keys the walk's
+ * facts table answered for (swiftvalue/Facts.h walk_keys_counts) */
 void hao_swift_witness_stats(void);
 /* nils hao_swift_witness_result could not restore: their ring entries were overwritten */
 uint64_t hao_swift_witness_lost(void);

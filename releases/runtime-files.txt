@@ -696,6 +696,7 @@ tests/tools/test_install_live.py
 tests/tools/test_install_overlay.py
 tests/tools/test_release.py
 tests/tools/test_aot_use.py
+tests/tools/test_swift_keys.py
 tests/tools/test_root.py
 tests/tools/test_trustlist.py
 tests/translate/run.sh
@@ -721,6 +722,7 @@ tools/hao_ifunit.py
 tools/hao_macho.py
 tools/hao_release.py
 tools/hao_root.py
+tools/hao_swift_keys.py
 tools/stub_identity_gate.py
 tools/value-contracts/README.md
 tools/value-contracts/optional-data-26A428.json
