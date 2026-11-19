@@ -763,11 +763,16 @@ system's (SystemVersion.plist, the cache header) and a system without `usr/lib/h
 hao-install.py's own functions (refactored into `load_payload`, `embed_programs`, `replace_files`, `install_record`,
 `write_record`; its CLI and record are unchanged), refuses any embed or replace error before the first write, then
 writes only root/ files whose sha256 or mode differs, programs to embed or restub and pending replacements, removes
-usr/lib/hao/aot caches not bound to the new libhao and rewrites install.json (`payload`, `live`). Without `--system`
+usr/lib/hao/aot caches not bound to the new libhao (the payload's own caches replace theirs by name) and rewrites
+install.json as hao-install.py would write it for the new payload (every runtime file counted, `already_embedded` as
+the first install found it) plus `live` (what this run wrote, the previous payload). hao-install.py now records the
+payload's identity (`payload`: version, commit, os_build, cache_uuid, layout_version) that the next update compares;
+a record without it (a hand-edited one, an older image) is updated once, then reported as installed. Without `--system`
 it checks `csrutil authenticated-root status`, mounts the booted system volume (`mount_apfs -o nobrowse`) at a
 private mount point, installs there and runs `bless --mount MNT --bootefi --create-snapshot`. Test:
 `tests/tools/test_install_live.py` (`tests/tools/run.sh`). Limits: the running-Mac path is tested only as far as
-the commands `--dry-run` prints; its first real run is on a laptop or QEMU. Files a newer payload no longer has
+the commands `--dry-run` prints; its first real run is on a laptop or QEMU. An installed image has no Python
+(`/usr/bin/python3` is the developer-tools shim): the tool needs a Python 3.12 or later brought along. Files a newer payload no longer has
 are not deleted; the whole-volume legacy-stub scan of hao-install.py step 5 is not repeated;
 `/private/var/db/hao` caches on the Data volume are left for hao to reject and remake.
 

@@ -16,7 +16,7 @@ nothing else is there.
 hao-runtime-on-mac --install-live PAYLOAD [--system DIR] [--x86-cache DIR] [--dry-run]: as root, update the hao
 payload of an installed system in place (see LIVE_USAGE below).
 """
-import hashlib, json, os, shutil, stat, struct, subprocess, sys, tempfile
+import hashlib, json, os, posixpath, shutil, stat, struct, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hao_codesig
@@ -270,6 +270,8 @@ def live_plan(inst, system, payload, admitted, staged):
     lib = 'root/usr/lib/hao/libhao.dylib'
     gen = inst.macho_uuid(None, staged.read(lib)) if lib in staged else None
     aot = inst.check_aot_caches(system, errors, gen=gen, remove=False)
+    ours = {posixpath.basename(r) for r in staged if posixpath.dirname(r) == 'root/' + inst.AOT_DIRS[0]}
+    aot['removed_stale'] = [n for n in aot['removed_stale'] if n not in ours]   # the payload's own replace them
     for r in manifest.get('required', inst.LEGACY_REQUIRED):
         if r not in emb['done']:
             errors.append(r + ' (required, not embedded)')
@@ -291,8 +293,13 @@ def live_install(inst, system, admitted, staged, plan, old, identity):
     aot = inst.check_aot_caches(system, errors)
     required = manifest.get('required', inst.LEGACY_REQUIRED)
     errors += [r + ' (required, not embedded)' for r in required if r not in emb['done']]
-    record = inst.install_record(len(plan['root']), emb, required, [(p, '') for p in old.get('legacy_stubs', [])],
+    # The record is the one hao-install.py would write for PAYLOAD on this system: every root/ file is installed
+    # (the unchanged ones already were); "already_embedded" stays what the first install found embedded before it ran.
+    record = inst.install_record(sum(r.startswith('root/') for r in staged), emb, required,
+                                 [(p, '') for p in old.get('legacy_stubs', [])],
                                  replaced, old.get('aot_dirs', []), aot, errors, manifest)
+    if isinstance(old.get('already_embedded'), int):
+        record['already_embedded'] = old['already_embedded']
     record['payload'] = identity
     record['live'] = {'root_written': plan['root'], 'embedded': [p for p in emb['done'] if p not in emb['already']
                                                                  and p not in emb['restubbed']],
