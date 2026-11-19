@@ -9,7 +9,7 @@
 # program's mach header, load commands and LC_UUID but other code, whose
 # cache the program must not run. Also the other rules of the environment
 # tiers that need a running guest: dependency paths in a set-ID process (L)
-# and the diagnostics log's lock, mode, directory and unified-log fallback (M). Prints PASS/FAIL per case;
+# and the diagnostics log's lock, mode, directory and unified-log fallback (M), and the AOT use records (U). Prints PASS/FAIL per case;
 # exit 1 on FAIL.
 # Writes nothing outside OUT except case H, which runs `hao --aot` with no
 # HOME, no --cache and no HAO_CACHE and removes the one cache file it creates in
@@ -597,5 +597,24 @@ print('size=%s first=%s caplines=%d' % ('under' if size <= cap else 'over', 'sam
 EOF
 )
 [ "$m" = "size=under first=same caplines=1" ] && pass "M the cap holds across processes: one cap line ($m)" || bad "M cap: $m"
+
+# --- U: AOT use records (HAO_AOT_USE, src/aot_use.c): one "main" record per run with what AOT found and, at exit, the
+# blocks the JIT translated; honoured in a guarded process (it only prints), not in a set-ID one. tools/hao-aot-use
+# turns them into a list naming the program.
+fresh "$OUT/uc"; timeout -s KILL "$T" "$HAO" --aot --cache "$OUT/uc" "$G" >/dev/null 2>&1
+run u1 HAO_AOT_USE=1
+run u2 HAO_AOT_USE=1 HAO_CACHE="$OUT/uc"
+run u3 HAO_AOT_USE=1 HAO_DISTRUST_ENV=1
+run u4 HAO_AOT_USE=1 HAO_DISTRUST_ENV=2
+run u5
+U=$(basename "$NAME" .aot)
+if [ $rc = 7 ] && grep -q "^hao-use 1 [0-9a-f]\{16\} main $U none $G\$" "$OUT/u1.err" \
+   && grep -q "^hao-use 1 [0-9a-f]\{16\} jit [1-9][0-9]* $U $G\$" "$OUT/u1.err" \
+   && grep -q "^hao-use 1 [0-9a-f]\{16\} main $U aot $G\$" "$OUT/u2.err" && ! grep -q "hao-use 1 .* jit " "$OUT/u2.err" \
+   && grep -q "hao-use 1 .* main $U none " "$OUT/u3.err" && ! grep -q "hao-use" "$OUT/u4.err" "$OUT/u5.err"; then
+    pass "U use records: main (none, aot) and the JIT's blocks; guarded too; not set-ID, not without the switch"
+else bad "U use records: $(grep -h hao-use "$OUT"/u[1-5].err | head -4)"; fi
+L=$(cat "$OUT/u1.err" "$OUT/u2.err" | python3 -I "$repo/tools/hao-aot-use" --root / - 2>"$OUT/u.log" | grep -v '^#')
+[ "$L" = "$G" ] && pass "U hao-aot-use: the program that ran is the list" || bad "U hao-aot-use: '$L' $(cat "$OUT/u.log")"
 
 exit $fail
