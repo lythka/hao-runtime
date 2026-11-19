@@ -320,7 +320,7 @@ ioregtest: all $(B)/test_ioreg_guest
 	timeout -s KILL 30 $(B)/hao $(B)/test_ioreg_guest
 	timeout -s KILL 30 $(B)/hao --interp $(B)/test_ioreg_guest
 
-test: unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
+test: jit-arena-test unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
 	tools/check_x86.sh
 	python3.14 -I -B tests/host/fork_locks.py
 
@@ -389,3 +389,7 @@ indexed-mulhigh-test: all
 # ARM-only launchd jobs of a mounted system image: no refusal the baseline runtime lacks (needs ROOT and BASELINE)
 image-scan: $(B)/hao
 	OUT=$(or $(SCAN_OUT),$(B)/image-scan) tests/image/launchd-scan.sh $(ROOT) $(abspath $(B)/hao) $(BASELINE)
+
+.PHONY: jit-arena-test
+jit-arena-test: $(B)/libhao.dylib $(B)/hao
+	OUT=$(abspath $(B))/jit-arena LIB=$(B) tests/host/jit-arena.sh

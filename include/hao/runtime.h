@@ -469,6 +469,10 @@ void *hao_jit_translate(uint64_t pc);   /* host tests: translate, do not run; NU
 bool hao_jit_locate(uint64_t host_pc, uint64_t *guest_pc, bool *flags_in_host);
 bool hao_jit_init(void);      /* false: no executable memory (interpreter, no thunks) */
 bool hao_have_thunks(void);
+/* Fixed cache-relative data pool, RW/non-executable, owned for the process lifetime. */
+#define HAO_ASYNC_RECORD_SLOTS 8192u
+#define HAO_ASYNC_RECORD_SIZE 16u
+void *hao_jit_async_records(void);
 bool hao_thunk_range(uint64_t *lo, uint64_t *hi); /* entire reserved plain-thunk area */
 void hao_jit_stats(void);
 /* `hao --aot [--cache DIR] [--cpu=SPEC] FILE`: write FILE's AOT cache into cache_dir (absolute), or with

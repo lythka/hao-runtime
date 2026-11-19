@@ -1,7 +1,10 @@
 /* Non-destructive placement of executable callback islands within rel32 range.
  * mmap's address is only a hint. Enumerate VM holes instead of assuming eight
  * sparse hints cover the available address space. A racing allocation can make
- * mmap choose elsewhere; validate every result and never use MAP_FIXED. */
+ * mmap choose elsewhere; validate every result and never use MAP_FIXED.
+ * This is a best-effort island search, not a reservation guarantee. Mandatory
+ * cache-relative data belongs in jit.c's arena: ordinary data mappings can be
+ * redirected to a separate VM range regardless of hints or available holes. */
 #ifndef HAO_NEAR_MAP_H
 #define HAO_NEAR_MAP_H
 #include <mach/mach.h>
