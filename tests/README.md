@@ -599,3 +599,16 @@ GPR operands away from x18, so opcode/immediate fields equal to 18 are tested.
 reciprocal/reciprocal-square-root estimate bucket at both ends. Undefined guest
 instructions currently terminate with the runtime's diagnostic and SIGABRT;
 the oracle checks the internal UNDEF result against hardware SIGILL.
+
+`make wx-cow-test` signs `hao` with and without the copy-on-write defeature
+entitlement and checks that only the entitled copy refuses JIT, with the same
+output.
+
+`make jit-arena-test` redirects hinted anonymous data allocations 8 GB from
+JIT memory. It checks that the code cache survives, plain and signature
+thunks address the correct tables, async records remain in relative reach,
+and code/data protections stay separate at 1, 256 and 1024 MiB cache sizes.
+It also checks fork inheritance/COW, failed initialization, real writable
+code aliases, and Swift task groups/native async callers under redirection
+against native ARM output. The fixture fails against 256dd30 with the original
+ENOMEM diagnostic.

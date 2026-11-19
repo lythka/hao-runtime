@@ -132,6 +132,19 @@ static void test_tiers(void)
     CHECK(hao_entitlements_foreign(more, strlen(more)), "a private entitlement is foreign");
     CHECK(hao_entitlements_foreign("<key>com.apple", 14), "malformed entitlements count as foreign");
     CHECK(!hao_entitlements_foreign("", 0), "no entitlements are not foreign");
+    static const char cow[] = "com.apple.security.hardened-process.containment.vm.cow-defeatured";
+    static const char on1[] = "<dict><key>com.apple.security.hardened-process.containment.vm.cow-defeatured</key>\n\t<integer>1</integer></dict>";
+    static const char ont[] = "<key>com.apple.security.hardened-process.containment.vm.cow-defeatured</key><true/>";
+    static const char off0[] = "<key>com.apple.security.hardened-process.containment.vm.cow-defeatured</key><integer>0</integer>";
+    static const char offf[] = "<key>com.apple.security.hardened-process.containment.vm.cow-defeatured</key> <false/>";
+    static const char other[] = "<key>com.apple.security.hardened-process.containment.vm.cow-defeatured.x</key><true/>"
+                                "<key>com.apple.security.cs.allow-jit</key><true/>";
+    CHECK(hao_entitlement_on(on1, strlen(on1), cow), "an integer 1 entitlement is on");
+    CHECK(hao_entitlement_on(ont, strlen(ont), cow), "a true entitlement is on");
+    CHECK(!hao_entitlement_on(off0, strlen(off0), cow), "an integer 0 entitlement is off");
+    CHECK(!hao_entitlement_on(offf, strlen(offf), cow), "a false entitlement is off");
+    CHECK(!hao_entitlement_on(other, strlen(other), cow), "a longer key is another entitlement");
+    CHECK(!hao_entitlement_on("", 0, cow), "no entitlements: off");
 }
 
 /* -------------------------------------------------------- locations */
