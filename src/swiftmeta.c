@@ -1466,7 +1466,7 @@ void hao_swiftmeta_resume_parent(uint64_t ctx)
     __atomic_fetch_add(&st_resume, 1, __ATOMIC_RELAXED);
 }
 
-#define AFP_SLOTS 8192
+#define AFP_SLOTS HAO_ASYNC_RECORD_SLOTS
 static struct { uint64_t key, rec; } afp_tab[AFP_SLOTS];
 static uint8_t *afp_area;
 static uint32_t afp_used;
@@ -1474,12 +1474,9 @@ static pthread_once_t afp_once = PTHREAD_ONCE_INIT;
 
 static void afp_map(void)
 {
-    uint64_t size = 16ull * AFP_SLOTS;
-    uint64_t lo, hi;
-    /* Future thunks can occupy the entire reserved area. Placement near
-     * only the first thunk could put later records outside rel32 reach. */
-    if (hao_thunk_range(&lo, &hi))
-        afp_area = hao_map_near_prot(lo, hi, size, PROT_READ | PROT_WRITE, 0);
+    /* Same allocation as the thunks: no hinted plain-data mapping can be
+     * redirected into a different address range by the process's VM policy. */
+    afp_area = hao_jit_async_records();
 }
 
 /* closureEntry of a task: a hao-owned copy of the record with Function at
@@ -1516,10 +1513,10 @@ static uint64_t task_entry(uint64_t afp, bool arg)
         pthread_once(&afp_once, afp_map);
         hao_crit_leave();
         uint32_t i = __atomic_fetch_add(&afp_used, 1, __ATOMIC_RELAXED);
-        int64_t d = afp_area ? (int64_t)(th - ((uint64_t)(uintptr_t)afp_area + 16ull * i)) : 0;
+        int64_t d = afp_area ? (int64_t)(th - ((uint64_t)(uintptr_t)afp_area + (uint64_t)HAO_ASYNC_RECORD_SIZE * i)) : 0;
         uint64_t r = afp;
         if (afp_area && i < AFP_SLOTS && d > INT32_MIN && d < INT32_MAX) {
-            uint8_t *rec = afp_area + 16ull * i;
+            uint8_t *rec = afp_area + (uint64_t)HAO_ASYNC_RECORD_SIZE * i;
             int32_t r32 = (int32_t)d;
             memcpy(rec, &r32, 4);
             memcpy(rec + 4, &size, 4);

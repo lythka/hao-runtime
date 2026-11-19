@@ -798,3 +798,6 @@ tests/guest/appdomain.c
 tests/guest/appdomain.sh
 tests/image/launchd-scan.sh
 tests/host/wx-cow.sh
+tests/host/jit-arena.c
+tests/host/jit-arena.sh
+tests/host/jit-arena-map.c

@@ -320,7 +320,7 @@ ioregtest: all $(B)/test_ioreg_guest
 	timeout -s KILL 30 $(B)/hao $(B)/test_ioreg_guest
 	timeout -s KILL 30 $(B)/hao --interp $(B)/test_ioreg_guest
 
-test: wx-cow-test unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
+test: wx-cow-test jit-arena-test unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
 	tools/check_x86.sh
 	python3.14 -I -B tests/host/fork_locks.py
 
@@ -393,4 +393,8 @@ image-scan: $(B)/hao
 .PHONY: wx-cow-test
 wx-cow-test: $(B)/libhao.dylib $(B)/hao $(B)/libhao_identity.dylib
 	OUT=$(abspath $(B))/wx-cow LIB=$(B) tests/host/wx-cow.sh
+
+.PHONY: jit-arena-test
+jit-arena-test: $(B)/libhao.dylib $(B)/hao
+	OUT=$(abspath $(B))/jit-arena LIB=$(B) tests/host/jit-arena.sh
 
