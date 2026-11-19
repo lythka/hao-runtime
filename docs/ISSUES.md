@@ -1,5 +1,21 @@
 # Runtime issues and measured scope
 
+## Report-only for every uncertified and known-wrong Swift value
+
+Since 75d8039 an uncertified value was refused unless its types were on a
+list taken from one boot's logs, and since 63c872d values its new rules call
+known-wrong were refused in report-only mode too. Applications that ran on
+the 2026-11-14 runtime aborted at open: Weather, Font Book and System
+Settings (unlisted types, a known-wrong Optional, a child task's result).
+Every uncertified or known-wrong value is again reported once and passed as
+found; strict mode (HAO_SWIFT_VALUE_STRICT, tests) still refuses them. The
+list now only marks the report line. Measured on the laptop (26B131, with
+the walk-order and multi-payload enum fixes): Weather, Maps, System
+Settings, Font Book and Control Center stay up after opening. Limits: a
+value passed as found can still be misread by native code; the constructed
+cases in guest/svpolicy (task, unreflected, unrefopt) fault after the report
+instead of aborting at it.
+
 ## Runtime-laid multi-payload enums with several empty cases
 
 A guest enum with two or more payload cases, one of them a resilient native
@@ -51,89 +67,6 @@ asking: the code cache is not made, guest code is interpreted and native-to-gues
   host kernel does not raise the guard, so the kill itself is shown only by the Intel crash report.
 - Limitation: these processes lose JIT and AOT speed. A W^X scheme that needs no memory entry of private memory
   is not written yet.
-
-## JIT arena data redirected outside relative-address reach
-
-At 256dd30 the MAP_JIT code cache could succeed while the separate ordinary
-anonymous mapping for thunk tables landed more than 2 GB away. The near-map
-helper correctly rejected the table, but initialization discarded the code
-cache and reported a fabricated mmap ENOMEM. The recorded gamed trace has
-eight such failures, each with two distant table results. The daemon-specific
-kernel policy responsible for redirecting the hints remains unverified.
-
-The cache, plain/signature thunk tables, and Swift async function records now
-occupy one MAP_JIT allocation. Only the page-aligned code prefix enters
-hao_wx_region. The data tail retains RW current and maximum protection,
-never RX; transient code-write aliases exclude it. Code allocation and
-code-address classification stop before the data. Guest mapping guards cover
-both spans. Compile-time bounds tie the maximum code size to the rel32 reach
-of the whole arena. Failure cleanup clears the carved pointers and unmaps
-the allocation once. This fixes placement without relying on a rebuilt system
-shared cache, reversed allocation order, smaller-cache retries or interpreter
-fallback. Existing behavior for a genuine JIT denial is unchanged.
-
-The async record pool used the same plain-data near search and is included
-in the repair. Image-relative Swift islands still use checked, best-effort
-MAP_JIT placement: their image/cache reservations are released before a new
-mapping is requested. Those paths can fail under fragmentation, races or
-policy; they retain their existing fallback and are not claimed infallible.
-The global arena cannot establish proximity to arbitrary image metadata.
-
-Validation: the new host/jit-arena fixture persistently redirects
-hinted data allocations 8 GB away. It fails against the shipped 256dd30
-library with its original ENOMEM diagnostic and passes the repair at 1,
-256 and 1024 MiB code sizes. It inspects emitted plain/signature thunk
-references, async record reach, RX code/RW data protections and guest mapping
-guards and fork inheritance/COW; injected data-protection and code-memory-entry
-failures leave no published arena. Its W^X positive control detects a real writable alias of
-an executable page. The guest W^X scanner now compares backing-object offset
-ranges, allowing disjoint pages of one object without overlooking overlapping
-aliases. guest/wx agrees with native ARM for C and Swift in JIT, interpreter
-and AOT modes. With the redirected-data policy, Swift task groups and native
-async callers match native output, with task and async-argument records made
-and zero unmade records. make test and make check pass (151 guest-suite passes,
-0 failures, 3 expected skips; sanitizer oracle also passes). On an Intel QEMU
-boot of a stock-cache integration image, the standalone
-probe passes at 1/256/1024 MiB, including data maximum protections, real alias
-detection, fork inheritance/COW and both injected initialization failures.
-The C W^X and Swift task-group outputs match the native ARM references there.
-No system runtime was replaced. The daemon reproduction on Intel hardware,
-application acceptance and release-image acceptance remain untested with this
-repair.
-
-## Refusals leave one public record
-
-A refusal was visible only in hao's diagnostics: stderr, the `hao_crash=1` log, or private unified-log
-records, which `log show` prints as `<private>`. Counting refusals needed crash reports or `hao_crash=1`. Now
-each refusal also writes one public error record (subsystem `com.hao`, category `refusal`) and the same line to
-hao's diagnostics: `hao-refusal v1 kind=KIND process="NAME" key="KEY" reason="REASON"`. Kinds: `startup` (the
-program does not run, status 126; keyed by its path), `binding` (a REFUSED binding called; its symbol), `sig`
-(a native call whose signature abi.c cannot place; the type encoding), `callback` and `callback-registration`
-(a guest function or block with such a signature; the encoding), `swift-value` (the Swift value boundary; the
-type's name), `swift-uncertified` (refused only because no row certifies it and no report-only list names it),
-and `syscall` (a raw thread or sigreturn system call, refused with ENOTSUP; its name). A record is written once
-per (kind, key) in a process, through a fixed 1024-entry table; later keys past that are not recorded. Values
-are escaped and cut (key 480 bytes, reason 320). The refusals themselves are unchanged. `guest/refuse` (exact
-form for `sig`, `callback`, `callback-registration`, `startup`, and `syscall` made three times with two keys),
-`guest/svpolicy` (one record per refusal; exact form for `swift-value` and `swift-uncertified`). Limits: the
-record is written with `os_log` on a handle made at start-up, from the refusing thread, which may be in a
-signal handler; libtrace does not allocate there, but this is not a documented guarantee. A fork child
-records through `OS_LOG_DEFAULT` (its parent's handle faults there), so its records carry no subsystem;
-match records by their `hao-refusal v1` prefix. A Swift type without a printable name
-is keyed `<<< invalid type >>>`, as in the refusal line. A signature refusal names the encoding, not the
-class and selector. The guarded VM traps and calls (`syscall.c`, `interpose.c`) refuse without a record.
-
-## Swift keys the value walk meets
-
-There was no record of which Swift types the value walk met without a row in its facts table, only of the
-values it then refused or reported. Now every metadata the walk looks up is counted once per process by the
-table's answer and by where the metadata lies (`--stats`: `hao-swift-keys`), and `HAO_SWIFT_KEYS=1` or the boot
-argument `hao_swift_keys=1` writes one `hao-swift-key` record each (docs/swift-metadata.md, "Recording the Swift
-keys a program meets"). `tools/hao_swift_keys.py` turns the records into coverage and generator input. Cost: one
-lock-free map lookup per walk lookup; the first sight of a metadata takes the table's lock and, for `where`,
-`dladdr`. Limits: types are recorded only where the walk looks them up, not at every metadata request; the map
-of metadata met holds 196,608 entries, later ones are counted as `uncounted`; a fork child does not record again
-what its parent recorded. `host/swift-keys`, `guest/svfacts` (keys).
 
 ## CPU profiles for translation and AOT caches
 
@@ -1110,11 +1043,10 @@ image. `guest/svguest`: multi-payload enums over a resilient native struct
 (runtime-laid, native witnesses), one with a `Data?` payload, and a struct
 of `Status?`, `Data?`, `String?`, `[Fault]`, an enum whose payload has
 static metadata, through native Optional and Array witnesses, and nils
-alone: equal to native under JIT, `--interp`, AOT with them, and since the
-runtime-laid enum rule below also without rows or with rows of another
-UUID, cdhash, offset, size or metadata initialization; refused with a row
-of another field or static metadata offset, and with the static metadata
-linked into writable `__DATA`. The shipped table has no rows yet. Not covered: an indirect case
+alone: refused without rows, with rows of another UUID, cdhash, offset,
+size, metadata initialization, static metadata offset or field, and
+with the static metadata linked into writable `__DATA`; equal to native under JIT, `--interp`, AOT with
+them. The shipped table has no rows yet. Not covered: an indirect case
 other than SAME, payload walks of spare-bit tags, guest classes.
 
 Source encoding: from three Optional levels a pointer word's encodings
@@ -3637,8 +3569,8 @@ three shapes, and a refusal at publication ends the process:
   40, flags 0x2230007, xi 0xfd).
 
 `enum_payloads()` accepts only runtime-laid-out enums (the runtime's
-multi-payload tag witness and a payload-size word in the metadata, any
-number of empty cases), which the two enum shapes do not have.
+multi-payload tag witness and a payload-size word in the metadata), which
+the two enum shapes do not have.
 
 Measured in one program built natively for arm64 and for x86_64
 (`tests/host/swiftlayout.swift`, arm64 natively and x86_64 under Rosetta
