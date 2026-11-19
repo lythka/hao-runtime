@@ -65,17 +65,20 @@ int main(void)
         static const char *never[] = {"no_libval", "aot_learn", "no_jit_memory", "bridge_abort", "sigreturn_user", "code_alias",
                                       "libval_user", "swift_value_passthrough", "swift_value_strict", "interp", "stats", "allow_unsigned", "watchdog", "cache", "guest_root",
                                       "if_dir", "trust_list", "diag_dir", "async_contract_library", "aot_limit_kb",
-                                      "jit_cache_mb", "swift_pop", "cpu_features", "aot_free_mb", "swift_walk_facts", NULL};
+                                      "jit_cache_mb", "swift_pop", "cpu_features", "aot_free_mb", "swift_walk_facts", "swift_value_list", NULL};
         /* boot argument in every tier, environment open only (opts.c BOOT_SURVEY) */
         static const char *survey[] = {"swift_value_audit", NULL};
+        /* boot argument in every tier and build, environment open only (opts.c BOOT_ANY) */
+        static const char *any[] = {"swift_value_report", NULL};
         static const int tiers[] = {HAO_ENV_OPEN, HAO_ENV_GUARDED, HAO_ENV_SETUGID};
         hao_opts_t zero;
         hao_opts_parse(&zero, none, NULL, NULL, false, HAO_ENV_OPEN);
         int nknobs = 0;
-        for (int pass = 0; pass < 4; pass++) {
-            const char **l = pass == 0 ? yes : pass == 1 ? dev : pass == 2 ? survey : never;
-            bool want = pass == 0 || (pass == 1 && hao_test_switches) || (pass == 2 && (hao_test_switches || hao_survey_build));
-            for (; *l; l++, nknobs += pass < 3) {
+        for (int pass = 0; pass < 5; pass++) {
+            const char **l = pass == 0 ? yes : pass == 1 ? dev : pass == 2 ? survey : pass == 3 ? never : any;
+            bool want = pass == 0 || pass == 4 || (pass == 1 && hao_test_switches) ||
+                        (pass == 2 && (hao_test_switches || hao_survey_build));
+            for (; *l; l++, nknobs += pass != 3) {
                 char arg[96], up[64] = "HAO_";
                 snprintf(arg, sizeof arg, "hao_%s=1 hao_%s=/x", *l, *l);
                 for (int t = 0; t < 3; t++) {
@@ -94,6 +97,8 @@ int main(void)
                 if (pass == 2) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) &&
                                      hao_env_switch_allowed(up, HAO_ENV_OPEN) == (hao_test_switches || hao_survey_build),
                                      "%s: survey knob, environment open only, survey or test builds only", up);
+                if (pass == 4) CHECK(!hao_env_switch_allowed(up, HAO_ENV_GUARDED) && hao_env_switch_allowed(up, HAO_ENV_OPEN) &&
+                                     !hao_env_test_switch(up), "%s: boot argument everywhere, environment open only", up);
             }
         }
         CHECK(nknobs == 23, "boot-argument lists name 23 knobs (%d)", nknobs);
@@ -102,19 +107,19 @@ int main(void)
     {
         char *et[] = {"HAO_LIBVAL_USER=1", "HAO_SIGRETURN_USER=1", "HAO_AOT_LIMIT_KB=64", "HAO_BRIDGE_ABORT=1",
                       "HAO_NO_JIT_MEMORY=1", "HAO_CODE_ALIAS=1", "HAO_CPU_FEATURES=1", "HAO_AOT_FREE_MB=5,6", "HAO_CRASH=1",
-                      "HAO_SWIFT_VALUE_STRICT=1", NULL};
+                      "HAO_SWIFT_VALUE_STRICT=1", "HAO_SWIFT_VALUE_LIST=/l", NULL};
         hao_opts_parse(&o, et, NULL, NULL, false, HAO_ENV_OPEN);
         bool all = o.libval_user && o.sigreturn_user && o.aot_limit_kb == 64 && o.bridge_abort && o.no_jit_memory && o.code_alias &&
                    o.cpu_clear == (HAO_CPU_ALL & ~HAO_CPU_AES) && !strcmp(o.aot_free_mb, "5,6") && o.crash &&
-                   o.swift_value_strict;
+                   o.swift_value_strict && !strcmp(o.swift_value_list, "/l");
         bool any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias || o.cpu_clear ||
-                   o.aot_free_mb[0] || o.crash || o.swift_value_strict;
+                   o.aot_free_mb[0] || o.crash || o.swift_value_strict || o.swift_value_list[0];
         if (hao_test_switches) CHECK(all, "test switches read in a test build (open)");
         else CHECK(!any && strstr(o.ignored, "HAO_CODE_ALIAS") && strstr(o.ignored, "HAO_LIBVAL_USER"),
                    "test switches not read by a build without HAO_TEST_SWITCHES (ignored: %s)", o.ignored);
         hao_opts_parse(&o, et, NULL, NULL, false, HAO_ENV_GUARDED);
         any = o.libval_user || o.sigreturn_user || o.aot_limit_kb || o.bridge_abort || o.no_jit_memory || o.code_alias || o.cpu_clear ||
-              o.aot_free_mb[0] || o.crash || o.swift_value_strict;
+              o.aot_free_mb[0] || o.crash || o.swift_value_strict || o.swift_value_list[0];
         CHECK(!any, "test switches never read in a guarded process");
         /* HAO_CPU_FEATURES only clears: a mask, baseline, host; anything else clears every optional feature */
         static const struct { const char *v; uint64_t clear; } cf[] = {

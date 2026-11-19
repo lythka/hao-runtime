@@ -972,11 +972,34 @@ code calls through hao's callbacks), or of a special representation such as
 the Error box, is not certified but not known wrong: reported, its payload
 still walked for a known-wrong part; only a witness table word that is no
 conformance is known wrong. Beside a type whose fields are not known it is
-still refused, as above. Strictness returns per type as rows land (v0.0.2); the test
+still refused, as above. The test
 switch `HAO_SWIFT_VALUE_STRICT=1` (test builds) refuses uncertified values
 as before, and the Swift value tests run under it. Test: `guest/svpolicy`
-(report-only and a known-wrong refusal by default), `guest/svfacts`,
+(report-only, and a known-wrong refusal either way), `guest/svfacts`,
 `guest/svconformance` (the existential verdicts).
+
+Strict refusal returns per type (v0.0.2). Report-only now applies only to a
+value whose innermost uncertified types (those its `hao-swift-audit`
+records name) are all on the report-only list, `src/swiftvalue_report.inc`:
+the types one boot of the 27.2.1 image logged as uncertified, written by
+`tools/hao_sv_reportlist.py` from those records; a generic type outside
+the standard library is listed with all its instantiations (by its name
+without generic arguments: an app's `ForEach` of its own element type is
+the boot's `ForEach`'s generator type). Any other uncertified
+value is refused, after its audit record and a `Swift value survey: not
+certified and not listed for report-only` line. A type leaves the list
+when a row certifies it. The boot argument `hao_swift_value_report=1`
+(every process and build; `HAO_SWIFT_VALUE_REPORT=1` in an open process)
+restores report-only for every type: for the boot that collects a list,
+or when an unlisted type stops a program. The admission is made once per
+(type, reason), as the report is. Limits: the list covers only what that
+boot ran and logged; App-Sandboxed processes log to the unified log as
+private records, so their types are missing until a boot with private
+data logging collects them (until then such a process needs the boot
+argument); a guest type is
+listed by name, so another program's type of the same name is admitted
+too. Test: `guest/svpolicy` (an unlisted value refused by default,
+admitted listed and under `HAO_SWIFT_VALUE_REPORT=1`), `aot/opts`.
 
 ## Swift value walk: per-type facts, carrier rules, the survey image's audit
 

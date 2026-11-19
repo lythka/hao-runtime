@@ -196,7 +196,7 @@ static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "H
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
                                             "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_CPU_FEATURES",
                                             "HAO_AOT_FREE_MB", "HAO_CRASH", "HAO_SWIFT_WALK_FACTS", "HAO_SWIFT_GUEST_FACTS",
-                                            "HAO_SWIFT_VALUE_STRICT", NULL};
+                                            "HAO_SWIFT_VALUE_STRICT", "HAO_SWIFT_VALUE_LIST", NULL};
 
 static bool listed(const char *const *l, const char *name)
 {
@@ -227,7 +227,7 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  *    the untyped bridge or are refused, bridge.c), HAO_NATIVE_LIBCXX (guest code meets a libc++ with another
  *    std::string layout, runtime.c), HAO_NATIVE_APP_LIBS (app values cross representation domains), HAO_NO_MSGSEND, HAO_NO_CLOSURES, HAO_NO_SWIFTREG, HAO_NO_*_THUNKS,
  *    HAO_NO_SWIFT_VALUES, HAO_SWIFT_POP, HAO_BRIDGE_CHECK (binds Swift results the default leaves alone,
- *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH and HAO_SWIFT_VALUE_AUDIT (a Swift value hao cannot certify
+ *    swiftresult.c), HAO_SWIFT_VALUE_PASSTHROUGH, HAO_SWIFT_VALUE_REPORT and HAO_SWIFT_VALUE_AUDIT (a Swift value hao cannot certify
  *    reaches native code, swiftvalue.c; the audit only in a SURVEY or test build, its boot argument in every
  *    tier there, opts.c BOOT_SURVEY);
  *  - change signal or memory behaviour: HAO_SIGRETURN_KERNEL (a resumed fault dies where the kernel refuses the

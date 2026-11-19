@@ -346,7 +346,12 @@ Swift value hao cannot certify go on to native code in every process
 (accepting the memory corruption that refusal prevents) and records each such
 type (`swiftvalue.c` `audit_record`); from the environment
 (`HAO_SWIFT_VALUE_AUDIT`) only an open process takes it. A release build
-ignores both, says so once, and refuses.
+ignores both, says so once, and refuses. Every build reads
+`hao_swift_value_report=1`: a Swift value no row or rule certifies either way
+(not one hao knows native code would misread) is reported and goes on in every
+process, as for the types on the report-only list (`swiftvalue.c`
+`report_listed`); from the environment (`HAO_SWIFT_VALUE_REPORT`) only an open
+process takes it.
 
 `HAO_NATIVE_APP_LIBS=1` is an OPEN-tier diagnostic switch, read once at
 startup. It restores native-first loading of app libraries, including guest

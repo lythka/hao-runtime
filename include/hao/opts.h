@@ -38,8 +38,13 @@ typedef struct {
                                     triage only, accepting memory corruption: a Swift value hao cannot certify goes on
                                     to native code instead of being refused (swiftvalue.c decline) */
          swift_value_strict,     /* HAO_SWIFT_VALUE_STRICT (tests; a HAO_TEST_SWITCHES build only): refuse a Swift
-                                    value no row or rule certifies, which the default reports and passes as found
-                                    (swiftvalue.c uncertified) */
+                                    value no row or rule certifies even where its types are listed for report-only
+                                    (swiftvalue.c uncertified, report_listed) */
+         swift_value_report,     /* boot argument hao_swift_value_report=1 (every process, every build) or
+                                    HAO_SWIFT_VALUE_REPORT (open tier): a Swift value no row or rule certifies is
+                                    reported and passed as found whatever its types, as in v0.0.1, accepting the
+                                    corruption a wrong guess causes; for a boot that lists them
+                                    (tools/hao_sv_reportlist.py) or one an unlisted type stops */
          swift_value_audit,      /* boot argument hao_swift_value_audit=1 (every process, every tier) or
                                     HAO_SWIFT_VALUE_AUDIT (open tier): a survey image's setting, accepting memory
                                     corruption as the pass-through does: a value hao cannot certify goes on, and one
@@ -65,6 +70,8 @@ typedef struct {
     char diag_dir[1024];        /* HAO_DIAG_DIR: diagnostics log directory (runtime.c; "" = unset: hao_crash=1's) */
     char swift_walk_facts[1024]; /* HAO_SWIFT_WALK_FACTS: a fixture of the Swift walk's facts table (tests;
                                     swiftvalue/Facts.c; "" = unset) */
+    char swift_value_list[1024]; /* HAO_SWIFT_VALUE_LIST: more report-only type keys, one per line (tests;
+                                    swiftvalue.c report_listed) */
     char swift_guest_facts[1024]; /* HAO_SWIFT_GUEST_FACTS: a fixture of the guest-type rows (tests; Facts.c) */
     char swift_pop[16];         /* HAO_SWIFT_POP: "signature" or "frame" ("" = both; runtime.c callee_pop) */
     char ignored[512];          /* comma-separated switches the tier ignored */

@@ -8,6 +8,7 @@
 #include "hao/swiftvalue.h"
 #include "hao/swiftschema.h"
 #include "hao/opts.h"
+#include "hao/aot.h"
 #include "hao/gmap.h"
 #include "hao/gen_stamp.h"
 #include "hao/dlsym_once.h"
@@ -59,6 +60,7 @@ typedef struct {
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t witness_setup_lock = PTHREAD_MUTEX_INITIALIZER;   /* guest calls of witnesses, below */
 static pthread_mutex_t storage_lock = PTHREAD_MUTEX_INITIALIZER;         /* storage destroy hooks, below */
+static pthread_mutex_t list_lock = PTHREAD_MUTEX_INITIALIZER;            /* the report-only list's test keys, below */
 static plan *plans;
 static const witnesses *vwt(const void *type) { return ((const witnesses *const *)type)[-1]; }
 static bool native_function(uint64_t pc)
@@ -71,6 +73,7 @@ void hao_swift_value_fork_child(void)
     lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     witness_setup_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     storage_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    list_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     storage_fork_child();
     hao_sv_native_leaf_fork_child();
     tables_fork_child();
@@ -129,6 +132,15 @@ static bool first_report(const void *type, const char *why)
     pthread_mutex_unlock(&lock); hao_crit_leave();
     if (full) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG,"Swift value survey: %u types reported; later ones are not\n",SEEN_LIMIT); }
     return first;
+}
+/* Whether (TYPE, WHY) was reported before, without recording it. */
+static bool reported(const void *type, const char *why)
+{
+    bool found = false;
+    hao_crit_enter(); pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < nseen && !found; ++i) found = seen[i].type == type && seen[i].why == why;
+    pthread_mutex_unlock(&lock); hao_crit_leave();
+    return found;
 }
 /* The survey image's audit (boot argument hao_swift_value_audit=1, every
  * process; HAO_SWIFT_VALUE_AUDIT in an open one), honoured only by a survey
@@ -291,10 +303,124 @@ static bool uncertified(const char *why)
     return strstr(why,"unresolved") != NULL;   /* "... unresolved active representation ...", "unresolved assignment destination" */
 }
 
+/* The report-only list: the types whose uncertified values are reported and
+ * passed as found (the v0.0.1 policy) rather than refused.
+ * src/swiftvalue_report.inc holds the types a boot logged as uncertified
+ * (tools/hao_sv_reportlist.py), until rows certify them: KEY(k) a type by
+ * its walk key (Facts.h walk_fact_key), NOMINAL(n) every instantiation of a
+ * generic nominal type outside the standard library, by the runtime's name
+ * with its generic arguments removed ("SwiftUI.ForEach.IDGenerator"). A
+ * test build adds the lines of HAO_SWIFT_VALUE_LIST ("nominal NAME" or a
+ * key). */
+#define KEY(k) k,
+#define NOMINAL(n)
+static const char *const report_keys[] = {
+#include "swiftvalue_report.inc"
+    NULL
+};
+#undef KEY
+#undef NOMINAL
+#define KEY(k)
+#define NOMINAL(n) n,
+static const char *const report_nominals[] = {
+#include "swiftvalue_report.inc"
+    NULL
+};
+#undef KEY
+#undef NOMINAL
+#define NKEYS (sizeof report_keys / sizeof report_keys[0] - 1)
+#define NNOMINALS (sizeof report_nominals / sizeof report_nominals[0] - 1)
+static char **list_extra;
+static unsigned nlist_extra;
+static bool list_loaded;
+static int key_compare(const void *a, const void *b) { return strcmp(*(const char *const *)a,*(const char *const *)b); }
+static bool type_key(const void *type, char *key, uint64_t cap)
+{
+    uint64_t n = 0;
+    const char *m = walk_fact_mangled(type,&n);
+    return m && walk_fact_key(m,n,key,cap);
+}
+/* TEXT (a key, or "nominal NAME") among the test build's added lines. */
+static bool extra_listed(const char *text)
+{
+    if (!hao_test_switches || !hao_opt.swift_value_list[0]) return false;
+    bool found = false;
+    hao_crit_enter(); pthread_mutex_lock(&list_lock);
+    if (!list_loaded) {
+        list_loaded = true;
+        FILE *f = fopen(hao_opt.swift_value_list,"r");
+        char line[2100];
+        while (f && fgets(line,sizeof line,f)) {
+            line[strcspn(line,"\r\n")] = 0;
+            char **g = line[0] ? realloc(list_extra,(nlist_extra + 1) * sizeof *list_extra) : NULL;
+            if (g && (g[nlist_extra] = strdup(line))) { list_extra = g; nlist_extra++; }
+            else if (g) list_extra = g;
+        }
+        if (f) fclose(f);
+    }
+    for (unsigned i = 0; i < nlist_extra && !found; ++i) found = !strcmp(list_extra[i],text);
+    pthread_mutex_unlock(&list_lock); hao_crit_leave();
+    return found;
+}
+static bool key_listed(const char *key)
+{
+    const char *k = key;
+    return (NKEYS && bsearch(&k,report_keys,NKEYS,sizeof *report_keys,key_compare)) || extra_listed(key);
+}
+/* TYPE's generic nominal type on the list: a generic instantiation (its name
+ * has arguments) not of the standard library and not an existential. */
+static bool nominal_listed(const void *type)
+{
+    type_name n = name_of(type);
+    char out[2048 + 8] = "nominal ";
+    size_t o = 8;
+    int depth = 0;
+    if (!memchr(n.text,'<',n.length) || (n.length >= 6 && !memcmp(n.text,"Swift.",6)) ||
+        (n.length >= 4 && !memcmp(n.text,"any ",4)) || memmem(n.text,n.length,"(unknown context",16)) return false;
+    for (uint64_t i = 0; i < n.length; ++i) {
+        char c = n.text[i];
+        if (c == '<') depth++;
+        else if (c == '>') { if (--depth < 0) return false; }
+        else if (!depth) { if (o + 1 >= sizeof out) return false; out[o++] = c; }
+    }
+    if (depth) return false;
+    out[o] = 0;
+    const char *k = out + 8;
+    return (NNOMINALS && bsearch(&k,report_nominals,NNOMINALS,sizeof *report_nominals,key_compare)) || extra_listed(out);
+}
+static bool type_listed(const void *type, const char *key) { return (key[0] && key_listed(key)) || nominal_listed(type); }
+/* Whether every innermost refusing type of the value (as its audit record
+ * names them: audit below), or TYPE where the walk names none, is listed. A
+ * type with no mangled name (a builtin) is listed by its nearest named
+ * parent, as tools/hao_sv_reportlist.py reads its record. */
+static bool report_listed(const void *type, const void *walked, const void *value, int existentials)
+{
+    audit_entry entries[8];
+    unsigned found = 0;
+    char key[2048];
+    if (walked && value) {
+        empty_patch scratch[64];
+        (void)collect_audit_patches(walked,value,scratch,64,existentials,entries,8,&found);
+    }
+    if (!found) return type_key(type,key,sizeof key) ? type_listed(type,key) : nominal_listed(type);
+    for (unsigned i = 0; i < found; ++i) {
+        const void *t = entries[i].type;
+        bool named = type_key(t,key,sizeof key) && key[0];
+        for (unsigned d = entries[i].depth < HAO_SV_AUDIT_CHAIN ? entries[i].depth : HAO_SV_AUDIT_CHAIN; !named && d; --d)
+            named = type_key(t = entries[i].chain[d - 1],key,sizeof key) && key[0];
+        if (!named || !type_listed(t,key)) return false;
+    }
+    return true;
+}
+
 /* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
- * walk refused it, ROOT the type of the activation, LR and PC the guest call. */
+ * walk refused it, ROOT the type of the activation, LR and PC the guest call.
+ * An uncertified value (uncertified above) is reported once per (type,
+ * reason) and passed as found when its types are on the report-only list or
+ * under hao_swift_value_report=1, and refused otherwise; HAO_SWIFT_VALUE_STRICT
+ * (tests) refuses it either way. */
 /* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH, the audit, or for an
- * uncertified reason (report-only). */
+ * uncertified reason the list or hao_swift_value_report admits. */
 static void decline_walk(const void *type, const char *why, const void *walked, const void *value, int existentials,
                          const void *root, uint64_t lr, uint64_t pc)
 {
@@ -305,16 +431,25 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
     }
     bool pass = hao_opt.swift_value_passthrough;
     if (!pass && !hao_opt.swift_value_strict && uncertified(why)) {
-        if (!first_report(type,why)) return;
-        hao_crit_enter();   /* no guest signal handler runs inside the report */
+        /* reported before: admitted then (a refusal is never recorded) */
+        if (reported(type,why)) return;
+        hao_crit_enter();   /* no guest signal handler runs inside the check or the report */
+        bool listed = hao_opt.swift_value_report || report_listed(type,walked,value,existentials);
+        if (listed && !first_report(type,why)) { hao_crit_leave(); return; }
+        /* the record names the keys a list needs (tools/hao_sv_reportlist.py) */
         audit(type,why,walked,value,existentials,root,lr,pc,false);
         type_name n = name_of(type), r = name_of(root);
         hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG,"Swift value survey: not certified, passed as found (report-only): %s (metadata=%p size=%llu "
-            "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
-            vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
+        if (!listed)
+            fprintf(HAO_DIAG,"Swift value survey: not certified and not listed for report-only: %s (type=%.*s)\n",
+                why,(int)n.length,n.text);
+        else
+            fprintf(HAO_DIAG,"Swift value survey: not certified, passed as found (report-only): %s (metadata=%p size=%llu "
+                "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
+                vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,
+                (unsigned long long)pc);
         hao_crit_leave();
-        return;
+        if (listed) return;
     }
     if (pass && !first_report(type,why)) return;
     if (walked && value) {
