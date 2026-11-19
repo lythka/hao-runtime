@@ -2,7 +2,7 @@
 // tests/guest/svguest.sh writes (test switch HAO_SWIFT_GUEST_FACTS) with this binary's own LC_UUID and
 // descriptor offsets. Each type holds a resilient native struct, so the runtime lays it out and its value
 // witnesses are native; generic code the optimizer does not specialize copies it through native Optional and
-// Array witnesses, which the walk's rules refuse for these enums.
+// Array witnesses. The walk's rule for runtime-laid-out multi-payload enums certifies them without rows too.
 //   status: a multi-payload enum, two empty cases; its row says SAME.
 //   fault:  a multi-payload enum with a Data? payload (an arm64 nil); its row says CONVERT, with case images.
 //   record: a struct of a Status?, a Data?, a String? and a [Fault]; its row says CONVERT, by its fields' rows.
