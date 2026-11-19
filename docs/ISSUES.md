@@ -4328,6 +4328,29 @@ Remaining limitations:
 - The reflection cache holds at most 49152 fields; past it, lookups are
   made each time as before.
 
+## Native callback-call contracts
+
+A plain callback takes rax as the guest's x8 (an indirect result's buffer)
+only when its guest callee is marked, has a Swift symbol, or reads x8 in
+its first instructions. A guest function whose read of x8 the machine
+outliner moved into a helper it calls first, or a thunk that forwards x8
+untouched through a register branch, did neither: its result went to
+hao's area and the native caller read an uninitialized buffer. Now a
+native call site can carry its own contract (`src/native_callback.c`,
+`include/hao/native_callback.h`): the native image's LC_UUID, the call's
+return-address offset and the lowered signature of the callee (a
+`hao_swift_reverse` recipe). Records are bound as dyld adds the image,
+only where the UUID matches, the return address lies in the image's
+executable `__TEXT` after an indirect call through a register, the recipe
+is well formed and no other record names the same call differently. A
+callback whose return address has a record takes that recipe whatever
+guest function the call reaches; other callbacks keep the inference above.
+The records are written by hand per macOS build, not generated: one call
+site so far. Test: `test_native_callback` (`make unit`: validation,
+binding by UUID and call site, conflicts, lookups). Limits: only recorded
+call sites are covered; a guest test through a recorded native call needs
+a record for a test library and is not written yet.
+
 ## Buffer copies in an associated result's value scope
 
 While guest code produces an associated result (`View.body`), hao
