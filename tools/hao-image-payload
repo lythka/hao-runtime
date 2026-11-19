@@ -81,8 +81,8 @@
 #   --aot ships AOT caches (<LC_UUID>.aot, include/hao/aot.h) for every embedded program;
 #   --aot-list ALIST for the programs ALIST names instead (one per line, relative to ROOT or
 #   absolute as on the target or under ROOT; '#' comments; any arm64/arm64e program under ROOT,
-#   so it also serves --no-embed). Each is generated from ROOT's file by this build's
-#   `hao --aot` (it maps the image and translates every reachable block; no guest code
+#   so it also serves --no-embed; tools/hao-aot-use makes one from the programs a Mac ran).
+#   Each is generated from ROOT's file by this build's `hao --aot` (it maps the image and translates every reachable block; no guest code
 #   runs), --aot-jobs at a time (default: the CPU count), into OUT/root/usr/lib/hao/aot,
 #   which hao searches first for every process, PID 1 and daemons included, and trusts
 #   once hao-install.py has made it and its files root-owned (src/aot_policy.c). A cache

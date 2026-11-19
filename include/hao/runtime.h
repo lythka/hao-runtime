@@ -679,6 +679,9 @@ static inline uint64_t hao_guest_of_entry(uint64_t a)
     return g ? g : hao_swiftmeta_island_target(a);
 }
 bool hao_aot_load(hao_image *im);
+/* AOT use records (HAO_AOT_USE, aot_use.c): set up once before the first image is initialised; one record per image */
+void hao_aot_use_init(void);
+void hao_aot_use_image(hao_image *im);
 /* phys_footprint and its limit (launchd's jetsam limit), bytes; false: no limit or unreadable (jit.c) */
 bool hao_footprint_limit(uint64_t *footprint, uint64_t *limit);
 

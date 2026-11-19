@@ -4,7 +4,8 @@
 # are cached, a listed missing file is counted, not failed; a list others can write (mode or ACL), or in a
 # directory others can write, is not used. A second run skips the valid caches; --check reports valid, missing and
 # stale and changes nothing. --auto (the LaunchDaemon) runs once per libhao: a marker names its generation, a run
-# where a program failed writes none, and it runs only with free space for the set (HAO_AOT_FREE_MB).
+# where a program failed writes none, and it runs only with free space for the set (HAO_AOT_FREE_MB). A listed native
+# program (no arm64 slice) is counted apart and fails neither --check nor --auto.
 #   OUT=dir HAO=/abs/build-ts/hao [T=120] tests/guest/aotdefault.sh
 set -u
 OUT=${OUT:-$(mktemp -d -t hao-aotdefault)}
@@ -93,6 +94,15 @@ HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c5 timeout -s KILL $T "$HAO" --aot --auto
 [ $r7 = 0 ] && grep -q 'ignored' "$OUT/u7.log" && grep -q 'done for libhao' "$OUT/u7.log" && [ "$(stat -f %Lp "$W/lists/auto-aot.done")" = 644 ] \
     && [ ! -e "$W/lists/auto-aot.done.tmp" ] \
     && echo "PASS --auto: a marker others can write is ignored and replaced; a stale .tmp is not reused" || bad "--auto marker rc $r7: $(tail -3 "$OUT/u7.log")"
+# a listed native program (no arm64 slice) has nothing to cache: --check and --auto count it apart, not as a failure
+clang -arch x86_64 -o "$W/native" "$W/h.c" && codesign -f -s - "$W/native" 2>/dev/null
+printf '%s\n%s\n' "$W/two" "$W/native" >"$W/lists/aot-list"; rm -f "$W/lists/auto-aot.done"
+HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --check --cache "$W/c5" > "$OUT/n1.log" 2>&1; n1=$?
+HAO_AOT_LIST_DIR=$W/lists HAO_CACHE=$W/c5 timeout -s KILL $T "$HAO" --aot --auto > "$OUT/n2.log" 2>&1; n2=$?
+[ $n1 = 0 ] && [ $n2 = 0 ] && grep -q '1 valid, 0 missing, 0 stale, 0 not checkable, 0 listed but not present, 1 native' "$OUT/n1.log" \
+    && grep -q 'native (no arm64 slice)' "$OUT/n2.log" && grep -q 'done for libhao' "$OUT/n2.log" \
+    && echo "PASS a listed native program: --check rc 0, --auto marks done" || bad "native program rc $n1 $n2: $(tail -2 "$OUT/n1.log" "$OUT/n2.log")"
+printf '%s\n' "$W/two" >"$W/lists/aot-list"
 chmod +a "everyone allow write" "$W/lists/aot-list" "$W/lists/stub-identities"
 HAO_AOT_LIST_DIR=$W/lists timeout -s KILL $T "$HAO" --aot --cache "$W/c2" > "$OUT/acl.log" 2>&1; ra=$?
 chmod -N "$W/lists/aot-list" "$W/lists/stub-identities"
