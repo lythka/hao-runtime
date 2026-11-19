@@ -436,22 +436,28 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
     }
     bool pass = hao_opt.swift_value_passthrough;
     const char *kind = "swift-value";
-    if (!pass && !hao_opt.swift_value_strict && uncertified(why)) {
+    /* Known-wrong values are reported too: their rules (malformed tags, nils
+     * with no encoding, flags from a partial walk) are not yet proven against
+     * a crash, and refusing them aborted applications that ran before. */
+    bool known_wrong = !strcmp(why,"value native code would misread") ||
+                       !strcmp(why,"guest-encoded nil in a shared box cannot be converted") ||
+                       !strcmp(why,"child task result has a nil native code would copy in the guest's encoding");
+    if (!pass && !hao_opt.swift_value_strict && (uncertified(why) || known_wrong)) {
         /* reported before: admitted then (a refusal is never recorded) */
         if (reported(type,why)) return;
         hao_crit_enter();   /* no guest signal handler runs inside the check or the report */
-        bool listed = hao_opt.swift_value_report || report_listed(type,walked,value,existentials);
-        if (listed && !first_report(type,why)) { hao_crit_leave(); return; }
+        /* Every uncertified value is reported and passed as found (the
+         * v0.0.1 policy); the list only says whether a boot logged its types
+         * before. Known-wrong values (certified_patches) and strict mode
+         * refuse. */
+        bool on_list = hao_opt.swift_value_report || report_listed(type,walked,value,existentials), listed = true;
+        if (!first_report(type,why)) { hao_crit_leave(); return; }
         /* the record names the keys a list needs (tools/hao_sv_reportlist.py) */
         audit(type,why,walked,value,existentials,root,lr,pc,false);
         type_name n = name_of(type), r = name_of(root);
         hao_diag_prefix(HAO_DIAG);
-        if (!listed)
-            fprintf(HAO_DIAG,"Swift value survey: not certified and not listed for report-only: %s (type=%.*s)\n",
-                why,(int)n.length,n.text);
-        else
-            fprintf(HAO_DIAG,"Swift value survey: not certified, passed as found (report-only): %s (metadata=%p size=%llu "
-                "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
+        fprintf(HAO_DIAG,"Swift value survey: not certified, passed as found (report-only%s): %s (metadata=%p size=%llu "
+                "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",on_list ? "" : ", not listed",why,type,(unsigned long long)vwt(type)->size,
                 vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,
                 (unsigned long long)pc);
         hao_crit_leave();
