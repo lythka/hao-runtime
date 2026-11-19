@@ -236,7 +236,12 @@ typedef struct { FILE *f; char *buf; size_t len; } hao_diag_blk;
 FILE *hao_diag_block(hao_diag_blk *b);
 void hao_diag_block_end(hao_diag_blk *b);
 void hao_diag_prefix(FILE *f);            /* "hao[prog:pid]: " */
-void hao_diag_public(const char *line);   /* a start-up refusal, also public in the unified log */
+/* A refusal's public record (runtime.c): "hao-refusal v1 kind=KIND process=\"P\" key=\"K\" reason=\"R\"", once per
+ * (KIND, KEY) in a process, as a public unified-log error (subsystem com.hao, category refusal) and a line
+ * of hao's diagnostics. Async-signal-safe (fixed buffers, atomics; os_log on a handle made at start-up).
+ * KEY and REASON are names and policy text, never addresses or guest data. */
+void hao_refusal_record(const char *kind, const char *key, const char *reason);
+void hao_refusal_log_init(void);          /* the record's log handle: not in a signal handler */
 /* hao's diagnostic line: HAO_LOG(level, fmt, ...) writes "hao[prog:pid]: "
  * and the message to HAO_DIAG (stderr, or the console and hao_crash's log)
  * in one write, when level <= hao_verbose: 0 always, 1 under -v, 2 under

@@ -5,7 +5,9 @@
  *   big    the same with a 96 KB result: more than hao's area (64 KB a level): the store faults in the
  *          guard after it (native: runs)
  *   call   an ObjC method taking 70000 bytes by value: refused (native: runs)
- *   block  a native call of a guest block whose parameter is 70000 bytes: refused (native: runs) */
+ *   block  a native call of a guest block whose parameter is 70000 bytes: refused (native: runs)
+ *   rawsys raw bsdthread_register twice, then bsdthread_create: refused with ENOTSUP and not run (hao only:
+ *          native would create a thread); one public record per call name */
 #import <string.h>
 #import "refusehelper.h"
 
@@ -50,6 +52,18 @@ int main(int argc, char **argv)
     if (!strcmp(c, "block")) {
         long r = rf_call_block(^long(struct rf_huge v) { return v.b[0] + v.b[sizeof v.b - 1]; }, 5);
         printf("block: %ld\n", r);
+        return 0;
+    }
+    if (!strcmp(c, "rawsys")) {
+        static const long n[] = {366, 366, 360};   /* bsdthread_register, again, bsdthread_create */
+        for (int k = 0; k < 3; k++) {
+            register long x0 __asm__("x0") = 0, x16 __asm__("x16") = n[k];
+            register long x1 __asm__("x1") = 0, x2 __asm__("x2") = 0, x3 __asm__("x3") = 0, x4 __asm__("x4") = 0;
+            long carry;
+            __asm__ volatile("svc #0x80\n\tcset %1, cs" : "+r"(x0), "=r"(carry), "+r"(x1) : "r"(x16), "r"(x2), "r"(x3), "r"(x4)
+                             : "memory", "cc");
+            printf("rawsys %ld: %s %ld\n", n[k], carry ? "errno" : "result", x0);
+        }
         return 0;
     }
     return 2;

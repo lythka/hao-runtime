@@ -79,6 +79,7 @@
 #include <fcntl.h>
 #include <mach-o/loader.h>
 #include <mach/machine.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -486,6 +487,21 @@ void hao_guest_switches_for(const hao_codesig *s)
     }
 }
 
+/* A refusal's line, and its public record (hao_refusal_record, kind startup, keyed by the program's path). */
+static void sig_refuse(FILE *f, const char *path, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static void sig_refuse(FILE *f, const char *path, const char *fmt, ...)
+{
+    char line[1200];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    hao_diag_prefix(f);
+    fprintf(f, "%s\n", line);
+    hao_refusal_log_init();
+    hao_refusal_record("startup", path, line);
+}
+
 /* The policy for the file open on fd, which the caller then hands to the
  * loader (hao_load_main_image). The slice is taken once here (hao_slice:
  * read into memory, unless only root can change the file) and left for the
@@ -499,17 +515,15 @@ int hao_guest_sig_enforce(int fd, const char *path)
     double t0 = now_us();
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-        hao_diag_prefix(f);
-        fprintf(f, "%s: not a regular file\n", path);
+        sig_refuse(f, path, "%s: not a regular file", path);
         return -1;
     }
     /* setuid/setgid cannot be honoured here: the kernel exec'd hao (and
      * through HaoExec's #! route it clears the bits). Running a privileged
      * helper without its privileges would fail in ways it does not expect. */
     if (((st.st_mode & S_ISUID) && geteuid() != st.st_uid) || ((st.st_mode & S_ISGID) && getegid() != st.st_gid)) {
-        hao_diag_prefix(f);
-        fprintf(f, "%s: set-%s-ID program, which hao cannot run with its privileges here; refusing to run "
-                   "(embed it with tools/hao-embed)\n", path, st.st_mode & S_ISUID ? "user" : "group");
+        sig_refuse(f, path, "%s: set-%s-ID program, which hao cannot run with its privileges here; refusing to run "
+                   "(embed it with tools/hao-embed)", path, st.st_mode & S_ISUID ? "user" : "group");
         return -1;
     }
     int rc = 0;
@@ -598,8 +612,7 @@ int hao_guest_sig_enforce(int fd, const char *path)
     }
 out:
     if (rc) {
-        hao_diag_prefix(f);
-        fprintf(f, "%s: %s; refusing to run\n", path, why);
+        sig_refuse(f, path, "%s: %s; refusing to run", path, why);
         hao_slice_close(sl);
     } else {
         hao_slice_hand(sl);                        /* the loader builds the image from the bytes checked here */

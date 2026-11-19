@@ -89,10 +89,15 @@ static type_name name_of(const void *type)
     if (n.length > 4096) n.length = 4096;
     return n;
 }
-static void refuse(const void *type, const char *why)
+/* KIND: the public record's (hao_refusal_record): "swift-value", or "swift-uncertified" for a value
+ * refused only because no row or rule certifies it and no report-only list names its types */
+static void refuse(const void *type, const char *why, const char *kind)
 {
-    hao_diag_prefix(HAO_DIAG);
     type_name n = name_of(type);
+    char key[512];
+    snprintf(key,sizeof key,"%.*s",(int)n.length,n.text);
+    hao_refusal_record(kind,key,why);
+    hao_diag_prefix(HAO_DIAG);
     fprintf(HAO_DIAG,"Swift value boundary refused: %s (metadata=%p size=%llu flags=%#x type=%.*s)\n",
         why,type,(unsigned long long)vwt(type)->size,vwt(type)->flags,(int)n.length,n.text);
     abort();
@@ -430,6 +435,7 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
         fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1)\n");
     }
     bool pass = hao_opt.swift_value_passthrough;
+    const char *kind = "swift-value";
     if (!pass && !hao_opt.swift_value_strict && uncertified(why)) {
         /* reported before: admitted then (a refusal is never recorded) */
         if (reported(type,why)) return;
@@ -450,6 +456,7 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
                 (unsigned long long)pc);
         hao_crit_leave();
         if (listed) return;
+        kind = "swift-uncertified";
     }
     if (pass && !first_report(type,why)) return;
     if (walked && value) {
@@ -458,7 +465,7 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
         (void)collect_survey_patches(walked,value,scratch,64,&unresolved);
         hao_swift_schema_dump(HAO_DIAG,walked,root,type,lr,pc);
     }
-    if (!pass) refuse(type,why);
+    if (!pass) refuse(type,why,kind);
     type_name n = name_of(type), r = name_of(root);
     hao_diag_prefix(HAO_DIAG);
     fprintf(HAO_DIAG,"Swift value survey: passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH): %s (metadata=%p size=%llu "
@@ -783,7 +790,7 @@ bool hao_swift_value_native(hao_thread *t, uint64_t pc)
 void hao_swift_value_end(hao_thread *t, hao_swift_value_scope *scope)
 {
     if (!scope->plan) return;
-    if (t->swift_values != scope) refuse(scope->plan->type,"activation lifetime mismatch");
+    if (t->swift_values != scope) refuse(scope->plan->type,"activation lifetime mismatch","swift-value");
     hao_cpu saved = t->cpu;
     empty_patch patches[64];
     int count = certified_patches(scope->plan->type,scope->output,patches,64,HAO_SV_SOURCE_GUEST,NULL,

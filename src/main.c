@@ -176,6 +176,7 @@ static int oslog_immutable(const void *p, size_t n)
 }
 
 static int run_guest(const char *path, int fd, int entry, int argc, char **argv, char **envp);
+static int refuse(const char *exe, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 /*
  * The file this process runs, from the kernel: the device and inode of the
@@ -680,11 +681,7 @@ int hao_cli_main(int argc, char **argv, char **envp)
      * signature here (guest_sig.c), on the descriptor run_guest hands to
      * the loader. */
     int fd = open(guest_path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "open %s: %s\n", guest_path, strerror(errno));
-        return 126;
-    }
+    if (fd < 0) return refuse(guest_path, "open %s: %s", guest_path, strerror(errno));
     if (hao_guest_sig_enforce(fd, guest_path) != 0) return 126;
     /* The kernel named this process after hao's file. Its long name (p_name:
      * proc_name, proc_pidinfo's pbi_name) is settable, as setprogname does:
@@ -763,10 +760,11 @@ static void pid1_report(void)
             on[0] ? on : "none");
 }
 
-/* A start-up refusal: the line to hao's diagnostics, and as a public record where they go to the unified
- * log (a sandboxed daemon's stderr goes nowhere and its private records show nothing); status 126. */
-static int refuse(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static int refuse(const char *fmt, ...)
+/* A start-up refusal: the line to hao's diagnostics, and its public record (hao_refusal_record, kind
+ * startup, keyed by the program's path) for the unified log (a sandboxed daemon's stderr goes nowhere and
+ * its private records show nothing); status 126. */
+static int refuse(const char *exe, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static int refuse(const char *exe, const char *fmt, ...)
 {
     char line[1024];
     va_list ap;
@@ -776,7 +774,8 @@ static int refuse(const char *fmt, ...)
     hao_diag_prefix(HAO_DIAG);
     fprintf(HAO_DIAG, "%s\n", line);
     fflush(HAO_DIAG);
-    hao_diag_public(line);
+    hao_refusal_log_init();
+    hao_refusal_record("startup", exe, line);
     return 126;
 }
 
@@ -794,8 +793,7 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     dev_t dev = 0;
     ino_t ino = 0;
     if (!self_vnode(apple, &dev, &ino, vpath, sizeof vpath)) {
-        fprintf(stderr, "hao: %s: the kernel does not say which file this process runs; refusing to run\n", exe);
-        return 126;
+        return refuse(exe, "%s: the kernel does not say which file this process runs; refusing to run", exe);
     }
     /* the re-exec's loop guard: this file, whatever path reaches it */
     snprintf(self, sizeof self, "%llu:%llu", (unsigned long long)dev, (unsigned long long)ino);
@@ -844,10 +842,10 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     int fd = open(exe, O_RDONLY | O_CLOEXEC);
     struct stat st;
     if (fd < 0) {
-        return refuse("open %s: %s", exe, strerror(errno));
+        return refuse(exe, "open %s: %s", exe, strerror(errno));
     }
     if (fstat(fd, &st) != 0 || st.st_dev != dev || st.st_ino != ino) {
-        return refuse("%s no longer names the file this process runs; refusing to load its ARM code from another file", exe);
+        return refuse(exe, "%s no longer names the file this process runs; refusing to load its ARM code from another file", exe);
     }
     /* The slice is taken once, here, and left for the loader. It is authenticated first, before anything
      * the environment selects can load: its signature verified and its cdhash the one the stub names (the
@@ -856,7 +854,7 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     hao_slice *sl = hao_slice_open(fd, w, sizeof w);
     if (!sl || hao_libval_stub_bound(sl, w, sizeof w) != 0) {
         hao_slice_close(sl);
-        return refuse("%s: %s", exe, w);
+        return refuse(exe, "%s: %s", exe, w);
     }
     hao_guest_switches_for(&sl->sig);
     hao_slice_hand(sl);
@@ -928,7 +926,7 @@ static int run_guest(const char *path, int fd, int entry, int argc, char **argv,
     char err[512], real[MAXPATHLEN];
     if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
     hao_image *img = hao_load_main_image(path, fd, entry, err, sizeof err);
-    if (!img) return refuse("%s", err);
+    if (!img) return refuse(path, "%s", err);
     hao_phase("load");
     /* PATH is absolute and unresolved, as dyld presents the main executable */
     extern char hao_guest_exec_path[1024], hao_guest_image_path[1024];

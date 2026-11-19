@@ -1716,13 +1716,105 @@ static void uni_start(void)
     __atomic_store_n(&uni_starting, 0, __ATOMIC_RELEASE);
 }
 
-/* A start-up refusal (the program does not run: status 126) also as a public record, when this process's
- * diagnostics go to the unified log: its text is hao's policy and the program's path, no register values
- * or guest data, and it is what an administrator needs to see in log show without private data. */
-void hao_diag_public(const char *line)
+/* ------------------------------ refusal records
+ * Each refusal (a start-up refusal, a binding or signature the bridge cannot place, a Swift value the
+ * boundary refuses, a raw system call hao does not run) leaves one public record, so that a refusal can be
+ * counted from the unified log alone, whatever hao_crash says and whatever the private records hide:
+ *   hao-refusal v1 kind=KIND process="NAME" key="KEY" reason="REASON"
+ * KIND is fixed text; NAME is getprogname(); KEY names what was refused (a symbol, a type encoding, a
+ * Swift type name, a system call; the program's path for a start-up refusal, which names it already);
+ * REASON is hao's policy text. No addresses, register values or guest data. Quotes and backslashes in a
+ * value are escaped, control bytes become '?', and each value is cut at a fixed length.
+ * Once per (KIND, KEY) in a process: a fixed table of 64-bit hashes claimed by compare-and-swap; when it
+ * is full, later keys are not recorded.
+ * Async-signal-safe as hao_fatal_safe: stack buffers, atomics, hao_diag_write, and os_log on a handle made
+ * and whose preferences were read outside any handler (hao_refusal_log_init); libtrace formats a %s
+ * argument into a stack buffer and writes the shared buffer without allocating. A fork child does not use
+ * its parent's handle (see uni_fork_child) and records to OS_LOG_DEFAULT; its table starts empty. Inside a hao critical section,
+ * so no guest signal handler runs during the write. */
+#define REFUSAL_KEYS 1024
+static uint64_t refusal_seen[REFUSAL_KEYS];
+static os_log_t refusal_log;
+static int refusal_forked;
+
+static void refusal_fork_child(void)
 {
-    if (__atomic_load_n(&uni_thr, __ATOMIC_ACQUIRE) && uni_log)
-        os_log_with_type(uni_log, OS_LOG_TYPE_ERROR, "refused: %{public}s", line);
+    refusal_forked = 1;   /* the parent's handle faults here, as uni_log does */
+    memset(refusal_seen, 0, sizeof refusal_seen);   /* a process of its own: its refusals are recorded */
+}
+static pthread_once_t refusal_once = PTHREAD_ONCE_INIT;
+static void refusal_register(void) { pthread_atfork(NULL, NULL, refusal_fork_child); }
+
+void hao_refusal_log_init(void)
+{
+    if (refusal_log || refusal_forked) return;
+    pthread_once(&refusal_once, refusal_register);
+    os_log_t l = os_log_create("com.hao", "refusal");
+    (void)os_log_type_enabled(l, OS_LOG_TYPE_ERROR);   /* its preferences, read now */
+    refusal_log = l;
+}
+
+static bool refusal_first(const char *kind, const char *key)
+{
+    uint64_t h = 14695981039346656037ull;
+    for (const char *p = kind; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
+    h = (h ^ 0xff) * 1099511628211ull;
+    for (const char *p = key; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
+    if (!h) h = 1;
+    for (unsigned i = 0; i < REFUSAL_KEYS; i++) {
+        uint64_t *slot = &refusal_seen[(h + i) % REFUSAL_KEYS], cur = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+        if (cur == h) return false;
+        if (cur) continue;
+        if (__atomic_compare_exchange_n(slot, &cur, h, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return true;
+        if (cur == h) return false;
+    }
+    return false;
+}
+
+static size_t refusal_put(char *b, size_t at, size_t cap, const char *s, size_t most, bool quoted)
+{
+    size_t start = at;
+    for (; s && *s && at + 3 < cap && at - start < most; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (quoted && (c == '"' || c == '\\')) b[at++] = '\\';
+        b[at++] = c < 0x20 || c == 0x7f ? '?' : (char)c;
+    }
+    return at;
+}
+
+void hao_refusal_record(const char *kind, const char *key, const char *reason)
+{
+    if (!kind) kind = "?";
+    if (!key) key = "";
+    if (!refusal_first(kind, key)) return;
+    int e = errno;
+    char b[1000];
+    size_t at = refusal_put(b, 0, sizeof b, "hao-refusal v1 kind=", 64, false);
+    at = refusal_put(b, at, sizeof b, kind, 32, false);
+    at = refusal_put(b, at, sizeof b, " process=\"", 16, false);
+    at = refusal_put(b, at, sizeof b, getprogname(), 64, true);
+    at = refusal_put(b, at, sizeof b, "\" key=\"", 16, false);
+    at = refusal_put(b, at, sizeof b, key, 480, true);
+    at = refusal_put(b, at, sizeof b, "\" reason=\"", 16, false);
+    at = refusal_put(b, at, sizeof b, reason ? reason : "", 320, true);
+    at = refusal_put(b, at, sizeof b, "\"", 1, false);
+    b[at] = 0;
+    hao_crit_enter();
+    os_log_t l = __atomic_load_n(&refusal_forked, __ATOMIC_RELAXED) || !refusal_log ? OS_LOG_DEFAULT : refusal_log;
+    os_log_with_type(l, OS_LOG_TYPE_ERROR, "%{public}s", b);
+    hao_crit_leave();
+    /* the same line among hao's diagnostics */
+    char d[1200];
+    size_t k = refusal_put(d, 0, sizeof d, "hao[", 4, false);
+    k = refusal_put(d, k, sizeof d, getprogname(), 64, false);
+    k = refusal_put(d, k, sizeof d, ":", 1, false);
+    k += hao_diag_fmt_u64(d + k, (uint64_t)getpid(), 10);
+    k = refusal_put(d, k, sizeof d, "]: ", 3, false);
+    memcpy(d + k, b, at);
+    k += at;
+    d[k++] = '\n';
+    hao_diag_write(d, k);
+    errno = e;
 }
 
 static void uni_fork_child(void)
@@ -2243,6 +2335,7 @@ void hao_diag_init(void)
 {
     static int done;
     if (done++) return;
+    hao_refusal_log_init();
     bool crash = hao_opt.crash, mk = false;
     diag_stamp = hao_opt.diag_time;
     if (diag_stamp) diag_now_ns();   /* the timebase, read outside any signal handler */

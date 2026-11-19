@@ -378,6 +378,19 @@ log directory that a user other than its owner may write, or a log file of
 another user, is not used. A process that cannot write a log (an App Sandbox
 one) sends the lines to the unified log as private records, which `log show`
 prints as `<private>` unless the Mac logs private data.
+
+Refusals are the exception: each one also writes one public unified-log
+error (subsystem `com.hao`, category `refusal`), with or without
+`hao_crash=1`, and the same line to the diagnostics:
+`hao-refusal v1 kind=KIND process="NAME" key="KEY" reason="REASON"`. It holds
+only the process name, what was refused (a symbol, a type encoding, a Swift
+type name, a system call name, or for a start-up refusal the program's path,
+which the start-up line already names) and hao's policy text. No addresses,
+register values, argument values or other guest data are written, so it is
+safe to show to anyone who can read the log. It is written once per kind and
+key in a process (a fixed table), so a refusal on a hot path cannot flood the
+log. It is built in fixed buffers without allocation, so it can be written
+from a signal handler.
 ## AOT caches
 
 An AOT cache (`<LC_UUID>.aot`, written by `hao --aot [--cache DIR] FILE...`) is x86_64 code that
