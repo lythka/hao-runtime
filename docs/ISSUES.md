@@ -273,6 +273,34 @@ rest and the marker). Limits: the 4 GB is the payload's list measured once,
 not an estimate from the programs left to cache; a single cache larger than
 the 2 GB kept is not foreseen.
 
+## AOT chosen from recorded use
+
+The payload's AOT list was fixed (every embedded program, or a hand-made
+`--aot-list`); nothing said which programs a Mac runs. With `HAO_AOT_USE=1`
+(guarded processes too) or boot argument `hao_aot_use=1`, every hao process
+logs AOT use records to the unified log (subsystem `com.hao`, category `use`;
+`src/aot_use.c`): per guest image, once at initialisation, the run, its
+LC_UUID, what AOT found (off, aot, none, rejected, unfit) and its path; at
+exit, 60 s after the start and then every 10 minutes while it grows, the
+blocks the JIT translated per image. The hot path adds one atomic add per
+translated block under the JIT lock; nothing runs in a signal handler.
+`tools/hao-aot-use` turns the records of any number of boots into a list
+(most runs first, then most translated blocks; `--root` keeps files with an
+arm64 slice, `--base` adds a fixed list, `--report` the per-image table),
+which `hao-image-payload --aot-list` takes; the caches stay bound to cdhash
+and libhao and load only from trusted directories. Tests: `aot` (U),
+`tests/tools/test_aot_use.py`. Limits: paths are logged public (a test-image
+switch, off by default); a process killed before its first report (60 s)
+leaves only its image records; a fork child reports only at its exit;
+arm64e shared-cache images have no file of their own and are left out.
+
+## A listed native program failed `hao --aot --check` and `--auto`
+
+A program of the list with no arm64 or arm64e slice (an image that ships a
+native build) was "not checkable": `--check` exited 1 on a complete set and
+`--auto` never wrote its done marker. Such a program is now counted apart
+("native, nothing to cache") and fails neither. Test: `guest/aotdefault`.
+
 ## Guest files read before or around the signature check
 
 Five checks of guest files and their metadata were weaker than their

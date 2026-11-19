@@ -12,7 +12,8 @@
 # tests/tools/codeid.sh (the code identity Security.framework gives listed stubs, src/code_identity.c) and
 # tests/tools/test_codesig.py (tools/hao_codesig.py and src/libval.c read a signature alike) and
 # tests/tools/test_trustlist.py (hao-trust-list hashes and verifies one copy of a file) and
-# tests/tools/test_root.py (--cryptex: a cryptex beside ROOT, the same outputs as in place).
+# tests/tools/test_root.py (--cryptex: a cryptex beside ROOT, the same outputs as in place) and
+# tests/tools/test_aot_use.py (tools/hao-aot-use: AOT use records to an AOT list).
 #   OUT=dir [B=build] [KC=BootKernelExtensions.kc] tests/tools/run.sh
 # Supply KC explicitly for read-only kernel collection checks; stamp cases
 # are skipped without it. Exit 1 if any case failed.
@@ -337,6 +338,10 @@ else bad "hao-trust-list: $(echo "$r" | grep FAIL)"; fi
 if r=$(timeout 300 python3 -I "$here/test_root.py" "$OUT/root" "$G" /bin/ls "$B/hao-stub" "$X86" 2>&1); then
     pass "--cryptex: $(echo "$r" | tr '\n' ';')"
 else bad "--cryptex: $(echo "$r" | grep FAIL)"; fi
+# --- hao-aot-use: AOT use records (src/aot_use.c) -> the AOT list hao-image-payload --aot-list takes
+if r=$(timeout 120 python3 -I "$here/test_aot_use.py" "$OUT/aotuse" 2>&1); then
+    pass "hao-aot-use: $(echo "$r" | tr '\n' ';')"
+else bad "hao-aot-use: $(echo "$r" | grep FAIL)"; fi
 # --- codesign's working copies only under a parent nobody else can change; the directory and files checked by
 # inode before codesign reads them
 d=$OUT/private; rm -rf "$d"; mkdir -p "$d"
