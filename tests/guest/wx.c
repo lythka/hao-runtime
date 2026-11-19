@@ -48,12 +48,12 @@ static int cmp(const void *a, const void *b)
 static int (*const table[])(const void *, const void *) = {cmp};
 #endif
 
-/* Regions that are writable and executable, plus writable regions that map the same memory object as an
- * executable one (a write view of code), Rosetta's own memory aside */
+/* Regions that are writable and executable, plus writable regions whose backing-object offsets overlap an
+ * executable region (a write view of code), Rosetta's own memory aside */
 int wx_regions(void)
 {
     enum { MAXR = 4096 };
-    static struct { uint64_t lo, hi; unsigned obj; int prot, tag; } r[MAXR];
+    static struct { uint64_t lo, hi, offset; unsigned obj; int prot, tag; } r[MAXR];
     int n = 0, wx = 0;
     mach_vm_address_t a = 0;
     while (n < MAXR) {
@@ -63,7 +63,7 @@ int wx_regions(void)
         mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
         if (mach_vm_region_recurse(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &cnt) != KERN_SUCCESS)
             break;
-        r[n].lo = a; r[n].hi = a + size; r[n].obj = info.object_id; r[n].prot = info.protection; r[n].tag = info.user_tag;
+        r[n].lo = a; r[n].hi = a + size; r[n].offset = info.offset; r[n].obj = info.object_id; r[n].prot = info.protection; r[n].tag = info.user_tag;
         n++;
         a += size;
     }
@@ -72,7 +72,9 @@ int wx_regions(void)
         if (r[i].tag >= 230 && r[i].tag <= 239) continue;
         bool w = r[i].prot & VM_PROT_WRITE, x = r[i].prot & VM_PROT_EXECUTE, alias = false;
         for (int j = 0; w && !x && r[i].obj && j < n; j++)
-            alias |= j != i && r[j].obj == r[i].obj && (r[j].prot & VM_PROT_EXECUTE) && !(r[j].tag >= 230 && r[j].tag <= 239);
+            alias |= j != i && r[j].obj == r[i].obj &&
+                     r[i].offset < r[j].offset + (r[j].hi - r[j].lo) &&
+                     r[j].offset < r[i].offset + (r[i].hi - r[i].lo) && (r[j].prot & VM_PROT_EXECUTE) && !(r[j].tag >= 230 && r[j].tag <= 239);
         if ((w && x) || alias) {
             wx++;
             fprintf(stderr, "wx: [%#llx, %#llx) prot %d tag %d%s\n", (unsigned long long)r[i].lo, (unsigned long long)r[i].hi,
