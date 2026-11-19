@@ -60,7 +60,9 @@ Runs as root inside an image builder (pure Python, no developer tools):
      aot_caches records the count, bytes and removals.
   5. Every fat file in SYSTEM whose x86_64 slice is a hao stub must name its
      arm slice (legacy_stubs): one that does not is an error, wherever it is.
-  6. Writes SYSTEM/usr/lib/hao/install.json.
+  6. Writes SYSTEM/usr/lib/hao/install.json, with "payload": the identity
+     payload-manifest.json gives (version, commit, os_build, cache_uuid,
+     layout_version), which --install-live compares with the next payload.
 Every name a manifest supplies ("path", "stub", "file", a bound "file") is a
 relative path under SYSTEM or PAYLOAD by the rule of tools/hao_release.py
 (relative, safe): not absolute, no "..", no backslash or NUL, already
@@ -147,6 +149,18 @@ MANIFEST = "payload-manifest.json"
 # Listed by the payload build, made on the installed system when absent: tools/hao-public-archive leaves the AOT
 # caches out, and `hao --aot` makes them after the first boot.
 MADE_LATER = "root/usr/lib/hao/aot/"
+
+
+IDENTITY = ("version", "commit", "os_build", "cache_uuid", "layout_version")
+
+
+def payload_identity(payload):
+    """The identity fields of PAYLOAD's payload-manifest.json (None where it has none); Unsafe if unreadable."""
+    try:
+        m = json.loads(read_nofollow(os.path.join(payload, MANIFEST)))
+        return {k: m.get(k) for k in IDENTITY}
+    except (OSError, ValueError, AttributeError) as x:
+        raise Unsafe("%s: missing or malformed (%s)" % (MANIFEST, x))
 
 
 def read_nofollow(path):
@@ -902,6 +916,7 @@ def install_staged(system, payload, admitted, staged):
         if r not in done:
             errors.append(r + " (required, not embedded)")
     record = install_record(installed, emb, required, legacy, replaced, aot_dirs, aot_caches, errors, manifest)
+    record["payload"] = payload_identity(payload)
     close_all(targets)
     write_record(system, record_path, record)
     print(f"hao: installed {installed} runtime files; embedded {len(done)} executables; "
