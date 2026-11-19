@@ -4935,6 +4935,7 @@ static void emit_block(tctx *t, uint64_t pc, const uint32_t *insns, int n)
         exit_direct(t, pc + 4u * (unsigned)n);
     }
     if (t->dry) return;
+    if (t->im) __atomic_fetch_add(&t->im->jit_blocks, 1, __ATOMIC_RELAXED);   /* AOT use records (aot_use.c) */
     st_blocks++;
     st_insns += (uint64_t)n;
 }
@@ -5790,9 +5791,11 @@ static bool aot_fits(uint64_t cost, char *why, size_t n)
 bool hao_aot_load(hao_image *im)
 {
     /* no code cache (no executable memory): nothing to install, run interpreted */
+    im->aot_state = HAO_AOT_STATE_OFF;
     if (!im->has_uuid || hao_opt.no_aot || !hao_jit_init()) return false;
     const uint8_t *gen = aot_gen();
     if (!gen) { if (hao_verbose) fprintf(HAO_DIAG, "hao: AOT off: this hao build has no LC_UUID\n"); return false; }
+    im->aot_state = HAO_AOT_STATE_NONE;
     hao_aot_dir dirs[HAO_AOT_MAX_DIRS];
     int w;
     char why[512], name[64];
@@ -5806,7 +5809,11 @@ bool hao_aot_load(hao_image *im)
     for (int d = 0; d < nd; d++) {
         struct stat st;
         int fd = hao_aot_open_trusted(&dirs[d], name, &st, why, sizeof why);
-        if (fd < 0) { if (why[0]) aot_reject(dirs[d].path, name, why); continue; }
+        if (fd < 0) {
+            if (why[0]) { aot_reject(dirs[d].path, name, why); im->aot_state = HAO_AOT_STATE_REJECTED; }
+            continue;
+        }
+        im->aot_state = HAO_AOT_STATE_REJECTED;   /* a file: LOADED below once one installs */
         if (x.id_kind == HAO_AOT_ID_CODE && aot_dir_system(&dirs[d], dirs[d].path, -1)) {
             close(fd);
             aot_reject(dirs[d].path, name, "this image is not code signed; a system cache directory serves signed code only");
@@ -5844,11 +5851,13 @@ bool hao_aot_load(hao_image *im)
             __atomic_fetch_add(&st_aot_rejected, 1, __ATOMIC_RELAXED);
             hao_diag_prefix(HAO_DIAG);
             fprintf(HAO_DIAG, "AOT cache %s/%s %s\n", dirs[d].path, name, why);
+            im->aot_state = HAO_AOT_STATE_UNFIT;
             return false;
         }
         bool ok = lazy ? aot_lazy_install(im, &v, buf, fsz, why, sizeof why) : aot_install(im, &v, why, sizeof why);
         if (!(ok && lazy)) aot_free_all(buf, fsz);   /* a lazy install keeps the mapping */
         if (!ok) { aot_reject(dirs[d].path, name, why); continue; }
+        im->aot_state = HAO_AOT_STATE_LOADED;
         if (hao_verbose)
             fprintf(HAO_DIAG, "hao: AOT cache %s/%s loaded: %u blocks, %llu KB%s\n", dirs[d].path, name, nb, (unsigned long long)(cs >> 10),
                     lazy ? ", each block copied in when it first runs" : "");

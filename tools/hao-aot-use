@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""hao-aot-use: an AOT list (/usr/lib/hao/aot-list) from recorded use.
+
+  hao-aot-use [--root ROOT [--cryptex NAME=DIR]...] [--base LIST] [--min-runs N] [--programs-only]
+              [--report JSON] [-o LIST] LOG...
+
+LOG is text holding the runtime's AOT use records (src/aot_use.c), written by every hao process of a boot whose
+boot arguments have hao_aot_use=1 (or a process with HAO_AOT_USE=1): the output of
+
+  log show --last boot --style compact --predicate 'subsystem == "com.hao" AND category == "use"'
+
+on the Mac that ran them (any --style; several boots or Macs: several files), hao's -v stderr, or bare records;
+'-' reads standard input. Every line that holds "hao-use 1 " counts; others are ignored.
+
+The list names each guest image that ran (main programs and guest dylibs; with --programs-only main programs
+only) in at least N runs (--min-runs, default 1), most runs first, then most blocks the JIT translated (code no
+cache served), then by path. --base LIST adds a list's entries after them ('#' comments; the list
+tools/hao-image-payload --aot-list takes). With --root, the image's System root, an entry is kept only when it
+is a file under ROOT with an arm64 or arm64e slice: arm64e shared-cache images (no file of their own) and native
+programs are reported, not listed. The output (-o, default stdout) is what hao-image-payload --aot-list takes.
+--report writes per image: runs, runs as the main program, what AOT found (off, aot, none, rejected, unfit),
+translated blocks, the LC_UUIDs seen, and whether it was listed and why not.
+
+The records only say what ran; the caches are still made by hao --aot from ROOT's files, bound to their cdhash
+and the payload's libhao, and loaded only from trusted directories (docs/security-model.md).
+"""
+import argparse
+import collections
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hao_fat  # noqa: E402
+import hao_root  # noqa: E402
+
+TAG = "hao-use 1 "
+STATES = ("off", "aot", "none", "rejected", "unfit")
+
+
+def parse_records(lines):
+    """(runs {run: main path}, images {(run, path): (uuid, state, kind)}, jit {(run, path): (uuid, blocks)})."""
+    mains, images, jit = {}, {}, {}
+    bad = 0
+    for line in lines:
+        k = line.find(TAG)
+        if k < 0:
+            continue
+        f = line[k + len(TAG):].rstrip("\r\n").split(" ", 4)
+        try:
+            if len(f) == 5 and f[1] in ("main", "image"):
+                run, kind, uuid, state, path = f
+                if state not in STATES or len(uuid) != 32 or not path.startswith("/"):
+                    raise ValueError
+                images[(run, path)] = (uuid, state, kind)
+                if kind == "main":
+                    mains[run] = path
+            elif len(f) == 5 and f[1] == "jit":
+                run, _, blocks, uuid, path = f
+                n = int(blocks)
+                if len(uuid) != 32 or not path.startswith("/"):
+                    raise ValueError
+                # cumulative counts: a run's last (largest) record holds
+                if n > jit.get((run, path), ("", -1))[1]:
+                    jit[(run, path)] = (uuid, n)
+            else:
+                raise ValueError
+        except ValueError:
+            bad += 1
+    return mains, images, jit, bad
+
+
+def arm_uuid(data):
+    """(has an arm64/arm64e slice, LC_UUID hex of the preferred one or None); (False, None) if not a Mach-O."""
+    sl = hao_fat.slices(data)
+    if not sl:
+        return False, None
+    arm = [s for s in sl if s[0] == hao_fat.CPU_ARM64]
+    if not arm:
+        return False, None
+    pick = next((s for s in arm if s[1] & 0xFFFFFF == 2), arm[0])[2]
+    try:
+        for cmd, off, size in hao_fat.load_commands(pick):
+            if cmd == 0x1B and size >= 24:
+                return True, pick[off + 8:off + 24].hex()
+    except ValueError:
+        pass
+    return True, None
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="hao-aot-use", description="an AOT list from recorded use (see the file's header)")
+    ap.add_argument("logs", nargs="+", metavar="LOG")
+    ap.add_argument("--root")
+    ap.add_argument("--cryptex", action="append", default=[])
+    ap.add_argument("--base")
+    ap.add_argument("--min-runs", type=int, default=1)
+    ap.add_argument("--programs-only", action="store_true")
+    ap.add_argument("--report")
+    ap.add_argument("-o", dest="out")
+    a = ap.parse_args()
+    if a.min_runs < 1:
+        ap.error("--min-runs: at least 1")
+    if a.cryptex and not a.root:
+        ap.error("--cryptex needs --root")
+    lines = []
+    for p in a.logs:
+        f = sys.stdin if p == "-" else open(p, encoding="utf-8", errors="replace")
+        lines.extend(f)
+        if f is not sys.stdin:
+            f.close()
+    mains, images, jit, bad = parse_records(lines)
+    if not images and not jit:
+        sys.exit("hao-aot-use: no hao-use records in %s (was hao_aot_use=1 set?)" % ", ".join(a.logs))
+
+    per = collections.OrderedDict()
+
+    def ent(path):
+        return per.setdefault(path, {"path": path, "runs": 0, "main_runs": 0, "aot": collections.Counter(),
+                                     "jit_blocks": 0, "uuids": set()})
+
+    runs_of = collections.defaultdict(set)
+    for (run, path), (uuid, state, kind) in images.items():
+        e = ent(path)
+        runs_of[path].add(run)
+        e["aot"][state] += 1
+        e["uuids"].add(uuid)
+    for (run, path), (uuid, n) in jit.items():
+        e = ent(path)
+        runs_of[path].add(run)   # a run whose image record was lost (log quota) still counts
+        e["jit_blocks"] += n
+        e["uuids"].add(uuid)
+    for path, rs in runs_of.items():
+        per[path]["runs"] = len(rs)
+        per[path]["main_runs"] = sum(mains.get(r) == path for r in rs)
+
+    tree = hao_root.Root(a.root, hao_root.parse(a.cryptex)) if a.root else None
+    rroot = os.path.realpath(a.root) if a.root else None
+    chosen = []
+    for e in per.values():
+        why = None
+        if a.programs_only and not e["main_runs"]:
+            why = "not a main program (--programs-only)"
+        elif e["runs"] < a.min_runs:
+            why = "ran in fewer than %d runs" % a.min_runs
+        elif tree:
+            real = tree.resolve(os.path.join(rroot, e["path"].lstrip("/")))
+            host = tree.host(real)
+            if not real.startswith(rroot.rstrip("/") + "/") or not os.path.isfile(host):
+                why = "not a file under ROOT (a shared-cache image, or not in this image)"
+            else:
+                with open(host, "rb") as f:
+                    arm, uuid = arm_uuid(f.read())
+                if not arm:
+                    why = "no arm64/arm64e slice under ROOT (native there)"
+                elif uuid and uuid not in e["uuids"]:
+                    e["note"] = "ROOT's file has LC_UUID %s, another build than the one recorded" % uuid
+        e["listed"] = why is None
+        if why:
+            e["why"] = why
+        else:
+            chosen.append(e)
+    chosen.sort(key=lambda e: (-e["runs"], -e["jit_blocks"], e["path"]))
+    out = [e["path"] for e in chosen]
+    seen = set(out)
+    nbase = 0
+    if a.base:
+        for line in open(a.base, encoding="utf-8"):
+            p = line.split("#", 1)[0].strip()
+            if not p:
+                continue
+            p = "/" + p.lstrip("/")
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+                nbase += 1
+
+    head = "# hao-aot-use: %d images from %d runs (%d records unreadable)%s\n" % (
+        len(chosen), len({r for r, _ in images} | {r for r, _ in jit}), bad,
+        ", then %d from %s" % (nbase, os.path.basename(a.base)) if a.base else "")
+    text = head + "".join(p + "\n" for p in out)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        sys.stdout.write(text)
+    if a.report:
+        rows = []
+        for e in per.values():
+            r = dict(e)
+            r["aot"] = dict(sorted(e["aot"].items()))
+            r["uuids"] = sorted(e["uuids"])
+            rows.append(r)
+        rows.sort(key=lambda r: (not r["listed"], -r["runs"], -r["jit_blocks"], r["path"]))
+        with open(a.report, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "runs": len({r for r, _ in images} | {r for r, _ in jit}), "unreadable": bad,
+                       "listed": len(chosen), "base_added": nbase, "images": rows}, f, indent=1, sort_keys=True)
+            f.write("\n")
+    print("hao-aot-use: %d of %d images listed%s" % (len(chosen), len(per), ", %d from the base list" % nbase if a.base else ""),
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

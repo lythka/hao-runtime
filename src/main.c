@@ -111,6 +111,7 @@ void hao_guest_image_init(hao_image *img)
         if (!prepared) hao_aot_load(img);
         if (hao_opt.diag_time) { snprintf(what, sizeof what, "aot %s", base); hao_phase(what); }
     }
+    hao_aot_use_image(img);   /* HAO_AOT_USE: which images run, and whether a cache served them */
     /* every adaptation is made: constant data becomes read-only, as dyld leaves it for initializers */
     if (!hao_image_seal(img)) {   /* fail closed: no initializer runs over writable constant data */
         HAO_LOG(0, "%s: constant data cannot be made read-only; stopping\n", base);
@@ -357,6 +358,23 @@ static bool aot_dir_ok(const char *dir, char *canon)
     return false;
 }
 
+/* PATH is a Mach-O with no arm64 or arm64e slice: a native program, which hao never runs, so it has no
+ * cache to make or check (an image may ship a native build of a program its list still names). */
+static bool aot_native_only(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return false;
+    struct stat st;
+    uint64_t off, size;
+    uint32_t sub;
+    char why[160];
+    bool r = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+             !hao_macho_choose_slice(fd, (uint64_t)st.st_size, &off, &size, &sub, why, sizeof why) &&
+             !strcmp(why, "no arm64/arm64e slice");
+    close(fd);
+    return r;
+}
+
 /* strict (--auto): a list that cannot be read to its end, or a listed file
  * that is not there, fails the run as a failed program does. */
 static int aot_default(const char *cache, bool check, bool strict, const char *cpu_spec, uint64_t cpu)
@@ -412,9 +430,14 @@ static int aot_default(const char *cache, bool check, bool strict, const char *c
     if (jobs > 4) jobs = 4;
     if (check) fprintf(stderr, "hao-aot: no FILE given: checking the %zu programs %s names\n", np, stubs ? spath : lpath);
     else fprintf(stderr, "hao-aot: no FILE given: the %zu programs %s names, %d at a time\n", np, stubs ? spath : lpath, jobs);
-    int running = 0, ok = 0, failed = 0, valid = 0, absent = 0, stale = 0;
+    int running = 0, ok = 0, failed = 0, valid = 0, absent = 0, stale = 0, native = 0;
     for (size_t i = 0; i <= np; i++) {
         if (i < np) {
+            if (aot_native_only(paths[i])) {
+                native++;
+                fprintf(stderr, "hao-aot: [%zu/%zu] %s: native (no arm64 slice), nothing to cache\n", i + 1, np, paths[i]);
+                continue;
+            }
             int r = hao_aot_check_file(paths[i], cache, false, cpu);
             if (check) {
                 const char *what = r == 0 ? "valid" : r == 3 ? "missing" : r == 4 ? "stale" : "not checkable";
@@ -450,11 +473,12 @@ static int aot_default(const char *cache, bool check, bool strict, const char *c
     for (size_t i = 0; i < np; i++) free(paths[i]);
     free(paths);
     if (check) {
-        fprintf(stderr, "hao-aot: %d valid, %d missing, %d stale, %d not checkable, %d listed but not present\n", valid, absent, stale,
-                failed, missing);
+        fprintf(stderr, "hao-aot: %d valid, %d missing, %d stale, %d not checkable, %d listed but not present, %d native\n", valid,
+                absent, stale, failed, missing, native);
         return (absent || stale || failed) ? 1 : 0;
     }
-    fprintf(stderr, "hao-aot: %d programs cached, %d already valid, %d failed, %d listed but not present\n", ok, valid, failed, missing);
+    fprintf(stderr, "hao-aot: %d programs cached, %d already valid, %d failed, %d listed but not present, %d native\n", ok, valid,
+            failed, missing, native);
     return failed || unread || (strict && missing) ? 1 : 0;
 }
 
@@ -730,7 +754,7 @@ static void pid1_report(void)
         {"nx_stats", &hao_opt.nx_stats}, {"crash_trace", &hao_opt.crash_trace}, {"jit_helpers_only", &hao_opt.jit_helpers_only},
         {"no_aot", &hao_opt.no_aot}, {"no_chain", &hao_opt.no_chain}, {"no_msgsend", &hao_opt.no_msgsend},
         {"no_closures", &hao_opt.no_closures}, {"no_swiftreg", &hao_opt.no_swiftreg},
-        {"no_block_thunks", &hao_opt.no_block_thunks}, {"aot_learn", &hao_opt.aot_learn},
+        {"no_block_thunks", &hao_opt.no_block_thunks}, {"aot_learn", &hao_opt.aot_learn}, {"aot_use", &hao_opt.aot_use},
         {"no_libval", &hao_opt.no_libval}, {"bridge_stats", &hao_opt.bridge_stats}, {"bridge_check", &hao_opt.bridge_check},
         {"no_ifunits", &hao_opt.no_ifunits}, {"libval_user", &hao_opt.libval_user}};
     for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
@@ -937,6 +961,7 @@ static int run_guest(const char *path, int fd, int entry, int argc, char **argv,
      * file's own. */
     const char *name = argc > 0 && argv[0] ? argv[0] : path;
     *_NSGetProgname() = (char *)(strrchr(name, '/') ? strrchr(name, '/') + 1 : name);
+    hao_aot_use_init();
     if (hao_opt.stats) { atexit(print_stats); extern void hao_nx_stats_atexit(void); hao_nx_stats_atexit(); }
 
     static char exe_path[1100];

@@ -110,6 +110,8 @@ struct hao_image {
     void *aot;                  /* loaded AOT cache in the code cache (jit.c aot_publish) */
     uint64_t aot_size, aot_cpu; /* its size and the CPU profile it was translated under (hao/aot.h cpu_profile) */
     void *aot_lazy;             /* its lazy install record (jit.c aot_lazy), or NULL when installed whole */
+    uint8_t aot_state;          /* what hao_aot_load found (HAO_AOT_STATE_*, hao/aot.h): AOT use records */
+    uint64_t jit_blocks;        /* blocks of this image the JIT translated (jit.c emit_block, atomic) */
     /* executable memory for the image's Swift metadata island entries (swiftmeta.c), mapped right after the
      * image when it was reserved (hao_island_reserve): [isl_lo, isl_hi), bump-allocated from isl_next */
     uint64_t isl_lo, isl_hi, isl_next;
