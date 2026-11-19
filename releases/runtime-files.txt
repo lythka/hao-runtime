@@ -488,6 +488,8 @@ tests/guest/svfacts.sh
 tests/guest/svfacts.swift
 tests/guest/svguest.sh
 tests/guest/svguest.swift
+tests/guest/svmpenum.sh
+tests/guest/svmpenum.swift
 tests/guest/svnoncopy.facts
 tests/guest/svnoncopy.sh
 tests/guest/svnoncopy.swift

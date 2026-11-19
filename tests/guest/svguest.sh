@@ -5,9 +5,11 @@
 # x86_64, beside walk rows for the native types it holds (HAO_SWIFT_WALK_FACTS). With the rows "status" (a
 # SAME row), "fault" (a CONVERT enum: case images, a Data? payload) and "record" (a CONVERT struct by its
 # fields' rows) and "holder" (a SAME enum whose payload type has static metadata) must equal native arm64
-# under JIT, --interp and AOT; without them, and with rows of another UUID, cdhash, offset, size or metadata
-# initialization or a field the live type does not have, each is refused, and so is "holder" with a row
-# naming other static metadata in the slice or built with its static metadata in writable __DATA.
+# under JIT, --interp and AOT. Without them, and with rows of another UUID, cdhash, offset, size or metadata
+# initialization (rows not applied), each must still equal native: the walk's rule for runtime-laid-out
+# multi-payload enums reads their tag byte and walks the payload. A row naming a field the live type does not
+# have is refused (except "nil", whose values hold no payload), and so is "holder" with a row naming other
+# static metadata in the slice or built with its static metadata in writable __DATA.
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svguest.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -107,7 +109,9 @@ for part in status holder nil fault record; do
         [ $mode = writable ] && bin=$OUT/svguest.writable
         timeout -s KILL "$T" env HAO_SWIFT_WALK_FACTS="$OUT/walk.facts" HAO_SWIFT_GUEST_FACTS="$facts" "$@" \
             "$bin" $part >"$OUT/$mode.$part.out" 2>"$OUT/$mode.$part.err"; rc=$?
-        case $mode in
+        expect=$mode
+        case $mode in nofacts|uuid|cdhash|offset|size|init) expect=jit ;; field) [ $part = nil ] && expect=jit ;; esac
+        case $expect in
         jit|interp|aot)
             if [ $rc = $nrc ] && cmp -s "$OUT/native.$part.out" "$OUT/$mode.$part.out"; then r=SAME; else r=DIFF; fail=1; fi ;;
         *)
