@@ -37,6 +37,7 @@ static void usage(void)
 }
 
 #include <signal.h>
+#include <stdarg.h>
 #include <dlfcn.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -738,6 +739,23 @@ static void pid1_report(void)
             on[0] ? on : "none");
 }
 
+/* A start-up refusal: the line to hao's diagnostics, and as a public record where they go to the unified
+ * log (a sandboxed daemon's stderr goes nowhere and its private records show nothing); status 126. */
+static int refuse(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static int refuse(const char *fmt, ...)
+{
+    char line[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG, "%s\n", line);
+    fflush(HAO_DIAG);
+    hao_diag_public(line);
+    return 126;
+}
+
 int hao_self_main(int argc, char **argv, char **envp, char **apple)
 {
     char exe[1100], vpath[MAXPATHLEN], self[64];
@@ -802,14 +820,10 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     int fd = open(exe, O_RDONLY | O_CLOEXEC);
     struct stat st;
     if (fd < 0) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "open %s: %s\n", exe, strerror(errno));
-        return 126;
+        return refuse("open %s: %s", exe, strerror(errno));
     }
     if (fstat(fd, &st) != 0 || st.st_dev != dev || st.st_ino != ino) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "%s no longer names the file this process runs; refusing to load its ARM code from another file\n", exe);
-        return 126;
+        return refuse("%s no longer names the file this process runs; refusing to load its ARM code from another file", exe);
     }
     /* The slice is taken once, here, and left for the loader. It is authenticated first, before anything
      * the environment selects can load: its signature verified and its cdhash the one the stub names (the
@@ -817,10 +831,8 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     char w[600];
     hao_slice *sl = hao_slice_open(fd, w, sizeof w);
     if (!sl || hao_libval_stub_bound(sl, w, sizeof w) != 0) {
-        hao_diag_prefix(HAO_DIAG);
-        fprintf(HAO_DIAG, "%s: %s\n", exe, w);
         hao_slice_close(sl);
-        return 126;
+        return refuse("%s: %s", exe, w);
     }
     hao_guest_switches_for(&sl->sig);
     hao_slice_hand(sl);
@@ -892,7 +904,7 @@ static int run_guest(const char *path, int fd, int entry, int argc, char **argv,
     char err[512], real[MAXPATHLEN];
     if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
     hao_image *img = hao_load_main_image(path, fd, entry, err, sizeof err);
-    if (!img) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "%s\n", err); return 126; }
+    if (!img) return refuse("%s", err);
     hao_phase("load");
     /* PATH is absolute and unresolved, as dyld presents the main executable */
     extern char hao_guest_exec_path[1024], hao_guest_image_path[1024];

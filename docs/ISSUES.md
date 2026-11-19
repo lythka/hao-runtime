@@ -442,6 +442,27 @@ the deferred library loads without library validation (the loader's
 fallback); dyld's handling of DYLD_* variables in a stub that is not
 hardened is unchanged.
 
+## A sandbox applied at exec refused CS_REQUIRE_LV
+
+A program whose entitlements name a sandbox profile the kernel applies at exec
+(`com.apple.private.sandbox.profile`, also `:macos`) runs sandboxed before
+hao starts. A profile may deny the process changing its own code-signing
+status. Then hao could not set `CS_REQUIRE_LV` after libhao loaded, and
+refused every start with status 126. On a 27.2 Intel image, sandboxd exited
+this way about every 10 s, which launchd logged as a respawn loop. Now
+`hao-embed` signs the stub of such a program with the library flag when
+the program requires library validation, so the kernel sets `CS_REQUIRE_LV`
+at exec. `src/libval.c` reads the status first and sets the flag only when
+it is missing. The private entitlement works on an ad hoc stub only where
+AMFI is relaxed, and libhao loads there under the flag (measured on the
+image). Start-up refusals also go to the unified log as a public record
+(`refused: ...`), because a sandboxed daemon's stderr goes nowhere and its
+private records show nothing. Tests: `test_macho` (flag set at exec,
+setting refused: library validation on) and `tests/tools/run.sh` (library
+flag only on such a stub). Limits: stubs from older payloads keep refusing
+until embedded again; with the JIT also denied (`dynamic-code-generation`),
+the program runs in the interpreter.
+
 ## hao-embed -o wrote through a fixed temporary name
 
 `hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
@@ -4279,6 +4300,33 @@ Remaining limitations:
   holding such a value is destroyed by the box's witness).
 - Two consumed inhabitants are the bound, as for published values: a third
   nesting level is handed over unchanged.
+
+## Cost of the Swift value walk at guest calls of native witnesses
+
+A guest call of a native value witness on a type that is not settled walks
+the value (`src/swiftvalue.c` `witness_walk`), and the walk asked the Swift
+runtime's reflection for every field of every struct, tuple and class it
+passed through, at every call. Each child lookup demangles the field's type
+name (`swift_getTypeByMangledName`), so a SwiftUI process whose commit
+handlers copy such values in generic code spent most of its CPU there; one
+commit handler took minutes. The field count, offsets and child metadata
+are now remembered per metadata (`src/swiftvalue/Recipe.c`, reflection
+cache; metadata is never freed and the walk sees only complete metadata);
+field names are not kept. A guest callback with an indirect result also
+looked for a body witness table among its arguments in a 128-entry
+protocol table that, once full, recomputed with two `dlsym` lookups per
+call: it is now a growable map, and words that are no protocol descriptor
+are not entered.
+
+Measured on the development host (under Rosetta): a generic copy of a tuple
+of `DateComponents?`, `(any P)??`, `URLComponents?`, `String?` and
+`[Int]?`, 20000 times: 17.2 s -> 0.88 s (JIT).
+
+Remaining limitations:
+- The walk itself still runs per call for a type that is not settled
+  (about 40 us for that tuple); a per-type plan is not made.
+- The reflection cache holds at most 49152 fields; past it, lookups are
+  made each time as before.
 
 ## `Optional<AnyObject>` in a published Swift value
 

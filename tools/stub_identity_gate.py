@@ -166,7 +166,8 @@ DENIED_FIELDS = {
                     "come only from Apple's signature or a trust cache (expected effect: TCC prompts for "
                     "anchor-apple requirements)",
     "sig.library": "library-validation: src/libval.c sets CS_REQUIRE_LV on the process once libhao is loaded "
-                   "(signing it would refuse libhao, which is not a platform library)",
+                   "(signing it would refuse libhao, which is not a platform library); a stub whose sandbox the "
+                   "kernel applies at exec has it in its signature instead (hao-embed exec_sandboxed)",
 }
 LC_NAMES = {c: n for c, (n, _, _) in RULES.items()}
 
