@@ -112,6 +112,8 @@ class InstallLive(unittest.TestCase):
         cache[0x58:0x68] = bytes.fromhex(CACHE)
         (self.system / 'System/Library/dyld/dyld_shared_cache_x86_64').write_bytes(bytes(cache))
         self.aot = 'a' * 32
+        self.pristine = self.base / 'pristine'
+        shutil.copytree(self.system, self.pristine)
         make_payload(self.p1, '1' * 32, self.stub, self.guest, aot=[self.aot])
         p = subprocess.run([sys.executable, '-I', str(INSTALL), str(self.system), str(self.p1)],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
@@ -149,6 +151,67 @@ class InstallLive(unittest.TestCase):
         self.before = tree(self.system)
         rc, out = self.live(self.p2, '--system', self.system)
         self.assertEqual(rc, 0, out)
+        self.assertIn('installed already; nothing to do', out)
+        self.assertEqual(self.changed(), [])
+
+    def fresh_record(self, payload):
+        """install.json as hao-install.py writes it for PAYLOAD on a copy of the system before any install"""
+        d = self.base / 'fresh'
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.copytree(self.pristine, d)
+        p = subprocess.run([sys.executable, '-I', str(INSTALL), str(d), str(payload)],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        return json.loads((d / 'usr/lib/hao/install.json').read_text())
+
+    def assert_record_as_fresh(self, payload):
+        """the live record is the one a fresh hao-install.py of PAYLOAD writes, plus "live" (and the old caches it
+        removed: a fresh install has none to remove)"""
+        rec = json.loads((self.system / 'usr/lib/hao/install.json').read_text())
+        self.assertIn('live', rec)
+        def same(r):
+            return {k: dict(v, removed_stale=None) if k == 'aot_caches' else v for k, v in r.items() if k != 'live'}
+        self.assertEqual(same(rec), same(self.fresh_record(payload)))
+        return rec
+
+    def test_record_as_fresh_install(self):
+        """after a libhao-only update install.json holds what hao-install.py writes for the new payload (every
+        runtime file counted, the identity of the payload), not only what this run wrote"""
+        make_payload(self.p2, '3' * 32, self.stub, self.guest, commit='c2')
+        rc, out = self.live(self.p2, '--system', self.system)
+        self.assertEqual(rc, 0, out)
+        rec = self.assert_record_as_fresh(self.p2)
+        self.assertEqual((rec['installed_files'], rec['payload']['commit'], rec['live']['previous']['commit']),
+                         (3, 'c2', 'c1'))
+
+    def test_libhao_swapped_by_hand(self):
+        """the state of a Mac whose libhao was replaced by hand (a live swap made permanent) and whose install.json
+        was edited to name it: the new payload's libhao is there already, the AOT caches on disk are the old
+        libhao's, install.json has no payload identity. The update writes the payload's AOT caches (made by the
+        new libhao, same names) and install.json, and nothing else; the record is a fresh install's."""
+        make_payload(self.p2, '3' * 32, self.stub, self.guest, aot=[self.aot], commit='c2')
+        lib = self.system / 'usr/lib/hao/libhao.dylib'
+        lib.write_bytes((self.p2 / 'root/usr/lib/hao/libhao.dylib').read_bytes())
+        rec = json.loads((self.system / 'usr/lib/hao/install.json').read_text())
+        del rec['payload']
+        rec['aot_caches'] = dict(libhao_uuid='3' * 32, caches=0, bytes=0, removed_stale=[])
+        (self.system / 'usr/lib/hao/install.json').write_text(json.dumps(rec, indent=1) + '\n')
+        self.before = tree(self.system)
+        rc, out = self.live(self.p2, '--system', self.system, '--dry-run')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('would write usr/lib/hao/aot/%s.aot' % self.aot, out)
+        self.assertNotIn('would remove AOT cache', out)
+        self.assertNotIn('would write usr/lib/hao/libhao.dylib', out)
+        self.assertEqual(self.changed(), [])
+        rc, out = self.live(self.p2, '--system', self.system)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.changed(), ['usr/lib/hao/aot/%s.aot' % self.aot, 'usr/lib/hao/install.json'], out)
+        self.assertIn('1 files written, 0 programs embedded, 0 stubs restubbed, 0 files replaced, 0 AOT caches removed', out)
+        rec = self.assert_record_as_fresh(self.p2)
+        self.assertEqual(rec['aot_caches'], dict(libhao_uuid='3' * 32, caches=1, bytes=144, removed_stale=[]))
+        self.assertIsNone(rec['live']['previous'])
+        self.before = tree(self.system)
+        rc, out = self.live(self.p2, '--system', self.system)
         self.assertIn('installed already; nothing to do', out)
         self.assertEqual(self.changed(), [])
 
