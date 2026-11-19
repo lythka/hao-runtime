@@ -110,15 +110,24 @@ if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/passthrough.out" &&
    grep -q 'passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH)' "$OUT/passthrough.err"; then r=SAME; else r=DIFF; fail=1; fi
 echo "passthrough rc=$rc $r"
 [ $r = SAME ] || { diff "$OUT/native.refuse.out" "$OUT/passthrough.out" | sed 's/^/    /' | head -8; tail -3 "$OUT/passthrough.err" | sed 's/^/    /'; }
-# The default: an uncertified value whose types are not on the report-only list is refused, its audit record
-# naming the keys a list needs; listed (HAO_SWIFT_VALUE_LIST, a test build's addition to the list) or under
-# HAO_SWIFT_VALUE_REPORT=1 (v0.0.1) it is reported once and goes on, equal native. A known-wrong one (a
-# guest-encoded nil in a shared box, also beside a part with no rule; a child task's C?? result; an ObjC
-# reference word that is no object) is refused either way.
-refused refuse default "unresolved active representation" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-grep -q 'not certified and not listed for report-only: unresolved active representation' "$OUT/default.refuse.err" ||
-    { echo "refuse default: no unlisted line"; fail=1; }
-record refuse default 'hao-refusal v1 kind=swift-uncertified process="svpolicy\.arm64e" key="[^"]*" reason="unresolved active representation \(guest call of a native witness\)"'
+# The default (v0.0.1, report-only): every uncertified value is reported once with its audit record (the keys
+# a list needs) and goes on, equal native. Known-wrong ones (a guest-encoded nil in a shared box, also beside
+# a part with no rule; a child task's C?? result; an ObjC reference word that is no object) are reported and
+# passed as found too: nothing refuses them outside strict mode, and native code may then misread them
+# (these constructed values can fault after the report; the parts above refuse them under strict mode).
+reported() {   # part reason [same]
+    part=$1 why=$2 same=${3:-}
+    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO" "$OUT/svpolicy.arm64e" $part \
+        >"$OUT/default.$part.out" 2>"$OUT/default.$part.err"; rc=$?
+    if ! grep -q 'boundary refused' "$OUT/default.$part.err" && ! grep -q 'hao-refusal v1' "$OUT/default.$part.err" &&
+       grep -q "not certified, passed as found (report-only[^)]*): $why" "$OUT/default.$part.err" &&
+       { [ -z "$same" ] || { [ $rc = 0 ] && cmp -s "$OUT/native.$part.out" "$OUT/default.$part.out"; }; }
+    then r=REPORTED; else r=NOT-REPORTED; fail=1; fi
+    printf '%-6s default   rc=%s %s\n' $part "$rc" "$r"
+    [ $r = REPORTED ] || grep -v hao-schema "$OUT/default.$part.err" | tail -3 | sed 's/^/    /'
+}
+reported refuse "unresolved active representation" same
+cp "$OUT/default.refuse.err" "$OUT/default.refuse.list-src"
 python3 -I "$repo/tools/hao_sv_reportlist.py" -o "$OUT/report.inc" "$OUT/default.refuse.err" 2>/dev/null &&
     sed -n -e 's/^KEY("\(.*\)")$/\1/p' -e 's/^NOMINAL("\(.*\)")$/nominal \1/p' "$OUT/report.inc" >"$OUT/report.list"
 for how in list report; do
@@ -134,12 +143,12 @@ for how in list report; do
     echo "report-only $how rc=$rc $r"
     [ $r = SAME ] || tail -3 "$OUT/$how.err" | sed 's/^/    /'
 done
-refused boxed default "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused task default "child task result has a nil native code would copy" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused boxmix default "guest-encoded nil in a shared box cannot be converted" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused unrefbox default "guest-encoded nil in a shared box cannot be converted" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused unreflected default "value native code would misread .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused unrefopt default "value native code would misread" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused objcbad default "value native code would misread" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+reported boxed "guest-encoded nil in a shared box cannot be converted"
+reported task "child task result has a nil native code would copy"
+reported boxmix "guest-encoded nil in a shared box cannot be converted"
+reported unrefbox "guest-encoded nil in a shared box cannot be converted"
+reported unreflected "value native code would misread"
+reported unrefopt "value native code would misread"
+reported objcbad "value native code would misread"
 [ $fail = 0 ] && echo "svpolicy: PASS" || echo "svpolicy: FAIL"
 exit $fail

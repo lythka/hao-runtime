@@ -1,5 +1,21 @@
 # Runtime issues and measured scope
 
+## Report-only for every uncertified and known-wrong Swift value
+
+Since 75d8039 an uncertified value was refused unless its types were on a
+list taken from one boot's logs, and since 63c872d values its new rules call
+known-wrong were refused in report-only mode too. Applications that ran on
+the 2026-11-14 runtime aborted at open: Weather, Font Book and System
+Settings (unlisted types, a known-wrong Optional, a child task's result).
+Every uncertified or known-wrong value is again reported once and passed as
+found; strict mode (HAO_SWIFT_VALUE_STRICT, tests) still refuses them. The
+list now only marks the report line. Measured on the laptop (26B131, with
+the walk-order and multi-payload enum fixes): Weather, Maps, System
+Settings, Font Book and Control Center stay up after opening. Limits: a
+value passed as found can still be misread by native code; the constructed
+cases in guest/svpolicy (task, unreflected, unrefopt) fault after the report
+instead of aborting at it.
+
 ## Runtime-laid multi-payload enums with several empty cases
 
 A guest enum with two or more payload cases, one of them a resilient native
