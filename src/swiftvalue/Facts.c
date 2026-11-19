@@ -194,6 +194,13 @@ int walk_fact_key(const char *s, uint64_t n, char *out, uint64_t cap)
                     i = k + 3;
                     continue;
                 }
+                /* "<digits>$<hex>LL": a private discriminator naming a context by its address */
+                if (k > j + 1 && k + 2 <= n && !memcmp(s + k, "LL", 2)) {
+                    if (o + 3 >= cap) return 0;
+                    memcpy(out + o, "$LL", 3); o += 3;
+                    i = k + 2;
+                    continue;
+                }
             }
             if (o + (j - i) >= cap) return 0;
             memcpy(out + o, s + i, j - i); o += j - i;
