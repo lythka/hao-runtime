@@ -42,7 +42,8 @@ OSO       := -Wl,-oso_prefix,$(CURDIR)/
 MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
 
 CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c \
-        src/a64_imm.c src/a64_cond.c src/a64_regs.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c
+        src/a64_imm.c src/a64_cond.c src/a64_regs.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c \
+        src/native_callback.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
 RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
@@ -216,6 +217,11 @@ $(B)/test_gmap: tests/host/gmap.c src/gmap.c include/hao/gmap.h $(MIN_STAMP)
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ tests/host/gmap.c src/gmap.c -lpthread && codesign -s - -f $@
 
+# Native callback-call contracts (src/native_callback.c): validation, binding by UUID and call site, lookups.
+$(B)/test_native_callback: tests/host/native_callback.c src/native_callback.c src/gmap.c include/hao/native_callback.h include/hao/gmap.h include/hao/swift_reverse.h $(MIN_STAMP)
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -o $@ tests/host/native_callback.c src/native_callback.c src/gmap.c && codesign -s - -f $@
+
 # x86_64 instruction lengths and native stack-argument slots (src/x86args.c): the packed-layout check.
 $(B)/test_x86args: tests/host/x86args.c src/x86args.c include/hao/x86args.h $(MIN_STAMP)
 	@mkdir -p $(B)
@@ -272,13 +278,14 @@ $(B)/test_round16: tests/aot/round16.c $(B)/libhaocore.a
 $(B)/test_ioreg: tests/host/ioreg.c src/ioreg.c $(MIN_STAMP)
 	$(CC) $(CFLAGS) -framework CoreFoundation -o $@ $< && codesign -s - -f $@
 
-unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_identity $(B)/test_ifunit $(B)/test_gmap $(B)/test_x86args $(B)/test_ioreg
+unit: $(B)/test_round16 $(B)/test_helper_descriptor $(B)/test_jit_vector $(B)/test_imm_cond $(B)/opts_test $(B)/test_abi_layout $(B)/test_macho $(B)/test_images $(B)/test_identity $(B)/test_ifunit $(B)/test_gmap $(B)/test_x86args $(B)/test_ioreg $(B)/test_native_callback
 	timeout -s KILL 30 $(B)/test_ioreg
 	timeout -s KILL 120 $(B)/test_round16
 	timeout -s KILL 90 $(B)/test_helper_descriptor
 	timeout -s KILL 240 $(B)/test_jit_vector
 	$(B)/test_imm_cond
 	timeout -s KILL 120 $(B)/test_gmap
+	timeout -s KILL 30 $(B)/test_native_callback
 	timeout -s KILL 60 $(B)/test_x86args
 	$(B)/test_abi_layout
 	$(B)/opts_test

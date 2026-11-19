@@ -19,6 +19,7 @@
 #include "hao/vafmt.h"
 #include "hao/gmap.h"
 #include "hao/gen_stamp.h"
+#include "hao/native_callback.h"
 #include <sys/sysctl.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -44,10 +45,13 @@ static bool ready;
 
 /* fork child: see the lock comment in jit.c */
 static pthread_mutex_t labels_lock = PTHREAD_MUTEX_INITIALIZER;   /* the name sources by address (labels_at) */
+static pthread_mutex_t native_callbacks_lock = PTHREAD_MUTEX_INITIALIZER;   /* writers of native_callbacks */
+
 void hao_bridge_fork_child(void)
 {
     bridge_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     labels_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    native_callbacks_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 }
 
 static void L(void) { hao_crit_enter(); pthread_mutex_lock(&bridge_lock); }
@@ -605,6 +609,30 @@ bool hao_gen_stamp_check(char *running, size_t n)
     return !strcmp(running, HAO_GEN_OS_BUILD);
 }
 
+/* Native callback-call contracts (hao/native_callback.h) of the loaded images, return pc -> recipe. Bound as
+ * dyld adds each image (before any of its code runs), read without a lock by hao_callback. */
+static hao_gmap native_callbacks = HAO_GMAP_INIT(2, 1, 4, 16);
+static uint64_t st_native_callbacks_bound, st_native_callbacks_rejected;
+
+static void native_callbacks_add_image(const struct mach_header *h, intptr_t slide)
+{
+    (void)slide;
+    unsigned rejected = 0, bound;
+    hao_crit_enter();
+    pthread_mutex_lock(&native_callbacks_lock);
+    bound = hao_native_callback_bind(&native_callbacks, h, hao_native_callback_rows, hao_native_callback_nrows, &rejected);
+    pthread_mutex_unlock(&native_callbacks_lock);
+    hao_crit_leave();
+    st_native_callbacks_bound += bound;
+    st_native_callbacks_rejected += rejected;
+    if (rejected) HAO_LOG(0, "native callback contracts: %u of an image's records rejected\n", rejected);
+}
+
+const hao_swift_reverse *hao_bridge_native_callback_reverse(uint64_t return_pc)
+{
+    return hao_native_callback_lookup(&native_callbacks, return_pc);
+}
+
 static void init_once(void)
 {
     if (hao_verbose) {
@@ -624,6 +652,7 @@ static void init_once(void)
     hao_plan_tab = tab_new(TAB_MIN_BITS);
     U();
     units_init();
+    if (!hao_opt.no_ifunits) _dyld_register_func_for_add_image(native_callbacks_add_image);
     if (hao_opt.bridge_stats) hao_bridge_stats_atexit();
     __atomic_store_n(&ready, true, __ATOMIC_RELEASE);
 }

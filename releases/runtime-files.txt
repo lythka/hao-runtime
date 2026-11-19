@@ -29,6 +29,7 @@ include/hao/cpufeat.h
 include/hao/dlsym_once.h
 include/hao/gen_stamp.h
 include/hao/gmap.h
+include/hao/native_callback.h
 include/hao/identity.h
 include/hao/idlist.h
 include/hao/macho.h
@@ -80,6 +81,7 @@ src/front/cli.c
 src/front/stub.c
 src/frozenstruct_gen.inc
 src/gmap.c
+src/native_callback.c
 src/gss.c
 src/gss_gen.inc
 src/guest_sig.c
@@ -474,6 +476,8 @@ tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
 tests/guest/stripview.sh
 tests/guest/stripview.swift
+tests/guest/viewbuffer.sh
+tests/guest/viewbuffer.swift
 tests/guest/svpolicy.sh
 tests/guest/svpolicy.swift
 tests/guest/svpolicy_lib.swift
@@ -627,6 +631,7 @@ tests/host/dscselhoist.sh
 tests/host/fork.c
 tests/host/fork_locks.py
 tests/host/gmap.c
+tests/host/native_callback.c
 tests/host/jitlock.c
 tests/host/jitlock.sh
 tests/host/labels_race.c
