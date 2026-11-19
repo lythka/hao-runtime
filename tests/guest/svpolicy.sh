@@ -111,12 +111,25 @@ if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/report.out" && ! grep -q
    grep -q '^hao-swift-audit .*"reason":"unresolved active representation' "$OUT/report.err"; then r=SAME; else r=DIFF; fail=1; fi
 echo "report-only rc=$rc $r"
 [ $r = SAME ] || tail -3 "$OUT/report.err" | sed 's/^/    /'
-refused boxed default "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused task default "child task result has a nil native code would copy" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused boxmix default "guest-encoded nil in a shared box cannot be converted" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused unrefbox default "guest-encoded nil in a shared box cannot be converted" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused unreflected default "value native code would misread .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused unrefopt default "value native code would misread" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
-refused objcbad default "value native code would misread" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
+# Known-wrong values (a guest-encoded nil in a shared box, a child task's C?? result, an ObjC word that is no
+# object) are reported and passed as found too outside strict mode; native code may then misread them (these
+# constructed values can fault after the report; strict mode refuses them above).
+reported() {   # part reason
+    part=$1 why=$2
+    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO" "$OUT/svpolicy.arm64e" $part \
+        >"$OUT/default.$part.out" 2>"$OUT/default.$part.err"; rc=$?
+    if ! grep -q 'boundary refused' "$OUT/default.$part.err" &&
+       grep -q "not certified, passed as found (report-only[^)]*): $why" "$OUT/default.$part.err"
+    then r=REPORTED; else r=NOT-REPORTED; fail=1; fi
+    printf '%-6s default   rc=%s %s\n' $part "$rc" "$r"
+    [ $r = REPORTED ] || grep -v hao-schema "$OUT/default.$part.err" | tail -3 | sed 's/^/    /'
+}
+reported boxed "guest-encoded nil in a shared box cannot be converted"
+reported task "child task result has a nil native code would copy"
+reported boxmix "guest-encoded nil in a shared box cannot be converted"
+reported unrefbox "guest-encoded nil in a shared box cannot be converted"
+reported unreflected "value native code would misread"
+reported unrefopt "value native code would misread"
+reported objcbad "value native code would misread"
 [ $fail = 0 ] && echo "svpolicy: PASS" || echo "svpolicy: FAIL"
 exit $fail
