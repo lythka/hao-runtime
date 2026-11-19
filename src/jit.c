@@ -36,7 +36,6 @@
 #include "hao/a64_imm.h"
 #include "hao/aot.h"
 #include "hao/gmap.h"
-#include "near_map.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -52,6 +51,7 @@ static inline int64_t sext(uint64_t v, int bits) { return (int64_t)(v << (64 - b
 
 #define MAX_BLOCK_INSNS 96
 #define MAX_BLOCK_BYTES (320u << 10)  /* 96 finite FP16 fused operations, including round-to-odd */
+#define CODE_MB_MAX 1024              /* arena-relative references must fit rel32 */
 #define CODE_MB_DEFAULT 256           /* translated-code space; HAO_JIT_CACHE_MB (1..1024) overrides */
 #define THUNK_AREA ((size_t)THUNK_SLOTS * 32)   /* 32-byte plain thunks */
 #define SIG_SLOT 64
@@ -66,16 +66,25 @@ static inline int64_t sext(uint64_t v, int bits) { return (int64_t)(v << (64 - b
 typedef struct { uint64_t pc; void *code; } tentry;
 
 /* The code cache is one mapping, laid out once by jit_init_once:
- *   stubs | thunk area | signature-thunk area | oracle scratch | code
+ *   stubs | thunk area | signature-thunk area | oracle scratch | code | RW data
+ * The RW tail contains thunk tables and async records; cache_end excludes it.
+ * Relative references never depend on a second mapping honouring a hint.
  * Only cache_alloc and block_commit move cache_ptr, under jit_lock. */
 static uint8_t *cache, *cache_ptr, *cache_end;
 static unsigned cache_code_mb;
 static uint8_t *thunk_area, *thunk_ptr, *thunk_end;        /* native-callable thunks (below) */
 static uint8_t *sig_area, *sig_ptr, *sig_end;
-static uint64_t *thunk_tab, *sig_tab;  /* their guest functions (and hsigs): data near the cache */
+static uint64_t *thunk_tab, *sig_tab;  /* guest functions and hsigs: RW tail of the arena */
+static uint8_t *async_records;
 static uint8_t *thunk_gen, *sig_gen;   /* thunk code made up to here (whole pages) */
 static uint8_t *thunk_entry;           /* jmp [rip+0]; .quad hao_callback_entry (stub page) */
 #define THUNK_TAB ((size_t)THUNK_SLOTS * 8 + (SIG_AREA / SIG_SLOT) * 16)
+#define ASYNC_RECORDS ((size_t)HAO_ASYNC_RECORD_SLOTS * HAO_ASYNC_RECORD_SIZE)
+#define ARENA_DATA (THUNK_TAB + ASYNC_RECORDS)
+_Static_assert((4096 + THUNK_AREA + SIG_AREA + SCRATCH_SIZE) % 4096 == 0, "code must occupy whole pages");
+_Static_assert(ARENA_DATA % 4096 == 0, "arena data must occupy whole pages");
+_Static_assert(((uint64_t)CODE_MB_MAX << 20) + THUNK_AREA + SIG_AREA + SCRATCH_SIZE + 4096 + ARENA_DATA < 0x7fff0000ull,
+               "all arena relative references must fit rel32");
 static uint8_t *scratch;
 /* The translation table, guest pc -> code. It starts at TABLE_MIN_BITS and
  * grows by replacement under jit_lock (a copy twice the size, published
@@ -450,7 +459,7 @@ bool hao_wx_covers(uint64_t a, uint64_t n)
     for (uint32_t i = 0; i < k; i++)
         if (a < wx_reg[i].x + wx_reg[i].size && a + n > wx_reg[i].x) return true;
     uint64_t t = (uint64_t)(uintptr_t)thunk_tab;
-    return (t && a < t + THUNK_TAB && a + n > t) || (wx_window && a < wx_window + WX_WINDOW && a + n > wx_window);
+    return (t && a < t + ARENA_DATA && a + n > t) || (wx_window && a < wx_window + WX_WINDOW && a + n > wx_window);
 }
 
 /* The address to write the n bytes of executable memory at x through (one write: hao_wx_end), or
@@ -6562,20 +6571,17 @@ static void jit_init_once(void)
     pthread_once(&jit_cpu_once, jit_cpu_init);
     if (hao_opt.jit_helpers_only) jit_disabled_native = 1;
     cache_code_mb = hao_opt.jit_cache_mb ? hao_opt.jit_cache_mb : CODE_MB_DEFAULT;
-    if (cache_code_mb > 1024) cache_code_mb = 1024;   /* chained links are rel32 */
+    if (cache_code_mb > CODE_MB_MAX) cache_code_mb = CODE_MB_MAX;   /* chained links are rel32 */
     size_t fixed = 4096 + THUNK_AREA + SIG_AREA + SCRATCH_SIZE;
     size_t size = fixed + ((size_t)cache_code_mb << 20);
     errno = EPERM;
-    /* MAP_JIT, read/write (not executable) until hao_wx_region; the thunks' table is data of its own
-     * mapping within rel32 reach of them, not part of the code cache's memory */
+    /* One owned mapping: placement of ordinary anonymous data may be in an entirely
+     * different VM range even when a hint points at free space beside MAP_JIT memory.
+     * Keep every cache-relative data pool in this allocation. Only the code prefix
+     * becomes a W^X region; the page-aligned data tail never becomes executable. */
+    size_t arena_size = size + ARENA_DATA;
     cache = hao_opt.no_jit_memory ? MAP_FAILED :
-            mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-    if (cache != MAP_FAILED) {
-        thunk_tab = hao_map_near_prot((uint64_t)(uintptr_t)cache, (uint64_t)(uintptr_t)cache + 4096 + THUNK_AREA + SIG_AREA, THUNK_TAB,
-                                      PROT_READ | PROT_WRITE, 0);
-        if (!thunk_tab) { munmap(cache, size); cache = MAP_FAILED; errno = ENOMEM; }
-        else sig_tab = thunk_tab + THUNK_SLOTS;
-    }
+            mmap(NULL, arena_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (cache == MAP_FAILED) {
         int e = errno;
         cache = NULL;
@@ -6583,6 +6589,24 @@ static void jit_init_once(void)
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG, "no executable memory for translated code (mmap MAP_JIT: %s); running interpreted, "
                 "native->guest calls take the fault path\n", strerror(e));
+        __atomic_store_n(&jit_state, -1, __ATOMIC_RELEASE);
+        return;
+    }
+    thunk_tab = (uint64_t *)(void *)(cache + size);
+    sig_tab = thunk_tab + THUNK_SLOTS;
+    async_records = (uint8_t *)thunk_tab + THUNK_TAB;
+    /* Lower the data maximum before creating the code memory entry. This also
+     * splits the VM entries at the code/data boundary without releasing ownership. */
+    kern_return_t data_kr = mach_vm_protect(mach_task_self(), (mach_vm_address_t)thunk_tab,
+                                           ARENA_DATA, TRUE, VM_PROT_READ | VM_PROT_WRITE);
+    if (data_kr != KERN_SUCCESS) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG, "JIT arena data protection failed (mach_vm_protect: %d)\n", data_kr);
+        munmap(cache, arena_size);
+        cache = NULL;
+        thunk_tab = sig_tab = NULL;
+        async_records = NULL;
+        hao_use_jit = 0;
         __atomic_store_n(&jit_state, -1, __ATOMIC_RELEASE);
         return;
     }
@@ -6610,8 +6634,11 @@ static void jit_init_once(void)
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG, "no W^X mapping for translated code (memory entry or protection refused); running interpreted, "
                 "native->guest calls take the fault path\n");
-        munmap(cache, size);
-        munmap(thunk_tab, THUNK_TAB);
+        munmap(cache, arena_size);
+        thunk_tab = sig_tab = NULL;
+        async_records = NULL;
+        thunk_area = thunk_ptr = thunk_end = thunk_gen = NULL;
+        sig_area = sig_ptr = sig_end = sig_gen = NULL;
         cache = cache_ptr = cache_end = NULL;
         hao_use_jit = 0;
         __atomic_store_n(&jit_state, -1, __ATOMIC_RELEASE);
@@ -6626,6 +6653,12 @@ bool hao_jit_init(void)
 {
     pthread_once(&jit_once, jit_init_once);
     return __atomic_load_n(&jit_state, __ATOMIC_ACQUIRE) > 0;
+}
+
+/* Fixed pool for Swift relative async records; jit_once publishes it with the thunks. */
+void *hao_jit_async_records(void)
+{
+    return hao_jit_init() ? async_records : NULL;
 }
 
 /* native-callable thunks can be made (the code cache exists) */
@@ -6921,7 +6954,7 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
  * of its own area) loads r10 with its hsig from sig_tab instead. The code
  * of a slot does not depend on its guest function: it is made a page at a
  * time (thunk_page, one W^X write per page), and a new thunk only fills its
- * table entries, read/write data of their own mapping, before it is handed
+ * table entries, read/write data in the arena tail, before it is handed
  * out. hao_thunk_target and hao_sig_thunk_target read them back. The
  * tables name guest code only; what runs natively stays read/execute.
  *

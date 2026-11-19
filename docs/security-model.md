@@ -646,6 +646,12 @@ writable after each write so Rosetta drops stale translations; an Intel
 Mac does not do that, and lowers the mapping's maximum protection to
 read/execute.
 
+The code cache and its relative-addressed data use one MAP_JIT allocation.
+The page-aligned data tail (thunk tables and Swift async records) stays
+read/write with a read/write maximum; it is excluded from the executable
+region and its write aliases. Code and data may share a backing object but
+never overlapping object offsets. Guest mapping guards cover both spans.
+
 ## Known limitations
 
 Some hardening is in progress.

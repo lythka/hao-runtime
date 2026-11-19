@@ -1,5 +1,54 @@
 # Runtime issues and measured scope
 
+## JIT arena data redirected outside relative-address reach
+
+At 256dd30 the MAP_JIT code cache could succeed while the separate ordinary
+anonymous mapping for thunk tables landed more than 2 GB away. The near-map
+helper correctly rejected the table, but initialization discarded the code
+cache and reported a fabricated mmap ENOMEM. The recorded gamed trace has
+eight such failures, each with two distant table results. The daemon-specific
+kernel policy responsible for redirecting the hints remains unverified.
+
+The cache, plain/signature thunk tables, and Swift async function records now
+occupy one MAP_JIT allocation. Only the page-aligned code prefix enters
+hao_wx_region. The data tail retains RW current and maximum protection,
+never RX; transient code-write aliases exclude it. Code allocation and
+code-address classification stop before the data. Guest mapping guards cover
+both spans. Compile-time bounds tie the maximum code size to the rel32 reach
+of the whole arena. Failure cleanup clears the carved pointers and unmaps
+the allocation once. This fixes placement without relying on a rebuilt system
+shared cache, reversed allocation order, smaller-cache retries or interpreter
+fallback. Existing behavior for a genuine JIT denial is unchanged.
+
+The async record pool used the same plain-data near search and is included
+in the repair. Image-relative Swift islands still use checked, best-effort
+MAP_JIT placement: their image/cache reservations are released before a new
+mapping is requested. Those paths can fail under fragmentation, races or
+policy; they retain their existing fallback and are not claimed infallible.
+The global arena cannot establish proximity to arbitrary image metadata.
+
+Validation: the new host/jit-arena fixture persistently redirects
+hinted data allocations 8 GB away. It fails against the shipped 256dd30
+library with its original ENOMEM diagnostic and passes the repair at 1,
+256 and 1024 MiB code sizes. It inspects emitted plain/signature thunk
+references, async record reach, RX code/RW data protections and guest mapping
+guards and fork inheritance/COW; injected data-protection and code-memory-entry
+failures leave no published arena. Its W^X positive control detects a real writable alias of
+an executable page. The guest W^X scanner now compares backing-object offset
+ranges, allowing disjoint pages of one object without overlooking overlapping
+aliases. guest/wx agrees with native ARM for C and Swift in JIT, interpreter
+and AOT modes. With the redirected-data policy, Swift task groups and native
+async callers match native output, with task and async-argument records made
+and zero unmade records. make test and make check pass (151 guest-suite passes,
+0 failures, 3 expected skips; sanitizer oracle also passes). On an Intel QEMU
+boot of a stock-cache integration image, the standalone
+probe passes at 1/256/1024 MiB, including data maximum protections, real alias
+detection, fork inheritance/COW and both injected initialization failures.
+The C W^X and Swift task-group outputs match the native ARM references there.
+No system runtime was replaced. The daemon reproduction on Intel hardware,
+application acceptance and release-image acceptance remain untested with this
+repair.
+
 ## Refusals leave one public record
 
 A refusal was visible only in hao's diagnostics: stderr, the `hao_crash=1` log, or private unified-log
