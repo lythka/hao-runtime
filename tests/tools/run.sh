@@ -123,6 +123,22 @@ if [ $rl = 7 ] && [ $rp = 7 ] && [ "$(echo "$nl" | grep -c INSERTED)" = 1 ] && [
     && codesign -dv --arch x86_64 "$d/lv.emb" 2>&1 | grep -q "flags=.*runtime" && [ $rg = 0 ]; then
     pass "library flag: the stub has the hardened runtime, dyld inserts nothing into it, hao runs it (rc 7); a plain program's stub takes the insert; gate SAME"
 else bad "library flag: rc $rl $rp gate $rg: [$nl] [$np] $(grep DIFF "$d/gate.log")"; fi
+# --- a sandbox the kernel applies at exec (com.apple.private.sandbox.profile) may deny the process setting
+# CS_REQUIRE_LV on itself: the stub of such a program that requires library validation has the library flag in
+# its signature (the kernel sets it at exec); without the entitlement, or without library validation, it has
+# not. Static: the private entitlement is kept (no --host-test), nothing is launched
+d=$OUT/xsb; rm -rf "$d"; mkdir -p "$d"
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.private.sandbox.profile:macos</key><string>com.example.profile</string></dict></plist>\n' >"$d/sb.plist"
+cp "$G" "$d/sbrt"; cp "$G" "$d/rt"; cp "$G" "$d/sb"
+codesign -s - -f -o runtime --entitlements "$d/sb.plist" "$d/sbrt" 2>/dev/null; codesign -s - -f -o runtime "$d/rt" 2>/dev/null
+codesign -s - -f --entitlements "$d/sb.plist" "$d/sb" 2>/dev/null
+xf=""
+for f in sbrt rt sb; do
+    "$repo/tools/hao-embed" --stub "$B/hao-stub" -o "$d/$f.emb" "$d/$f" >"$d/$f.log" 2>&1 || xf="$xf $f:embed"
+    codesign -dv --arch x86_64 "$d/$f.emb" 2>&1 | grep -q "flags=.*library-validation" && xf="$xf $f:lv" || xf="$xf $f:-"
+done
+[ "$xf" = " sbrt:lv rt:- sb:-" ] && pass "sandbox at exec: a library-validated program's stub has the library flag; others not" ||
+    bad "sandbox at exec: library flag per stub:$xf"
 d=$OUT/links
 "$repo/tools/hao-embed" --stub "$B/hao-stub" --stubs "$d/x" --scan >/dev/null 2>"$d/scan.err"
 grep -q "needs --root" "$d/scan.err" && pass "--scan without --root: usage error" || bad "--scan without --root: $(cat "$d/scan.err")"

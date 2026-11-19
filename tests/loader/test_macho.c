@@ -677,6 +677,26 @@ static void gate_setlv(const uint8_t *seed, size_t n, const uint8_t *lib, size_t
     free(d);
 }
 
+/* The stub's signature had the kernel set CS_REQUIRE_LV at exec, and the process may not set it (a sandbox
+ * the kernel applied at exec denies changing its own code-signing status): nothing to set, library
+ * validation is the kernel's. */
+static void gate_setlv_exec(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
+{
+    (void)lib; (void)ln;
+    char err[512];
+    uint8_t *d = copy_of(seed, n);
+    size_t so = sig_at(d), cd = so + be32at(d + so + 16);
+    d[cd + 13] |= 0x01;                                          /* runtime */
+    hao_libval_set_verifier(fake_signer, true, NULL);
+    hao_libval_test_setlv = 4;
+    hao_libval_expect_main(true, HAO_ENTRY_CLI);
+    hao_image *img = load_bytes("main.bin", d, n, err, sizeof err);
+    note(img && hao_libval_mode() == HAO_LIBVAL_KERNEL,
+         "hardened main executable, CS_REQUIRE_LV set at exec and setting it refused: loads, library validation on");
+    hao_libval_test_setlv = 0;
+    free(d);
+}
+
 /* HAO_NO_LIBVAL (enabled = false) turns library validation off only for a program that does not require
  * it: natively the hardened runtime and the kernel do not take that from the environment. */
 static void gate_nolv_hardened(const uint8_t *seed, size_t n, const uint8_t *lib, size_t ln)
@@ -1256,6 +1276,7 @@ int main(int argc, char **argv)
     fails += in_child(gate_hardened, seed, n, lib, ln, &passes);
     fails += in_child(gate_entry, seed, n, lib, ln, &passes);
     fails += in_child(gate_setlv, seed, n, lib, ln, &passes);
+    fails += in_child(gate_setlv_exec, seed, n, lib, ln, &passes);
     fails += in_child(gate_nolv_hardened, seed, n, lib, ln, &passes);
     fails += in_child(gate_nolv_plain, seed, n, lib, ln, &passes);
 

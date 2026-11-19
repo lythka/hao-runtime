@@ -11,5 +11,12 @@ int common_byte_optional_case(const void *type, const void *value);
 /* Exact ObjCRetainableBox metadata, not weak/foreign/existential storage. */
 int common_objc_reference_type(const void *type);
 int common_objc_reference_value(const void *type, const void *value);
+/* swift_reflectionMirror_recursiveCount, recursiveChildOffset and
+ * recursiveChildMetadata (Swift calling convention, the same arguments)
+ * remembered per metadata (Recipe.c); NULL where the runtime lacks them.
+ * The child's field_info carries no name. */
+void *reflect_count_fn(void);
+void *reflect_offset_fn(void);
+void *reflect_field_fn(void);
 /* The most stored fields of a struct or tuple the walk reads through reflection. */
 enum { HAO_SV_FIELD_LIMIT = 256 };

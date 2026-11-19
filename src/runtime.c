@@ -1708,6 +1708,15 @@ static void uni_start(void)
     __atomic_store_n(&uni_starting, 0, __ATOMIC_RELEASE);
 }
 
+/* A start-up refusal (the program does not run: status 126) also as a public record, when this process's
+ * diagnostics go to the unified log: its text is hao's policy and the program's path, no register values
+ * or guest data, and it is what an administrator needs to see in log show without private data. */
+void hao_diag_public(const char *line)
+{
+    if (__atomic_load_n(&uni_thr, __ATOMIC_ACQUIRE) && uni_log)
+        os_log_with_type(uni_log, OS_LOG_TYPE_ERROR, "refused: %{public}s", line);
+}
+
 static void uni_fork_child(void)
 {
     uni_thr = NULL;

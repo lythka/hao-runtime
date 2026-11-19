@@ -624,13 +624,22 @@ static int decide(hao_slice *sl, char *why, size_t n)
         size_t l = strlen(reason);
         snprintf(reason + l, sizeof reason - l, "; HAO_NO_LIBVAL ignored");
     }
-    /* hao_libval_test_setlv (tests): 1 setting the flag fails, 2 reading it back fails, 3 it does not stick */
+    /* The stub's own signature may have the kernel hold the process to it from exec (tools/hao-embed: the
+     * library flag, for a stub whose sandbox the kernel applies at exec, which may deny a process changing
+     * its own code-signing status). Then there is nothing to set.
+     * hao_libval_test_setlv (tests): 1 setting the flag fails, 2 reading it back fails, 3 it does not stick,
+     * 4 the flag is set at exec and setting it fails */
     uint32_t f = CS_REQUIRE_LV, now = 0;
     int t = hao_libval_test_setlv;
-    int r = t == 1 ? (errno = EPERM, -1) : t == 3 ? 0 : csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
-    int e = errno;
-    int q = t == 2 ? -1 : csops(getpid(), CS_OPS_STATUS, &now, sizeof now);
+    int r = 0, e = 0, q = t == 2 ? -1 : csops(getpid(), CS_OPS_STATUS, &now, sizeof now);
     if (t == 3) now &= ~CS_REQUIRE_LV;
+    if (t == 4) now |= CS_REQUIRE_LV;
+    if (q != 0 || !(now & CS_REQUIRE_LV)) {
+        r = t == 1 || t == 4 ? (errno = EPERM, -1) : t == 3 ? 0 : csops(getpid(), CS_OPS_SET_STATUS, &f, sizeof f);
+        e = errno;
+        q = t == 2 ? -1 : csops(getpid(), CS_OPS_STATUS, &now, sizeof now);
+        if (t == 3) now &= ~CS_REQUIRE_LV;
+    }
     if (r != 0 || q != 0 || !(now & CS_REQUIRE_LV)) {
         snprintf(why, n, "it requires library validation (%s), and this process cannot be made to require it "
                  "(CS_REQUIRE_LV: %s)", reason, r ? strerror(e) : q ? "status not readable" : "flags unchanged");

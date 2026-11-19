@@ -468,9 +468,9 @@ static const plan *prepare(const void *type)
     builder *b = calloc(1,sizeof *b);
     if (!b) return NULL;
     b->kind = HAO_DLSYM("swift_getMetadataKind");
-    b->count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    b->offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    b->field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    b->count = reflect_count_fn();
+    b->offset = reflect_offset_fn();
+    b->field = reflect_field_fn();
     bool syms = b->kind && b->count && b->offset && b->field;
     bool affected = syms && graph(b,type,0);
     plan *p = calloc(1,sizeof *p);
@@ -513,9 +513,9 @@ void hao_swift_value_begin(hao_thread *t, hao_swift_value_scope *scope, const vo
 static const void *enum_storage(const void *type)
 {
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     for (unsigned depth = 0; depth < 16; ++depth) {
         if (kind(type) == 0x201) return type;
         if (kind(type) != 0x200 || count(type) != 1 || offset(type,0)) return NULL;
@@ -869,9 +869,9 @@ static int witness_state(const void *type)
     if (!b) return WITNESS_INVALID;   /* not cached: a later call tries again */
     b->existentials = true;
     b->kind = HAO_DLSYM("swift_getMetadataKind");
-    b->count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    b->offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    b->field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    b->count = reflect_count_fn();
+    b->offset = reflect_offset_fn();
+    b->field = reflect_field_fn();
     bool ok = b->kind && b->count && b->offset && b->field;
     bool affected = ok && graph(b,type,0);
     int state = !ok || b->invalid ? WITNESS_INVALID : b->failed ? WITNESS_UNCERTIFIABLE : !affected ? WITNESS_SETTLED :
@@ -915,9 +915,9 @@ static bool runtime_laid(const void *type) { return hao_gmap_get1(&laid_types,(u
 static int guest_ranges(const void *type, uint64_t base, byte_range *out, int n, int cap, int depth)
 {
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
-    count_fn *count = HAO_DLSYM("swift_reflectionMirror_recursiveCount");
-    offset_fn *offset = HAO_DLSYM("swift_reflectionMirror_recursiveChildOffset");
-    field_fn *field = HAO_DLSYM("swift_reflectionMirror_recursiveChildMetadata");
+    count_fn *count = reflect_count_fn();
+    offset_fn *offset = reflect_offset_fn();
+    field_fn *field = reflect_field_fn();
     if (!kind || !count || !offset || !field || depth > 16) return -1;
     const void *const *m = type;
     uintptr_t k = kind(type);
