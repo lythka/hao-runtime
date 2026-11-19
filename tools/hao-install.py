@@ -1151,8 +1151,13 @@ def plan_overlay(system, payload, admitted, staged, ov, old, ident):
     embedded = [p for p in emb["done"] if p not in emb["already"] and p not in emb["restubbed"]]
     changes = bool(pending or aot["removed_stale"])
     if changes or old.get("payload") != ident:
-        record = install_record(len(root), emb, required, [(p, "") for p in old.get("legacy_stubs", [])], replaced,
+        # the record hao-install.py writes for PAYLOAD here (as --install-live): every root/ file counts as
+        # installed, and "already_embedded" stays what the first install found
+        record = install_record(sum(r.startswith("root/") for r in staged), emb, required,
+                                [(p, "") for p in old.get("legacy_stubs", [])], replaced,
                                 old.get("aot_dirs", []), aot, [], manifest)
+        if isinstance(old.get("already_embedded"), int):
+            record["already_embedded"] = old["already_embedded"]
         record["payload"] = ident
         record["live"] = {"root_written": root, "embedded": embedded, "restubbed": emb["restubbed"],
                           "replaced": replaced_new, "previous": old.get("payload"), "via": "overlay"}
