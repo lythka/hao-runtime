@@ -81,6 +81,8 @@ static bool raw_mediated(hao_thread *t, long bsd, const uint64_t *a)
         return true;
     }
     case SYS_sigreturn: case SYS_bsdthread_create: case SYS_bsdthread_register:
+        hao_refusal_record("syscall", bsd == SYS_sigreturn ? "sigreturn" : bsd == SYS_bsdthread_create ? "bsdthread_create"
+                           : "bsdthread_register", "guest threads and signal returns go through libSystem under hao");
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG, "raw system call %ld (%s) refused: guest threads and signal returns go through libSystem under hao\n",
                 bsd, bsd == SYS_sigreturn ? "sigreturn" : bsd == SYS_bsdthread_create ? "bsdthread_create" : "bsdthread_register");

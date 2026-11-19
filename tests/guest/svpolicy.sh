@@ -15,7 +15,8 @@
 # examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64. The refusals run under the test
 # switch HAO_SWIFT_VALUE_STRICT=1. By default "refuse" is refused too, its types on no report-only list; listed, or
 # under HAO_SWIFT_VALUE_REPORT=1, it is reported and goes on, equal native; "boxed", "task", "boxmix" and "objcbad"
-# (known wrong: native code would misread them) are refused either way.
+# (known wrong: native code would misread them) are refused either way. Each refusal leaves one public record
+# "hao-refusal v1 kind=swift-value" ("swift-uncertified" for one refused only for want of a list entry).
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svpolicy.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -54,11 +55,13 @@ for mode in jit interp aot; do
     printf 'pass   %-9s rc=%s %s\n' "$mode" "$rc" "$r"
     [ $r = SAME ] || diff "$OUT/native.pass.out" "$OUT/$mode.pass.out" | sed 's/^/    /' | head -16
 done
-# Each refused part: a nonzero exit, nothing printed past the boundary, the refusal line with its reason.
+# Each refused part: a nonzero exit, nothing printed past the boundary, the refusal line with its reason, and
+# exactly one public refusal record (src/runtime.c hao_refusal_record), whose exact form record() checks.
 refused() {   # part mode reason command...
     part=$1 mode=$2 why=$3; shift 3
     timeout -s KILL "$T" "$@" "$OUT/svpolicy.arm64e" $part >"$OUT/$mode.$part.out" 2>"$OUT/$mode.$part.err"; rc=$?
-    if [ $rc != 0 ] && [ ! -s "$OUT/$mode.$part.out" ] && grep -q "Swift value boundary refused: $why" "$OUT/$mode.$part.err"
+    if [ $rc != 0 ] && [ ! -s "$OUT/$mode.$part.out" ] && grep -q "Swift value boundary refused: $why" "$OUT/$mode.$part.err" &&
+       [ "$(grep -c 'hao-refusal v1 kind=swift-' "$OUT/$mode.$part.err")" = 1 ]
     then r=REFUSED; else r=NOT-REFUSED; fail=1; fi
     printf '%-6s %-9s rc=%s %s\n' $part "$mode" "$rc" "$r"
     [ $r = REFUSED ] || grep -v hao-schema "$OUT/$mode.$part.err" | tail -3 | sed 's/^/    /'
@@ -72,6 +75,11 @@ refused result jit "native result has unresolved active representation" env HAO_
 refused boxed jit "guest-encoded nil in a shared box cannot be converted .*type=Any)" env HAO_NO_AOT=1 "$HAO"
 refused task jit "child task result" env HAO_NO_AOT=1 "$HAO"
 refused unreflected jit "value native code would misread .*type=(SvpolicyLib.Unreflected" env HAO_NO_AOT=1 "$HAO"
+record() {   # part mode ERE: the record's line, after hao's "hao[NAME:PID]: " prefix
+    grep -qxE "hao\[svpolicy\.arm64e:[0-9]+\]: $3" "$OUT/$2.$1.err" && r=RECORDED || { r=NOT-RECORDED; fail=1; }
+    printf 'record %-6s %-9s %s\n' $1 $2 $r
+}
+record task jit 'hao-refusal v1 kind=swift-value process="svpolicy\.arm64e" key="Swift\.Optional<Swift\.Optional<svpolicy\.C>>" reason="child task result has a nil native code would copy in the guest.s encoding"'
 # The pass classes, named under HAO_BRIDGE_CHECK.
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_BRIDGE_CHECK=1 "$HAO" "$OUT/svpolicy.arm64e" pass >"$OUT/check.out" 2>"$OUT/check.err"
 for c in "owner-opaque .*NSObject" "identical-representation .*Int) -> Swift.Int" "inactive-payload .*Optional<Swift.Int>"; do
@@ -110,6 +118,7 @@ echo "passthrough rc=$rc $r"
 refused refuse default "unresolved active representation" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO"
 grep -q 'not certified and not listed for report-only: unresolved active representation' "$OUT/default.refuse.err" ||
     { echo "refuse default: no unlisted line"; fail=1; }
+record refuse default 'hao-refusal v1 kind=swift-uncertified process="svpolicy\.arm64e" key="[^"]*" reason="unresolved active representation \(guest call of a native witness\)"'
 python3 -I "$repo/tools/hao_sv_reportlist.py" -o "$OUT/report.inc" "$OUT/default.refuse.err" 2>/dev/null &&
     sed -n -e 's/^KEY("\(.*\)")$/\1/p' -e 's/^NOMINAL("\(.*\)")$/nominal \1/p' "$OUT/report.inc" >"$OUT/report.list"
 for how in list report; do

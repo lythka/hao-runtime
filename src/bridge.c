@@ -1995,6 +1995,7 @@ void hao_bridge_check_mask(hao_thread *t, const hao_plan *p)
 
 void hao_bridge_refused(hao_thread *t, const hao_plan *p)
 {
+    hao_refusal_record("binding", p->name ? p->name : "?", p->why ? p->why : "no reason recorded");
     char where[1100];
     HAO_LOG(0, "bridge: REFUSED call to %s (%#llx): %s; lr=%#llx%s\n", p->name ? p->name : "?", (unsigned long long)p->native,
             p->why ? p->why : "no reason recorded", (unsigned long long)t->cpu.x[30],

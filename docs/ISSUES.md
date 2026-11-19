@@ -1,5 +1,27 @@
 # Runtime issues and measured scope
 
+## Refusals leave one public record
+
+A refusal was visible only in hao's diagnostics: stderr, the `hao_crash=1` log, or private unified-log
+records, which `log show` prints as `<private>`. Counting refusals needed crash reports or `hao_crash=1`. Now
+each refusal also writes one public error record (subsystem `com.hao`, category `refusal`) and the same line to
+hao's diagnostics: `hao-refusal v1 kind=KIND process="NAME" key="KEY" reason="REASON"`. Kinds: `startup` (the
+program does not run, status 126; keyed by its path), `binding` (a REFUSED binding called; its symbol), `sig`
+(a native call whose signature abi.c cannot place; the type encoding), `callback` and `callback-registration`
+(a guest function or block with such a signature; the encoding), `swift-value` (the Swift value boundary; the
+type's name), `swift-uncertified` (refused only because no row certifies it and no report-only list names it),
+and `syscall` (a raw thread or sigreturn system call, refused with ENOTSUP; its name). A record is written once
+per (kind, key) in a process, through a fixed 1024-entry table; later keys past that are not recorded. Values
+are escaped and cut (key 480 bytes, reason 320). The refusals themselves are unchanged. `guest/refuse` (exact
+form for `sig`, `callback`, `callback-registration`, `startup`, and `syscall` made three times with two keys),
+`guest/svpolicy` (one record per refusal; exact form for `swift-value` and `swift-uncertified`). Limits: the
+record is written with `os_log` on a handle made at start-up, from the refusing thread, which may be in a
+signal handler; libtrace does not allocate there, but this is not a documented guarantee. A fork child
+records through `OS_LOG_DEFAULT` (its parent's handle faults there), so its records carry no subsystem;
+match records by their `hao-refusal v1` prefix. A Swift type without a printable name
+is keyed `<<< invalid type >>>`, as in the refusal line. A signature refusal names the encoding, not the
+class and selector. The guarded VM traps and calls (`syscall.c`, `interpose.c`) refuse without a record.
+
 ## Swift keys the value walk meets
 
 There was no record of which Swift types the value walk met without a row in its facts table, only of the
@@ -496,8 +518,8 @@ at exec. `src/libval.c` reads the status first and sets the flag only when
 it is missing. The private entitlement works on an ad hoc stub only where
 AMFI is relaxed, and libhao loads there under the flag (measured on the
 image). Start-up refusals also go to the unified log as a public record
-(`refused: ...`), because a sandboxed daemon's stderr goes nowhere and its
-private records show nothing. Tests: `test_macho` (flag set at exec,
+(now `hao-refusal v1 kind=startup`, "Refusals leave one public record"), because a sandboxed daemon's stderr
+goes nowhere and its private records show nothing. Tests: `test_macho` (flag set at exec,
 setting refused: library validation on) and `tests/tools/run.sh` (library
 flag only on such a stub). Limits: stubs from older payloads keep refusing
 until embedded again; with the JIT also denied (`dynamic-code-generation`),

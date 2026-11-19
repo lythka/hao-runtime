@@ -665,6 +665,16 @@ hsig *hao_sig(const char *enc)
     return n->sig;
 }
 
+/* The encoding a parsed signature was interned under, for a refusal's record: a walk of the cache
+ * without the lock (nodes are published with release and never freed), so a signal handler may use it. */
+static const char *sig_encoding(const hsig *s)
+{
+    for (unsigned h = 0; h < SIGCACHE; h++)
+        for (signode *n = __atomic_load_n(&sigcache[h], __ATOMIC_ACQUIRE); n; n = n->next)
+            if (n->sig == s) return n->enc;
+    return "?";
+}
+
 /* Interned parsed signatures and their copied encoding strings live for the
  * process lifetime. A descriptor address itself is not a signature identity. */
 const void *hao_sig_identity(const char *enc)
@@ -871,6 +881,7 @@ __attribute__((noreturn, cold)) static void sig_refused(const hao_cpu *c, uint64
     for (unsigned k = 0; k < sizeof parts / sizeof *parts; k++)
         for (const char *p = parts[k]; *p && at + 1 < sizeof what; p++) what[at++] = *p;
     what[at] = 0;
+    hao_refusal_record("sig", enc, why);
     uint64_t v[2] = {fn, c->x[30]};
     hao_fatal_safe(what, v, 2);
 }
@@ -884,6 +895,7 @@ __attribute__((noreturn, cold)) static void sig_refused(const hao_cpu *c, uint64
  * for the parser, link without the runtime */
 __attribute__((weak)) uint64_t hao_bridge_code_arg(uint64_t a, const char *enc) { (void)enc; return a; }
 __attribute__((weak, noreturn)) void hao_fatal_safe(const char *what, const uint64_t *v, int n) { (void)what; (void)v; (void)n; abort(); }
+__attribute__((weak)) void hao_refusal_record(const char *kind, const char *key, const char *reason) { (void)kind; (void)key; (void)reason; }
 static void code_slots(uint8_t *p, int size, uint64_t code)
 {
     for (; code; code &= code - 1) {
@@ -1202,6 +1214,8 @@ void hao_callback_with_sig(hao_cb_frame *f, void *sigp)
 {
     hsig *s = sigp;
     if (s->unmarshalable) {
+        hao_refusal_record("callback", sig_encoding(s), "signature not marshalled (too many arguments, too large an "
+                           "aggregate or a malformed encoding)");
         uint64_t v[2] = {f->target, f->ret};
         hao_fatal_safe("bridge: REFUSED callback into guest: its signature is not marshalled (too many arguments, too large "
                        "an aggregate or a malformed encoding); guest function, native return address:", v, 2);
@@ -1285,6 +1299,8 @@ static uint64_t guest_entry_for_sig(uint64_t guest, const char *enc, bool known_
         __atomic_fetch_add(&hao_abi_refused, 1, __ATOMIC_RELAXED);
         uint64_t code = hao_opt.no_closures ? 0 : hao_sig_thunk(guest, s);
         if (code) return code;
+        hao_refusal_record("callback-registration", enc, "signature not marshalled (too many arguments, too large an "
+                           "aggregate or a malformed encoding) and no refusing entry can be made");
         uint64_t v[1] = {guest};
         hao_fatal_safe("bridge: REFUSED callback registration: the guest function's signature is not marshalled (too many "
                        "arguments, too large an aggregate or a malformed encoding) and no refusing entry can be made; guest function:",
