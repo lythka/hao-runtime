@@ -1634,6 +1634,19 @@ void hao_swift_witness_stats(void)
     if (witness_entries || witness_dropped || lost)
         fprintf(HAO_DIAG,"hao-swift-witness: entries=%u dropped=%u map_kb=%llu nils_lost=%llu\n",witness_entries,witness_dropped,
                 (unsigned long long)(witness_pcs.bytes >> 10),(unsigned long long)lost);
+    /* The walk's facts table: the metadata it met, by answer and by where the metadata lies (Facts.h) */
+    uint64_t rows[WALK_KEY_NROWS], where[3], dropped, met = 0;
+    walk_keys_counts(rows,where,&dropped);
+    for (unsigned k = 0; k < WALK_KEY_NROWS; ++k) met += rows[k];
+    if (!met && !dropped) return;
+    hao_diag_blk blk;
+    FILE *f = hao_diag_block(&blk);
+    fprintf(f,"hao-swift-keys: met=%llu",(unsigned long long)met);
+    for (unsigned k = 0; k < WALK_KEY_NROWS; ++k)
+        if (rows[k]) fprintf(f," %s=%llu",walk_key_row_name((int)k),(unsigned long long)rows[k]);
+    fprintf(f,"; cache=%llu guest=%llu heap=%llu; uncounted=%llu\n",(unsigned long long)where[0],(unsigned long long)where[1],
+            (unsigned long long)where[2],(unsigned long long)dropped);
+    hao_diag_block_end(&blk);
 }
 
 /* Each element's outer nils in the witness's encoding, in place; their

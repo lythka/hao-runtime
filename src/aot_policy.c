@@ -189,7 +189,7 @@ static const char *const engine_switches[] = {"HAO_NO_AOT", "HAO_INTERP", "HAO_N
 /* Print to the process's own stderr, the console or the unified log. They bind
  * nothing and turn nothing off (HAO_NX_STATS and HAO_AOT_USE add a thread that only prints). */
 static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "HAO_NX_STATS", "HAO_BRIDGE_STATS", "HAO_DIAG_TIME",
-                                            "HAO_AOT_USE", NULL};
+                                            "HAO_AOT_USE", "HAO_SWIFT_KEYS", NULL};
 /* For hao's own tests: they replace a kernel or CPUID answer or a resource
  * limit with a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */

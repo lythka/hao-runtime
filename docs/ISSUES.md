@@ -1,5 +1,17 @@
 # Runtime issues and measured scope
 
+## Swift keys the value walk meets
+
+There was no record of which Swift types the value walk met without a row in its facts table, only of the
+values it then refused or reported. Now every metadata the walk looks up is counted once per process by the
+table's answer and by where the metadata lies (`--stats`: `hao-swift-keys`), and `HAO_SWIFT_KEYS=1` or the boot
+argument `hao_swift_keys=1` writes one `hao-swift-key` record each (docs/swift-metadata.md, "Recording the Swift
+keys a program meets"). `tools/hao_swift_keys.py` turns the records into coverage and generator input. Cost: one
+lock-free map lookup per walk lookup; the first sight of a metadata takes the table's lock and, for `where`,
+`dladdr`. Limits: types are recorded only where the walk looks them up, not at every metadata request; the map
+of metadata met holds 196,608 entries, later ones are counted as `uncounted`; a fork child does not record again
+what its parent recorded. `host/swift-keys`, `guest/svfacts` (keys).
+
 ## CPU profiles for translation and AOT caches
 
 The JIT knew one optional CPU feature, AES-NI, from a global flag, and an AOT

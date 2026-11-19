@@ -49,6 +49,7 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"bridge_stats", offsetof(hao_opts_t, bridge_stats), BOOT_YES},
     {"diag_time", offsetof(hao_opts_t, diag_time), BOOT_YES},
     {"aot_use", offsetof(hao_opts_t, aot_use), BOOT_YES},
+    {"swift_keys", offsetof(hao_opts_t, swift_keys), BOOT_YES},
     {"no_ifunits", offsetof(hao_opts_t, no_ifunits), BOOT_DEV},
     {"no_swift_thunks", offsetof(hao_opts_t, no_swift_thunks), BOOT_DEV},
     {"no_swift_values", offsetof(hao_opts_t, no_swift_values), BOOT_DEV},
