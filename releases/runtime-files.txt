@@ -115,6 +115,7 @@ src/swiftobjects.c
 src/swiftresult.c
 src/swiftschema.c
 src/swiftvalue.c
+src/swiftvalue_report.inc
 src/swiftvalue/Aggregate.c
 src/swiftvalue/Aggregate.h
 src/swiftvalue/Common.c
@@ -723,6 +724,7 @@ tools/hao_macho.py
 tools/hao_release.py
 tools/hao_root.py
 tools/hao_swift_keys.py
+tools/hao_sv_reportlist.py
 tools/stub_identity_gate.py
 tools/value-contracts/README.md
 tools/value-contracts/optional-data-26A428.json

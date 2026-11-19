@@ -6,7 +6,8 @@
 # REFUSE row on Int?, which the rules certify) must be refused. Without the fixture "same" is refused. Under
 # HAO_SWIFT_VALUE_AUDIT=1 "refuse" goes on, equal to native, with one hao-swift-audit record naming the
 # refused type by its table key, its parent chain and the guest caller's image UUID and offset; a release
-# build (REL) ignores the audit and HAO_SWIFT_VALUE_STRICT, says so once, and reports "same" (report-only).
+# build (REL) ignores the audit and HAO_SWIFT_VALUE_STRICT, says so once, and under HAO_SWIFT_VALUE_REPORT=1
+# reports "same" (report-only).
 # Under HAO_SWIFT_KEYS=1 the "same" lookup is one hao-swift-key record with the row's answer.
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svfacts.sh
 set -u
@@ -73,11 +74,11 @@ if [ $rc = 0 ] && cmp -s "$OUT/native.same.out" "$OUT/keys.out" && [ "$n" = 1 ] 
    grep -qE '^hao-swift-keys: met=[0-9]+ same=1 ' "$OUT/keys.err"; then r=RECORDED; else r=NOT-RECORDED; fail=1; fi
 echo "same     keys    rc=$rc $r"
 [ $r = RECORDED ] || grep -a 'hao-swift-key' "$OUT/keys.err" | head -4 | cut -c1-300 | sed 's/^/    /'
-# A release build (REL, default build/hao) ignores the audit and the strict switch, says so once, and
-# reports the uncertified value, which goes on equal to native.
+# A release build (REL, default build/hao) ignores the audit and the strict switch and says so once; under
+# HAO_SWIFT_VALUE_REPORT=1 it reports the uncertified value, which goes on equal to native.
 REL=${REL:-$repo/build/hao}
 if [ -x "$REL" ]; then
-    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_AUDIT=1 "$REL" "$OUT/svfacts.arm64e" same >"$OUT/release.out" 2>"$OUT/release.err"; rc=$?
+    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_AUDIT=1 HAO_SWIFT_VALUE_REPORT=1 "$REL" "$OUT/svfacts.arm64e" same >"$OUT/release.out" 2>"$OUT/release.err"; rc=$?
     if [ $rc = 0 ] && [ "$(grep -c 'hao_swift_value_audit ignored: this libhao is not a survey build' "$OUT/release.err")" = 1 ] &&
        cmp -s "$OUT/native.same.out" "$OUT/release.out" && ! grep -q 'Swift value boundary refused' "$OUT/release.err" &&
        grep -q 'not certified, passed as found (report-only)' "$OUT/release.err"

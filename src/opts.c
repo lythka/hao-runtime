@@ -26,8 +26,11 @@ hao_opts_t hao_opt;
  *             hao_swift_value_audit, which a survey image sets so that one
  *             boot lists the Swift values every program, daemons included,
  *             would have refused (it accepts their corruption, swiftvalue.c).
- *             A release build ignores it and says so (swift_value_audit_ignored). */
-enum { BOOT_NO, BOOT_DEV, BOOT_YES, BOOT_SURVEY };
+ *             A release build ignores it and says so (swift_value_audit_ignored);
+ *   BOOT_ANY  every process and every build, but from the environment only
+ *             an open one: hao_swift_value_report, which an image sets to
+ *             report uncertified Swift values instead of refusing them. */
+enum { BOOT_NO, BOOT_DEV, BOOT_YES, BOOT_SURVEY, BOOT_ANY };
 static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"nx_stats", offsetof(hao_opts_t, nx_stats), BOOT_YES},
     {"crash_trace", offsetof(hao_opts_t, crash_trace), BOOT_YES},
@@ -64,12 +67,13 @@ static const struct { const char *name; size_t off; int boot; } knobs[] = {
     {"swift_value_passthrough", offsetof(hao_opts_t, swift_value_passthrough), BOOT_NO},
     {"swift_value_strict", offsetof(hao_opts_t, swift_value_strict), BOOT_NO},
     {"swift_value_audit", offsetof(hao_opts_t, swift_value_audit), BOOT_SURVEY},
+    {"swift_value_report", offsetof(hao_opts_t, swift_value_report), BOOT_ANY},
 };
 #define NKNOBS (sizeof knobs / sizeof knobs[0])
 
 static bool boot_knob_allowed(int boot)
 {
-    return boot == BOOT_YES || (boot == BOOT_SURVEY && (hao_survey_build || hao_test_switches)) ||
+    return boot == BOOT_YES || boot == BOOT_ANY || (boot == BOOT_SURVEY && (hao_survey_build || hao_test_switches)) ||
            (boot == BOOT_DEV && hao_test_switches);
 }
 
@@ -163,6 +167,7 @@ void hao_opts_parse(hao_opts_t *o, char **envp, const char *flags, const char *b
     if (env_on(o, envp, "HAO_CRASH", tier)) o->crash = true;
     if ((v = env_get(o, envp, "HAO_SWIFT_WALK_FACTS", tier))) snprintf(o->swift_walk_facts, sizeof o->swift_walk_facts, "%s", v);
     if ((v = env_get(o, envp, "HAO_SWIFT_GUEST_FACTS", tier))) snprintf(o->swift_guest_facts, sizeof o->swift_guest_facts, "%s", v);
+    if ((v = env_get(o, envp, "HAO_SWIFT_VALUE_LIST", tier))) snprintf(o->swift_value_list, sizeof o->swift_value_list, "%s", v);
     for (size_t k = 0; k < NKNOBS; k++) {
         char name[40] = "HAO_";
         for (size_t i = 0; knobs[k].name[i] && i < sizeof name - 5; i++)
