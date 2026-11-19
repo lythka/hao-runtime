@@ -187,6 +187,8 @@ bool hao_env_test_switch(const char *name);
 bool hao_dep_path_allowed(const char *path, bool from_rpath, bool main_image, int tier, const char **why);
 /* Does an XML entitlements plist name any key outside hao's own? */
 bool hao_entitlements_foreign(const char *xml, size_t n);
+/* Is the boolean or integer entitlement `key` on in an XML entitlements plist? */
+bool hao_entitlement_on(const char *xml, size_t n, const char *key);
 
 /* ---------------------------------------------------- cache locations */
 enum { HAO_AOT_SYS_RO, HAO_AOT_SYS, HAO_AOT_USER, HAO_AOT_EXPLICIT };
