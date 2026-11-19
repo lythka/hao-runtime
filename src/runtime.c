@@ -14,6 +14,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/nlist.h>
 #include "hao/a64_regs.h"
+#include "hao/native_callback.h"
 #include "hao/gen_stamp.h"
 #include "hao/identity.h"
 #include "hao/swiftvalue.h"
@@ -1203,6 +1204,13 @@ uint64_t hao_callback(hao_cb_frame *f)
     }
     if ((in & 7) == HAO_CB_SWIFT_TAG) {
         callback_swift(f, (const hao_swift_reverse *)(uintptr_t)(in & ~7ull), NULL);
+        return 0;
+    }
+    /* the native call's own contract (hao/native_callback.h): its callee's lowered signature, whatever guest
+     * function the call reaches */
+    const hao_swift_reverse *contract = in <= HAO_CB_SWIFTCC ? hao_bridge_native_callback_reverse(f->ret) : NULL;
+    if (contract) {
+        callback_swift(f, contract, NULL);
         return 0;
     }
     /* arrived by an NX fault: a block whose helper this is gets thunks for next time */
