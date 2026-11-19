@@ -600,19 +600,12 @@ What this trusts, and what stops an attacker:
   guarded tier (`src/trust.c`). A user's `HAO_TRUST_LIST`, `HAO_FLAGS` or
   `HAO_IF_DIR` therefore cannot load foreign code into a process that then
   passes as Apple's.
-- **`DYLD_*` variables.** With AMFI's checks off, dyld honours
-  `DYLD_INSERT_LIBRARIES` in every process. Measured on 26B131: the library
-  was inserted into the stub of `/usr/bin/sw_vers`, a platform, hardened and
-  `restrict` program, for an ordinary user and for root. The same policy
-  applies to Apple-signed native programs; that is inferred, not measured. So
-  on such an image any local user can already run code in a process that passes
-  `anchor apple` with an Apple identifier, for example an Apple-signed x86_64
-  program from an earlier release with an inserted library. The lists do not
-  widen that. Where AMFI's dyld policy is in force, dyld ignores `DYLD_*` for a
-  listed stub, because hao-embed signs the stubs of platform, hardened and
-  library-validated (library flag) programs with the hardened runtime, and
-  never with allow-dyld-environment-variables when the program requires
-  library validation, and the guarded tier covers hao's own switches.
+- **`DYLD_*` variables.** Where AMFI's dyld policy is in force, dyld ignores
+  `DYLD_*` for a listed stub: hao-embed signs the stubs of platform, hardened
+  and library-validated programs with the hardened runtime, and never with
+  allow-dyld-environment-variables when the program requires library
+  validation. The guarded tier covers hao's own switches. Some hardening of
+  this area is in progress for the next release.
 - **A translator bug reachable from input** inside such a process is the same
   class of risk as a memory bug in the native Apple program.
 
@@ -631,15 +624,8 @@ change its mapping or protection, nor make an image's sealed constant
 data writable, through libc, libsystem or raw system calls. This defends
 against an attacker who can corrupt memory but not run code. Code
 already running in the process, guest or native, is out of scope, as it
-is for a native JIT; known and not defended against:
-
-- the memory entries hao keeps for its writes can be mapped again by
-  code that finds them and calls Mach;
-- another thread can store into a write mapping while it is open (a
-  burst of translated blocks, a chain patch, a thunk page), at a random
-  page of a reserved window;
-- VM requests sent as Mach messages to the task port are not seen by
-  hao's checks of calls and traps.
+is for a native JIT. Some hardening of this area is in progress for the
+next release.
 
 On the Rosetta development host the executable mapping is briefly made
 writable after each write so Rosetta drops stale translations; an Intel

@@ -369,9 +369,7 @@ no log in the first, every record private; before the change the first got a
 log and the second a public record; a log just under the cap gets one cap
 line and stays under it, where before a process wrote past it and no cap
 line). Not tested on the host: the console notice (nothing here captures
-`/dev/console`) and a failed `fchmod`. Known: a user can create
-`DIR/user/<uid>` for another uid first, which leaves that uid without a log
-file (its lines then go to the private unified log; nothing is disclosed).
+`/dev/console`) and a failed `fchmod`. Some hardening of this area is in progress for the next release.
 
 Measured on the 27.2 host under Rosetta (load about 30 on 16 CPUs), test
 build, 40 interleaved runs per cell, medians, with switch off / with a log
@@ -572,9 +570,7 @@ byte-identical copies of two of those 29. Test:
 then dropped when listed; the gate). Limits: the carried self constraints
 ask for a platform binary on the system volume, which an ad hoc stub is not,
 so where the kernel enforces launch constraints those programs will not
-start; not run on an Intel image yet. Constraints Apple attaches to platform
-programs through the trust cache are not in the signature and do not apply
-to a stub.
+start; not run on an Intel image yet. Some hardening of this area is in progress for the next release.
 
 ## Stubs linked native libraries from storage others can change
 
@@ -598,8 +594,7 @@ one looks loadable, since a build cannot prove what dyld will load; a
 path is walked as dyld opens it (no lexical "..") and is a shared-cache hit
 only as that exact string; a payload stub names libhao and libhao_identity
 by their /usr/lib/hao paths, so no rpath is searched for them; each x86_64 slice of a library, in each
-rpath context it is reached in, is judged on its own; a chain deeper than
-16 libraries is not protected. Any other is not
+rpath context it is reached in, is judged on its own. Any other is not
 linked (manifest `not_linked`: "outside protected storage") and hao's binder
 loads it with the program's image, after library validation is set.
 Measured on 26B131: 963 embedded programs, 5 link a library from disk, all
@@ -608,18 +603,15 @@ A program whose signature requires library validation (the library flag,
 with or without the hardened runtime) now also gets a hardened-runtime stub,
 without allow-dyld-environment-variables, so dyld ignores
 DYLD_INSERT_LIBRARIES for it as natively (26B131: 2 more stubs, 956 of
-963 hardened; test: the insert reaches a plain program's stub, not this
-one, and hao still runs it).
+963 hardened; test: the insert does not reach this stub, and hao still
+runs it).
 `stub_identity_gate.py` fails a stub that loads anything else at launch
 (`dylibs.protected`: libhao only from /usr/lib/hao), and needs the x86_64
 cache to say so (without one it fails). Test:
 `tests/tools/stubdeps.sh` (linked from an image root's usr/bin; not from
 /Library, behind a /Library rpath, through /usr/LOCAL, through a link
 under /Library or from a temporary folder, where the program still runs as
-natively; the gate on such a stub). Limits: when `CS_REQUIRE_LV` cannot be set,
-the deferred library loads without library validation (the loader's
-fallback); dyld's handling of DYLD_* variables in a stub that is not
-hardened is unchanged.
+natively; the gate on such a stub). Some hardening of this area is in progress for the next release.
 
 ## A sandbox applied at exec refused CS_REQUIRE_LV
 
@@ -669,9 +661,7 @@ refused), makes `replace/dyld`
 only when the manifest lists it, and fails when the payload holds a file the
 manifest does not list, a link or special file, or a listed file that is
 missing (AOT caches excepted) or changed. Test: `tests/tools/run.sh`
-(hao-runtime-on-mac cases). Limits: the image builder's own check of a
-payload (the contract checker the patcher vendors) still checks only listed
-files.
+(hao-runtime-on-mac cases). Some hardening of this area is in progress for the next release.
 
 ## Updating a running Mac's payload needed a new image
 
@@ -751,8 +741,7 @@ that names libhao (a library command of any kind, or the name as a string);
 the launcher's `__hao_cli` marker exempts only the payload's own
 usr/libexec/hao, and a file the scan cannot read fails it. Test: `tests/tools/test_install.py` (14
 of its cases fail with the old installer), `tests/tools/bundle.sh`. Limits:
-the manifest's hashes are not a signature; the scan reads the whole System
-volume once; copies outside it are not found.
+the scan reads the whole System volume once. Some hardening of this area is in progress for the next release.
 
 ## Constant data of guest images stayed writable
 
@@ -782,11 +771,10 @@ writer as these stores (code.c, see the guest code entry).
 Test: `test_macho` (writable after the load, read-only after the seal, a
 sealed store leaves the page read-only), `guest/wx` (the program's
 `__DATA_CONST` reads back read-only in main, as natively; it was
-writable). Limits: shared-cache images (dsc.c) are not sealed, their
-data is fixed up page by page as it is used; the slots a sealed store
+writable). Limits: the slots a sealed store
 writes are found only by blocks.c, and any other late writer into a
 sealed segment would fault (none other was seen in the 119 guest and
-host entries of tests/check.list).
+host entries of tests/check.list). Some hardening of this area is in progress for the next release.
 
 ## Calls hao could not place went through the register bridge
 
@@ -942,7 +930,7 @@ A lazily installed AOT block is marked filled only once its links to
 blocks not yet copied are cut and its write mapping is gone (before, a
 fork in between left a child a filled block jumping into unfilled code).
 The threat model these defend is in docs/security-model.md (Executable
-memory), with what it leaves out.
+memory).
 
 A fork child has no memory entries (they are not inherited). Under
 Rosetta it takes them again (the region briefly read/write, not
@@ -994,10 +982,7 @@ child writes. The fork-lock audit script of another branch
 (tests/host/fork_locks.py) is not in this tree. The patches are applied before any of the image's code runs
 and an image patched this way gets no AOT cache. Test: `test_macho`
 (page read-only again at the guest address and in the alias, a patch
-across a page boundary, an unmapped page refused). Limits: guest
-`mprotect` of its own code pages still reaches the kernel unchanged, so
-a guest can make its code writable and change it before it is
-translated, as a native process without hardened runtime can.
+across a page boundary, an unmapped page refused). Some hardening of this area is in progress for the next release.
 
 ## @ paths in a restricted process, now that app libraries are guest code
 
@@ -1827,9 +1812,7 @@ kernel. A call through a pointer to libc's `optarg` (`__DATA`) is still
 refused ("not executable host memory").
 
 Limits: the time saved is known only as the cost removed (the profile
-above); a before/after on Intel hardware is not measured. Data in an
-executable segment (`__TEXT,__const`) counts as host code, as it does for
-the kernel's answer.
+above); a before/after on Intel hardware is not measured. Some hardening of this area is in progress for the next release.
 
 ## Swift value checks looked their symbols up on every call
 
