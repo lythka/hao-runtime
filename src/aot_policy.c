@@ -292,6 +292,32 @@ bool hao_entitlements_foreign(const char *xml, size_t n)
     }
 }
 
+/* The value after <key>key</key>, whitespace skipped: on for <true/> or a nonzero <integer>, off for
+ * <false/>, <integer>0</integer> or no such key. Any other value counts as on. */
+bool hao_entitlement_on(const char *xml, size_t n, const char *key)
+{
+    size_t kl = strlen(key);
+    const char *p = xml, *e = xml + n;
+    for (;;) {
+        const char *k = memmem(p, (size_t)(e - p), "<key>", 5);
+        if (!k) return false;
+        k += 5;
+        const char *ke = memmem(k, (size_t)(e - k), "</key>", 6);
+        if (!ke) return false;
+        p = ke + 6;
+        if ((size_t)(ke - k) != kl || memcmp(k, key, kl)) continue;
+        while (p < e && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+        size_t left = (size_t)(e - p);
+        if (left >= 8 && !memcmp(p, "<false/>", 8)) return false;
+        if (left >= 9 && !memcmp(p, "<integer>", 9)) {
+            const char *v = p + 9;
+            while (v < e && (*v == ' ' || *v == '0')) v++;
+            return !(v < e && *v == '<');
+        }
+        return true;
+    }
+}
+
 /* ---------------------------------------------------- cache locations */
 
 static bool at_or_under(const char *p, const char *dir)

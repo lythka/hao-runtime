@@ -599,6 +599,10 @@ reciprocal/reciprocal-square-root estimate bucket at both ends. Undefined guest
 instructions currently terminate with the runtime's diagnostic and SIGABRT;
 the oracle checks the internal UNDEF result against hardware SIGILL.
 
+`make wx-cow-test` signs `hao` with and without the copy-on-write defeature
+entitlement and checks that only the entitled copy refuses JIT, with the same
+output.
+
 `make jit-arena-test` redirects hinted anonymous data allocations 8 GB from
 JIT memory. It checks that the code cache survives, plain and signature
 thunks address the correct tables, async records remain in relative reach,
