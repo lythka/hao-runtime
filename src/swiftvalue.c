@@ -536,10 +536,22 @@ static bool handle(hao_thread *t, const entry *e)
     bool destroy = (e->slots & (1u << 1)) && c->x[1] == (uint64_t)(uintptr_t)e->type;
     bool transfer = (e->slots & writes) && c->x[2] == (uint64_t)(uintptr_t)e->type;
     if (!destroy && !transfer) return false;
-    /* A buffer witness has a different storage ABI. Refuse aliases before
-     * reading any value bytes, including when the later walk has no nil. */
     const void *root = t->swift_values->plan->type;
 #define DECLINE(type,why,walked,value) do { decline(type,why,walked,value,root,c->x[30],e->pc); return false; } while (0)
+    /* initializeBufferWithCopyOfBuffer(dest, src, type) (ValueWitness.def):
+     * a type stored inline in a ValueBuffer is copied as initializeWithCopy
+     * does; an out-of-line one (IsNonInline) has a box reference in each
+     * buffer, which the witness copies and retains, sharing the box: no
+     * value bytes move and none are read, so there is nothing to convert. */
+    entry view = *e;
+    if (!destroy && (view.slots & (1u << 0))) {
+        if (vwt(e->type)->flags & 0x00020000) {
+            if (view.slots == (1u << 0)) { pass_note(e->type,HAO_SV_PASS_OWNED); return false; }
+        } else view.slots = (view.slots & ~(1u << 0)) | (1u << 2);
+    }
+    e = &view;
+    /* Refuse other buffer and ambiguous aliases before reading any value
+     * bytes, including when the later walk has no nil. */
     if ((e->slots & (1u << 0)) || (destroy && (transfer || e->slots != (1u << 1))))
         DECLINE(e->type,"unsupported buffer or ambiguous witness ABI",NULL,NULL);
     void *source = (void *)(uintptr_t)c->x[destroy ? 0 : 1];

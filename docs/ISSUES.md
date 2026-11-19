@@ -4328,6 +4328,23 @@ Remaining limitations:
 - The reflection cache holds at most 49152 fields; past it, lookups are
   made each time as before.
 
+## Buffer copies in an associated result's value scope
+
+While guest code produces an associated result (`View.body`), hao
+intercepts its calls of the native value witnesses of types in the result's
+type graph. A guest-defined enum with layout-string value witnesses (native
+`swift_cvw_*` code) copied through an existential was refused there, which
+ended the process: `unsupported buffer or ambiguous witness ABI`
+(`initializeBufferWithCopyOfBuffer`). By the value witness ABI that witness,
+for an out-of-line type (flag IsNonInline), copies and retains the buffer's
+box reference and reads no value bytes, so it now goes on as found; for an
+inline type it is `initializeWithCopy` and is handled as that. Test:
+`guest/viewbuffer`, whose value scope opens only where interface units for
+the native SwiftUI are installed (an image). Limits: a buffer witness
+aliased to another slot stays refused, and so does a guest call of an
+enum's `initializeWithCopy` that holds a nil to convert (`non-borrowable
+aggregate ownership`), which that test's enum reaches next.
+
 ## `Optional<AnyObject>` in a published Swift value
 
 A guest SwiftUI view value that held an `NSNotificationCenter.Publisher`
