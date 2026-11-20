@@ -77,6 +77,7 @@ void hao_swift_value_fork_child(void)
     tables_fork_child();
     walk_facts_fork_child();
     recipe_fork_child();
+    hao_sv_enum_fork_child();
 }
 typedef struct { const char *text; uintptr_t length; } type_name;
 static type_name name_of(const void *type)

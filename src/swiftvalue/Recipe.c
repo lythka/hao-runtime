@@ -979,18 +979,28 @@ static int guest_witnessed_optional(reflection *r, const void *type)
 /* PAYLOAD's single-payload tag witnesses (getEnumTagSinglePayload,
  * storeEnumTagSinglePayload) are native code, as the runtime's tuple
  * witnesses are: not a guest image's, a trap or a guest entry. */
+static hao_gmap tag_witness_memo = HAO_GMAP_INIT(2, 1, 6, 16);   /* payload metadata -> 1 native, 2 not */
+static void reflect_remember(hao_gmap *m, const uint64_t *key, const uint64_t *value, unsigned n);
 static int native_tag_witnesses(reflection *r, const void *payload)
 {
 #ifdef HAO_SWIFT_VALUE_RUNTIME
     (void)r;
     if (!vwt(payload)->extra) return 0;
-    for (unsigned slot = 6; slot <= 7; ++slot) {
+    /* The answer depends on PAYLOAD's witness table alone (fixed for its
+     * metadata, which is never freed) and costs two dladdr calls, each a
+     * search of every loaded image: remembered per metadata. */
+    uint64_t key = (uint64_t)(uintptr_t)payload;
+    const uint64_t *e = hao_gmap_get1(&tag_witness_memo,key);
+    if (e) return e[1] == 1;
+    uint64_t native = 1;
+    for (unsigned slot = 6; slot <= 7 && native == 1; ++slot) {
         uint64_t f = (uint64_t)(uintptr_t)vwt(payload)->functions[slot];
         Dl_info info;
         if (!f || hao_is_trap(f) || hao_image_for_code(f) || hao_guest_of_entry(f) ||
-            !dladdr((const void *)(uintptr_t)f,&info) || !info.dli_fname) return 0;
+            !dladdr((const void *)(uintptr_t)f,&info) || !info.dli_fname) native = 2;
     }
-    return 1;
+    if (key) reflect_remember(&tag_witness_memo,&key,&native,1);
+    return native == 1;
 #else
     (void)r; (void)payload;
     return 0;
