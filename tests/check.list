@@ -67,6 +67,7 @@ guest/sealedstorage	300	par	tests/guest/sealedstorage.sh
 guest/svfacts	300	par	tests/guest/svfacts.sh
 guest/svguest	300	par	tests/guest/svguest.sh
 guest/svmpenum	300	par	tests/guest/svmpenum.sh
+guest/svtuplexi	300	par	tests/guest/svtuplexi.sh
 guest/svnoncopy	300	par	tests/guest/svnoncopy.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh

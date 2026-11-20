@@ -22,6 +22,21 @@ a guest C function returning a struct through x8, called by C code in such an
 image, would get rax rather than the C caller's sret pointer (rdi). Requiring
 a Swift-calling-convention caller is open.
 
+## Single-payload enums over a tuple: empty cases in the native encoding
+
+A guest single-payload enum whose payload is a tuple holding a resilient
+native field is laid out by the runtime, and its empty cases are stored by
+the tuple's tag witnesses, which are native: on x86_64 a class reference's
+extra inhabitant k is the word 2k, on arm64 it is k. The walk compared the
+word with arm64's numbering, so an empty case past the first read as an
+outer Optional's nil and the value was reported as one native code would
+misread (Weather's WeatherData at each refresh; refused under strict mode).
+When the payload's tag witnesses are native, the walk now makes each empty
+case and outer nil with the payload's own store witness in scratch storage
+and compares the word with those. Test: `guest/svtuplexi`. Limits: up to 64
+empty cases; a payload whose store witness is guest code keeps the previous
+comparison.
+
 ## Report-only for known-wrong Swift values
 
 The rules 63c872d added call some values known-wrong (malformed enum and

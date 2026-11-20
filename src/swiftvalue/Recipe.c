@@ -39,6 +39,7 @@ typedef intptr_t SWIFT offset_fn(const void *, intptr_t);
 typedef const void *SWIFT field_fn(const void *, intptr_t, field_info *);
 typedef unsigned SWIFT enum_tag_fn(const void *, const void *);
 typedef void SWIFT inject_tag_fn(void *, unsigned, const void *);
+typedef void SWIFT store_tag_fn(void *, unsigned, unsigned, const void *);
 typedef struct {
     kind_fn *kind;
     count_fn *count;
@@ -89,6 +90,8 @@ static int holds_archdiff(reflection *r, const void *type, unsigned depth);
 #define WRONG(r) ((r)->passes |= HAO_SV_KNOWN_WRONG, 0)
 static int scalar_only(reflection *r, const void *type, unsigned depth);
 static int guest_tag_witnesses(reflection *r, const void *g);
+static int native_tag_witnesses(reflection *r, const void *payload);
+static int native_empty_case(const void *payload, uint64_t offset, unsigned empty, uint64_t word);
 
 static const witnesses *vwt(const void *type)
 {
@@ -973,6 +976,52 @@ static int guest_witnessed_optional(reflection *r, const void *type)
     if (!r->existentials || m[1] != r->optional || !m[2] || vwt(type)->size != vwt(m[2])->size) return 0;
     return guest_tag_witnesses(r,m[2]);
 }
+/* PAYLOAD's single-payload tag witnesses (getEnumTagSinglePayload,
+ * storeEnumTagSinglePayload) are native code, as the runtime's tuple
+ * witnesses are: not a guest image's, a trap or a guest entry. */
+static int native_tag_witnesses(reflection *r, const void *payload)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    (void)r;
+    if (!vwt(payload)->extra) return 0;
+    for (unsigned slot = 6; slot <= 7; ++slot) {
+        uint64_t f = (uint64_t)(uintptr_t)vwt(payload)->functions[slot];
+        Dl_info info;
+        if (!f || hao_is_trap(f) || hao_image_for_code(f) || hao_guest_of_entry(f) ||
+            !dladdr((const void *)(uintptr_t)f,&info) || !info.dli_fname) return 0;
+    }
+    return 1;
+#else
+    (void)r; (void)payload;
+    return 0;
+#endif
+}
+/* Which of the first EMPTY + 8 inhabitants of PAYLOAD (an enum's EMPTY
+ * empty cases, then an outer Optional's nils) the word WORD at OFFSET is,
+ * each made in scratch storage by PAYLOAD's own native store witness (no
+ * payload: nothing to own or destroy); EMPTY + 8 when none, -1 when a word
+ * cannot be made. */
+static int native_empty_case(const void *payload, uint64_t offset, unsigned empty, uint64_t word)
+{
+    const witnesses *pv = vwt(payload);
+    store_tag_fn *store = (store_tag_fn *)pv->functions[7];
+    unsigned cases = empty + 8;
+    if (!store || empty > 64 || pv->extra < cases || pv->stride < pv->size || pv->stride > 8192 ||
+        offset > pv->size - 8) return -1;
+    size_t alignment = (pv->flags & 255) + 1;
+    if (alignment < sizeof(void *)) alignment = sizeof(void *);
+    void *scratch = NULL;
+    if (posix_memalign(&scratch,alignment,(size_t)pv->stride)) return -1;
+    int found = (int)cases;
+    for (unsigned k = 0; k < cases; ++k) {
+        memset(scratch,0,(size_t)pv->stride);
+        store(scratch,k + 1,cases,payload);
+        uint64_t made; memcpy(&made,(const char *)scratch + offset,8);
+        if (made == word) { found = (int)k; break; }
+    }
+    free(scratch);
+    return found;
+}
 /* G is a guest-defined struct or enum with extra inhabitants whose single-
  * payload tag witnesses are guest code (guest_witnessed_optional). The same
  * holds for a guest single-payload enum whose empty cases are G's
@@ -1746,6 +1795,18 @@ static int collect_inner(reflection *r, const void *type, const unsigned char *v
             inner.offset <= v->size - 8) {
             uint64_t word, first = inner.consumed;
             memcpy(&word,value + inner.offset,8);
+            if (native_tag_witnesses(r,single)) {
+                /* The payload's tag witnesses are native (a tuple's: its
+                 * metadata is the runtime's), so the enum's own witnesses
+                 * store and read its empty cases through them, in the native
+                 * encoding (XI k is the word 2k on x86_64 for a pointer):
+                 * compared with the words those witnesses make. */
+                int found = native_empty_case(single,inner.offset,empty_cases,word);
+                if (found < 0) return leaf(r,type,value);   /* no word made: not known */
+                if (found < (int)empty_cases) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
+                if (found < (int)empty_cases + 8) return WRONG(r);
+                return collect(r,single,value,base,out,capacity,used,depth + 1);
+            }
             if (word >= first && word < first + empty_cases) { r->passes |= HAO_SV_PASS_INACTIVE; return 1; }
             if (word >= first + empty_cases && word < first + empty_cases + 8) return WRONG(r);
             return collect(r,single,value,base,out,capacity,used,depth + 1);
