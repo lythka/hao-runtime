@@ -93,7 +93,10 @@ image works; those are tested on the target system.
   --predicate 'subsystem == "com.hao"'`). A record names types by their
   facts-table keys (mangled, private contexts' addresses removed), the
   layout, offset and depth, the keys above the type, the boundary (`reason`,
-  `class`) and the guest caller and native witness by image UUID and offset,
+  `class`), the guest caller and native witness by image UUID and offset,
+  and the native function the guest was calling (`callee_symbol`: its
+  Swift call map row's symbol, its exported name or the `...Tq` method
+  descriptor whose implementation it is; `callee_image`, `callee_offset`),
   never an address or a path (`swiftvalue.c` `audit_record`).
   `HAO_SWIFT_VALUE_AUDIT=1` does the same for one program in a survey or
   test build.

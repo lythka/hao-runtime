@@ -69,6 +69,7 @@ guest/svguest	300	par	tests/guest/svguest.sh
 guest/svmpenum	300	par	tests/guest/svmpenum.sh
 guest/svtuplexi	300	par	tests/guest/svtuplexi.sh
 guest/svnoncopy	300	par	tests/guest/svnoncopy.sh
+guest/swiftcallres	300	par	tests/guest/swiftcallres.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh
 guest/xpcrect	300	par	tests/guest/xpcrect.sh

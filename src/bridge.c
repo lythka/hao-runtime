@@ -133,7 +133,8 @@ static bool better(const hao_plan *p, const hao_plan *old)
     /* or the same class, now known to be a Swift async function (note_async_entry) */
     return (old->cls == HAO_BR_UNKNOWN && p->cls != HAO_BR_UNKNOWN) ||
            (p->cls == old->cls && (p->flags & ~old->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT |
-                                                         HAO_PLAN_VIEWSELF)));
+                                                         HAO_PLAN_VIEWSELF))) ||
+           (p->cls == old->cls && p->swiftcall && !old->swiftcall);
 }
 
 /* under bridge_lock: insert or upgrade; returns the plan now in the table. Every change ends
@@ -984,6 +985,7 @@ static void make_plan(hao_plan *p, uint64_t native, const char *gname, const hao
     if (hao_swift_genres_bind(native, gname, p->flags & HAO_PLAN_SWIFTASYNC)) p->flags |= HAO_PLAN_GENRESULT;
     if (hao_swift_viewself_bind(native, gname)) p->flags |= HAO_PLAN_VIEWSELF;
     if (!(p->flags & HAO_PLAN_SWIFTASYNC)) p->swift_enum = hao_swift_textalign(gname, false);
+    p->swiftcall = hao_swiftcall_bind(native);   /* the Swift call map's row (swiftcall.c) */
     uint64_t gh = 0, nh = 0;
     bool thunk = r && (r->flags & HAO_IFR_THUNK) && !hao_opt.no_thunks && hao_thunks_pair(v->str + r->thunk, &gh, &nh);
     if (r && (r->flags & HAO_IFR_THUNK) && !thunk) __atomic_fetch_add(&st_thunk_missing, 1, __ATOMIC_RELAXED);
@@ -1376,7 +1378,7 @@ static const hao_plan *publish(const hao_plan *tmp, const char *name)
     const hao_plan *r;
     L();
     bool share = tmp->cls == HAO_BR_UNKNOWN && (!tmp->kind || tmp->kind == HAO_KIND_SITEPACK) && !hao_bridge_counting &&
-                 !tmp->why && !tmp->redirect && !tmp->swift_enum &&
+                 !tmp->why && !tmp->redirect && !tmp->swift_enum && !tmp->swiftcall &&
                  !(tmp->flags & (HAO_PLAN_SWIFTASYNC | HAO_PLAN_ASYNCARG | HAO_PLAN_GENRESULT | HAO_PLAN_VIEWSELF | HAO_PLAN_PROBE)) &&
                  tmp->swiftfn == (tmp->kind == HAO_KIND_SITEPACK);
     if (share && tmp->kind) r = tab_put(tmp->native, (tmp->flags & HAO_PLAN_DLADDR) ? &unknown_bare_sitepack : &unknown_import_sitepack);

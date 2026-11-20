@@ -127,6 +127,9 @@ typedef struct hao_thread {
      * x0), a ring the abort report prints (how guest code reached the failing call) */
     struct { uint64_t pc, lr, x0; } step_ring[HAO_STEP_RING];
     uint32_t step_n;
+    /* runtime.c native_step: the native function the guest is calling (0: none), for the Swift value
+     * audit's records (swiftvalue.c); a nested call's is restored when it returns */
+    uint64_t native_target;
 } hao_thread;
 
 /* Frames at segment depth `depth` and deeper were abandoned (a nonlocal jump or an exception): a cache
@@ -547,6 +550,17 @@ void hao_swift_genres_result(const void *type, uint64_t result);
  * call: at each guest call, NULL or a converted copy of self to pass in x20
  * for the call (then freed). */
 bool hao_swift_viewself_bind(uint64_t native, const char *sym);
+/* The Swift call map (swiftcall.c): bind, at binding, the row of the native
+ * function at NATIVE (its symbol, or the implementation of a dispatch thunk's
+ * or method descriptor's row), NULL none; before and after, around each
+ * guest call of it, its arguments to the native encoding and its results to
+ * the guest's. symbol_at: the row's symbol for NATIVE (audit records). */
+struct hao_swiftcall;
+const struct hao_swiftcall *hao_swiftcall_bind(uint64_t native);
+void hao_swiftcall_before(hao_cpu *c, const struct hao_swiftcall *s, uint64_t native);
+void hao_swiftcall_after(hao_cpu *c, const struct hao_swiftcall *s, uint64_t native);
+const char *hao_swiftcall_symbol_at(uint64_t native);
+void hao_swiftcall_fork_child(void);
 void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
 /* Packed stack arguments of a native Swift function without a layout record
  * (swiftcc.c; plan kind HAO_KIND_SITEPACK): the layout the guest call site

@@ -1287,6 +1287,41 @@ placeholder (POINTER at word 16) equals native by default. Not measured: the
 generated rows themselves (their cache is 26B131's), the native-source path
 through a real native generic result, and a whole image under the audit.
 
+## Swift call map: values in registers converted per native function
+
+A native Swift function returning or taking a value whose nil differs by
+architecture directly in registers crossed unconverted: a getter returning
+`(String?, String?)?` in x0-x3 / rax rdx rcx r8 gave the guest x86_64's outer
+nil (word 1 = 2), which arm64 code reads as a present value (its nil is 1)
+and retains. `src/swiftcall_gen.inc` (generated for one OS build) lists such
+functions by mangled symbol and the x86_64 library's LC_UUID, with each
+value's arm64 and x86_64 register per 8-byte word and its type's key in the
+walk's facts table. `src/swiftcall.c` attaches a function's row to its plan
+at binding (by the symbol's address, or by the implementation a dispatch
+thunk's or method descriptor's row names, the address a vtable call
+reaches). Around the call, arguments' words are gathered from the guest's
+registers, walked to the native encoding (source guest: the facts table's
+case images and the pointer rule) and placed where `hao_native_call` loads
+the row's x86_64 registers from; results the other way (source native). A
+REFUSE verdict, a type that does not resolve or whose size is not the
+words', a location `hao_native_call` does not pass, a converted indirect
+result, coroutine or async function is refused at the call. A function
+without a row keeps the policy for uncertified values. Audit records now
+name the native function being called (`callee_symbol`, `callee_image`,
+`callee_offset`: the row's symbol, the exported name, or the method
+descriptor whose implementation it is).
+
+Measured on the host (27.2, whose caches are not the table's):
+`guest/swiftcallres` with fixture rows for a universal library loaded
+natively (getter, setter, function; by method descriptor and by dispatch
+thunk) equals native arm64 under JIT, `--interp` and AOT, and crashes
+without the rows; a REFUSE row is refused and audited. Not measured: the
+generated rows themselves (26B131's cache). Not covered: native-to-guest
+calls (a guest override or closure that native code calls returns or
+receives such a value through a callback; the same rows, read with the
+directions swapped, would drive them), indirect results, stack arguments,
+coroutines and async functions.
+
 ## Swift values hao cannot certify are refused again
 
 Partly superseded by report-only (Open (high) entry above) for values no

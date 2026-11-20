@@ -11,6 +11,7 @@
 #include "hao/gmap.h"
 #include "hao/gen_stamp.h"
 #include "hao/dlsym_once.h"
+#include "hao/bridge.h"
 #define HAO_SWIFT_VALUE_RUNTIME 1
 #include "swiftvalue/Aggregate.h"
 #include "swiftvalue/Common.h"
@@ -212,20 +213,53 @@ static bool native_image_of(uint64_t pc, uint8_t uuid[16], uint64_t *offset)
     }
     return false;
 }
-/* One audit record (see above). Types by their table keys, code by image
- * UUID and offset: no address, no path. */
-static void audit_record(const void *type, const char *why, uint64_t offset, unsigned depth, const void *const *chain,
-                         const void *walked, const void *root, uint64_t lr, uint64_t pc, bool once)
+/* The native function the guest is calling (hao_thread native_target), by
+ * name for an audit record: the call map's symbol for it (swiftcall.c), else
+ * its exported name, else the method descriptor ("...Tq") whose
+ * implementation it is (a vtable call reaches an implementation the library
+ * need not export). "" when none is found. */
+typedef struct { uint64_t impl; char name[1024]; } callee_search;
+static void callee_visit(void *context, const char *name, const void *address)
 {
-    if (once && !first_report(type,why)) return;
+    callee_search *s = context;
+    size_t n = strlen(name);
+    int32_t rel;
+    if (s->name[0] || n < 4 || n >= sizeof s->name || strcmp(name + n - 2,"Tq") || strncmp(name,"_$s",3)) return;
+    memcpy(&rel,(const char *)address + 4,4);   /* MethodDescriptor {Flags, Impl (relative direct)} */
+    if (rel && (uint64_t)(uintptr_t)address + 4 + (uint64_t)(int64_t)rel == s->impl) memcpy(s->name,name + 1,n);
+}
+static void json_callee(FILE *f, uint64_t callee)
+{
+    const char *name = callee ? hao_swiftcall_symbol_at(callee) : NULL;
+    Dl_info info;
+    callee_search search = {callee, ""};
+    if (!name && callee && dladdr((const void *)(uintptr_t)callee,&info) && info.dli_sname &&
+        (uint64_t)(uintptr_t)info.dli_saddr == callee) name = info.dli_sname;
+    if (!name && callee && hao_bridge_native_exports((const void *)(uintptr_t)callee,callee_visit,&search) && search.name[0])
+        name = search.name;
+    if (name && name[0] == '_') ++name;
+    json_text(f,name ? name : "",name ? strlen(name) : 0);
+}
+/* One audit record (see above). Types by their table keys, code by image
+ * UUID and offset: no address, no path. TYPE NULL: a value the call map
+ * (swiftcall.c) names by KEY, or a whole call (KEY NULL). */
+static void audit_record(const void *type, const char *key, const char *why, uint64_t offset, unsigned depth,
+                         const void *const *chain, const void *walked, const void *root, uint64_t lr, uint64_t pc,
+                         bool once)
+{
+    if (once && !first_report(type ? type : key ? (const void *)key : (const void *)(uintptr_t)pc,why)) return;
     FILE *f = HAO_DIAG;
-    const witnesses *v = vwt(type);
+    static const witnesses none;
+    const witnesses *v = type ? vwt(type) : &none;
     typedef uintptr_t SWIFT kind_fn(const void *);
     kind_fn *kind = HAO_DLSYM("swift_getMetadataKind");
     hao_image *img = lr ? hao_image_for_addr(lr) : NULL;
-    uint8_t witness[16];
-    uint64_t witness_offset = 0;
+    uint8_t witness[16], callee_uuid[16];
+    uint64_t witness_offset = 0, callee_offset = 0;
     bool native = native_image_of(pc,witness,&witness_offset);
+    hao_thread *t = hao_current_peek();
+    uint64_t callee = t && t->native_target ? t->native_target : pc;
+    bool callee_native = native_image_of(callee,callee_uuid,&callee_offset);
     extern bool _dyld_get_shared_cache_uuid(unsigned char uuid[16]);
     unsigned char cache[16] = {0};
     (void)_dyld_get_shared_cache_uuid(cache);
@@ -235,23 +269,30 @@ static void audit_record(const void *type, const char *why, uint64_t offset, uns
     fprintf(f,",\"reason\":");
     json_text(f,why,strlen(why));
     fprintf(f,",\"class\":\"%s\",\"type\":",refusal_class(why));
-    json_mangled(f,type);
+    if (type) json_mangled(f,type);
+    else json_text(f,key ? key : "",key ? strlen(key) : 0);
     fprintf(f,",\"kind\":%lu,\"size\":%llu,\"stride\":%llu,\"flags\":%u,\"xi\":%u,\"offset\":%llu,\"depth\":%u,\"chain\":[",
-        kind ? (unsigned long)kind(type) : 0ul,(unsigned long long)v->size,(unsigned long long)v->stride,v->flags,v->extra,
+        kind && type ? (unsigned long)kind(type) : 0ul,(unsigned long long)v->size,(unsigned long long)v->stride,v->flags,v->extra,
         (unsigned long long)offset,depth);
     for (unsigned k = 0; chain && k < depth && k < HAO_SV_AUDIT_CHAIN; ++k) {
         if (k) fputc(',',f);
         json_mangled(f,chain[k]);
     }
     fprintf(f,"],\"walked\":");
-    json_mangled(f,walked ? walked : type);
+    if (walked || type) json_mangled(f,walked ? walked : type);
+    else json_text(f,key ? key : "",key ? strlen(key) : 0);
     fprintf(f,",\"root\":");
-    json_mangled(f,root ? root : type);
+    if (root || type) json_mangled(f,root ? root : type);
+    else json_text(f,key ? key : "",key ? strlen(key) : 0);
     fprintf(f,",\"caller_image\":");
     json_uuid(f,img && img->has_uuid ? img->uuid : NULL);
     fprintf(f,",\"caller_offset\":%llu,\"witness_image\":",(unsigned long long)(img ? lr - img->base : 0));
     json_uuid(f,native ? witness : NULL);
-    fprintf(f,",\"witness_offset\":%llu,\"x86_cache\":",(unsigned long long)witness_offset);
+    fprintf(f,",\"witness_offset\":%llu,\"callee_symbol\":",(unsigned long long)witness_offset);
+    json_callee(f,callee_native ? callee : 0);
+    fprintf(f,",\"callee_image\":");
+    json_uuid(f,callee_native ? callee_uuid : NULL);
+    fprintf(f,",\"callee_offset\":%llu,\"x86_cache\":",(unsigned long long)callee_offset);
     json_uuid(f,cache);
     fprintf(f,"}\n");
     funlockfile(f);
@@ -266,8 +307,8 @@ static void audit(const void *type, const char *why, const void *walked, const v
         (void)collect_audit_patches(walked,value,scratch,64,existentials,entries,8,&found);
     }
     for (unsigned i = 0; i < found; ++i)
-        audit_record(entries[i].type,why,entries[i].offset,entries[i].depth,entries[i].chain,walked,root,lr,pc,once);
-    if (!found) audit_record(type,why,0,0,NULL,walked,root,lr,pc,once);
+        audit_record(entries[i].type,NULL,why,entries[i].offset,entries[i].depth,entries[i].chain,walked,root,lr,pc,once);
+    if (!found) audit_record(type,NULL,why,0,0,NULL,walked,root,lr,pc,once);
 }
 
 /* Whether WHY means only that no row or rule proves the value either way
@@ -341,6 +382,63 @@ static void decline(const void *type, const char *why, const void *walked, const
 {
     decline_walk(type,why,walked,value,0,root,lr,pc);
 }
+/* A mapped Swift call (swiftcall.c) the policy refuses: the value of TYPE, or
+ * of KEY that does not resolve (TYPE NULL), or the whole call (both NULL),
+ * WHY, SYMBOL the call map's function. Refused as decline does, or recorded
+ * by the audit; returns only under the audit or HAO_SWIFT_VALUE_PASSTHROUGH. */
+void hao_swift_call_refused(const void *type, const char *key, const char *why, const char *symbol, uint64_t lr, uint64_t pc)
+{
+    if (type) { decline(type,why,NULL,NULL,type,lr,pc); return; }
+    if (hao_opt.swift_value_audit) { audit_record(NULL,key,why,0,0,NULL,NULL,NULL,lr,pc,true); return; }
+    if (hao_opt.swift_value_audit_ignored && first_report(NULL,"audit ignored")) {
+        hao_diag_prefix(HAO_DIAG);
+        fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1); refusing\n");
+    }
+    bool pass = hao_opt.swift_value_passthrough;
+    /* Only a row's REFUSE verdict refuses: a row this runtime cannot apply
+     * leaves the call as without a row, reported once (v0.0.1 report-only
+     * policy), unless HAO_SWIFT_VALUE_STRICT (tests). */
+    bool report_only = !pass && !hao_opt.swift_value_strict && strcmp(why,"a value the call map refuses") &&
+                       strcmp(why,"a call the call map refuses");
+    if ((pass || report_only) && !first_report(key ? (const void *)key : (const void *)symbol,why)) return;
+    hao_diag_prefix(HAO_DIAG);
+    fprintf(HAO_DIAG,"Swift value boundary %s: %s (call=%s%s%s guest lr=%#llx)\n",
+        pass ? "passed through unconverted (HAO_SWIFT_VALUE_PASSTHROUGH)" :
+        report_only ? "not converted, passed as found (report-only)" : "refused",why,symbol ? symbol : "?",
+        key ? " type=" : "",key ? key : "",(unsigned long long)lr);
+    if (!pass && !report_only) abort();
+}
+
+static int certified_patches(const void *type, const void *value, empty_patch *p, unsigned cap, int existentials,
+                             int (*known_layout)(const void *), const char *why, const void *root, uint64_t lr, uint64_t pc);
+/* A value of TYPE a mapped Swift call (swiftcall.c) passes in registers:
+ * VALUE, its words (BYTES) as the sending side's registers held them, in that
+ * side's encoding, rewritten to the receiving side's (TO_GUEST: native code
+ * made it). Only the walk's certified patches are written; a value it cannot
+ * certify, or whose size the words do not hold, is refused (decline). */
+void hao_swift_call_value(const void *type, void *value, uint64_t bytes, bool to_guest, const char *symbol,
+                          uint64_t lr, uint64_t pc)
+{
+    if (hao_opt.no_swift_values || !type || !value) return;
+    const witnesses *v = vwt(type);
+    if (v->size > bytes || v->size + 8 <= bytes) {
+        hao_swift_call_refused(type,NULL,"Swift call value's size is not its register words",symbol,lr,pc);
+        return;
+    }
+    empty_patch p[64];
+    int n = certified_patches(type,value,p,64,to_guest ? HAO_SV_SOURCE_NATIVE : HAO_SV_SOURCE_GUEST,NULL,
+                              to_guest ? "Swift call result has unresolved active representation" :
+                                         "Swift call argument has unresolved active representation",type,lr,pc);
+    for (int i = 0; i < n; ++i)
+        if (p[i].offset + 8 <= bytes) memcpy((char *)value + p[i].offset,to_guest ? &p[i].arm_bits : &p[i].receiver_bits,8);
+    if (hao_opt.bridge_check)
+    {
+        type_name tn = name_of(type);
+        fprintf(HAO_DIAG,"hao: Swift call %s %s %.*s: %d patches\n",symbol ? symbol : "?",to_guest ? "result" : "argument",
+            (int)tn.length,tn.text,n);
+    }
+}
+
 /* Under HAO_BRIDGE_CHECK, the pass classes by which a certified value of
  * TYPE goes on with parts as found, once per (type, class) in a process. */
 static void pass_note(const void *type, unsigned passes)

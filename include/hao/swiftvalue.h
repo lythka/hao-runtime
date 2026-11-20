@@ -58,5 +58,13 @@ void hao_swift_storage_element(const void *element, bool box, uint64_t lr);
  * type's storage gets hao's final-destruction conversion (swiftvalue.c). */
 void hao_swift_storage_made(void *object);
 void hao_swift_value_fork_child(void);
+/* The Swift call map's values (swiftcall.c): a value of TYPE in register words
+ * (BYTES) rewritten from the sending side's encoding to the receiving side's
+ * (TO_GUEST: native code made it); and a refusal of a mapped call's value
+ * (TYPE, or KEY when it does not resolve) or of the whole call. Both refuse
+ * per the boundary policy; SYMBOL names the call. */
+void hao_swift_call_value(const void *type, void *value, uint64_t bytes, bool to_guest, const char *symbol,
+                          uint64_t lr, uint64_t pc);
+void hao_swift_call_refused(const void *type, const char *key, const char *why, const char *symbol, uint64_t lr, uint64_t pc);
 void hao_swift_result_prepare(const hao_swift_result_context *, const uint64_t *, uint64_t, hao_swift_value_scope *);
 #endif
