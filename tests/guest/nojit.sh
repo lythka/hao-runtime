@@ -11,7 +11,8 @@
 # abi (ObjC methods with struct arguments called by native NSInvocation) and
 # blocks2 (blocks with struct signatures invoked by native code) must also
 # take NX faults and report signatures noted for the callback path. An AOT
-# cache that loads under the JIT must be skipped in this mode.
+# cache that loads under the JIT must be skipped in this mode, and the thunk
+# libraries of HAO_IF_DIR must still load.
 #   OUT=dir HAO=build/hao [T=60] tests/guest/nojit.sh     exit 1 on any failure
 set -u
 # This fixture exercises the guest/native bridge through its universal helper.
@@ -74,5 +75,17 @@ echo "aot      cache loaded: jit $jl, nojit $nl; nojit rc=$rc"
 [ "$jl" = 1 ] || bad aot "control: the cache did not load under the JIT"
 [ "$nl" = 0 ] || bad aot "cache loaded without a code cache"
 [ $rc = 0 ] && cmp -s "$OUT/sorts.native.out" "$OUT/aot.nojit.out" || bad aot "sorts with a cache and no JIT memory differs from native"
+# Generated thunk pairs are compiled code and do not need the code cache: the thunk libraries of
+# HAO_IF_DIR load in this mode too (tests/guest/lvswitchesmark.c leaves a marker), else every
+# interface-unit record that requires its pair would be refused at its first call.
+mkdir -p "$OUT/if"; chmod 755 "$OUT/if"; rm -f "$OUT/mark"
+clang -arch x86_64 -arch arm64 -dynamiclib -o "$OUT/if/mark.thunks" "$here/lvswitchesmark.c" &&
+    codesign -s - -f "$OUT/if/mark.thunks" 2>/dev/null && chmod 644 "$OUT/if/mark.thunks"
+timeout -s KILL "$T" env HAO_NO_JIT_MEMORY=1 HAO_VERBOSE=1 HAO_IF_DIR="$OUT/if" LVSWITCHES_MARK="$OUT/mark" \
+    "$HAO" "$OUT/hello.arm64e" >"$OUT/thunks.out" 2>"$OUT/thunks.err"
+rc=$?
+tl=$(grep -c 'thunk library .*mark.thunks (guest half at' "$OUT/thunks.err")
+echo "thunks   library loaded without JIT memory: $tl, marker $([ -e "$OUT/mark" ] && echo yes || echo no), rc=$rc"
+[ $rc = 7 ] && [ "$tl" = 1 ] && [ -e "$OUT/mark" ] || bad thunks "thunk library not loaded without JIT memory"
 [ $fail = 0 ] && echo "nojit: PASS" || echo "nojit: FAIL"
 exit $fail

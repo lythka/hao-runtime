@@ -18,6 +18,12 @@
  * platform or hardened guest has library validation on (src/libval.c), and
  * the kernel would refuse an ad hoc native library. The x86_64 slice loads
  * with dlopen, the arm64e slice as a guest image (runtime.c).
+ *
+ * The pairs do not need the code cache: both halves are compiled code, and
+ * guest code among a native half's arguments keeps its guest address when no
+ * native entry can be made (hao_bridge_code_arg), which native code reaches
+ * through the NX-fault path. A process whose MAP_JIT mapping failed still
+ * loads them; a record that requires its pair would otherwise be REFUSED.
  */
 #include "hao/runtime.h"
 #include "hao/bridge.h"
@@ -35,7 +41,7 @@ static uint64_t st_found, st_missing;
 
 void hao_thunks_init(void)
 {
-    if (hao_opt.no_ifunits || hao_opt.no_thunks || !hao_have_thunks()) return;
+    if (hao_opt.no_ifunits || hao_opt.no_thunks) return;
     hao_aot_dir dir;
     char why[512];
     if (!hao_if_dirs_for(hao_env_tier(), hao_opt.if_dir, &dir, why, sizeof why)) return;
