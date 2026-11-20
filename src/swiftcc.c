@@ -996,6 +996,7 @@ typedef struct genres {
     /* a module-level generic function: its formal parameters' registers and generic parameters (ngen 0: a method) */
     uint8_t nformal, ngen;
     uint8_t nres;           /* indirect results ahead of the formal arguments (a tuple's elements), 0: one in x8 */
+    uint8_t params[8];      /* each formal parameter: its generic parameter | GENRES_* << 4 */
     char *sym;              /* its symbol (a module-level function's) */
     const char *type_start; /* the function type in it */
     int16_t result_len;     /* the result's mangling there: 0 not found yet, -1 none */
@@ -1066,6 +1067,8 @@ bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *par
     return true;
 }
 
+/* A formal parameter of a module-level function (params[]: generic parameter | how << 4) */
+enum { GENRES_PLAIN, GENRES_METATYPE, GENRES_OPTIONAL, GENRES_INOUT };
 /* "Module.name<A, B>(p, ...) -> R": the counts of generic parameters, of
  * formal parameters (each one register: a generic parameter, its metatype,
  * Optional or inout) and of indirect results passed ahead of them (R a
@@ -1077,7 +1080,7 @@ static bool genres_generic_spelled(const char *p, const char *end, unsigned n)
     else if (end - p == 2 && p[1] == '?') end--;
     return end == p + 1 && *p >= 'A' && *p < 'A' + (int)n;
 }
-bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nformal, unsigned *nres)
+bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nformal, unsigned *nres, uint8_t *params)
 {
     const char *lt = strchr(d, '<'), *open = strchr(d, '(');
     if (!lt || !open || open < lt || strstr(d, " in ") || *d == '(' || strstr(d, "(extension in ")) return false;
@@ -1099,11 +1102,13 @@ bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nf
     unsigned k = 0;
     const char *p = open + 1;
     while (*p && *p != ')') {
-        if (!strncmp(p, "inout ", 6)) p += 6;
-        if (*p < 'A' || *p >= 'A' + (int)n) return false;
-        p++;
-        if (!strncmp(p, ".Type", 5)) p += 5;
-        else if (*p == '?') p++;
+        uint8_t how = GENRES_PLAIN;
+        if (!strncmp(p, "inout ", 6)) { p += 6; how = GENRES_INOUT; }
+        if (*p < 'A' || *p >= 'A' + (int)n || k >= 8) return false;
+        int letter = *p++ - 'A';
+        if (!strncmp(p, ".Type", 5)) { p += 5; if (how == GENRES_INOUT) return false; how = GENRES_METATYPE; }
+        else if (*p == '?') { p++; if (how == GENRES_INOUT) return false; how = GENRES_OPTIONAL; }
+        if (params) params[k] = (uint8_t)(letter | how << 4);
         k++;
         if (*p == ',') { p++; if (*p == ' ') p++; }
         else if (*p != ')') return false;
@@ -1159,12 +1164,17 @@ static void genres_mangle(char out[8], int index)
     else snprintf(out, 8, "q%d_Sg", index - 2);
 }
 
+typedef const void *__attribute__((swiftcall)) genres_env_fn(const char *, size_t, const void *, const void *const *);
+static genres_env_fn *genres_by_name;   /* swift_getTypeByMangledNameInEnvironment, found at binding */
+
 bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
 {
     if (!sym || strncmp(sym, "_$s", 3) || hao_opt.no_swift_values) return false;
-    /* the result, mangled first in the function type, is an Optional of a generic parameter */
-    if (!strstr(sym, "xSg") && !strstr(sym, "_Sg")) return false;
-    size_t len = strlen(sym);   /* a function (F), static (FZ), a getter (vg, vgZ) */
+    /* the result, mangled first in the function type, is an Optional of a generic parameter; or a
+     * generic function (its generic signature, ...lF), which may return a generic parameter or a tuple */
+    size_t len = strlen(sym);
+    if (!strstr(sym, "xSg") && !strstr(sym, "_Sg") && (len < 4 || strcmp(sym + len - 2, "lF"))) return false;
+    /* a function (F), static (FZ), a getter (vg, vgZ) */
     if (len < 6 || (strcmp(sym + len - 1, "F") && strcmp(sym + len - 2, "FZ") && strcmp(sym + len - 2, "vg") &&
                     strcmp(sym + len - 3, "vgZ"))) return false;
     if (hao_gmap_get1(&genres_fns, native)) return true;
@@ -1179,7 +1189,9 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
     unsigned nres = 0;
     bool parsed = false;
     /* a module-level generic function first: its "Module.name<A>" would read as a method of a type Module */
-    if (!is_async && strcmp(sym + len - 1, "F") == 0 && hao_swift_genres_free_demangled(d, &ngen, &nformal, &nres) &&
+    uint8_t params[8] = {0};
+    if (!genres_by_name) genres_by_name = (genres_env_fn *)dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInEnvironment");   /* binding */
+    if (!is_async && genres_by_name && strcmp(sym + len - 1, "F") == 0 && hao_swift_genres_free_demangled(d, &ngen, &nformal, &nres, params) &&
         (ftype = genres_free_type(sym, nformal))) {
         parsed = true;
         throwing = false;
@@ -1198,6 +1210,7 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
         if (!own) { free(g->context); free(g); return false; }
         g->ngen = (uint8_t)ngen; g->nformal = (uint8_t)nformal;
         g->nres = (uint8_t)nres;
+        memcpy(g->params, params, sizeof params);
         g->sym = own;
         g->type_start = own + (ftype - sym);
     } else genres_mangle(g->result, param);
@@ -1330,7 +1343,6 @@ static void __attribute__((swiftasynccall)) genres_resume_throwing(context_hdr *
  * requirements << 12), the parameter count of each level, a descriptor per
  * parameter (0x80: it has a key argument). */
 typedef struct { uint32_t flags; uint16_t counts[1]; uint8_t params[8]; } genres_env;
-typedef const void *__attribute__((swiftcall)) genres_env_fn(const char *, size_t, const void *, const void *const *);
 
 /* Is M readable metadata (a kind or a class's isa) of a native type? */
 static bool genres_metadata(uint64_t m)
@@ -1340,26 +1352,26 @@ static bool genres_metadata(uint64_t m)
 }
 
 /* A module-level function's result type for the call's generic arguments
- * (after its indirect results and formal arguments); its mangling's end
- * found at the first call (above). */
-static const void *genres_free_result(genres *g, const hao_cpu *c)
+ * (ARGS, after its indirect results and formal arguments); its mangling's
+ * end found at the first call (above). Under hao_crit: the native runtime
+ * allocates and takes its locks (no guest signal on top). */
+static const void *genres_free_type_of(genres *g, const char *mangled, size_t n, const void *const *args)
 {
-    const void *args[8];
-    for (unsigned k = 0; k < g->ngen; k++) {
-        args[k] = (const void *)(uintptr_t)c->x[g->nres + g->nformal + k];
-        if (!genres_metadata((uint64_t)(uintptr_t)args[k])) return NULL;
-    }
-    static genres_env_fn *by_name;
-    if (!by_name) by_name = (genres_env_fn *)dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInEnvironment");
-    if (!by_name) return NULL;
     genres_env env = {1, {g->ngen}, {0}};
     for (unsigned k = 0; k < g->ngen; k++) env.params[k] = 0x80;
+    hao_crit_enter();
+    const void *t = genres_by_name(mangled, n, &env, args);
+    hao_crit_leave();
+    return t;
+}
+static const void *genres_free_result(genres *g, const void *const *args)
+{
     int len = __atomic_load_n(&g->result_len, __ATOMIC_ACQUIRE);
     if (len < 0) return NULL;
     if (!len) {
         size_t avail = strlen(g->type_start);
         for (size_t n = avail > 256 ? 256 : avail; n > 0 && !len; n--)
-            if (!memchr(g->type_start, 'Q', n) && by_name(g->type_start, n, &env, args)) len = (int)n;
+            if (!memchr(g->type_start, 'Q', n) && genres_free_type_of(g, g->type_start, n, args)) len = (int)n;
         if (!len) len = -1;
         __atomic_store_n(&g->result_len, (int16_t)len, __ATOMIC_RELEASE);
         if (hao_opt.bridge_check)
@@ -1367,31 +1379,76 @@ static const void *genres_free_result(genres *g, const hao_cpu *c)
                     len > 0 ? g->type_start : "none");
         if (len < 0) return NULL;
     }
-    return by_name(g->type_start, (size_t)len, &env, args);
+    return genres_free_type_of(g, g->type_start, (size_t)len, args);
 }
 
-/* A guest call of NATIVE with the guest's registers: 0, or the result address
- * to convert with *TYPE when the call returns (synchronous). An async call's
+/* The formal arguments a module-level function borrows (or takes inout) by
+ * address: each value whose nils differ is passed as a copy in the native
+ * encoding, so native code only ever sees its own (a value it forwards into
+ * its result comes back native, and is converted with the result). */
+static void genres_free_args(genres *g, hao_cpu *c, const void *const *args, hao_genres_call *call)
+{
+    for (unsigned k = 0; k < g->nformal; k++) {
+        unsigned letter = g->params[k] & 15, how = g->params[k] >> 4;
+        if (how == GENRES_METATYPE) continue;
+        const void *type = args[letter];
+        if (how == GENRES_OPTIONAL) {
+            char m[8];
+            genres_mangle(m, (int)letter);   /* the parameter's Optional */
+            type = genres_free_type_of(g, m, strlen(m), args);
+        }
+        uint64_t *slot = &c->x[g->nres + k];
+        if (!type || !*slot) continue;
+        void *copy = hao_swift_borrow_to_native(type, (const void *)(uintptr_t)*slot);   /* NULL: lent as it is */
+        const uint64_t *vw = (const uint64_t *)(uintptr_t)*((const uint64_t *)type - 1);
+        uint64_t size = vw[8];   /* the value witnesses' size, flags */
+        uint32_t flags = (uint32_t)vw[10];
+        /* inout: native code may store a native-made value there, so it always works on a copy that is
+         * converted back (a bitwise-takable value; another is lent as it is) */
+        if (!copy && how == GENRES_INOUT && size && size <= (1u << 20) && !(flags & 0x00100000) &&
+            (copy = malloc((size_t)size)))
+            memcpy(copy, (const void *)(uintptr_t)*slot, (size_t)size);
+        if (!copy) continue;
+        unsigned i = call->ncopies++;
+        call->copies[i].orig = (void *)(uintptr_t)*slot;
+        call->copies[i].copy = copy;
+        call->copies[i].type = type;
+        call->copies[i].size = size;
+        call->copies[i].inout = how == GENRES_INOUT;
+        *slot = (uint64_t)(uintptr_t)copy;
+        if (hao_opt.bridge_check) fprintf(HAO_DIAG, "hao: native generic argument %u of %s: a native-encoded copy\n", k, g->sym);
+    }
+}
+
+/* A guest call of NATIVE with the guest's registers: true when the call has
+ * conversions to make when it returns (synchronous; CALL). An async call's
  * conversion is set up here and happens at its resume. */
-uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **type)
+bool hao_swift_genres_call(hao_cpu *c, uint64_t native, hao_genres_call *call)
 {
     const uint64_t *e = hao_gmap_get1(&genres_fns, native);
-    if (!e) return 0;
+    if (!e) return false;
     genres *g = (genres *)(uintptr_t)e[1];
+    call->nres = call->ncopies = 0;
+    call->result = 0;
     if (g->ngen) {
-        const void *t = genres_free_result(g, c);
-        if (!t) return 0;
-        *type = t;
-        if (!g->nres) return c->x[8];
-        /* a tuple's elements' buffers, x0.. before the call: tagged (bit 0) for hao_swift_genres_result */
-        uint64_t *at = malloc(sizeof *at * (1 + g->nres));
-        if (!at) return 0;
-        at[0] = g->nres;
-        for (unsigned k = 0; k < g->nres; k++) at[1 + k] = c->x[k];
-        return (uint64_t)(uintptr_t)at | 1;
+        const void *args[8];
+        for (unsigned k = 0; k < g->ngen; k++) {
+            args[k] = (const void *)(uintptr_t)c->x[g->nres + g->nformal + k];
+            if (!genres_metadata((uint64_t)(uintptr_t)args[k])) return false;
+        }
+        const void *t = genres_free_result(g, args);
+        if (!t) return false;
+        call->type = t;
+        if (!g->nres) call->result = c->x[8];
+        else {   /* a tuple: its elements' buffers, x0.. before the call */
+            call->nres = g->nres;
+            for (unsigned k = 0; k < g->nres; k++) call->at[k] = c->x[k];
+        }
+        genres_free_args(g, c, args, call);
+        return true;
     }
     int reg = __atomic_load_n(&g->self_reg, __ATOMIC_ACQUIRE);
-    if (reg == -1) return 0;
+    if (reg == -1) return false;
     if (reg == -2) {
         static const int8_t regs[] = {0, 1, 2, 3, 4, 5, 6, 7, 20};
         int found = -1;
@@ -1400,16 +1457,16 @@ uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **t
         __atomic_store_n(&g->self_reg, (int8_t)found, __ATOMIC_RELEASE);
         if (hao_opt.bridge_check)
             fprintf(HAO_DIAG, "hao: native generic result %s: Self metadata %s%d\n", g->context, found < 0 ? "not found, x" : "x", found);
-        if (found < 0) return 0;
+        if (found < 0) return false;
         reg = found;
     }
     const void *t = genres_result_type(g, c->x[reg]);
-    if (!t) return 0;
-    if (!g->is_async) { *type = t; return c->x[8]; }
+    if (!t) return false;
+    if (!g->is_async) { call->type = t; call->result = c->x[8]; return true; }
     context_hdr *ctx = (context_hdr *)(uintptr_t)c->x[22];
-    if (!ctx || ((uintptr_t)ctx & 7) || !c->x[0]) return 0;
+    if (!ctx || ((uintptr_t)ctx & 7) || !c->x[0]) return false;
     genres_wait *w = malloc(sizeof *w);
-    if (!w) return 0;
+    if (!w) return false;
     w->ctx = ctx; w->type = t; w->result = c->x[0];
     hao_crit_enter();
     pthread_mutex_lock(&genres_lock);
@@ -1426,19 +1483,26 @@ uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **t
     w->next = genres_waiting; genres_waiting = w;
     pthread_mutex_unlock(&genres_lock);
     hao_crit_leave();
-    return 0;
+    return false;
 }
 
-void hao_swift_genres_result(const void *type, uint64_t result)
+void hao_swift_genres_result(hao_cpu *c, hao_genres_call *call)
 {
-    if (!(result & 1)) { genres_convert(type, result, "sync"); return; }
+    /* the arguments' copies: an inout one's value back in the guest's encoding, the registers as the guest set them */
+    for (unsigned i = 0; i < call->ncopies; i++) {
+        if (call->copies[i].inout) {
+            (void)hao_swift_native_result_to_guest(call->copies[i].type, call->copies[i].copy);
+            memcpy(call->copies[i].orig, call->copies[i].copy, (size_t)call->copies[i].size);
+        }
+        free(call->copies[i].copy);
+    }
+    (void)c;
+    if (!call->nres) { if (call->result) genres_convert(call->type, call->result, "sync"); return; }
     /* a tuple returned as one indirect result per element: each element by its own type
      * (TupleTypeMetadata: kind, NumElements, Labels, then {Type, Offset} per element) */
-    uint64_t *at = (uint64_t *)(uintptr_t)(result & ~1ull);
-    const uint64_t *m = type;
-    if (m[0] == 0x301 && m[1] == at[0])
-        for (uint64_t k = 0; k < at[0]; k++) genres_convert((const void *)(uintptr_t)m[3 + 2 * k], at[1 + k], "sync, tuple element");
-    free(at);
+    const uint64_t *m = call->type;
+    if (m[0] == 0x301 && m[1] == call->nres)
+        for (unsigned k = 0; k < call->nres; k++) genres_convert((const void *)(uintptr_t)m[3 + 2 * k], call->at[k], "sync, tuple element");
 }
 
 /*

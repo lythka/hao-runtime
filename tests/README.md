@@ -117,7 +117,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/fpscalar | PASS | 55 | |
 | guest/fullcache | PASS | 6 | |
 | guest/fwbundle | PASS | 20 | a guest framework finds its bundle by identifier (`bundleWithIdentifier:` then a resource), by class (plain, resilient-ancestry, generic and pure Swift classes) and in `Bundle.allFrameworks`: equal to native arm64 under JIT, `--interp` and AOT. Without the framework's CFBundle the identifier lookup is nil (the control) |
-| guest/genpair | PASS | 5 | native generic module-level functions (`src/swiftcc.c` genres): `(T?, U)` returned as one indirect result per element and `T?` in x8, with T = `C?` or `CGImage?` made nil by native code in guest storage (the outer nil 1 on arm64, 2 on x86_64), next to a guest generic enum; equal to native arm64 under JIT, `--interp` and AOT; `BASE` (a build without the conversion) differs (it crashes). The CGImage types' facts are the walk table's 26B131 rows as a fixture (test switch `HAO_SWIFT_WALK_FACTS`) |
+| guest/genpair | PASS | 5 | native generic module-level functions (`src/swiftcc.c` genres): `(T?, U)` returned as one indirect result per element and `T?` in x8, with T = `C?` or `CGImage?` made nil by native code in guest storage (the outer nil 1 on arm64, 2 on x86_64), next to a guest generic enum; guest nested nils native code forwards into its result or takes inout; a one-byte result at an odd address; equal to native arm64 under JIT, `--interp` and AOT; `BASE` (a build without the conversion) differs (it crashes). The CGImage types' facts are the walk table's 26B131 rows as a fixture (test switch `HAO_SWIFT_WALK_FACTS`) |
 | guest/gss | PASS | 1 | |
 | guest/heapprobe | PASS | 1 | |
 | guest/hfasret | PASS | 2 | |

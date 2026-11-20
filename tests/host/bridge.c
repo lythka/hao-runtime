@@ -332,7 +332,7 @@ int main(int argc, char **argv)
     char ffirst[200] = "";
     for (size_t k = 0; k < sizeof freefn / sizeof *freefn; k++) {
         unsigned g = 0, f = 0, r = 0;
-        bool ok = hao_swift_genres_free_demangled(freefn[k].d, &g, &f, &r);
+        bool ok = hao_swift_genres_free_demangled(freefn[k].d, &g, &f, &r, NULL);
         if (ok != (freefn[k].ngen >= 0) || (ok && ((int)g != freefn[k].ngen || (int)f != freefn[k].nformal || (int)r != freefn[k].nres)))
             if (!fmis++) snprintf(ffirst, sizeof ffirst, ": %s", freefn[k].d);
     }
