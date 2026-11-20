@@ -8,7 +8,7 @@
  */
 #include "hao/a64_regs.h"
 
-enum { R = 1, W = 2, STOP = 4, JUMP = 8, BOTH = 16 };
+enum { R = 1, W = 2, STOP = 4, JUMP = 8, BOTH = 16, CALL = 32 };
 
 static inline unsigned f(uint32_t i, unsigned lo) { return (i >> lo) & 31; }
 static inline int64_t sext(uint32_t v, unsigned bits) { return (int64_t)((uint64_t)v << (64 - bits)) >> (64 - bits); }
@@ -97,9 +97,8 @@ static int effect(uint32_t i, int64_t *off)
 {
     if ((i & 0xFFFFF01F) == 0xD503201F || (i & 0xFFFFF01F) == 0xD503301F) return 0;   /* hints (PACIBSP, BTI, ...), barriers */
     if ((i & 0x7C000000) == 0x14000000) {                                 /* B, BL */
-        if (i >> 31) return STOP;
         *off = sext(i & 0x3FFFFFF, 26) * 4;
-        return JUMP;
+        return i >> 31 ? CALL : JUMP;
     }
     if ((i & 0x7E000000) == 0x34000000) { *off = sext((i >> 5) & 0x7FFFF, 19) * 4; return f(i, 0) == 8 ? R : BOTH; }   /* CBZ, CBNZ */
     if ((i & 0x7E000000) == 0x36000000) { *off = sext((i >> 5) & 0x3FFF, 14) * 4; return f(i, 0) == 8 ? R : BOTH; }    /* TBZ, TBNZ */
@@ -123,6 +122,9 @@ static bool walk(a64_fetch_fn fetch, void *ctx, uint64_t pc, int depth, int *bud
         if (e & R) return true;
         if (e & (W | STOP)) return false;
         if (e & JUMP) { pc += (uint64_t)off; continue; }
+        /* BL with x8 not yet written: x8 reaches the callee, which takes it as an input when its own code
+         * reads it first. After the call x8 is the callee's (caller-saved), so the walk ends here. */
+        if (e & CALL) return depth < 4 && walk(fetch, ctx, pc + (uint64_t)off, depth + 1, budget);
         if ((e & BOTH) && depth < 4 && walk(fetch, ctx, pc + (uint64_t)off, depth + 1, budget)) return true;
         pc += 4;
     }

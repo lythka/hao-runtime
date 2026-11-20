@@ -1,5 +1,27 @@
 # Runtime issues and measured scope
 
+## Signatureless callback arguments
+
+A plain callback has no arity, so hao can't tell how many argument registers
+the caller filled. Callback register handling is tighter in this release, and
+x8 stays on hao's own result area when no indirect result is passed. The host
+bridge test checks ordinary argument and result values. The callback's arity is
+still unknown.
+
+An unsymbolized guest closure may forward x8 without reading it before a call.
+On an untyped entry from an image with Swift metadata, the bridge passes rax as
+x8 only when the guest's own code takes x8 as an input: it reads x8 before
+writing it, or reaches a direct BL with x8 unwritten whose callee reads it first
+(a64_x8_live_in, four calls deep). A native Swift host test receives all five
+words written by such a forwarded callee; a direct-return call that leaves a
+caller-stack address in rax, incidentally or assigned right before the call, is
+not forwarded (host tests that fail on the earlier stack-range and call-site
+rules). A closure that reaches its result's writer only through an indirect call
+(BLR) is still not recognized. The caller's evidence is only that its image has Swift metadata:
+a guest C function returning a struct through x8, called by C code in such an
+image, would get rax rather than the C caller's sret pointer (rdi). Requiring
+a Swift-calling-convention caller is open.
+
 ## Report-only for known-wrong Swift values
 
 The rules 63c872d added call some values known-wrong (malformed enum and

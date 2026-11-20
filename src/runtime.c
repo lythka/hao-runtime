@@ -512,6 +512,7 @@ static bool native_swift_image(uint64_t pc)
     return sw;
 }
 
+
 /* Is the native function at pc a Swift function by its own symbol (an exported Swift mangled name at
  * exactly pc)? Guest functions passed to it are Swift function values: their entries are marked
  * (hao_swift_thunk_for). Also asked when the plan's names are not Swift ones (hao_plan swiftfn, which
@@ -1224,8 +1225,9 @@ uint64_t hao_callback(hao_cb_frame *f)
     /* rax is an indirect result's buffer only for a Swift callee: its entry says so (an island entry, or
      * the entry hao gave it where guest code handed it to native Swift code), its own symbol does, a
      * native function the guest called jumped on to it (a dispatch thunk's tail call returns to
-     * hao_native_call, which put the guest's own x8 in rax), or its own code takes x8 as an input and
-     * its caller is in an image with Swift metadata (a closure no hand-off site marked) */
+     * hao_native_call, which put the guest's own x8 in rax), or its own code takes x8 as an input (it
+     * reads x8 before writing it, or passes it unwritten to a direct callee that does: a64_x8_live_in)
+     * and its caller is in an image with Swift metadata (a closure no hand-off site marked) */
     bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target) ||
                    (guest_reads_x8(f->target) && native_swift_image(f->ret));
     hao_thread *t = hao_current();
@@ -1283,6 +1285,13 @@ static uint64_t noret_area(hao_thread *t)
     return (uint64_t)(uintptr_t)(m + (size_t)(NORET_LEVEL + NORET_GUARD) * level);
 }
 
+/* A plain callback has no arity: an argument slot the caller did not fill
+ * holds whatever was there. Words that are hao's own are passed as 0. */
+static uint64_t plain_arg(const hao_thread *t, uint64_t word)
+{
+    return word - (uintptr_t)t < sizeof(*t) ? 0 : word;
+}
+
 /* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry). */
 static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc)
 {
@@ -1290,10 +1299,10 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
     t->callbacks++;
     if (hao_verbose > 1) { callback_trace_entry(f, t); if (swiftcc) fprintf(stderr, "hao:   (a Swift entry: rax %#llx)\n", (unsigned long long)f->swift[3]); }
-    for (int k = 0; k < 6; k++) c->x[k] = f->gpr[k];
+    for (int k = 0; k < 6; k++) c->x[k] = plain_arg(t, f->gpr[k]);
     /* SysV stack args 0,1 -> x6,x7; the rest are copied to the guest stack */
-    c->x[6] = f->stack_args[0];
-    c->x[7] = f->stack_args[1];
+    c->x[6] = plain_arg(t, f->stack_args[0]);
+    c->x[7] = plain_arg(t, f->stack_args[1]);
     for (int k = 0; k < 8; k++) memcpy(&c->v[k], f->xmm[k], 16);
     c->x[21] = f->swift[0];
     c->x[20] = f->swift[1];
@@ -1314,7 +1323,7 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
      * passed through only to a Swift function (its entry or its own symbol
      * says so: hao_callback), and then only a value that can be a data
      * pointer; otherwise x8 is noret_area's. */
-    uint64_t r = f->swift[3];
+    uint64_t r = plain_arg(t, f->swift[3]);
     bool data = swiftcc && r >= 0x10000 && r < 0x800000000000ull && r != f->target && !hao_in_code_cache(r) &&
                 !hao_swiftmeta_is_island(r) && !hao_image_for_code(r) && !hao_is_trap(r);
     c->x[8] = data ? r : noret_area(t);

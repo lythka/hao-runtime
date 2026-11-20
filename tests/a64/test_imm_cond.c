@@ -240,7 +240,7 @@ enum {
     STP_D9_D8_PRE = 0x6dbf23e9, LDP_X8_X9_X0 = 0xa9402408, STP_X8_X9_SP = 0xa90027e8, FMOV_D8_X0 = 0x9e670008,
     FMOV_X8_D0 = 0x9e660008, LDR_X0_X1_X8 = 0xf8686820, CSEL_X0_X8_X1 = 0x9a810100, LDR_X8_LIT = 0x58000008,
     MOVK_X8 = 0xf2a00028, NOP = 0xd503201f,
-    CBZ_X0_P8 = 0xb4000040, CBZ_X8_P8 = 0xb4000048, B_P8 = 0x14000002, B_SELF = 0x14000000,
+    CBZ_X0_P8 = 0xb4000040, CBZ_X8_P8 = 0xb4000048, B_P8 = 0x14000002, B_SELF = 0x14000000, BL_P8 = 0x94000002,
 };
 
 static void test_x8(void)
@@ -256,7 +256,7 @@ static void test_x8(void)
     X8(true, CSEL_X0_X8_X1, RET);
     X8(true, MOVK_X8, RET);
     X8(true, CBZ_X8_P8, RET, RET);
-    /* written first, a call first, or never used */
+    /* written first, a BL into code that never reads x8, a BLR, or never used */
     X8(false, PACIBSP, STP_FP_LR_PRE, MOV_FP_SP, RET);
     X8(false, MOV_X8_X0, STR_X0_X8, RET);
     X8(false, MOV_W8_3, STR_X0_X8, RET);
@@ -276,6 +276,11 @@ static void test_x8(void)
     X8(false, CBZ_X0_P8, MOV_X8_X0, RET, RET);
     X8(false, NOP, B_SELF);
     X8(false, NOP, NOP);
+    /* BL with x8 unwritten: x8 is an input when the direct callee reads it first (a closure forwarding its
+     * indirect result); not when the callee writes it first, or when x8 was written before the call */
+    X8(true, STP_FP_LR_PRE, BL_P8, RET, STR_X0_X8, RET);
+    X8(false, BL_P8, RET, MOV_X8_X0, STR_X0_X8, RET);
+    X8(false, MOV_X8_X0, BL_P8, RET, STR_X0_X8, RET);
     printf("x8 walk: %d cases\n", n_x8);
 }
 
