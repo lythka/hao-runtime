@@ -646,6 +646,20 @@ flag only on such a stub). Limits: stubs from older payloads keep refusing
 until embedded again; with the JIT also denied (`dynamic-code-generation`),
 the program runs in the interpreter.
 
+## An exit-time unified-log object crashed a forked daemon
+
+A daemon whose child closed every descriptor (sshd) lost hao's log file; at
+exit the child's statistics then went to the unified log, and hao made its
+log object there. `os_log_create` walks libtrace's table of log objects, and
+in that child the table named memory the child did not have (as hao's own
+object faults in a fork child: `uni_fork_child`): SIGSEGV in `_os_log_find`.
+The object is now made at start-up, when diagnostics may need the unified
+log, and never later: a fork child, or a process that made none, drops what
+its file does not take (counted). Test: `tests/guest/routes.sh` (a fork child
+that closes hao's log exits 0; it did on the host before too: the fault was
+seen on the 27.2 Intel image only). Limits: which mapping the table names
+is not established; a fork child keeps no unified-log diagnostics.
+
 ## Required thunk pairs were refused without JIT memory
 
 When the code-cache mapping (MAP_JIT) failed, hao ran interpreted as

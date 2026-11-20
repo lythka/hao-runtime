@@ -1706,7 +1706,11 @@ static void uni_start(void)
     if (__atomic_load_n(&uni_thr, __ATOMIC_ACQUIRE) ||
         !__atomic_compare_exchange_n(&uni_starting, &no, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
         return;
-    if (!uni_log) uni_log = os_log_create("com.hao", "diag");
+    /* The log object is made at start-up (hao_diag_init), never here: this can run at exit or in a fork
+     * child, where libtrace's table of log objects names memory the child does not have, and making one
+     * walks that table (os_log_create faulted in _os_log_find in a forked daemon's exit). Without one the
+     * ring's bytes are dropped, counted in uni_dropped. */
+    if (!uni_log) { __atomic_store_n(&uni_starting, 0, __ATOMIC_RELEASE); return; }
     (void)os_log_type_enabled(uni_log, OS_LOG_TYPE_DEFAULT);   /* its preferences, read now */
     semaphore_t s = uni_sem;
     if (!s && semaphore_create(mach_task_self(), &s, SYNC_POLICY_FIFO, 0) != KERN_SUCCESS) s = 0;
@@ -2262,6 +2266,8 @@ void hao_diag_init(void)
     if (hao_opt.diag_dir[0] == '/') { snprintf(diag_dir, sizeof diag_dir, "%s", hao_opt.diag_dir); mk = true; }
     else if (crash) { snprintf(diag_dir, sizeof diag_dir, "/private/var/log/hao"); mk = geteuid() == 0; }
     diag_con_notice = crash && diag_dir[0];
+    /* the unified log's object now, for whatever the file does not take later (uni_start) */
+    if (diag_dir[0] || diag_stamp) uni_log = os_log_create("com.hao", "diag");
     if (diag_dir[0]) {
         int lfd = -1, fd = diag_log_open(diag_dir, mk, &lfd), e = errno;
         char ud[sizeof diag_dir];
