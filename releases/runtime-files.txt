@@ -109,6 +109,7 @@ src/signals.c
 src/stackargs_gen.inc
 src/stubs_oracle.c
 src/swift.c
+src/swiftcall.c
 src/swiftcall_gen.inc
 src/swiftcc.c
 src/swiftguest_gen.inc
@@ -567,6 +568,9 @@ tests/guest/swiftboxes.swift
 tests/guest/swiftcallee.sh
 tests/guest/swiftcallee.swift
 tests/guest/swiftcalleehelper.swift
+tests/guest/swiftcallres.sh
+tests/guest/swiftcallres.swift
+tests/guest/swiftcallres_lib.swift
 tests/guest/swiftcc.swift
 tests/guest/swiftcchelper.swift
 tests/guest/swiftentry.swift

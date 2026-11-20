@@ -126,6 +126,9 @@ enum {
 #define HAO_RES_CODE     0x01         /* the result may be a native function pointer */
 #define HAO_RES_BLOCK    0x02         /* the result may be a native block */
 
+/* A native Swift function's row of the call map (swiftcall.c, src/swiftcall_gen.inc). */
+typedef struct hao_swiftcall hao_swiftcall;
+
 typedef struct hao_plan {
     uint64_t native;                  /* the native entry point */
     const char *name;                 /* Mach-O symbol name ('_'...), NULL when nobody needs it */
@@ -156,6 +159,7 @@ typedef struct hao_plan {
     uint64_t sel;                     /* HAO_BRS_OBJCIMP: the selector the method was found by */
     uint64_t bsig;                    /* HAO_BRS_BLOCKSIG: the typing block's signature string when it lies in
                                        * the shared cache (never freed), else 0 (hao_bridge_block_recheck) */
+    const hao_swiftcall *swiftcall;   /* its call map row: values converted around the call (swiftcall.c) */
 } hao_plan;
 
 /* The plan table: open addressing keyed by native address, grown by

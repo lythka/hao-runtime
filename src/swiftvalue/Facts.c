@@ -5,7 +5,8 @@
  *   type KEY VERDICT [XI-CLASS XI-OFFSET [UNCHECKED]]   (SAME, DYNAMIC, CONVERT or REFUSE; NONE, SAME, POINTER,
  *        OTHER; UNCHECKED: a SAME row on a type with guest parts, which no generated row names)
  *   image KEY CASE ARM64-IMAGE ARM64-MASK X86_64-IMAGE X86_64-MASK   (hex, as SWIFTWALK_IMAGES)
- * ("#" starts a comment; tests/guest/svfacts.facts). */
+ * ("#" starts a comment; tests/guest/svfacts.facts). Its call and value
+ * lines are the Swift call map's (swiftcall.c). */
 #include "Facts.h"
 #include "hao/aot.h"
 #include "hao/gen_stamp.h"

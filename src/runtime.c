@@ -258,6 +258,7 @@ static void fork_child(void)
     hao_swiftcc_fork_child();
     hao_interpose_fork_child();
     hao_swift_value_fork_child();
+    hao_swiftcall_fork_child();
     hao_async_contract_fork_child();
     hao_varsniff_fork_child();
     hao_signals_fork_child();
@@ -592,13 +593,22 @@ static inline void native_call(hao_cpu *c, uint64_t pc, const hao_plan *p)
     uint64_t genres_at = p && (p->flags & HAO_PLAN_GENRESULT) ? hao_swift_genres_call(c, p->native, &genres_type) : 0;
     /* async function values for a native Swift function's async parameters (swiftmeta.c) */
     if (p && (p->flags & HAO_PLAN_ASYNCARG)) hao_swiftmeta_async_args(c);
-    if (kind == HAO_IF_KIND_STACKPACK) { native_call_stackpack(c, pc, p); return; }
+    /* the Swift call map's row (swiftcall.c): arguments to the native encoding, results after the call
+     * to the guest's */
+    const hao_swiftcall *mapped = p ? p->swiftcall : NULL;
+    if (mapped) hao_swiftcall_before(c, mapped, pc);
+    if (kind == HAO_IF_KIND_STACKPACK) {
+        native_call_stackpack(c, pc, p);
+        if (mapped) hao_swiftcall_after(c, mapped, pc);
+        return;
+    }
     /* a native View modifier borrows self (x20): a copy with native nils (swiftcc.c) */
     void *lent = p && (p->flags & HAO_PLAN_VIEWSELF) ? hao_swift_viewself_call(c, p->native) : NULL;
     uint64_t self = c->x[20];
     if (lent) c->x[20] = (uint64_t)(uintptr_t)lent;
     if (kind != HAO_KIND_SITEPACK || !native_call_stackpack(c, pc, p)) hao_native_call(pc, c, 16);
     if (lent) { c->x[20] = self; free(lent); }
+    if (mapped) hao_swiftcall_after(c, mapped, pc);
     if (genres_at) hao_swift_genres_result(genres_type, genres_at);
     if (optdata && optdata[0] == 'R' && c->x[0] == 0 && c->x[1] == HAO_OPTDATA_NIL_X86) c->x[1] = HAO_OPTDATA_NIL_ARM;
     if (kind && kind != 'A' && kind != HAO_KIND_SITEPACK) c->x[0] = hao_narrowret_extend(c->x[0], kind);   /* bool/char/short result */
@@ -736,10 +746,16 @@ static void native_step(void *arg)
         hao_bridge_count(t, p, pc);
         if (hao_opt.bridge_check && p && (p->flags & HAO_PLAN_MASKED)) hao_bridge_check_mask(t, p);
     }
-    if (t->swift_values && hao_swift_value_native(t,pc)) return;
-    if (pc >= __atomic_load_n(&hao_swift_witness_lo,__ATOMIC_ACQUIRE) && pc <= __atomic_load_n(&hao_swift_witness_hi,__ATOMIC_RELAXED) &&
-        hao_swift_witness_native(t,pc)) return;
+    uint64_t outer_target = t->native_target;   /* a callback's own native calls nest inside this one */
+    t->native_target = pc;
+    if ((t->swift_values && hao_swift_value_native(t,pc)) ||
+        (pc >= __atomic_load_n(&hao_swift_witness_lo,__ATOMIC_ACQUIRE) && pc <= __atomic_load_n(&hao_swift_witness_hi,__ATOMIC_RELAXED) &&
+         hao_swift_witness_native(t,pc))) {
+        t->native_target = outer_target;
+        return;
+    }
     if (p && p->thunk_guest) {
+        t->native_target = outer_target;
         hao_swift_objects_args(t);   /* swiftself need not appear in the pair's code-argument mask */
         /* a generated thunk pair (hao/bridge.h): the guest half runs with
          * the guest's own registers, stack and lr; x18 = &p->tp */
@@ -775,6 +791,7 @@ static void native_step(void *arg)
         fprintf(stderr, "hao: <- %s = %#llx [isa %#llx]\n", sn, (unsigned long long)r0, (unsigned long long)w0);
     } else
     native_call(c, pc, p);
+    t->native_target = outer_target;
     if (objc_enum_result) hao_objc_enum_result(c, objc_enum_result);
     if (swift_enum & HAO_SWIFT_ENUM_RESULT) c->x[0] = hao_swift_textalign_value(c->x[0]);
     c->pc = c->x[30];
