@@ -160,6 +160,8 @@ typedef struct {
 /* r10 of an island entry (swiftmeta.c), whose guest function is a Swift function: swiftcc passes an indirect
  * result's buffer in rax, which hao_callback hands the guest as x8 (a plain C entry's rax is no buffer) */
 #define HAO_CB_SWIFTCC 4
+/* r10 of a guest witness's signature thunk whose requirement has a Swift call map row (swiftcall.c): the row | 5 */
+#define HAO_CB_SWIFTCALL_TAG 5ull
 
 typedef void (*hao_trap_fn)(hao_thread *t, uint64_t arg);
 
@@ -560,6 +562,12 @@ const struct hao_swiftcall *hao_swiftcall_bind(uint64_t native);
 void hao_swiftcall_before(hao_cpu *c, const struct hao_swiftcall *s, uint64_t native);
 void hao_swiftcall_after(hao_cpu *c, const struct hao_swiftcall *s, uint64_t native);
 const char *hao_swiftcall_symbol_at(uint64_t native);
+/* The callback direction: the row of a protocol requirement (its descriptor
+ * at REQ) for native calls of a guest witness, and around such a call its
+ * arguments to the guest's encoding (RESULTS false) and its results to the
+ * native one. */
+const struct hao_swiftcall *hao_swiftcall_requirement(uint64_t req);
+void hao_swiftcall_callback(hao_cpu *c, hao_cb_frame *f, const struct hao_swiftcall *s, bool results);
 void hao_swiftcall_fork_child(void);
 void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
 /* Packed stack arguments of a native Swift function without a layout record

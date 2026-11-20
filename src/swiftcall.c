@@ -25,6 +25,15 @@
  * function that needs more than a move. A function without a row keeps the
  * policy for uncertified values.
  *
+ * The callback direction: a METHOD_DESCRIPTOR row names a protocol
+ * requirement (...Tq) the other way round when native code calls a guest
+ * witness of it (swiftmeta.c requirement_bridge; runtime.c callback_plain):
+ * before the guest runs, each argument's words are gathered from where the
+ * native caller left them (hao_cb_frame), walked to the guest's encoding and
+ * placed in the row's arm64 registers; after it, each result's words are
+ * gathered from the guest's registers, walked to the native encoding and
+ * placed where hao_callback_entry returns the row's x86_64 register from.
+ *
  * Under the test switch HAO_SWIFT_WALK_FACTS=FILE (a TEST_SWITCHES build)
  * the fixture file may also hold rows, looked up before the table's:
  *   call SYMBOL UUID KIND VERDICT
@@ -80,6 +89,7 @@ typedef struct {
     int8_t arm[MAX_WORDS];     /* the arm64 register of each word (a slot) */
     int8_t in[MAX_WORDS];      /* argument: the slot hao_native_call loads the x86_64 register from */
     int8_t out[MAX_WORDS];     /* result: the slot the x86_64 register lands in after the call */
+    int8_t cb[MAX_WORDS];      /* callback: the x86_64 register's hao_cb_frame slot (cb_slots) */
     const void *type;          /* resolved metadata (atomic), or (void *)1: does not resolve */
 } sc_value;
 struct hao_swiftcall {
@@ -88,6 +98,7 @@ struct hao_swiftcall {
     int kind;
     char verdict;
     const char *why;           /* not applied by this runtime: refused at the call */
+    const char *cbwhy;         /* not applied to a callback of it (a requirement's row): refused there */
     unsigned nvalues;
     sc_value v[MAX_VALUES];
     uint64_t addr, impl;       /* resolved in its library: the symbol, a descriptor's implementation; */
@@ -135,6 +146,21 @@ static void x86_slots(const char *s, size_t n, int *in, int *out)
     }
 }
 static bool is_result(char role) { return role == 'r' || role == 'e'; }
+/* hao_cb_frame (hao_callback_entry): an argument register's slot as the
+ * native caller left it, or a result register's slot it is returned from;
+ * 0-5 gpr[n], 8-11 swift[n - 8], 16-23 xmm[n - 16]. */
+enum { CB_SWIFT = 8, CB_XMM = 16 };
+static int cb_slot(const char *s, size_t n, bool result)
+{
+    static const struct { const char *name; int8_t arg, ret; } regs[] = {
+        {"rdi", 0, SLOT_NONE}, {"rsi", 1, SLOT_NONE}, {"rdx", 2, 1}, {"rcx", 3, 2}, {"r8", 4, 3}, {"r9", 5, SLOT_NONE},
+        {"rax", CB_SWIFT + 3, 0}, {"r12", CB_SWIFT, CB_SWIFT}, {"r13", CB_SWIFT + 1, SLOT_NONE}, {"r14", CB_SWIFT + 2, SLOT_NONE},
+    };
+    for (unsigned k = 0; k < sizeof regs / sizeof *regs; k++)
+        if (strlen(regs[k].name) == n && !memcmp(regs[k].name, s, n)) return result ? regs[k].ret : regs[k].arg;
+    if (n == 4 && !memcmp(s, "xmm", 3) && s[3] >= '0' && s[3] <= (result ? '3' : '7')) return CB_XMM + (s[3] - '0');
+    return SLOT_NONE;
+}
 
 /* One value row into R; false when its text is malformed (the row is then refused). */
 static bool add_value(hao_swiftcall *r, const char *role, const char *key, char verdict, const char *words)
@@ -153,9 +179,12 @@ static bool add_value(hao_swiftcall *r, const char *role, const char *key, char 
         int in, out, arm = arm_slot(p, (size_t)(colon - p));
         x86_slots(colon + 1, (size_t)(end - colon - 1), &in, &out);
         v->arm[v->n] = (int8_t)arm; v->in[v->n] = (int8_t)in; v->out[v->n] = (int8_t)out;
+        v->cb[v->n] = (int8_t)cb_slot(colon + 1, (size_t)(end - colon - 1), is_result(v->role));
         v->n++;
         if (arm == SLOT_NONE || (is_result(v->role) ? out : in) == SLOT_NONE)
             r->why = "a value word in a location hao_native_call does not pass";
+        if (arm == SLOT_NONE || v->cb[v->n - 1] == SLOT_NONE)
+            r->cbwhy = "a value word in a location hao_callback_entry does not pass";
         p = end;
     }
     if (!v->n) r->why = "a value without words";
@@ -405,4 +434,65 @@ const char *hao_swiftcall_symbol_at(uint64_t native)
         if (__atomic_load_n(&rows[i]->resolved, __ATOMIC_ACQUIRE) && (rows[i]->addr == native || rows[i]->impl == native))
             return rows[i]->symbol;
     return NULL;
+}
+
+/* The row of the protocol requirement whose descriptor is at REQ (a
+ * METHOD_DESCRIPTOR row naming ...Tq), for a native call of a guest witness
+ * of it; NULL none. At binding (swiftmeta.c), like hao_swiftcall_bind. */
+const hao_swiftcall *hao_swiftcall_requirement(uint64_t req)
+{
+    const hao_swiftcall *r = hao_swiftcall_bind(req);
+    return r && r->kind == SWIFTCALL_METHOD_DESCRIPTOR && r->addr == req ? r : NULL;
+}
+
+static uint64_t frame_word(const hao_cb_frame *f, int s)
+{
+    uint64_t w;
+    if (s >= CB_XMM) memcpy(&w, f->xmm[s - CB_XMM], 8);
+    else w = s >= CB_SWIFT ? f->swift[s - CB_SWIFT] : f->gpr[s];
+    return w;
+}
+static void frame_set(hao_cb_frame *f, int s, uint64_t w)
+{
+    if (s >= CB_XMM) memcpy(f->xmm[s - CB_XMM], &w, 8);
+    else if (s >= CB_SWIFT) f->swift[s - CB_SWIFT] = w;
+    else f->gpr[s] = w;
+}
+
+/* A native call of a guest witness whose requirement has row CS (runtime.c
+ * callback_plain): before the guest runs (RESULTS false), the arguments from
+ * the native caller's registers (F) to the row's arm64 registers in C, walked
+ * to the guest's encoding; after it, the results from C to F, walked to the
+ * native encoding (only the error when the guest threw). */
+void hao_swiftcall_callback(hao_cpu *c, hao_cb_frame *f, const hao_swiftcall *cs, bool results)
+{
+    hao_swiftcall *s = (hao_swiftcall *)cs;
+    const char *why = s->why ? s->why : s->cbwhy;
+    if (why) {
+        if (!results) hao_swift_call_refused(NULL, NULL, why, s->symbol, f->ret, f->target);
+        return;
+    }
+    uint64_t buf[MAX_VALUES][MAX_WORDS];
+    bool threw = false;
+    for (unsigned i = 0; results && i < s->nvalues; i++)
+        if (s->v[i].role == 'e') threw |= *slot(c, s->v[i].arm[0]) != 0;
+    hao_crit_enter();
+    for (unsigned i = 0; i < s->nvalues; i++) {
+        sc_value *v = &s->v[i];
+        if (is_result(v->role) != results || (threw && v->role == 'r')) continue;
+        for (unsigned w = 0; w < v->n; w++) buf[i][w] = results ? *slot(c, v->arm[w]) : frame_word(f, v->cb[w]);
+        if (v->verdict == SWIFTWALK_SAME || !v->key) continue;
+        const void *type = value_type(v);
+        if (!type) { hao_swift_call_refused(NULL, v->key, "the value's type does not resolve", s->symbol, f->ret, f->target); continue; }
+        hao_swift_call_value(type, buf[i], v->n * 8, !results, s->symbol, f->ret, f->target);
+    }
+    hao_crit_leave();
+    for (unsigned i = 0; i < s->nvalues; i++) {
+        const sc_value *v = &s->v[i];
+        if (is_result(v->role) != results || (threw && v->role == 'r')) continue;
+        for (unsigned w = 0; w < v->n; w++) {
+            if (results) frame_set(f, v->cb[w], buf[i][w]);
+            else *slot(c, v->arm[w]) = buf[i][w];
+        }
+    }
 }
