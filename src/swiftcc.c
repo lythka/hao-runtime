@@ -1382,6 +1382,22 @@ static const void *genres_free_result(genres *g, const void *const *args)
     return genres_free_type_of(g, g->type_start, (size_t)len, args);
 }
 
+/* hao_genres_call.more: allocated (and freed) under hao_crit */
+typedef struct {
+    unsigned nres, ncopies;
+    uint64_t at[8];
+    struct { void *orig, *copy; const void *type; uint64_t size; bool inout; } copies[8];
+} genres_more;
+static genres_more *genres_more_of(hao_genres_call *call)
+{
+    if (!call->more) {
+        hao_crit_enter();
+        call->more = calloc(1, sizeof(genres_more));
+        hao_crit_leave();
+    }
+    return call->more;
+}
+
 /* The formal arguments a module-level function borrows (or takes inout) by
  * address: each value whose nils differ is passed as a copy in the native
  * encoding, so native code only ever sees its own (a value it forwards into
@@ -1399,22 +1415,29 @@ static void genres_free_args(genres *g, hao_cpu *c, const void *const *args, hao
         }
         uint64_t *slot = &c->x[g->nres + k];
         if (!type || !*slot) continue;
+        hao_crit_enter();   /* the walk and its copy allocate: no guest signal on top */
         void *copy = hao_swift_borrow_to_native(type, (const void *)(uintptr_t)*slot);   /* NULL: lent as it is */
+        hao_crit_leave();
         const uint64_t *vw = (const uint64_t *)(uintptr_t)*((const uint64_t *)type - 1);
         uint64_t size = vw[8];   /* the value witnesses' size, flags */
         uint32_t flags = (uint32_t)vw[10];
         /* inout: native code may store a native-made value there, so it always works on a copy that is
          * converted back (a bitwise-takable value; another is lent as it is) */
-        if (!copy && how == GENRES_INOUT && size && size <= (1u << 20) && !(flags & 0x00100000) &&
-            (copy = malloc((size_t)size)))
-            memcpy(copy, (const void *)(uintptr_t)*slot, (size_t)size);
+        if (!copy && how == GENRES_INOUT && size && size <= (1u << 20) && !(flags & 0x00100000)) {
+            hao_crit_enter();
+            copy = malloc((size_t)size);
+            hao_crit_leave();
+            if (copy) memcpy(copy, (const void *)(uintptr_t)*slot, (size_t)size);
+        }
         if (!copy) continue;
-        unsigned i = call->ncopies++;
-        call->copies[i].orig = (void *)(uintptr_t)*slot;
-        call->copies[i].copy = copy;
-        call->copies[i].type = type;
-        call->copies[i].size = size;
-        call->copies[i].inout = how == GENRES_INOUT;
+        genres_more *m = genres_more_of(call);
+        if (!m) { hao_crit_enter(); free(copy); hao_crit_leave(); continue; }   /* lent as it is */
+        unsigned i = m->ncopies++;
+        m->copies[i].orig = (void *)(uintptr_t)*slot;
+        m->copies[i].copy = copy;
+        m->copies[i].type = type;
+        m->copies[i].size = size;
+        m->copies[i].inout = how == GENRES_INOUT;
         *slot = (uint64_t)(uintptr_t)copy;
         if (hao_opt.bridge_check) fprintf(HAO_DIAG, "hao: native generic argument %u of %s: a native-encoded copy\n", k, g->sym);
     }
@@ -1428,8 +1451,8 @@ bool hao_swift_genres_call(hao_cpu *c, uint64_t native, hao_genres_call *call)
     const uint64_t *e = hao_gmap_get1(&genres_fns, native);
     if (!e) return false;
     genres *g = (genres *)(uintptr_t)e[1];
-    call->nres = call->ncopies = 0;
     call->result = 0;
+    call->more = NULL;
     if (g->ngen) {
         const void *args[8];
         for (unsigned k = 0; k < g->ngen; k++) {
@@ -1441,8 +1464,10 @@ bool hao_swift_genres_call(hao_cpu *c, uint64_t native, hao_genres_call *call)
         call->type = t;
         if (!g->nres) call->result = c->x[8];
         else {   /* a tuple: its elements' buffers, x0.. before the call */
-            call->nres = g->nres;
-            for (unsigned k = 0; k < g->nres; k++) call->at[k] = c->x[k];
+            genres_more *m = genres_more_of(call);
+            if (!m) return false;
+            m->nres = g->nres;
+            for (unsigned k = 0; k < g->nres; k++) m->at[k] = c->x[k];
         }
         genres_free_args(g, c, args, call);
         return true;
@@ -1488,21 +1513,27 @@ bool hao_swift_genres_call(hao_cpu *c, uint64_t native, hao_genres_call *call)
 
 void hao_swift_genres_result(hao_cpu *c, hao_genres_call *call)
 {
-    /* the arguments' copies: an inout one's value back in the guest's encoding, the registers as the guest set them */
-    for (unsigned i = 0; i < call->ncopies; i++) {
-        if (call->copies[i].inout) {
-            (void)hao_swift_native_result_to_guest(call->copies[i].type, call->copies[i].copy);
-            memcpy(call->copies[i].orig, call->copies[i].copy, (size_t)call->copies[i].size);
-        }
-        free(call->copies[i].copy);
-    }
     (void)c;
-    if (!call->nres) { if (call->result) genres_convert(call->type, call->result, "sync"); return; }
-    /* a tuple returned as one indirect result per element: each element by its own type
-     * (TupleTypeMetadata: kind, NumElements, Labels, then {Type, Offset} per element) */
-    const uint64_t *m = call->type;
-    if (m[0] == 0x301 && m[1] == call->nres)
-        for (unsigned k = 0; k < call->nres; k++) genres_convert((const void *)(uintptr_t)m[3 + 2 * k], call->at[k], "sync, tuple element");
+    genres_more *m = call->more;
+    /* the arguments' copies: an inout one's value back in the guest's encoding */
+    for (unsigned i = 0; m && i < m->ncopies; i++)
+        if (m->copies[i].inout) {
+            (void)hao_swift_native_result_to_guest(m->copies[i].type, m->copies[i].copy);
+            memcpy(m->copies[i].orig, m->copies[i].copy, (size_t)m->copies[i].size);
+        }
+    if (!m || !m->nres) { if (call->result) genres_convert(call->type, call->result, "sync"); }
+    else {
+        /* a tuple returned as one indirect result per element: each element by its own type
+         * (TupleTypeMetadata: kind, NumElements, Labels, then {Type, Offset} per element) */
+        const uint64_t *t = call->type;
+        if (t[0] == 0x301 && t[1] == m->nres)
+            for (unsigned k = 0; k < m->nres; k++) genres_convert((const void *)(uintptr_t)t[3 + 2 * k], m->at[k], "sync, tuple element");
+    }
+    if (!m) return;
+    hao_crit_enter();
+    for (unsigned i = 0; i < m->ncopies; i++) free(m->copies[i].copy);
+    free(m);
+    hao_crit_leave();
 }
 
 /*
