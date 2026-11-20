@@ -97,11 +97,13 @@ static void refuse(const void *type, const char *why)
 }
 
 /* The boundary policy. A value crossing to native code is converted (its
- * nils given the receiving encoding) or passed as found only where the walk
- * certifies every part of it: each part then is a patched nil or in one of
+ * nils given the receiving encoding) where the walk certifies every part of
+ * it: each part then is a patched nil or in one of
  * the pass classes of Recipe.h (HAO_SV_PASS_IDENTICAL, _INACTIVE, _OWNED),
- * which pass_note names under HAO_BRIDGE_CHECK. Everything else is refused
- * (decline): an active representation the walk has no rule for, a layout,
+ * which pass_note names under HAO_BRIDGE_CHECK. The default policy also
+ * reports uncertified and selected known-wrong values and passes them as
+ * found. Strict mode refuses them. The reasons for decline include
+ * an active representation the walk has no rule for, a layout,
  * spare-bit or extra-inhabitant rule that differs by architecture, an
  * ambiguous witness ABI or ownership, an unresolved assignment destination,
  * invalid or overlapping storage, and a failed allocation a required
@@ -341,10 +343,8 @@ static void audit(const void *type, const char *why, const void *walked, const v
  * (v0.0.1 policy, docs/ISSUES.md): the walk's bounds, an active
  * representation it has no rule for, a type not settled at a destruction
  * hao cannot hook. Such a value is reported and passed as found, as before
- * the refusal policy, unless HAO_SWIFT_VALUE_STRICT (tests). Every other
- * reason is a value hao knows native code would misread (a nil it must
- * convert and cannot), malformed storage, or a failed allocation a
- * conversion needs: those stay refused. */
+ * the refusal policy, unless HAO_SWIFT_VALUE_STRICT (tests). decline_walk
+ * also applies report-only to the known-wrong reasons listed there. */
 static bool uncertified(const char *why)
 {
     static const char *const reasons[] = {
@@ -358,14 +358,32 @@ static bool uncertified(const char *why)
     return strstr(why,"unresolved") != NULL;   /* "... unresolved active representation ...", "unresolved assignment destination" */
 }
 
-/* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
- * walk refused it, ROOT the type of the activation, LR and PC the guest call. */
-/* Returns only under HAO_SWIFT_VALUE_PASSTHROUGH, the audit, or for an
- * uncertified reason (report-only). */
-static void decline_walk(const void *type, const char *why, const void *walked, const void *value, int existentials,
-                         const void *root, uint64_t lr, uint64_t pc)
+/* Name the whole value, even if the failed node has no printable type name.
+ * Use the diagnostic writer directly so repeated verbose lines bypass stdio. */
+static void report_skipped_patches(const void *type, const char *why, unsigned count)
 {
-    if (hao_opt.swift_value_audit) { audit(type,why,walked,value,existentials,root,lr,pc,true); return; }
+    char line[1024] = "hao: Swift value report-only: skipped_patches=";
+    size_t len = strlen(line);
+    len += hao_diag_fmt_u64(line + len,count,10);
+    line[len] = 0;
+    strlcat(line," reason=",sizeof line);
+    strlcat(line,why,sizeof line);
+    strlcat(line," type=",sizeof line);
+    len = strlen(line);
+    type_name n = name_of(type);
+    size_t take = n.length < sizeof line - len - 1 ? n.length : sizeof line - len - 1;
+    memcpy(line + len,n.text,take);
+    line[len + take] = '\n';
+    hao_diag_write(line,len + take + 1);
+}
+
+/* TYPE and WHY name the refusal; WALKED/VALUE, when given, the value whose
+ * walk refused it, ROOT the type of the activation, LR and PC the guest call.
+ * Only experimental pass-through and survey mode allow partial patches. */
+static bool decline_walk(const void *type, const char *why, const void *walked, const void *value, int existentials,
+                         const void *root, uint64_t lr, uint64_t pc, unsigned partial)
+{
+    if (hao_opt.swift_value_audit) { audit(type,why,walked,value,existentials,root,lr,pc,true); return true; }
     if (hao_opt.swift_value_audit_ignored && first_report(NULL,"audit ignored")) {
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG,"hao_swift_value_audit ignored: this libhao is not a survey build (make SURVEY=1)\n");
@@ -378,7 +396,12 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
                        !strcmp(why,"guest-encoded nil in a shared box cannot be converted") ||
                        !strcmp(why,"child task result has a nil native code would copy in the guest's encoding");
     if (!pass && !hao_opt.swift_value_strict && (uncertified(why) || known_wrong)) {
-        if (!first_report(type,why)) return;
+        if (hao_verbose) {
+            hao_crit_enter();
+            report_skipped_patches(walked ? walked : type,why,partial);
+            hao_crit_leave();
+        }
+        if (!first_report(type,why)) return false;
         hao_crit_enter();   /* no guest signal handler runs inside the report */
         audit(type,why,walked,value,existentials,root,lr,pc,false);
         type_name n = name_of(type), r = name_of(root);
@@ -387,9 +410,9 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
             "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
             vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
         hao_crit_leave();
-        return;
+        return false;
     }
-    if (pass && !first_report(type,why)) return;
+    if (pass && !first_report(type,why)) return true;
     if (walked && value) {
         empty_patch scratch[64];
         const void *unresolved;
@@ -399,14 +422,15 @@ static void decline_walk(const void *type, const char *why, const void *walked, 
     if (!pass) refuse(type,why);
     type_name n = name_of(type), r = name_of(root);
     hao_diag_prefix(HAO_DIAG);
-    fprintf(HAO_DIAG,"Swift value survey: passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH): %s (metadata=%p size=%llu "
+    fprintf(HAO_DIAG,"Swift value survey: partial conversion allowed (HAO_SWIFT_VALUE_PASSTHROUGH): %s (metadata=%p size=%llu "
         "flags=%#x xi=%#x type=%.*s) root=%.*s guest lr=%#llx pc=%#llx\n",why,type,(unsigned long long)vwt(type)->size,
         vwt(type)->flags,vwt(type)->extra,(int)n.length,n.text,(int)r.length,r.text,(unsigned long long)lr,(unsigned long long)pc);
+    return true;
 }
 static void decline(const void *type, const char *why, const void *walked, const void *value,
                     const void *root, uint64_t lr, uint64_t pc)
 {
-    decline_walk(type,why,walked,value,0,root,lr,pc);
+    decline_walk(type,why,walked,value,0,root,lr,pc,0);
 }
 /* A mapped Swift call (swiftcall.c) the policy refuses: the value of TYPE, or
  * of KEY that does not resolve (TYPE NULL), or the whole call (both NULL),
@@ -480,8 +504,8 @@ static void pass_note(const void *type, unsigned passes)
 /* The patches of VALUE of TYPE for a conversion; with EXISTENTIALS the walk
  * of a value a guest hands to a native witness. Where the walk cannot
  * certify the value it is refused for WHY; under the experimental pass-
- * through the patches of the parts it could certify are returned instead,
- * so that a refusing field does not drop its siblings' patches. */
+ * through or survey, return partial patches. A report-only decline returns
+ * zero, including when the same type has already been reported. */
 static int certified_patches(const void *type, const void *value, empty_patch *p, unsigned cap, int existentials,
                              int (*known_layout)(const void *), const char *why, const void *root, uint64_t lr, uint64_t pc)
 {
@@ -497,17 +521,9 @@ static int certified_patches(const void *type, const void *value, empty_patch *p
     passes |= rest;
     if (passes & HAO_SV_UNCONVERTIBLE) why = "guest-encoded nil in a shared box cannot be converted";   /* known wrong */
     else if (passes & HAO_SV_KNOWN_WRONG) why = "value native code would misread";   /* Recipe.h HAO_SV_KNOWN_WRONG */
-    decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc);
-    /* The patches come from a walk after the report: reporting names the
-     * types it walked, which completes metadata the first walk found
-     * incomplete, and the walk after it then finds the nils to convert. A
-     * value passed as found with them unconverted is misread by native code
-     * (a guest nil where native code reads a count or a pointer). */
-    int after = collect_partial_patches(type,value,p,cap,existentials,known_layout,NULL);
-    if (after != n && hao_verbose && first_report(type,"partial walk after the report"))
-        HAO_LOG(1, "Swift value: %d nils to convert after the report, %d before it (metadata=%p)\n", after, n, type);
-    n = after;
-    return n < 0 ? 0 : n;
+    if (n < 0) n = 0;
+    bool allow_partial = decline_walk(unresolved ? unresolved : type,why,type,value,existentials,root,lr,pc,(unsigned)n);
+    return allow_partial ? n : 0;
 }
 /* Whether a value of TYPE needs certification at a boundary: some node of
  * its type graph is not settled (Recipe.h settled_node), its representation
