@@ -31,6 +31,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static volatile uint32_t published;    /* entry points [0, published) are in the table */
 static volatile int stop;
@@ -57,12 +58,115 @@ static void *reader(void *arg)
     return NULL;
 }
 
+/* Exercise the frame assembled by the signatureless callback entry. A guest
+ * trap observes its register file before any guest instruction changes it. */
+extern uint64_t hao_callback(hao_cb_frame *frame);
+
+static void capture_args(hao_thread *t, uint64_t output)
+{
+    memcpy((void *)(uintptr_t)output, t->cpu.x, 9 * sizeof(uint64_t));
+}
+
+static bool plain_callback_args(void)
+{
+    hao_thread *t = hao_current();
+    uint64_t seen[9] = {0}, slots[16] = {0};
+    uint64_t target = hao_trap_address("capture_args", capture_args, (uintptr_t)seen);
+    /* The native caller supplied six arguments. Its next two stack words
+     * hold hao's own values where a longer call would have arguments. */
+    hao_cb_frame plain = {.target = target, .stack_args = slots};
+    slots[0] = (uintptr_t)t;
+    slots[1] = (uintptr_t)&t->cpu.host_scratch;
+    hao_callback(&plain);
+    if (seen[6] || seen[7]) {
+        puts("plain callback passed a non-argument word in x6 or x7");
+        return false;
+    }
+
+    for (unsigned pass = 0; pass < 2; pass++) {
+        hao_cb_frame f = {.target = target, .sig = HAO_CB_SWIFTCC, .stack_args = slots};
+        for (unsigned k = 0; k < 9; k++) {
+            uint64_t word = pass ? (uintptr_t)&seen[k] : (uintptr_t)&t->cpu.x[k];
+            if (k < 6) f.gpr[k] = word;
+            else if (k < 8) slots[k - 6] = word;
+            else f.swift[3] = word;
+        }
+        hao_callback(&f);
+        for (unsigned k = 0; k < 8; k++)
+            if (seen[k] != (pass ? (uintptr_t)&seen[k] : 0)) return false;
+        if (pass && seen[8] != (uintptr_t)&seen[8]) return false;
+        if (!seen[8] || seen[8] - (uintptr_t)t < sizeof(*t)) return false;
+    }
+    return true;
+}
+
+extern bool bridge_result(const void *entry);
+
+static bool nx_forwarded_result(void)
+{
+    /* BL without an explicit use of x8 in the entry. The callee initializes
+     * all five words of the native Swift caller's indirect result. */
+    static uint32_t guest[] = {
+        0xa9bf7bfd, 0x94000003, 0xa8c17bfd, 0xd65f03c0, /* save fp/lr; bl; restore; ret */
+        0xd2800229, 0xa9002509, 0xa9012509, 0xf9001109, 0xd65f03c0
+    };
+    static hao_image image;
+    image.base = image.code_lo[0] = (uintptr_t)guest;
+    image.vmsize = sizeof guest;
+    image.code_hi[0] = image.base + image.vmsize;
+    image.ncode = 1;
+    hao_image_register(&image);
+    hao_jit_init();
+    hao_install_fault_handler();
+    return bridge_result(guest);
+}
+
+extern uint64_t bridge_stack_rax(const void *entry);
+extern uint64_t bridge_stack_rax_adjacent(const void *entry);
+
+static bool nx_incidental_rax(void)
+{
+    /* Sol's negative control. The guest returns directly; it reaches a helper
+     * returning x8 only through BLR, so its own code shows no use of x8. The
+     * Swift-image caller leaves a stack address in rax that it did not set for
+     * the call: x8 must not be that address. */
+    static uint32_t guest[] = {
+        0xa9bf7bfd, 0x10000089, 0xd63f0120, 0xa8c17bfd, 0xd65f03c0,   /* save fp/lr; adr x9, helper; blr x9; restore; ret */
+        0xaa0803e0, 0xd65f03c0                                        /* helper: mov x0, x8; ret */
+    };
+    static hao_image image;
+    image.base = image.code_lo[0] = (uintptr_t)guest;
+    image.vmsize = sizeof guest;
+    image.code_hi[0] = image.base + image.vmsize;
+    image.ncode = 1;
+    hao_image_register(&image);
+    hao_jit_init();
+    hao_install_fault_handler();
+    pthread_t self = pthread_self();
+    uint64_t hi = (uint64_t)(uintptr_t)pthread_get_stackaddr_np(self), lo = hi - pthread_get_stacksize_np(self);
+    bool ok = true;
+    uint64_t x8 = bridge_stack_rax(guest);
+    if (x8 >= lo && x8 < hi) { printf("  incidental: x8 was the caller's stack address %#llx\n", (unsigned long long)x8); ok = false; }
+    x8 = bridge_stack_rax_adjacent(guest);
+    if (x8 >= lo && x8 < hi) { printf("  adjacent: x8 was the caller's stack address %#llx\n", (unsigned long long)x8); ok = false; }
+    return ok;
+}
+
 int main(int argc, char **argv)
 {
     uint32_t n = argc > 1 ? (uint32_t)atoi(argv[1]) : 40000;
     hao_opts_init(NULL);
     hao_bridge_init();
-    int fail = 0;
+    int fail = !plain_callback_args();
+    printf("plain callback arguments %s\n", fail ? "FAIL" : "PASS");
+
+    bool forwarded = nx_forwarded_result();
+    printf("NX Swift indirect result %s\n", forwarded ? "PASS" : "FAIL");
+    fail |= !forwarded;
+
+    bool kept = nx_incidental_rax();
+    printf("NX stack rax of a direct-return call not forwarded (incidental, adjacent) %s\n", kept ? "PASS" : "FAIL");
+    fail |= !kept;
 
     pthread_t th[4];
     for (int k = 0; k < 4; k++) pthread_create(&th[k], NULL, reader, NULL);

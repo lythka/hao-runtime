@@ -618,6 +618,8 @@ tests/guest/ymmupper.c
 tests/guest/ymmupper.sh
 tests/guest/ymmupper_lib.c
 tests/host/async_package.py
+tests/host/bridge-result-stack.s
+tests/host/bridge-result.swift
 tests/host/bridge.c
 tests/host/chain.c
 tests/host/chain.sh

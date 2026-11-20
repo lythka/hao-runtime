@@ -7,17 +7,27 @@
  * callback through the same path are checked.
  *
  * x8_store reads x8 at its entry (an indirect-result function); x8_calls
- * calls first and only its callee stores through x8. Called from an image
- * with Swift metadata, rax is x8 for x8_store only; from a C image never. */
+ * passes x8 unwritten to x8_store (a forwarder, the shape of the SwiftUI
+ * closures Weather hands over). From an image with Swift metadata, rax is x8
+ * for both, since their own code takes x8 as an input; from a C image never:
+ * x8_store2 (a copy of x8_store, used only by the C-image case) keeps the C
+ * caller's stale rax off its buffer.
+ * x8_hidden stores through x8 only behind an indirect call, which its own
+ * code does not show: not forwarded, so the stale rax is not written (a rule
+ * on rax alone would write it). */
 #include <stdio.h>
 #include <stdlib.h>
 #include "x8helper.h"
 
 long x8_store(void);
 long x8_calls(void);
+long x8_store2(void);
+long x8_hidden(void);
 __asm__(".text\n.p2align 2\n"
         "_x8_store: mov x9, #0x77\n str x9, [x8]\n mov x0, #1\n ret\n"
-        "_x8_calls: stp x29, x30, [sp, #-16]!\n mov x29, sp\n bl _x8_store\n ldp x29, x30, [sp], #16\n ret\n");
+        "_x8_calls: stp x29, x30, [sp, #-16]!\n mov x29, sp\n bl _x8_store\n ldp x29, x30, [sp], #16\n ret\n"
+        "_x8_store2: mov x9, #0x77\n str x9, [x8]\n mov x0, #1\n ret\n"
+        "_x8_hidden: stp x29, x30, [sp, #-16]!\n mov x29, sp\n adrp x9, _x8_store@PAGE\n add x9, x9, _x8_store@PAGEOFF\n blr x9\n ldp x29, x30, [sp], #16\n ret\n");
 
 static struct x8_l3 make(long k) { struct x8_l3 r = {k, k + 1, k + 2}; return r; }
 static long twice(long k) { return 2 * k; }
@@ -33,12 +43,17 @@ int main(void)
     long *b = calloc(4, sizeof *b);
     long rc = x8s_call_with(x8_store, b);
     printf("swift image, x8 read: %ld %#lx\n", rc, b[0]);
+    /* Forwarded: x8_calls hands x8 to a callee that stores through it, so it
+     * returns indirectly; the caller passes its buffer, which gets the store. */
     b[1] = 0x5a5a;
-    rc = x8s_call_stale(x8_calls, &b[1]);
-    printf("swift image, x8 not read: %ld %#lx\n", rc, b[1]);
+    rc = x8s_call_with(x8_calls, &b[1]);
+    printf("swift image, x8 forwarded to a callee: %ld %#lx\n", rc, b[1]);
     b[2] = 0x5a5a;
-    rc = x8c_call_stale(x8_store, &b[2]);
+    rc = x8c_call_stale(x8_store2, &b[2]);
     printf("C image, x8 read: %ld %#lx\n", rc, b[2]);
+    b[3] = 0x5a5a;
+    rc = x8s_call_stale(x8_hidden, &b[3]);
+    printf("swift image, x8 used only behind an indirect call: %ld %#lx\n", rc, b[3]);
     free(b);
     return 0;
 }

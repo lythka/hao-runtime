@@ -201,8 +201,14 @@ forktest: $(B)/test_fork
 
 # The bridge plan table: capacity, lock-free reads while it grows, upgrades
 # (tests/host/bridge.c).
-$(B)/test_bridge: tests/host/bridge.c $(B)/libhao.dylib
-	$(CC) $(ARCH) -O1 -Iinclude -o $@ $< -L$(B) -lhao -Wl,-rpath,$(abspath $(B)) && codesign -s - -f $@
+$(B)/bridge-result-stack.o: tests/host/bridge-result-stack.s | $(B)
+	$(CC) $(ARCH) -c -o $@ $<
+
+$(B)/libbridge_result.dylib: tests/host/bridge-result.swift $(B)/bridge-result-stack.o | $(B)
+	CLANG_MODULE_CACHE_PATH=$(abspath $(B))/module-cache swiftc -target x86_64-apple-macosx$(MACOS_MIN) -emit-library -Xlinker -install_name -Xlinker @rpath/libbridge_result.dylib -o $@ $< $(B)/bridge-result-stack.o
+
+$(B)/test_bridge: tests/host/bridge.c $(B)/libhao.dylib $(B)/libbridge_result.dylib
+	$(CC) $(ARCH) -O1 -Iinclude -o $@ $< -L$(B) -lbridge_result -lhao -Wl,-rpath,$(abspath $(B)) && codesign -s - -f $@
 
 bridgetest: $(B)/test_bridge
 	timeout -s KILL 120 $(B)/test_bridge
