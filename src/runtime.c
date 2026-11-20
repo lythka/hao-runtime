@@ -518,6 +518,36 @@ static bool native_swift_image(uint64_t pc)
 }
 
 
+/* The guest image's own symbol at exactly PC (its symbol table as mapped), NULL none. Cold: audit records. */
+const char *hao_guest_symbol_at(uint64_t pc)
+{
+    hao_image *im = hao_image_for_code(pc);
+    const struct mach_header_64 *mh = im && !im->dsc ? (const void *)(uintptr_t)im->base : NULL;
+    const struct symtab_command *st = NULL;
+    const struct segment_command_64 *le = NULL;
+    if (!mh || mh->magic != MH_MAGIC_64 || mh->sizeofcmds >= (1u << 20)) return NULL;
+    const uint8_t *p = (const uint8_t *)(mh + 1), *end = p + mh->sizeofcmds;
+    for (uint32_t k = 0; k < mh->ncmds && p + sizeof(struct load_command) <= end; k++) {
+        const struct load_command *lc = (const void *)p;
+        if (lc->cmdsize < sizeof *lc || lc->cmdsize > (size_t)(end - p)) break;
+        if (lc->cmd == LC_SYMTAB && lc->cmdsize >= sizeof *st) st = (const void *)lc;
+        if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof *le && !strncmp(((const struct segment_command_64 *)lc)->segname, "__LINKEDIT", 16))
+            le = (const void *)lc;
+        p += lc->cmdsize;
+    }
+    if (!st || !le || st->symoff < le->fileoff || st->stroff < le->fileoff) return NULL;
+    uint64_t lo = le->vmaddr + im->slide, n = le->filesize, so = st->symoff - le->fileoff, to = st->stroff - le->fileoff;
+    if (so > n || (uint64_t)st->nsyms * sizeof(struct nlist_64) > n - so || to > n || st->strsize > n - to) return NULL;
+    const struct nlist_64 *sym = (const void *)(uintptr_t)(lo + so);
+    const char *str = (const char *)(uintptr_t)(lo + to);
+    for (uint32_t k = 0; k < st->nsyms; k++) {
+        if ((sym[k].n_type & (N_STAB | N_TYPE)) != N_SECT || sym[k].n_value + im->slide != pc) continue;
+        uint32_t x = sym[k].n_un.n_strx;
+        if (x < st->strsize && memchr(str + x, 0, st->strsize - x)) return str + x;
+    }
+    return NULL;
+}
+
 /* Is the native function at pc a Swift function by its own symbol (an exported Swift mangled name at
  * exactly pc)? Guest functions passed to it are Swift function values: their entries are marked
  * (hao_swift_thunk_for). Also asked when the plan's names are not Swift ones (hao_plan swiftfn, which
@@ -1184,7 +1214,10 @@ static void callback_swift_run(hao_cb_frame *f, const hao_swift_reverse *s, cons
     c->pc = f->target;
     c->native_pop = 0;
     t->callbacks++;
+    uint64_t outer_guest = t->callback_guest;
+    t->callback_guest = f->target;
     hao_run(t, saved);
+    t->callback_guest = outer_guest;
     hao_swift_objects_result(t, f->target, indirect);
     hao_swift_witness_result(t, made, indirect);
     hao_swift_value_end(t, &values);
@@ -1360,6 +1393,8 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
     c->native_pop = 0;       /* per activation; nested callbacks restore it */
+    uint64_t outer_guest = t->callback_guest;
+    t->callback_guest = f->target;
     if (row) hao_swiftcall_callback(c, f, row, false);
     unsigned objc_enum_result = hao_objc_enum_args(c, f->target, true);
     unsigned made = t->swift_made_n;
@@ -1373,6 +1408,7 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     f->swift[0] = c->x[21];
     if (row) hao_swiftcall_callback(c, f, row, true);
     if (data) hao_swift_body_result(f->target, a, r);   /* may run guest code: after the results are taken */
+    t->callback_guest = outer_guest;
     const char *why;
     uint64_t pop = callee_pop(f, saved, (int64_t)c->native_pop, &why);
     if (pop && hao_verbose > 1) callback_trace_pop(f, pop, why, c->native_pop);

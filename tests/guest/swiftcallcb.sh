@@ -1,12 +1,15 @@
 #!/bin/sh
 # The Swift call map's callback direction (src/swiftcall.c hao_swiftcall_callback): native code calls guest
-# witnesses of a native protocol's requirements (tests/guest/swiftcallcb_lib.swift) whose direct values have a
+# witnesses of a native protocol's requirements, and a guest subclass's overrides of a native class's methods
+# through the vtable (tests/guest/swiftcallcb_lib.swift), whose direct values have a
 # nil whose encoding differs by architecture: a result (String?, String?)? in x0-x3 / rax rdx rcx r8 and an
 # argument in x0-x3 / rdi rsi rdx rcx, the outer nil's word 1 being 1 on arm64 and 2 on x86_64. The library is
 # universal (library evolution: its requirement descriptors are exported) and loaded natively; the requirements' rows (by requirement descriptor, ...Tq), keyed by its x86_64
 # LC_UUID, and the type's case images are a fixture (test switch HAO_SWIFT_WALK_FACTS, a TEST_SWITCHES build).
 # With the rows every hao run (JIT, --interp, AOT) must print what native arm64 prints; without them (CTL,
-# default build/hao) the run must differ. A REFUSE row is refused at the witness's first call.
+# default build/hao) the run must differ. A REFUSE row is refused at the witness's first call; under
+# HAO_SWIFT_VALUE_AUDIT=1 its record names the guest function native code called (callback_image, callback_offset,
+# callback_symbol) and the requirement's descriptor (callback_kind witness, callback_descriptor ...Tq).
 #   OUT=dir HAO=/abs/build-ts/hao [CTL=/abs/build/hao] [T=60] tests/guest/swiftcallcb.sh
 set -u
 export HAO_NATIVE_APP_LIBS=1   # the library's x86_64 slice runs natively
@@ -40,7 +43,8 @@ done
 U=$(python3 -I "$repo/tools/hao_ifunit.py" uuid "$d/libSCBLib.dylib")
 sym() { nm -arch x86_64 "$d/libSCBLib.dylib" | grep -oE "_\\\$s6SCBLib$1\$" | sed 's/^_//' | head -1; }
 labels=$(sym '6SourceP6labels[A-Za-z0-9_]*FTq'); show=$(sym '6SourceP4show[A-Za-z0-9_]*FTq')
-[ -n "$labels" ] && [ -n "$show" ] || { echo "requirement descriptors not found"; exit 2; }
+blabels=$(sym '4BaseC6labels[A-Za-z0-9_]*FTq'); bshow=$(sym '4BaseC4show[A-Za-z0-9_]*FTq')
+[ -n "$labels" ] && [ -n "$show" ] && [ -n "$blabels" ] && [ -n "$bshow" ] || { echo "method descriptors not found"; exit 2; }
 # the requirements' rows (self a class reference in x20 / r13) and the type's case images
 facts() {
     cat <<EOT
@@ -55,6 +59,14 @@ call $show $U METHOD_DESCRIPTOR CONVERT
 value r SS o SAME x0:rax x1:rdx
 value p0 $key g CONVERT x0:rdi x1:rsi x2:rdx x3:rcx
 value s 0 g SAME x20:r13
+call $blabels $U METHOD_DESCRIPTOR CONVERT
+value r $key o CONVERT x0:rax x1:rdx x2:rcx x3:r8
+value p0 Si g SAME x0:rdi
+value s 0 g SAME x20:r13
+call $bshow $U METHOD_DESCRIPTOR CONVERT
+value r SS o SAME x0:rax x1:rdx
+value p0 $key g CONVERT x0:rdi x1:rsi x2:rdx x3:rcx
+value s 0 g SAME x20:r13
 EOT
 }
 facts CONVERT >"$d/rows.facts"
@@ -63,7 +75,7 @@ HAO_SWIFT_WALK_FACTS="$d/rows.facts" timeout -s KILL "$T" "$HAO" --aot --cache "
     echo "aot generation failed"
 timeout -s KILL "$T" "$d/swiftcallcb.arm64" >"$d/native.out" 2>/dev/null; nrc=$?
 echo "native    rc=$nrc lines=$(wc -l <"$d/native.out" | tr -d ' ')"
-[ $nrc = 0 ] && [ "$(wc -l <"$d/native.out" | tr -d ' ')" = 6 ] || fail=1
+[ $nrc = 0 ] && [ "$(wc -l <"$d/native.out" | tr -d ' ')" = 12 ] || fail=1
 for mode in jit interp aot; do
     case $mode in
     jit) set -- env HAO_NO_AOT=1 "$HAO" ;;
@@ -88,5 +100,13 @@ if [ $rc != 0 ] && [ ! -s "$d/refuse.out" ] &&
    grep -q "Swift value boundary refused: a value the call map refuses (call=$labels " "$d/refuse.err"; then r=REFUSED
 else r=NOT-REFUSED; fail=1; fi
 printf '%-9s rc=%s %s\n' refuse "$rc" "$r"
+HAO_SWIFT_WALK_FACTS="$d/refuse.facts" HAO_SWIFT_VALUE_AUDIT=1 timeout -s KILL "$T" env HAO_NO_AOT=1 "$HAO" \
+    "$d/swiftcallcb.arm64e" >"$d/audit.out" 2>"$d/audit.err"; rc=$?
+n=$(grep '^hao-swift-audit {"v":1,' "$d/audit.err" | grep -F '"reason":"a value the call map refuses"' |
+    grep '"callback_image":"[0-9A-F]\{32\}","callback_offset":[1-9][0-9]*,"callback_symbol":"[^"]*labels[^"]*TW",' |
+    grep -c -F "\"callback_kind\":\"witness\",\"callback_descriptor\":\"$labels\"")
+if [ "$n" = 1 ]; then r=RECORDED; else r=NOT-RECORDED; fail=1; fi
+printf '%-9s rc=%s %s (%s record)\n' audit "$rc" "$r" "$n"
+[ $r = RECORDED ] || grep -a '^hao-swift-audit' "$d/audit.err" | head -2 | cut -c1-700 | sed 's/^/    /'
 [ $fail = 0 ] && echo "swiftcallcb: PASS" || echo "swiftcallcb: FAIL"
 exit $fail

@@ -1,5 +1,6 @@
 import SCBLib
-// tests/guest/swiftcallcb.sh: native code calls guest witnesses whose values differ in their nil's encoding.
+// tests/guest/swiftcallcb.sh: native code calls guest witnesses and overrides whose values differ in their nil's
+// encoding.
 final class GuestSource: Source {
     func labels(_ k: Int) -> Pair? {
         switch k {
@@ -16,9 +17,15 @@ final class GuestSource: Source {
         return (v.title ?? "nil") + ":" + (v.subtitle ?? "nil")
     }
 }
+final class GuestBase: Base {
+    override func labels(_ k: Int) -> Pair? { GuestSource().labels(k) }
+    override func show(_ v: Pair?) -> String { "o" + GuestSource().show(v) }
+}
 @main struct Main {
     static func main() {
         let s = GuestSource()
         for k in 0..<6 { print(k, drive(s, k)) }
+        let b = GuestBase()
+        for k in 0..<6 { print("override", k, driveBase(b, k)) }
     }
 }

@@ -965,6 +965,23 @@ uint64_t hao_swift_async_extend_result(uint64_t target, uint64_t x0)
  * function, when the native callee resumes the guest's continuation without an
  * error: its ResumeParent is replaced for that invocation by
  * genres_resume[_throwing], which restores it, converts, and tail-calls it.
+ *
+ * A module-level generic function ("Module.name<A, B>(B, A.Type) -> (A?, B)",
+ * synchronous, no where clause) qualifies when each formal parameter takes
+ * one register (a generic parameter, its metatype, Optional or inout: by
+ * address or a metadata pointer) and its result is a generic parameter or
+ * its Optional, in x8, or a tuple of them, which Swift returns as one
+ * indirect result per element passed ahead of the formal arguments (x0..).
+ * The generic parameters' metadata follows the formal arguments, in order
+ * (measured: a metatype argument does not stand in for it). The result
+ * type is the first type of the function type in the symbol, after the
+ * name and its argument labels; its end is found once, as the longest
+ * prefix the native runtime resolves in a generic environment of those
+ * parameters with the call's metadata (the parameters' type follows, and
+ * a type with another after it does not resolve). The values native code
+ * made in the guest's storage are then walked like a nil a witness makes
+ * (swiftvalue.c hao_swift_native_result_to_guest), a tuple's element by
+ * element at its own address, each by its own type.
  */
 #include "hao/swiftvalue.h"
 #include <mach/mach.h>
@@ -976,6 +993,12 @@ typedef struct genres {
     char result[8];         /* G? mangled: "xSg", "q_Sg", "q0_Sg", ... */
     uint8_t is_async, throwing;
     int8_t self_reg;        /* -2 not found yet, -1 none, 0-7 x0-x7, 20 x20 */
+    /* a module-level generic function: its formal parameters' registers and generic parameters (ngen 0: a method) */
+    uint8_t nformal, ngen;
+    uint8_t nres;           /* indirect results ahead of the formal arguments (a tuple's elements), 0: one in x8 */
+    char *sym;              /* its symbol (a module-level function's) */
+    const char *type_start; /* the function type in it */
+    int16_t result_len;     /* the result's mangling there: 0 not found yet, -1 none */
     struct genres *next;
 } genres;
 typedef struct genres_type { const struct genres *fn; uint64_t self; const void *result; struct genres_type *next; } genres_type;
@@ -1043,6 +1066,91 @@ bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *par
     return true;
 }
 
+/* "Module.name<A, B>(p, ...) -> R": the counts of generic parameters, of
+ * formal parameters (each one register: a generic parameter, its metatype,
+ * Optional or inout) and of indirect results passed ahead of them (R a
+ * tuple of generic parameters or their Optionals: one per element; R one
+ * such type: 0, its buffer in x8). False for any other signature. */
+static bool genres_generic_spelled(const char *p, const char *end, unsigned n)
+{
+    if (end - p >= 17 && !strncmp(p, "Swift.Optional<", 15) && p[16] == '>' && end == p + 17) p += 15, end--;
+    else if (end - p == 2 && p[1] == '?') end--;
+    return end == p + 1 && *p >= 'A' && *p < 'A' + (int)n;
+}
+bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nformal, unsigned *nres)
+{
+    const char *lt = strchr(d, '<'), *open = strchr(d, '(');
+    if (!lt || !open || open < lt || strstr(d, " in ") || *d == '(' || strstr(d, "(extension in ")) return false;
+    const char *dot = strchr(d, '.');
+    const char *next = dot ? strchr(dot + 1, '.') : NULL;
+    if (!dot || dot > lt || (next && next < lt)) return false;   /* Module.name: one dot before '<' */
+    const char *gt = strchr(lt, '>');
+    if (!gt || gt + 1 != open) return false;   /* no where clause: its witness tables would follow the metadata */
+    unsigned n = 0;
+    for (const char *p = lt + 1; p < gt; p++) {
+        if (*p < 'A' || *p > 'L' || (p[1] != ',' && p + 1 != gt)) return false;
+        n++;
+        p++;
+        if (*p == ',') p++;   /* ", " */
+    }
+    bool throwing = false;
+    const char *r = n && n <= 8 ? genres_function_result(open, &throwing) : NULL;
+    if (!r || throwing || strstr(open, ") async")) return false;
+    unsigned k = 0;
+    const char *p = open + 1;
+    while (*p && *p != ')') {
+        if (!strncmp(p, "inout ", 6)) p += 6;
+        if (*p < 'A' || *p >= 'A' + (int)n) return false;
+        p++;
+        if (!strncmp(p, ".Type", 5)) p += 5;
+        else if (*p == '?') p++;
+        k++;
+        if (*p == ',') { p++; if (*p == ' ') p++; }
+        else if (*p != ')') return false;
+    }
+    if (*p != ')') return false;
+    unsigned m = 0;
+    size_t rl = strlen(r);
+    if (*r == '(' && rl > 2 && r[rl - 1] == ')') {
+        for (const char *e = r + 1; e < r + rl - 1; m++) {
+            int depth = 0;
+            const char *q = e;
+            for (; q < r + rl - 1; q++) { if (*q == '<') depth++; else if (*q == '>') depth--; else if (*q == ',' && !depth) break; }
+            if (!genres_generic_spelled(e, q, n)) return false;
+            e = q < r + rl - 1 ? q + 2 : q;
+        }
+        if (m < 2) return false;
+    } else if (!genres_generic_spelled(r, r + rl, n)) return false;
+    if (m + k + n > 8) return false;
+    *ngen = n; *nformal = k; *nres = m;
+    return true;
+}
+
+/* The function type in SYM ("$s" module name labels type...): after the
+ * module's and the name's identifiers and the labels (y, or one '_' or
+ * identifier per parameter); NULL for any other spelling. */
+static const char *genres_free_type(const char *sym, unsigned nformal)
+{
+    const char *p = sym + 3;   /* "_$s" */
+    for (int id = 0; id < 2; id++) {
+        if (*p < '1' || *p > '9') return NULL;   /* no word substitutions, no standard module */
+        char *end;
+        unsigned long n = strtoul(p, &end, 10);
+        if (n > 200 || strnlen(end, n) < n) return NULL;
+        p = end + n;
+    }
+    if (*p == 'y') return p + 1;
+    for (unsigned k = 0; k < nformal; k++) {
+        if (*p == '_') { p++; continue; }
+        if (*p < '1' || *p > '9') return NULL;
+        char *end;
+        unsigned long n = strtoul(p, &end, 10);
+        if (n > 200 || strnlen(end, n) < n) return NULL;
+        p = end + n;
+    }
+    return p;
+}
+
 static void genres_mangle(char out[8], int index)
 {
     /* Mangling.rst: 'x' is depth 0 index 0, 'q' INDEX for index N+1 (INDEX: '_' for 0, NATURAL '_' for N+1) */
@@ -1064,15 +1172,35 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
     if (!dm) return false;
     char buf[2048], context[512], *d = demangle_full(dm, sym + 1, len - 1, buf, sizeof buf);
     if (!d) return false;
-    int param;
+    int param = -1;
     bool throwing;
-    bool parsed = hao_swift_genres_demangled(d, context, sizeof context, &param, &throwing);
+    unsigned ngen = 0, nformal = 0;
+    const char *ftype = NULL;
+    unsigned nres = 0;
+    bool parsed = false;
+    /* a module-level generic function first: its "Module.name<A>" would read as a method of a type Module */
+    if (!is_async && strcmp(sym + len - 1, "F") == 0 && hao_swift_genres_free_demangled(d, &ngen, &nformal, &nres) &&
+        (ftype = genres_free_type(sym, nformal))) {
+        parsed = true;
+        throwing = false;
+        context[0] = 0;
+    } else {
+        ngen = 0;
+        parsed = hao_swift_genres_demangled(d, context, sizeof context, &param, &throwing);
+    }
     demangled_free(d, buf);
     if (!parsed) return false;
     genres *g = calloc(1, sizeof *g);
     if (!g || !(g->context = strdup(context))) { free(g); return false; }
     g->native = native;
-    genres_mangle(g->result, param);
+    if (ngen) {
+        char *own = strdup(sym);
+        if (!own) { free(g->context); free(g); return false; }
+        g->ngen = (uint8_t)ngen; g->nformal = (uint8_t)nformal;
+        g->nres = (uint8_t)nres;
+        g->sym = own;
+        g->type_start = own + (ftype - sym);
+    } else genres_mangle(g->result, param);
     g->is_async = is_async;
     g->throwing = throwing;
     g->self_reg = -2;
@@ -1083,7 +1211,7 @@ bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async)
     if (s && fresh) { s[1] = (uint64_t)(uintptr_t)g; hao_gmap_publish1(&genres_fns, s, native); g = NULL; }
     pthread_mutex_unlock(&genres_lock);
     hao_crit_leave();
-    if (g) { free(g->context); free(g); return s != NULL; }
+    if (g) { free(g->context); free(g->sym); free(g); return s != NULL; }
     if (hao_opt.bridge_check)
         fprintf(HAO_DIAG, "hao: native generic result %s: %s (%s%s, Self %s)\n", sym, buf, is_async ? "async" : "sync",
                 throwing ? ", throws" : "", context);
@@ -1197,6 +1325,51 @@ static void __attribute__((swiftasynccall)) genres_resume_throwing(context_hdr *
     __attribute__((musttail)) return r(ctx, error);
 }
 
+/* A generic environment of N depth-0 parameters without requirements
+ * (TargetGenericEnvironment, swift/ABI/Metadata.h): flags (levels, and
+ * requirements << 12), the parameter count of each level, a descriptor per
+ * parameter (0x80: it has a key argument). */
+typedef struct { uint32_t flags; uint16_t counts[1]; uint8_t params[8]; } genres_env;
+typedef const void *__attribute__((swiftcall)) genres_env_fn(const char *, size_t, const void *, const void *const *);
+
+/* Is M readable metadata (a kind or a class's isa) of a native type? */
+static bool genres_metadata(uint64_t m)
+{
+    uint64_t kind, vwt;
+    return m && !(m & 7) && genres_read(m, &kind, 8) && genres_read(m - 8, &vwt, 8) && vwt && !(vwt & 7);
+}
+
+/* A module-level function's result type for the call's generic arguments
+ * (after its indirect results and formal arguments); its mangling's end
+ * found at the first call (above). */
+static const void *genres_free_result(genres *g, const hao_cpu *c)
+{
+    const void *args[8];
+    for (unsigned k = 0; k < g->ngen; k++) {
+        args[k] = (const void *)(uintptr_t)c->x[g->nres + g->nformal + k];
+        if (!genres_metadata((uint64_t)(uintptr_t)args[k])) return NULL;
+    }
+    static genres_env_fn *by_name;
+    if (!by_name) by_name = (genres_env_fn *)dlsym(RTLD_DEFAULT, "swift_getTypeByMangledNameInEnvironment");
+    if (!by_name) return NULL;
+    genres_env env = {1, {g->ngen}, {0}};
+    for (unsigned k = 0; k < g->ngen; k++) env.params[k] = 0x80;
+    int len = __atomic_load_n(&g->result_len, __ATOMIC_ACQUIRE);
+    if (len < 0) return NULL;
+    if (!len) {
+        size_t avail = strlen(g->type_start);
+        for (size_t n = avail > 256 ? 256 : avail; n > 0 && !len; n--)
+            if (!memchr(g->type_start, 'Q', n) && by_name(g->type_start, n, &env, args)) len = (int)n;
+        if (!len) len = -1;
+        __atomic_store_n(&g->result_len, (int16_t)len, __ATOMIC_RELEASE);
+        if (hao_opt.bridge_check)
+            fprintf(HAO_DIAG, "hao: native generic result %s: result mangling %.*s\n", g->sym, len > 0 ? len : 4,
+                    len > 0 ? g->type_start : "none");
+        if (len < 0) return NULL;
+    }
+    return by_name(g->type_start, (size_t)len, &env, args);
+}
+
 /* A guest call of NATIVE with the guest's registers: 0, or the result address
  * to convert with *TYPE when the call returns (synchronous). An async call's
  * conversion is set up here and happens at its resume. */
@@ -1205,6 +1378,18 @@ uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **t
     const uint64_t *e = hao_gmap_get1(&genres_fns, native);
     if (!e) return 0;
     genres *g = (genres *)(uintptr_t)e[1];
+    if (g->ngen) {
+        const void *t = genres_free_result(g, c);
+        if (!t) return 0;
+        *type = t;
+        if (!g->nres) return c->x[8];
+        /* a tuple's elements' buffers, x0.. before the call: tagged (bit 0) for hao_swift_genres_result */
+        uint64_t *at = malloc(sizeof *at * (1 + g->nres));
+        if (!at) return 0;
+        at[0] = g->nres;
+        for (unsigned k = 0; k < g->nres; k++) at[1 + k] = c->x[k];
+        return (uint64_t)(uintptr_t)at | 1;
+    }
     int reg = __atomic_load_n(&g->self_reg, __ATOMIC_ACQUIRE);
     if (reg == -1) return 0;
     if (reg == -2) {
@@ -1244,7 +1429,17 @@ uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **t
     return 0;
 }
 
-void hao_swift_genres_result(const void *type, uint64_t result) { genres_convert(type, result, "sync"); }
+void hao_swift_genres_result(const void *type, uint64_t result)
+{
+    if (!(result & 1)) { genres_convert(type, result, "sync"); return; }
+    /* a tuple returned as one indirect result per element: each element by its own type
+     * (TupleTypeMetadata: kind, NumElements, Labels, then {Type, Offset} per element) */
+    uint64_t *at = (uint64_t *)(uintptr_t)(result & ~1ull);
+    const uint64_t *m = type;
+    if (m[0] == 0x301 && m[1] == at[0])
+        for (uint64_t k = 0; k < at[0]; k++) genres_convert((const void *)(uintptr_t)m[3 + 2 * k], at[1 + k], "sync, tuple element");
+    free(at);
+}
 
 /*
  * Native View modifiers (hao_swift_viewself_*).

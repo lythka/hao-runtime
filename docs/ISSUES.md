@@ -1334,9 +1334,46 @@ the native one after (`hao_swiftcall_callback`; only the error when the
 guest threw). `guest/swiftcallcb` (fixture rows, a guest class's witnesses
 of a native protocol, a `(String?, String?)?` result and argument) equals
 native arm64 under JIT, `--interp` and AOT, crashes without the rows, and
-a REFUSE row is refused at the first call. Not covered: closures native
-code calls (no row names one yet; a closure has no descriptor to key it),
-class overrides, a witness reached through a dispatch thunk's row only.
+a REFUSE row is refused at the first call. A guest subclass's override of a
+native class method whose method descriptor has a row gets the same thunk
+(`override_bridge`); `guest/swiftcallcb` covers it through the vtable. Not
+covered: closures native code calls (a closure has no descriptor to key a
+row; audit records now name the invoke function, below).
+
+Audit records of a refusal inside a native call of guest code add
+`callback_image`, `callback_offset` (the guest function entered, a
+closure's invoke function), `callback_symbol` (its own mangled name when
+the image keeps it; a closure's spells its function type), `callback_kind`
+(witness, override) and `callback_descriptor` (the requirement's or the
+overridden method's `...Tq`: the vtable slot by name, stable across
+builds, where a numeric slot is not). Stripped images give an empty
+symbol: a closure is then known by image and offset only.
+
+## Native generic module-level functions: results made in guest storage
+
+A native generic function the guest calls makes its result in the guest's
+storage with native witnesses: `emptyPair<T, U>(_: U, _: T.Type) -> (T?, U)`
+with T = `C?` writes `C??`'s outer nil as 2 (x86_64), which guest code
+specialized for the types reads inline as an object (arm64's nil is 1) and
+retains: the class of the crash in issue #77 (its exact native
+writer is not identified). The native generic result rule (`swiftcc.c`
+genres, before only methods of generic types returning `G?`) now also binds
+module-level generic functions without a where clause whose formal
+parameters each take one register (a generic parameter, its metatype,
+Optional or inout) and whose result is a generic parameter, its Optional,
+or a tuple of them. Measured: a tuple result comes back as one indirect
+result per element in x0.. ahead of the formal arguments, and a metatype
+argument does not replace the parameter's metadata, which follows the
+formal arguments. The result type's mangling is the longest prefix of the
+symbol's function type the native runtime resolves in a generic environment
+of the call's metadata; each tuple element is converted at its own address
+by its own type (the walk's facts and pointer rule). `guest/genpair` (C and
+CGImage, with the walk table's 26B131 `CGImage??` rows as a fixture) equals
+native arm64 under JIT, `--interp` and AOT and crashes without the rule.
+Not covered: async and throwing functions, where clauses (witness tables),
+concrete parameters (their register count), results with loadable elements
+(they return in registers) and associated types. A type the walk cannot
+certify is refused there, as for the methods.
 
 ## Swift values hao cannot certify are refused again
 
