@@ -1487,7 +1487,10 @@ release address 1): its nils are converted at a final destruction, and
 guest calls of its witnesses convert like a frozen native struct's. One
 whose layout string guest code compiled has guest functions read its enum
 fields' cases (both encodings of a `C??` nil destroy cleanly): it keeps the
-guest's encoding, as one with guest witnesses does.
+guest's encoding, as one with guest witnesses does. A guest
+witness's Copyable associated-type result of a type settled as a whole
+(`UInt32`, `Int`, `Double`) is admitted; before, it was refused as past
+the walk's bounds (`guest/settledresult`).
 
 Closed gaps: guest calls of native Optional, tuple and array witnesses
 handed an uncertified value over unchanged without any decision; a lent
