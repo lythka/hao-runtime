@@ -67,10 +67,30 @@ struct Board: Codable {
     }
 }
 
+// every argument from a value the optimizer cannot fold
+@inline(never) func record(_ n: Int) -> Record {
+    _ = dirty()
+    let s = { (t: String) in "\(t)-\(num(n))" }
+    let some = flag(n)
+    return Record(logID: s("log"), groups: some ? [s("g")] : nil, id: s("id"), sortTitle: s("sort"),
+                  storeID: some ? s("store") : nil, title: s("title"),
+                  url: some ? URL(string: "file:///tmp/\(num(n)).epub") : nil, author: s("author"),
+                  ratio: some ? Double(num(n)) / 7 : nil, coverURL: some ? nil : s("cover"),
+                  finished: some ? Date(timeIntervalSince1970: Double(num(n))) : nil, summary: s("summary"),
+                  path: some ? s("path") : nil, kind: some ? .pending : nil, genres: some ? nil : [s("genre")],
+                  b0: flag(n), b1: !flag(n), b2: flag(n + 1), b3: !flag(n + 1), b4: flag(n), b5: flag(n + 2),
+                  b6: !flag(n), b7: flag(n), b8: !flag(n + 2), b9: flag(n + 1), b10: flag(n),
+                  language: some ? s("en") : nil, engaged: Date(timeIntervalSince1970: Double(num(n + 5))),
+                  rating: some ? Int64(num(n + 1)) : nil, progress: Double(num(n)) / 3,
+                  released: some ? nil : Date(timeIntervalSince1970: Double(num(n + 9))), label: s("label"),
+                  number: some ? Decimal(num(n + 3)) : nil, sortKey: some ? num(n + 4) : nil,
+                  version: some ? Float(num(n)) / 4 : nil)
+}
+
 @main struct Main {
     static func main() {
         switch CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "" {
-        case "list": print("friend pair0 pair16 quad spill encode method")
+        case "list": print("friend pair0 pair16 quad spill encode method wide")
         case "friend": friends()
         case "pair0":
             for n in 0..<2 {
@@ -93,6 +113,14 @@ struct Board: Codable {
                 print("spill: \(spill(SIMD4<Float>(Float(n), 2, 3, 4), n == 0 ? nil : Tag("tag-\(n)"), flag(n), flag(n + 1)))")
             }
         case "encode": encode()
+        case "wide":
+            var all: [Record] = []
+            for n in -1..<2 {
+                let r = record(n)
+                print("wide \(n): \(describe(r))")
+                all.append(r)
+            }
+            print("wide copied \(all.count): \(all.map { $0.engaged.map { "\($0.timeIntervalSince1970)" } ?? "nil" })")
         case "method":
             let o = Offers()
             for n in 0..<3 {
@@ -102,7 +130,7 @@ struct Board: Codable {
                 print("nils: \(o.nils(1, 2, 3, 4, 5, 6, 7, 8, nil, nil, nil, true, nil, false, nil, nil, true, num(n)))")
                 print("nils: \(o.nils(1, 2, 3, 4, 5, 6, 7, 8, flag(n), nil, flag(n) ? "q" : nil, nil, nil, true, nil, false, nil, num(n)))")
             }
-        default: print("usage: sitepack list|friend|pair0|pair16|quad|spill|encode|method")
+        default: print("usage: sitepack list|friend|pair0|pair16|quad|spill|encode|method|wide")
         }
     }
 

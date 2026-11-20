@@ -1582,12 +1582,19 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native)
  * the guest function's arguments). The answer is kept per (call site, native
  * function), in one word: nearly every call site has none, and a daemon's
  * memory limit counts the table; the layouts are few and kept apart. An
- * indirect call's register is checked on every call. */
-#define SITEPACK_WINDOW 64
+ * indirect call's register is checked on every call.
+ *
+ * A call with many arguments has a long call sequence and a wide area: a
+ * native initializer of 42 stack arguments (Strings, eleven Bools, indirect
+ * Date? addresses, the last at [sp+256]) is stored over 104 instructions, and
+ * its x86_64 callee reads 44 slots. A 64-instruction window, 32 arguments,
+ * 40 callee slots and 8-bit offsets each left the word copy, so the callee
+ * took a stale word for an indirect Date?'s address and copied from 0. */
+#define SITEPACK_WINDOW 128
 #define SITEPACK_DIRECT 0xff
 #define SITEPACK_LAYOUTS 256
 static hao_gmap sitepacks = HAO_GMAP_INIT(3, 2, 6, 20);   /* (lr, native) -> n | register << 8 | (layout + 1) << 16 */
-static uint8_t sitepack_layouts[SITEPACK_LAYOUTS][2 * HAO_IF_MAX_PACK];   /* (offset, width) pairs; under sitepack_lock */
+static struct { uint16_t off[HAO_SITEPACK_MAX]; uint8_t w[HAO_SITEPACK_MAX]; } sitepack_layouts[SITEPACK_LAYOUTS];   /* under sitepack_lock */
 static unsigned sitepack_nlayouts;
 static inline uint64_t untag(uint64_t a) { return a & 0x00007fffffffffffull; }
 
@@ -1823,7 +1830,7 @@ static bool sitepack_address(const uint32_t *win, int nwin, int k, unsigned r)
 
 /* The layout the stores of the call sequence ending at CALL give its stack arguments, as described
  * above, or 0 (word copy); *why says why a packed-looking site was refused. */
-static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_PACK], uint8_t width[HAO_IF_MAX_PACK],
+static int sitepack_scan(uint64_t call, uint64_t native, uint16_t off[HAO_SITEPACK_MAX], uint8_t width[HAO_SITEPACK_MAX],
                          const char **why)
 {
     *why = NULL;
@@ -1852,7 +1859,7 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
             if (fp && w == 16) w = 8;
             for (int p = 0; p < pieces; p++) {
                 int64_t at = o.imm - (alloc ? o.wb : 0) + p * w;   /* from the sp at the call */
-                if (at < 0 || at >= 8 * HAO_IF_MAX_PACK) continue;     /* below sp, or no argument we place */
+                if (at < 0 || at >= 8 * HAO_SITEPACK_MAX) continue;     /* below sp, or no argument we place */
                 bool seen = false;
                 for (int j = 0; j < ns && !seen; j++) {
                     if (st[j].off == at && st[j].w == w) seen = true;  /* the later store is the argument */
@@ -1881,7 +1888,7 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
 #define REFUSE(m) do { if (!quiet) *why = (m); return 0; } while (0)
     if (!odd && !shown) return 0;
     if (shown && n <= 0) REFUSE("the callee reads no stack argument past x7");
-    if (n > HAO_IF_MAX_PACK) REFUSE("too many stack arguments");
+    if (n > HAO_SITEPACK_MAX) REFUSE("too many stack arguments");
     bool packed = false;
     unsigned end = 0;
     int j = 0;
@@ -1904,7 +1911,7 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
                 if (r != 1 && r != 2 && r != 4 && r != 8) REFUSE("a merged store with a slot of unknown width");
                 p = (p + r - 1) & ~(r - 1u);
                 if (p + r > at + w) break;
-                off[j] = (uint8_t)p;
+                off[j] = (uint16_t)p;
                 width[j] = (uint8_t)r;
                 packed |= p != 8u * (unsigned)j;
                 p += r;
@@ -1917,7 +1924,7 @@ static int sitepack_scan(uint64_t call, uint64_t native, uint8_t off[HAO_IF_MAX_
         if (at != ((end + w - 1) & ~(w - 1))) REFUSE("a hole among the stores");
         if (!shown && w > 1 && !sitepack_address(win, nwin, st[s].k, st[s].src))
             REFUSE("callee not readable, and a store wider than a byte may be merged arguments");
-        off[j] = (uint8_t)at;
+        off[j] = (uint16_t)at;
         width[j] = (uint8_t)w;
         packed |= at != 8u * (unsigned)j;
         end = at + w;
@@ -1935,20 +1942,21 @@ int hao_swift_callee_stack_slots(uint64_t native)
     return u.nslots > 2 ? u.nslots - 2 : 0;
 }
 
-int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width)
+int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint16_t *off, uint8_t *width)
 {
     uint64_t lr = c->x[30], key[2] = {lr, native};
     if (!lr || (lr & 3) || !native) return 0;
     const uint64_t *e = hao_gmap_get(&sitepacks, key);
     int n, reg;
-    uint8_t o[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
+    uint16_t o[HAO_SITEPACK_MAX];
+    uint8_t w[HAO_SITEPACK_MAX];
     const char *why = NULL;
     if (e) {
         uint64_t v = e[2];
         unsigned li = (unsigned)(v >> 16);
         n = (int)(v & 0xff);
         reg = (int)((v >> 8) & 0xff);
-        if (n && li) for (int j = 0; j < n; j++) { o[j] = sitepack_layouts[li - 1][2 * j]; w[j] = sitepack_layouts[li - 1][2 * j + 1]; }
+        if (n && li) for (int j = 0; j < n; j++) { o[j] = sitepack_layouts[li - 1].off[j]; w[j] = sitepack_layouts[li - 1].w[j]; }
         else if (n) n = sitepack_scan(lr - 4, native, o, w, &why);   /* the layout table was full: read the site again */
     } else {
         reg = sitepack_call(lr - 4, native);
@@ -1960,7 +1968,7 @@ int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t 
             hao_x86_stackuse u;
             bool shown = callee_stackuse(native, &u);
             uint64_t impl = dispatch_impl(untag(native));
-            char t[8 * HAO_IF_MAX_PACK], cw[4 * HAO_X86_MAX_SLOTS];
+            char t[8 * HAO_SITEPACK_MAX], cw[4 * HAO_X86_MAX_SLOTS];
             size_t l = 0, m = 0;
             for (int j = 0; j < n && l + 9 < sizeof t; j++) l += (size_t)snprintf(t + l, sizeof t - l, "%s%u.%u", j ? "," : "", o[j], w[j]);
             t[l] = 0;
@@ -1982,7 +1990,7 @@ int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t 
             unsigned li = 0;
             if (n && sitepack_nlayouts < SITEPACK_LAYOUTS) {
                 li = ++sitepack_nlayouts;
-                for (int j = 0; j < n; j++) { sitepack_layouts[li - 1][2 * j] = o[j]; sitepack_layouts[li - 1][2 * j + 1] = w[j]; }
+                for (int j = 0; j < n; j++) { sitepack_layouts[li - 1].off[j] = o[j]; sitepack_layouts[li - 1].w[j] = w[j]; }
             }
             s[2] = (uint64_t)n | (uint64_t)reg << 8 | (uint64_t)li << 16;
             hao_gmap_publish(&sitepacks, s, key);
@@ -1990,7 +1998,7 @@ int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t 
         pthread_mutex_unlock(&sitepack_lock);
         hao_crit_leave();
         if (n && hao_opt.bridge_check) {
-            char t[8 * HAO_IF_MAX_PACK];
+            char t[8 * HAO_SITEPACK_MAX];
             size_t l = 0;
             for (int j = 0; j < n && l + 9 < sizeof t; j++) l += (size_t)snprintf(t + l, sizeof t - l, "%s%u.%u", j ? "," : "", o[j], w[j]);
             fprintf(HAO_DIAG, "hao: packed stack arguments from the call site at %#llx: %s\n", (unsigned long long)(lr - 4), t);
@@ -1998,7 +2006,7 @@ int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t 
             fprintf(HAO_DIAG, "hao: packed stack arguments at %#llx refused (%s): word copy\n", (unsigned long long)(lr - 4), why);
     }
     if (n <= 0 || (reg != SITEPACK_DIRECT && untag(c->x[reg]) != untag(native))) return 0;
-    memcpy(off, o, (size_t)n);
+    memcpy(off, o, (size_t)n * sizeof *o);
     memcpy(width, w, (size_t)n);
     return n;
 }

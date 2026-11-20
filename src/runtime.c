@@ -395,7 +395,7 @@ bool hao_no_guest_code;
 
 /* Guest -> native call of `pc` with the guest's registers and stack, as its
  * plan says (hao/bridge.h; NULL: UNKNOWN). */
-/* noinline: its 320 bytes of arrays would otherwise be in every native call's frame, also across the
+/* noinline: its 736 bytes of arrays would otherwise be in every native call's frame, also across the
  * native callee's callbacks into guest code */
 __attribute__((noinline)) static bool native_call_stackpack(hao_cpu *c, uint64_t pc, const hao_plan *p)
 {
@@ -406,10 +406,14 @@ __attribute__((noinline)) static bool native_call_stackpack(hao_cpu *c, uint64_t
      * arguments zero-extended, the rest 0) and let it copy them from there. Native code
      * calling back into guest code runs below them (hao_callback's red-zone margin); the
      * guest sp is restored after the call. false: no layout, nothing called. */
-    uint8_t off[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
-    int n = p->kind == HAO_KIND_SITEPACK ? hao_swift_sitepack(c, pc, off, w) : hao_ifunit_stackpack(p->enc, off, w);
+    uint16_t off[HAO_SITEPACK_MAX];
+    uint8_t w[HAO_SITEPACK_MAX], uo[HAO_IF_MAX_PACK];
+    _Static_assert(HAO_IF_MAX_PACK <= HAO_SITEPACK_MAX, "a unit's layout fits");
+    int n;
+    if (p->kind == HAO_KIND_SITEPACK) n = hao_swift_sitepack(c, pc, off, w);
+    else if ((n = hao_ifunit_stackpack(p->enc, uo, w)) > 0) for (int i = 0; i < n; i++) off[i] = uo[i];
     if (n <= 0) return false;
-    uint64_t sp = c->x[31], words[HAO_IF_MAX_PACK] = {0};
+    uint64_t sp = c->x[31], words[HAO_SITEPACK_MAX] = {0};
     for (int i = 0; i < n; i++) {
         const uint8_t *a = (const uint8_t *)(uintptr_t)(sp + off[i]);
         words[i] = w[i] == 1 ? *a : w[i] == 2 ? *(const uint16_t *)a : w[i] == 4 ? *(const uint32_t *)a : *(const uint64_t *)a;
