@@ -1367,9 +1367,16 @@ argument does not replace the parameter's metadata, which follows the
 formal arguments. The result type's mangling is the longest prefix of the
 symbol's function type the native runtime resolves in a generic environment
 of the call's metadata; each tuple element is converted at its own address
-by its own type (the walk's facts and pointer rule). `guest/genpair` (C and
-CGImage, with the walk table's 26B131 `CGImage??` rows as a fixture) equals
-native arm64 under JIT, `--interp` and AOT and crashes without the rule.
+by its own type (the walk's facts and pointer rule). So that a native-encoded
+result is all native code ever made, each argument it borrows by address is
+lent as a copy with its nils in the native encoding (a value it forwards into
+its result then comes back converted, never a guest word read as native),
+and an inout one always works on a copy converted back after the call.
+Resolution runs in a hao critical section; the lookup function is found at
+binding. `guest/genpair` (C and CGImage, with the walk table's 26B131
+`CGImage??` rows as a fixture; forwarded and inout nested nils; a one-byte
+result written at an odd address) equals native arm64 under JIT,
+`--interp` and AOT and crashes without the rule.
 Not covered: async and throwing functions, where clauses (witness tables),
 concrete parameters (their register count), results with loadable elements
 (they return in registers) and associated types. A type the walk cannot

@@ -3,7 +3,9 @@
 # generic function returning (T?, U), a tuple Swift returns as one indirect result per element ahead of the
 # formal arguments, makes T? = nil there with its own witnesses (tests/guest/genpair_lib.swift). With T = C? or
 # CGImage? that is C?? / CGImage??'s outer nil, word 1 on arm64 and 2 on x86_64, next to a guest generic enum;
-# guest code specialized for the types reads it inline. A function returning T? = nil in x8 too. The library is
+# guest code specialized for the types reads it inline. A function returning T? = nil in x8 too, also a one-byte
+# one at an odd address. Guest nils native code forwards into its result (fullPair's U, same) or takes inout
+# (replace) are lent as native-encoded copies and come back as the guest wrote them. The library is
 # universal and loaded natively. The CGImage types' facts are the walk table's rows for 26B131 (its outer nil whole word
 # 1 / 2), as a fixture (test switch HAO_SWIFT_WALK_FACTS, a TEST_SWITCHES build): the table applies only on its
 # own cache. Every hao run (JIT, --interp, AOT) must print what native arm64 prints; BASE (a build without this
@@ -48,7 +50,7 @@ done
 timeout -s KILL "$T" "$HAO" --aot --cache "$d/aot" "$d/genpair.arm64e" >/dev/null 2>&1 || echo "aot generation failed"
 timeout -s KILL "$T" "$d/genpair.arm64" >"$d/native.out" 2>/dev/null; nrc=$?
 echo "native    rc=$nrc lines=$(wc -l <"$d/native.out" | tr -d ' ')"
-[ $nrc = 0 ] && [ "$(wc -l <"$d/native.out" | tr -d ' ')" = 6 ] || fail=1
+[ $nrc = 0 ] && [ "$(wc -l <"$d/native.out" | tr -d ' ')" = 11 ] || fail=1
 for mode in jit interp aot; do
     case $mode in
     jit) set -- env HAO_NO_AOT=1 "$HAO" ;;

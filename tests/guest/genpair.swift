@@ -12,6 +12,11 @@ enum GuestGeneric<T> { case loading(Int), loaded(T), failed(any Error), none }
 @inline(never) func show<T>(_ g: GuestGeneric<T>) -> String {
     switch g { case .loading(let k): return "loading \(k)"; case .loaded: return "loaded"; case .failed: return "failed"; case .none: return "none" }
 }
+struct Packed { var a: UInt8; var b: Bool?; var c: UInt8? }
+final class Box { var p = Packed(a: 1, b: true, c: 3) }
+// the callee's result buffer is the field itself, at offset 1 (x8 odd)
+@inline(never) func fill(_ p: inout Packed) { p.b = emptyOne(Bool.self); p.c = emptyOne(UInt8.self) }
+@inline(never) func fillBox(_ b: Box) { b.p.b = emptyOne(Bool.self) }
 @main struct Main {
     static func main() {
         let a = emptyPair(GuestGeneric<C>.loaded(C(7)), C?.self)
@@ -21,6 +26,21 @@ enum GuestGeneric<T> { case loading(Int), loaded(T), failed(any Error), none }
         let d = fullPair(C?.some(C(3)), GuestGeneric<C>.loading(4))
         print("full", show(d.0), show(d.1))
         print("one", show(emptyOne(C?.self)))
+        // guest nils native code forwards: they must come back as the guest wrote them
+        let g = fullPair(C?.none, C??.none)
+        print("forward", show(g.0), show(g.1))
+        let h = fullPair(C?.some(C(8)), C??.some(nil))
+        print("forward-some", show(h.0), show(h.1))
+        print("same", show(same(C??.none)), show(same(C??.some(nil))))
+        var x: C?? = .some(C(5))
+        let old = replace(&x, C??.none)
+        print("replace", show(old), show(x))
+        // a one-byte result written at an odd address in guest storage
+        var p = Packed(a: 1, b: true, c: 3)
+        fill(&p)
+        let box = Box()
+        fillBox(box)
+        print("bytes", p.a, p.b.map { "\($0)" } ?? "nil", p.c.map(String.init) ?? "nil", box.p.b.map { "\($0)" } ?? "nil")
         let ctx = CGContext(data: nil, width: 5, height: 3, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         let image = ctx.makeImage()!

@@ -547,9 +547,18 @@ void hao_swiftcc_fork_child(void);
  * converted when its callee resumes the guest); result: that conversion. */
 bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async);
 bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *param, bool *throwing);
-bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nformal, unsigned *nres);
-uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **type);
-void hao_swift_genres_result(const void *type, uint64_t result);
+/* One synchronous call's conversions (swiftcc.c genres): the result's type and address, or a tuple's element
+ * addresses (nres); the formal arguments passed as converted copies, written back after an inout one. */
+typedef struct {
+    const void *type;
+    uint64_t result;
+    unsigned nres, ncopies;
+    uint64_t at[8];
+    struct { void *orig, *copy; const void *type; uint64_t size; bool inout; } copies[8];
+} hao_genres_call;
+bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nformal, unsigned *nres, uint8_t *params);
+bool hao_swift_genres_call(hao_cpu *c, uint64_t native, hao_genres_call *call);
+void hao_swift_genres_result(hao_cpu *c, hao_genres_call *call);
 /* Native View modifiers (swiftcc.c): a native protocol extension method of
  * SwiftUI.View lends self (x20) to native witnesses with Self's nils in the
  * native encoding. bind: at binding (true: the plan gets HAO_PLAN_VIEWSELF);
