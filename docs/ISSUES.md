@@ -646,6 +646,22 @@ flag only on such a stub). Limits: stubs from older payloads keep refusing
 until embedded again; with the JIT also denied (`dynamic-code-generation`),
 the program runs in the interpreter.
 
+## Required thunk pairs were refused without JIT memory
+
+When the code-cache mapping (MAP_JIT) failed, hao ran interpreted as
+designed but also skipped the generated thunk libraries. Every
+interface-unit record that requires its pair and has no encoding to fall
+back on was then REFUSED, and the first such call aborted the process. On
+a 27.2 Intel image code-cache setup failed for some daemon starts during a
+loaded boot (see the JIT arena entry), and a Swift dispatch thunk refused
+this way made a daemon exit at each start until a start got the cache. The
+pairs are compiled code and do not need the code cache: guest code among a
+native half's arguments keeps its guest address and native code reaches it
+through the NX-fault path. Thunk libraries now load in that mode. Test:
+`tests/guest/nojit.sh` (a thunk library loads with `HAO_NO_JIT_MEMORY`).
+Limits: without the code cache Swift requirement witnesses get no signature
+entry and the guest runs interpreted.
+
 ## hao-embed -o wrote through a fixed temporary name
 
 `hao-embed -o` opened `OUT.hao-embed` for writing (following a symbolic
