@@ -2,6 +2,11 @@ import SCLib
 // tests/guest/swiftcallres.sh: native Swift calls whose direct values differ in their nil's encoding.
 @main struct Main {
     static func main() {
+        if CommandLine.arguments.count > 1 {   // "perm": the fixture permutes these registers
+            let r = pairDiff(7, 2)
+            print("perm", r.0, r.1)
+            return
+        }
         let c = Card(0)
         for k in 0..<6 {
             let v = Card(k).labels   // a result in x0-x3
@@ -9,6 +14,7 @@ import SCLib
             print("show", k, show(v))   // an argument in x0-x3
             c.labels = v                // a setter's argument
             print("set", k, show(c.labels))
+            do { print("pick", k, show(try pick(k))) } catch { print("pick", k, "threw", (error as? Refused)?.k ?? -1) }
         }
     }
 }

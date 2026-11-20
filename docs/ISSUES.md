@@ -1302,7 +1302,10 @@ thunk's or method descriptor's row names, the address a vtable call
 reaches). Around the call, arguments' words are gathered from the guest's
 registers, walked to the native encoding (source guest: the facts table's
 case images and the pointer rule) and placed where `hao_native_call` loads
-the row's x86_64 registers from; results the other way (source native). A
+the row's x86_64 registers from; results the other way (source native),
+only the error when the error register is nonzero (a function that threw
+defines no other result). Types resolve at binding; the walk runs in a hao
+critical section. A
 REFUSE verdict, a type that does not resolve or whose size is not the
 words', a location `hao_native_call` does not pass, a converted indirect
 result, coroutine or async function is refused at the call. A function
@@ -1314,7 +1317,9 @@ descriptor whose implementation it is).
 Measured on the host (27.2, whose caches are not the table's):
 `guest/swiftcallres` with fixture rows for a universal library loaded
 natively (getter, setter, function; by method descriptor and by dispatch
-thunk) equals native arm64 under JIT, `--interp` and AOT, and crashes
+thunk; a throwing function) equals native arm64 under JIT, `--interp` and
+AOT; a fixture permuting argument and result registers moves each word
+where its row says; it crashes
 without the rows; a REFUSE row is refused and audited. Not measured: the
 generated rows themselves (26B131's cache). Not covered: native-to-guest
 calls (a guest override or closure that native code calls returns or

@@ -16,7 +16,8 @@
  *   placed where hao_native_call loads the row's x86_64 register from;
  *   after it, each result's words are gathered from where the native
  *   registers land, walked to the guest's encoding (source native) and
- *   placed in the row's arm64 registers.
+ *   placed in the row's arm64 registers (only the error, when the error
+ *   register is nonzero: a function that threw defined no other result).
  * A row the walk cannot apply is refused per the boundary policy
  * (swiftvalue.c), at the call: a REFUSE verdict, a type that does not
  * resolve or whose size is not the row's words, a location hao_native_call
@@ -89,15 +90,22 @@ struct hao_swiftcall {
     const char *why;           /* not applied by this runtime: refused at the call */
     unsigned nvalues;
     sc_value v[MAX_VALUES];
-    uint64_t addr, impl;       /* resolved in its library: the symbol, a descriptor's implementation */
-    bool resolved;
+    uint64_t addr, impl;       /* resolved in its library: the symbol, a descriptor's implementation; */
+    bool resolved;             /* both final once this is set (release; read with acquire) */
 };
 static hao_swiftcall **rows;
 static unsigned nrows;
 static bool loaded;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static hao_gmap libs = HAO_GMAP_INIT(2, 1, 4, 14);   /* mach header -> 1 no rows, 2 rows */
-void hao_swiftcall_fork_child(void) { lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+/* A fork that cut off a writer: a load not yet published is redone from the
+ * start (its rows are dropped, not freed: the writer may have been in malloc);
+ * a resolution not yet published is redone at the next bind (resolve). */
+void hao_swiftcall_fork_child(void)
+{
+    lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    if (!__atomic_load_n(&loaded, __ATOMIC_ACQUIRE)) { rows = NULL; nrows = 0; }
+}
 
 static int arm_slot(const char *s, size_t n)
 {
@@ -269,23 +277,27 @@ static uint64_t descriptor_impl(const void *d)
 /* Under lock: R's addresses in its library (HANDLE, at header H). */
 static void resolve(hao_swiftcall *r, void *handle, const void *h)
 {
-    if (r->resolved) return;
-    r->resolved = true;
+    if (__atomic_load_n(&r->resolved, __ATOMIC_ACQUIRE)) return;
     Dl_info di;
+    uint64_t addr = 0, impl = 0;
     void *a = dlsym(handle, r->symbol + (r->symbol[0] == '_'));
-    if (a && dladdr(a, &di) && di.dli_fbase == h) r->addr = (uint64_t)(uintptr_t)a;
+    if (a && dladdr(a, &di) && di.dli_fbase == h) addr = (uint64_t)(uintptr_t)a;
     size_t n = strlen(r->symbol);
-    if (r->kind == SWIFTCALL_METHOD_DESCRIPTOR) r->impl = descriptor_impl((const void *)(uintptr_t)r->addr);
+    if (r->kind == SWIFTCALL_METHOD_DESCRIPTOR) impl = descriptor_impl((const void *)(uintptr_t)addr);
     else if (r->kind == SWIFTCALL_DISPATCH_THUNK && n > 2 && n < 1024 && !strcmp(r->symbol + n - 2, "Tj")) {
         char tq[1024];
         memcpy(tq, r->symbol + (r->symbol[0] == '_'), n + 1 - (r->symbol[0] == '_'));
         tq[strlen(tq) - 1] = 'q';
         const void *d = dlsym(handle, tq);
-        if (d && dladdr(d, &di) && di.dli_fbase == h) r->impl = descriptor_impl(d);
+        if (d && dladdr(d, &di) && di.dli_fbase == h) impl = descriptor_impl(d);
     }
-    if (r->impl && (!dladdr((const void *)(uintptr_t)r->impl, &di) || di.dli_fbase != h)) r->impl = 0;
+    if (impl && (!dladdr((const void *)(uintptr_t)impl, &di) || di.dli_fbase != h)) impl = 0;
+    r->addr = addr;
+    r->impl = impl;
+    __atomic_store_n(&r->resolved, true, __ATOMIC_RELEASE);   /* last: a fork before this redoes it */
 }
 
+static const void *value_type(sc_value *v);
 const hao_swiftcall *hao_swiftcall_bind(uint64_t native)
 {
     if (!native || hao_opt.no_swift_values) return NULL;
@@ -316,11 +328,15 @@ const hao_swiftcall *hao_swiftcall_bind(uint64_t native)
             hao_swiftcall *r = rows[i];
             if (strcmp(r->uuid, uuid)) continue;
             if (handle) resolve(r, handle, h);
-            if (r->addr == native || r->impl == native) found = r;
+            if (__atomic_load_n(&r->resolved, __ATOMIC_ACQUIRE) && (r->addr == native || r->impl == native)) found = r;
         }
         if (handle) dlclose(handle);
     }
-    pthread_mutex_unlock(&lock); hao_crit_leave();
+    pthread_mutex_unlock(&lock);
+    /* the values' types, now: never first on a call's path (a guest signal handler's call included) */
+    for (unsigned i = 0; found && i < found->nvalues; i++)
+        if (found->v[i].key && found->v[i].verdict != SWIFTWALK_SAME) (void)value_type((sc_value *)&found->v[i]);
+    hao_crit_leave();
     if (found && hao_opt.bridge_check)
         fprintf(HAO_DIAG, "hao: Swift call map: %s at %#llx%s%s\n", found->symbol, (unsigned long long)native,
                 found->why ? ": refused, " : "", found->why ? found->why : "");
@@ -329,7 +345,8 @@ const hao_swiftcall *hao_swiftcall_bind(uint64_t native)
 
 const char *hao_swiftcall_symbol(const hao_swiftcall *s) { return s ? s->symbol : NULL; }
 
-/* V's type, resolved once by the native runtime from its key; NULL if it does not resolve. */
+/* V's type, resolved once by the native runtime from its key (at binding; under
+ * hao_crit, which holds a guest signal back); NULL if it does not resolve. */
 static const void *value_type(sc_value *v)
 {
     const void *t = __atomic_load_n(&v->type, __ATOMIC_ACQUIRE);
@@ -356,18 +373,24 @@ static void convert(hao_cpu *c, const hao_swiftcall *cs, uint64_t native, bool r
     }
     uint64_t before[SLOT_V + 8], buf[MAX_VALUES][MAX_WORDS];
     for (int k = 0; k < SLOT_V + 8; k++) before[k] = *slot(c, k);
+    /* a function that threw (its error register nonzero) defined no ordinary result: only the error moves */
+    bool threw = false;
+    for (unsigned i = 0; results && i < s->nvalues; i++)
+        if (s->v[i].role == 'e') threw |= before[s->v[i].out[0]] != 0;
+    hao_crit_enter();   /* the walk allocates and takes the Swift runtime's locks: no guest signal on top */
     for (unsigned i = 0; i < s->nvalues; i++) {
         sc_value *v = &s->v[i];
-        if (is_result(v->role) != results) continue;
+        if (is_result(v->role) != results || (threw && v->role == 'r')) continue;
         for (unsigned w = 0; w < v->n; w++) buf[i][w] = before[results ? v->out[w] : v->arm[w]];
         if (v->verdict == SWIFTWALK_SAME || !v->key) continue;
         const void *type = value_type(v);
         if (!type) { hao_swift_call_refused(NULL, v->key, "the value's type does not resolve", s->symbol, lr, native); continue; }
         hao_swift_call_value(type, buf[i], v->n * 8, results, s->symbol, lr, native);
     }
+    hao_crit_leave();
     for (unsigned i = 0; i < s->nvalues; i++) {
         const sc_value *v = &s->v[i];
-        if (is_result(v->role) != results) continue;
+        if (is_result(v->role) != results || (threw && v->role == 'r')) continue;
         for (unsigned w = 0; w < v->n; w++) *slot(c, results ? v->arm[w] : v->in[w]) = buf[i][w];
     }
 }
@@ -379,6 +402,7 @@ const char *hao_swiftcall_symbol_at(uint64_t native)
 {
     if (!__atomic_load_n(&loaded, __ATOMIC_ACQUIRE)) return NULL;
     for (unsigned i = 0; i < nrows; i++)
-        if (rows[i]->resolved && (rows[i]->addr == native || rows[i]->impl == native)) return rows[i]->symbol;
+        if (__atomic_load_n(&rows[i]->resolved, __ATOMIC_ACQUIRE) && (rows[i]->addr == native || rows[i]->impl == native))
+            return rows[i]->symbol;
     return NULL;
 }

@@ -25,3 +25,11 @@ open class Card {
     guard let v = v else { return "none" }
     return (v.title ?? "nil") + "/" + (v.subtitle ?? "nil")
 }
+public struct Refused: Error { public let k: Int }
+// A throwing function: its error in x21 / r12, its result registers undefined when it throws.
+@inline(never) public func pick(_ k: Int) throws -> Pair? {
+    if k == 3 { throw Refused(k: k) }
+    return k == 0 ? nil : (k == 1 ? (nil, nil) : ("p\(k)", nil))
+}
+// Two Int arguments and an (Int, Int) result, for a fixture that permutes their registers.
+@inline(never) public func pairDiff(_ a: Int, _ b: Int) -> (Int, Int) { (a - b, a * 10 + b) }

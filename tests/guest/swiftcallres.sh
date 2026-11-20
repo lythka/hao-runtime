@@ -2,13 +2,15 @@
 # The Swift call map (src/swiftcall.c): native Swift calls whose direct values have a nil whose encoding differs
 # by architecture (tests/guest/swiftcallres_lib.swift). A getter returns (String?, String?)? in x0-x3 /
 # rax rdx rcx r8, a setter and a function take one in x0-x3 / rdi rsi rdx rcx; the outer nil's word 1 is 1 on
-# arm64 and 2 on x86_64. The library is universal and loaded natively; its rows, keyed by its x86_64 LC_UUID,
+# arm64 and 2 on x86_64; a throwing function returns one, or throws (its result registers then undefined: only
+# the error crosses). The library is universal and loaded natively; its rows, keyed by its x86_64 LC_UUID,
 # and the type's case images are a fixture (test switch HAO_SWIFT_WALK_FACTS, a TEST_SWITCHES build), in two
 # builds of the library: "vtable" (the guest calls the implementations a vtable holds; rows by method
 # descriptor, ...Tq) and "resilient" (library evolution: the guest calls dispatch thunks, rows ...Tj). With the
 # rows every hao run (JIT, --interp, AOT) must print what native arm64 prints; without them (CTL, default
 # build/hao) the run must differ. A REFUSE row is refused, and under HAO_SWIFT_VALUE_AUDIT=1 recorded once with
-# the call's symbol and the library's UUID (the record's callee_symbol and callee_image).
+# the call's symbol and the library's UUID (the record's callee_symbol and callee_image). A fixture that permutes
+# a function's argument and result registers must move each word where its row says.
 #   OUT=dir HAO=/abs/build-ts/hao [CTL=/abs/build/hao] [T=60] tests/guest/swiftcallres.sh
 set -u
 export HAO_NATIVE_APP_LIBS=1   # the library's x86_64 slice runs natively
@@ -46,8 +48,9 @@ for variant in vtable resilient; do
     sym() { nm -arch x86_64 "$d/libSCLib.dylib" | grep -oE "_\\\$s5SCLib$1\$" | sed 's/^_//' | head -1; }
     if [ $variant = vtable ]; then get=$(sym '4CardC6labels[A-Za-z0-9_]*vgTq'); set=$(sym '4CardC6labels[A-Za-z0-9_]*vsTq'); kind=METHOD_DESCRIPTOR
     else get=$(sym '4CardC6labels[A-Za-z0-9_]*vgTj'); set=$(sym '4CardC6labels[A-Za-z0-9_]*vsTj'); kind=DISPATCH_THUNK; fi
-    show=$(sym '4show[A-Za-z0-9_]*F')
-    [ -n "$get" ] && [ -n "$set" ] && [ -n "$show" ] || { echo "$variant: library symbols not found"; exit 2; }
+    show=$(sym '4show[A-Za-z0-9_]*F'); pick=$(sym '4pick[A-Za-z0-9_]*KF'); pair=$(sym '8pairDiff[A-Za-z0-9_]*F')
+    [ -n "$get" ] && [ -n "$set" ] && [ -n "$show" ] && [ -n "$pick" ] && [ -n "$pair" ] ||
+        { echo "$variant: library symbols not found"; exit 2; }
     # rows (VERDICT the getter result's) and the type's case images: what the call map and the walk table hold
     facts() {
         cat <<EOF
@@ -63,10 +66,18 @@ value s 0 g SAME x20:r13
 call $show $U FUNCTION CONVERT
 value r SS o SAME x0:rax x1:rdx
 value p0 $key g CONVERT x0:rdi x1:rsi x2:rdx x3:rcx
+call $pick $U FUNCTION CONVERT
+value r $key o CONVERT x0:rax x1:rdx x2:rcx x3:r8
+value e 0 o SAME x21:r12
+value p0 Si g SAME x0:rdi
 EOF
     }
     facts CONVERT >"$d/rows.facts"
     facts REFUSE >"$d/refuse.facts"
+    # A permutation no real lowering has, to see each word go where its row says: the two arguments swapped
+    # (native pairDiff gets (2, 7)) and the two result words swapped (the guest gets (27, -5)).
+    printf 'call %s %s FUNCTION SAME\nvalue p0 Si g SAME x0:rsi\nvalue p1 Si g SAME x1:rdi\nvalue r Si_Sit o SAME x0:rdx x1:rax\n' \
+        "$pair" "$U" >"$d/perm.facts"
     HAO_SWIFT_WALK_FACTS="$d/rows.facts" timeout -s KILL "$T" "$HAO" --aot --cache "$d/aot" "$d/swiftcallres.arm64e" >/dev/null 2>&1 ||
         echo "$variant: aot generation failed"
     timeout -s KILL "$T" "$d/swiftcallres.arm64" >"$d/native.out" 2>/dev/null; nrc=$?
@@ -82,6 +93,13 @@ EOF
         if [ $rc = $nrc ] && cmp -s "$d/native.out" "$d/$mode.out"; then r=SAME; else r=DIFF; fail=1; fi
         printf '%s %-9s rc=%s %s\n' $variant $mode "$rc" "$r"
         [ $r = SAME ] || { diff "$d/native.out" "$d/$mode.out" | head -8; tail -3 "$d/$mode.err" | cut -c1-300; } | sed 's/^/    /'
+    done
+    for mode in jit interp; do
+        case $mode in jit) set -- "$HAO" ;; interp) set -- "$HAO" --interp ;; esac
+        HAO_SWIFT_WALK_FACTS="$d/perm.facts" timeout -s KILL "$T" env HAO_NO_AOT=1 "$@" "$d/swiftcallres.arm64e" perm \
+            >"$d/perm.$mode.out" 2>"$d/perm.$mode.err"; rc=$?
+        if [ $rc = 0 ] && [ "$(cat "$d/perm.$mode.out")" = "perm 27 -5" ]; then r=PERMUTED; else r=NOT-PERMUTED; fail=1; fi
+        printf '%s %-9s rc=%s %s %s\n' $variant "perm-$mode" "$rc" "$r" "$(cat "$d/perm.$mode.out")"
     done
     # Without the rows the nils cross unconverted: the run must differ (the case the rows exist for).
     if [ -x "$CTL" ]; then
