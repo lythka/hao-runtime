@@ -481,6 +481,9 @@ static bool rq_function_kind(uint32_t f) { uint32_t k = f & 0xf; return k >= RQ_
 /* a witness or default implementation for a requirement with flags f */
 static void requirement_bridge(struct ent *e, uint64_t proto, uint64_t req)
 {
+    /* a Swift call map row of the requirement (swiftcall.c) comes first: its values are converted both ways */
+    const struct hao_swiftcall *row = hao_swiftcall_requirement(req);
+    if (row && !((uintptr_t)row & 7)) { e->bridge = hao_sig_thunk(e->target, (void *)((uintptr_t)row | HAO_CB_SWIFTCALL_TAG)); return; }
     const hao_swift_result_signature *result = NULL;
     const hao_swift_reverse *sig = hao_swift_reverse_requirement(req, &result);
     if (!sig) return;

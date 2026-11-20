@@ -568,6 +568,9 @@ tests/guest/swiftboxes.swift
 tests/guest/swiftcallee.sh
 tests/guest/swiftcallee.swift
 tests/guest/swiftcalleehelper.swift
+tests/guest/swiftcallcb.sh
+tests/guest/swiftcallcb.swift
+tests/guest/swiftcallcb_lib.swift
 tests/guest/swiftcallres.sh
 tests/guest/swiftcallres.swift
 tests/guest/swiftcallres_lib.swift

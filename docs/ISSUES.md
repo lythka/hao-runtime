@@ -1321,11 +1321,22 @@ thunk; a throwing function) equals native arm64 under JIT, `--interp` and
 AOT; a fixture permuting argument and result registers moves each word
 where its row says; it crashes
 without the rows; a REFUSE row is refused and audited. Not measured: the
-generated rows themselves (26B131's cache). Not covered: native-to-guest
-calls (a guest override or closure that native code calls returns or
-receives such a value through a callback; the same rows, read with the
-directions swapped, would drive them), indirect results, stack arguments,
-coroutines and async functions.
+generated rows themselves (26B131's cache). Not covered: indirect results,
+stack arguments, coroutines and async functions.
+
+Callback direction: a method descriptor row naming a protocol requirement
+(...Tq) also drives native calls of a guest witness of it. Its guest
+conformance's island entry gets a signature thunk tagged with the row
+(`swiftmeta.c` requirement_bridge, ahead of an interface unit's recipe);
+`callback_plain` then walks the arguments from the native caller's
+registers to the guest's encoding before the guest runs and the results to
+the native one after (`hao_swiftcall_callback`; only the error when the
+guest threw). `guest/swiftcallcb` (fixture rows, a guest class's witnesses
+of a native protocol, a `(String?, String?)?` result and argument) equals
+native arm64 under JIT, `--interp` and AOT, crashes without the rows, and
+a REFUSE row is refused at the first call. Not covered: closures native
+code calls (no row names one yet; a closure has no descriptor to key it),
+class overrides, a witness reached through a dispatch thunk's row only.
 
 ## Swift values hao cannot certify are refused again
 

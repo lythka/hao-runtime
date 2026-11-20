@@ -1213,8 +1213,8 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
     t->cpu_saves_n = mark;
 }
 
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc);
-static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc);
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc, const struct hao_swiftcall *row);
+static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc, const struct hao_swiftcall *row);
 
 uint64_t hao_callback(hao_cb_frame *f)
 {
@@ -1239,6 +1239,9 @@ uint64_t hao_callback(hao_cb_frame *f)
         callback_swift(f, contract, NULL);
         return 0;
     }
+    /* a guest witness of a requirement with a Swift call map row (swiftcall.c): a Swift function */
+    const struct hao_swiftcall *row = NULL;
+    if ((in & 7) == HAO_CB_SWIFTCALL_TAG) { row = (const void *)(uintptr_t)(in & ~7ull); in = HAO_CB_SWIFTCC; }
     /* arrived by an NX fault: a block whose helper this is gets thunks for next time */
     if (in == HAO_CB_FAULT) hao_blocks_heal(f->gpr[0], f->target);
     bool marked = in == HAO_CB_SWIFTCC;
@@ -1258,9 +1261,9 @@ uint64_t hao_callback(hao_cb_frame *f)
     hao_thread *t = hao_current();
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
-    if (!saved) return callback_plain_local(f, t, swiftcc);
+    if (!saved) return callback_plain_local(f, t, swiftcc, row);
     *saved = t->cpu;
-    uint64_t pop = callback_plain(f, t, saved, swiftcc);
+    uint64_t pop = callback_plain(f, t, saved, swiftcc, row);
     t->cpu_saves_n = mark;
     return pop;
 }
@@ -1317,8 +1320,9 @@ static uint64_t plain_arg(const hao_thread *t, uint64_t word)
     return word - (uintptr_t)t < sizeof(*t) ? 0 : word;
 }
 
-/* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry). */
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc)
+/* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry), or a guest
+ * witness whose requirement has a Swift call map row (ROW: its values converted around the guest's run). */
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc, const struct hao_swiftcall *row)
 {
     hao_cpu *c = &t->cpu;
     c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
@@ -1356,6 +1360,7 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
     c->native_pop = 0;       /* per activation; nested callbacks restore it */
+    if (row) hao_swiftcall_callback(c, f, row, false);
     unsigned objc_enum_result = hao_objc_enum_args(c, f->target, true);
     unsigned made = t->swift_made_n;
     uint64_t a[6];
@@ -1366,6 +1371,7 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     hao_swift_witness_result(t, made, data ? r : 0);
     for (int k = 0; k < 4; k++) { f->gpr[k] = c->x[k]; memcpy(f->xmm[k], &c->v[k], 16); }
     f->swift[0] = c->x[21];
+    if (row) hao_swiftcall_callback(c, f, row, true);
     if (data) hao_swift_body_result(f->target, a, r);   /* may run guest code: after the results are taken */
     const char *why;
     uint64_t pop = callee_pop(f, saved, (int64_t)c->native_pop, &why);
@@ -1374,10 +1380,11 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     return pop;
 }
 
-__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc)
+__attribute__((noinline)) static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc,
+                                                               const struct hao_swiftcall *row)
 {
     hao_cpu saved = t->cpu;
-    return callback_plain(f, t, &saved, swiftcc);
+    return callback_plain(f, t, &saved, swiftcc, row);
 }
 
 /* ---------------------------------------------------- fault handler */
