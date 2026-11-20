@@ -150,8 +150,14 @@ static bool first_report(const void *type, const char *why)
  * walked (the refused value's type), root (the activation's type),
  * caller_image and caller_offset (the guest image's LC_UUID and the call's
  * offset in it), witness_image and witness_offset (the same for the native
- * code called), x86_cache (this process's x86_64 shared cache UUID). No
- * address and no path. The records go where hao's diagnostics go: with
+ * code called), x86_cache (this process's x86_64 shared cache UUID); in a
+ * native call of guest code (a callback: a closure, a witness, an override)
+ * also callback_image and callback_offset (the guest function entered: a
+ * closure's invoke function), callback_symbol (its own mangled name when the
+ * image keeps it: a closure's spells its function type), callback_kind
+ * (witness, override or "") and callback_descriptor (the native requirement's
+ * or overridden method's descriptor, ...Tq: an override's vtable slot by
+ * name). No address and no path. The records go where hao's diagnostics go: with
  * hao_crash=1 the owner-only console.log under /private/var/log/hao (a
  * user's processes: their directory under it), else stderr; from a
  * sandboxed process the unified log (subsystem com.hao, category diag), as
@@ -240,6 +246,25 @@ static void json_callee(FILE *f, uint64_t callee)
     if (name && name[0] == '_') ++name;
     json_text(f,name ? name : "",name ? strlen(name) : 0);
 }
+/* The callback fields of an audit record (see above) for the guest function at GUEST. */
+static void json_callback(FILE *f, uint64_t guest)
+{
+    hao_image *img = hao_image_for_addr(guest);
+    bool override = false;
+    uint64_t d = hao_swiftmeta_callee_descriptor(guest,&override);
+    const char *own = hao_guest_symbol_at(guest);
+    if (own && own[0] == '_') ++own;
+    fprintf(f,",\"callback_image\":");
+    json_uuid(f,img && img->has_uuid ? img->uuid : NULL);
+    fprintf(f,",\"callback_offset\":%llu,\"callback_symbol\":",(unsigned long long)(img ? guest - img->base : 0));
+    json_text(f,own ? own : "",own ? strlen(own) : 0);
+    fprintf(f,",\"callback_kind\":\"%s\",\"callback_descriptor\":",d ? (override ? "override" : "witness") : "");
+    Dl_info info;
+    const char *name = d && dladdr((const void *)(uintptr_t)d,&info) && info.dli_sname &&
+                       (uint64_t)(uintptr_t)info.dli_saddr == d ? info.dli_sname : NULL;
+    if (name && name[0] == '_') ++name;
+    json_text(f,name ? name : "",name ? strlen(name) : 0);
+}
 /* One audit record (see above). Types by their table keys, code by image
  * UUID and offset: no address, no path. TYPE NULL: a value the call map
  * (swiftcall.c) names by KEY, or a whole call (KEY NULL). */
@@ -294,6 +319,7 @@ static void audit_record(const void *type, const char *key, const char *why, uin
     json_uuid(f,callee_native ? callee_uuid : NULL);
     fprintf(f,",\"callee_offset\":%llu,\"x86_cache\":",(unsigned long long)callee_offset);
     json_uuid(f,cache);
+    if (t && t->callback_guest) json_callback(f,t->callback_guest);
     fprintf(f,"}\n");
     funlockfile(f);
 }

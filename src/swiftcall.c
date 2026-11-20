@@ -26,8 +26,9 @@
  * policy for uncertified values.
  *
  * The callback direction: a METHOD_DESCRIPTOR row names a protocol
- * requirement (...Tq) the other way round when native code calls a guest
- * witness of it (swiftmeta.c requirement_bridge; runtime.c callback_plain):
+ * requirement or a class method (...Tq) the other way round when native code
+ * calls a guest witness or override of it (swiftmeta.c requirement_bridge,
+ * override_bridge; runtime.c callback_plain):
  * before the guest runs, each argument's words are gathered from where the
  * native caller left them (hao_cb_frame), walked to the guest's encoding and
  * placed in the row's arm64 registers; after it, each result's words are
@@ -436,9 +437,10 @@ const char *hao_swiftcall_symbol_at(uint64_t native)
     return NULL;
 }
 
-/* The row of the protocol requirement whose descriptor is at REQ (a
- * METHOD_DESCRIPTOR row naming ...Tq), for a native call of a guest witness
- * of it; NULL none. At binding (swiftmeta.c), like hao_swiftcall_bind. */
+/* The row of the protocol requirement or class method whose descriptor is at
+ * REQ (a METHOD_DESCRIPTOR row naming ...Tq), for a native call of a guest
+ * witness or override of it; NULL none. At binding (swiftmeta.c), like
+ * hao_swiftcall_bind. */
 const hao_swiftcall *hao_swiftcall_requirement(uint64_t req)
 {
     const hao_swiftcall *r = hao_swiftcall_bind(req);

@@ -130,6 +130,9 @@ typedef struct hao_thread {
     /* runtime.c native_step: the native function the guest is calling (0: none), for the Swift value
      * audit's records (swiftvalue.c); a nested call's is restored when it returns */
     uint64_t native_target;
+    /* runtime.c callback_plain / callback_swift_run: the guest function native code is calling (0: none),
+     * for the same records; a nested callback's is restored when it returns */
+    uint64_t callback_guest;
 } hao_thread;
 
 /* Frames at segment depth `depth` and deeper were abandoned (a nonlocal jump or an exception): a cache
@@ -544,6 +547,7 @@ void hao_swiftcc_fork_child(void);
  * converted when its callee resumes the guest); result: that conversion. */
 bool hao_swift_genres_bind(uint64_t native, const char *sym, bool is_async);
 bool hao_swift_genres_demangled(const char *d, char *context, size_t n, int *param, bool *throwing);
+bool hao_swift_genres_free_demangled(const char *d, unsigned *ngen, unsigned *nformal, unsigned *nres);
 uint64_t hao_swift_genres_call(const hao_cpu *c, uint64_t native, const void **type);
 void hao_swift_genres_result(const void *type, uint64_t result);
 /* Native View modifiers (swiftcc.c): a native protocol extension method of
@@ -567,6 +571,11 @@ const char *hao_swiftcall_symbol_at(uint64_t native);
  * arguments to the guest's encoding (RESULTS false) and its results to the
  * native one. */
 const struct hao_swiftcall *hao_swiftcall_requirement(uint64_t req);
+/* For the Swift value audit: the native descriptor the guest function at GUEST implements (swiftmeta.c: a
+ * requirement's, or with *OVERRIDE the overridden method's), 0 none; the guest image's own symbol at
+ * exactly PC (runtime.c), NULL none. */
+uint64_t hao_swiftmeta_callee_descriptor(uint64_t guest, bool *override);
+const char *hao_guest_symbol_at(uint64_t pc);
 void hao_swiftcall_callback(hao_cpu *c, hao_cb_frame *f, const struct hao_swiftcall *s, bool results);
 void hao_swiftcall_fork_child(void);
 void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);

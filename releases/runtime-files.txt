@@ -372,6 +372,9 @@ tests/guest/fpscalar.sh
 tests/guest/fullcache.c
 tests/guest/fullcache.sh
 tests/guest/generic-objc-destruct.swift
+tests/guest/genpair.sh
+tests/guest/genpair.swift
+tests/guest/genpair_lib.swift
 tests/guest/gss.c
 tests/guest/gss.sh
 tests/guest/heapblock.m

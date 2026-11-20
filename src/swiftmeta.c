@@ -478,9 +478,28 @@ enum { RQ_BASE, RQ_METHOD, RQ_INIT, RQ_GETTER, RQ_SETTER, RQ_READ, RQ_MODIFY, RQ
 static bool rq_async_bit(uint32_t f) { return f & 0x20; }
 static bool rq_function_kind(uint32_t f) { uint32_t k = f & 0xf; return k >= RQ_METHOD && k <= RQ_MODIFY; }
 
+/* For the Swift value audit (swiftvalue.c): the native descriptor a guest
+ * function implements, by its entry: a protocol requirement's (a witness)
+ * or the overridden method's (an override); bit 0 set for an override. */
+static hao_gmap callee_keys = HAO_GMAP_INIT(2, 1, 4, 14);
+static void callee_key_note(uint64_t guest, uint64_t descriptor, bool override)
+{
+    if (!guest || !descriptor || (descriptor & 1) || hao_image_for_addr(descriptor)) return;   /* native descriptors only */
+    bool fresh;
+    uint64_t *s = hao_gmap_claim1(&callee_keys, guest, &fresh);
+    if (s && fresh) { s[1] = descriptor | override; hao_gmap_publish1(&callee_keys, s, guest); }
+}
+uint64_t hao_swiftmeta_callee_descriptor(uint64_t guest, bool *override)
+{
+    const uint64_t *e = hao_gmap_get1(&callee_keys, guest);
+    *override = e && (e[1] & 1);
+    return e ? e[1] & ~1ull : 0;
+}
+
 /* a witness or default implementation for a requirement with flags f */
 static void requirement_bridge(struct ent *e, uint64_t proto, uint64_t req)
 {
+    callee_key_note(e->target, req, false);
     /* a Swift call map row of the requirement (swiftcall.c) comes first: its values are converted both ways */
     const struct hao_swiftcall *row = hao_swiftcall_requirement(req);
     if (row && !((uintptr_t)row & 7)) { e->bridge = hao_sig_thunk(e->target, (void *)((uintptr_t)row | HAO_CB_SWIFTCALL_TAG)); return; }
@@ -490,6 +509,14 @@ static void requirement_bridge(struct ent *e, uint64_t proto, uint64_t req)
     const hao_swift_result_context *context = hao_swift_result_bind(proto, req, sig, result);
     uintptr_t tag = context ? (uintptr_t)context | HAO_CB_SWIFT_RESULT_TAG : (uintptr_t)sig | HAO_CB_SWIFT_TAG;
     e->bridge = hao_sig_thunk(e->target, (void *)tag);
+}
+
+/* an override of a native method whose method descriptor has a Swift call map row (swiftcall.c): native
+ * calls of it (through the vtable) get the row's conversions, as a witness of a requirement does */
+static void override_bridge(struct ent *e, uint64_t method)
+{
+    const struct hao_swiftcall *row = hao_image_for_addr(method) ? NULL : hao_swiftcall_requirement(method);
+    if (row && !((uintptr_t)row & 7)) e->bridge = hao_sig_thunk(e->target, (void *)((uintptr_t)row | HAO_CB_SWIFTCALL_TAG));
 }
 
 static void requirement_impl(walk *w, uint64_t field, uint32_t f, int kind, uint64_t proto, uint64_t req)
@@ -734,8 +761,12 @@ static void type_descriptor(walk *w, uint64_t td)
             uint64_t m = rel_indirectable(w, p + 4, HAO_SK_OVERRIDE_METHOD);
             uint32_t mf;
             if (w->slot) continue;
-            if (m && rd32_any(m, &mf)) method_impl(w, p + 8, mf, K_OVERRIDE);
-            else bad_desc(p, m);
+            if (m && rd32_any(m, &mf)) {
+                size_t before = w->n;
+                method_impl(w, p + 8, mf, K_OVERRIDE);
+                if (!md_data(mf)) callee_key_note(rel_direct(w, p + 8), m, true);
+                if (w->n > before && !md_data(mf)) override_bridge(&w->e[before], m);
+            } else bad_desc(p, m);
         }
     }
     if (resilient_super && (extra & 1)) p += 4;                         /* ObjCResilientClassStubInfo */

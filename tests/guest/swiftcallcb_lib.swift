@@ -24,3 +24,12 @@ public protocol Source: AnyObject {
 @inline(never) public func drive(_ s: any Source, _ k: Int) -> String {
     "labels=" + fmt(s.labels(k)) + " show=" + s.show(make(k))
 }
+// The same through a class: native code calls a guest subclass's overrides through the vtable.
+open class Base {
+    public init() {}
+    open func labels(_ k: Int) -> Pair? { nil }
+    open func show(_ v: Pair?) -> String { "base" }
+}
+@inline(never) public func driveBase(_ b: Base, _ k: Int) -> String {
+    "labels=" + fmt(b.labels(k)) + " show=" + b.show(make(k))
+}

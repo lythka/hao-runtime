@@ -314,6 +314,30 @@ int main(int argc, char **argv)
     }
     printf("genres     %s  native generic results G? from demangled entities%s\n", gmis ? "FAIL" : "PASS", gfirst);
     if (gmis) fail = 1;
+    /* module-level generic functions: (generic parameters, formal parameters, indirect results ahead of them), or
+     * not bound (-1) */
+    static const struct { const char *d; int ngen, nformal, nres; } freefn[] = {
+        {"GPLib.emptyPair<A, B>(B, A.Type) -> (Swift.Optional<A>, B)", 2, 2, 2},
+        {"GPLib.fullPair<A, B>(A, B) -> (Swift.Optional<A>, B)", 2, 2, 2},
+        {"GPLib.emptyOne<A>(A.Type) -> Swift.Optional<A>", 1, 1, 0},
+        {"M.f<A>(inout A, A?) -> A", 1, 2, 0},
+        {"M.f<A where A: Swift.Equatable>(A) -> A?", -1, 0, 0},     /* witness tables after the metadata */
+        {"M.f<A>(Swift.Int) -> A?", -1, 0, 0},                      /* a concrete parameter's registers */
+        {"M.f<A>(A) -> (A, Swift.Int)", -1, 0, 0},                  /* a loadable element comes back in registers */
+        {"M.f<A>(A) throws -> A?", -1, 0, 0},
+        {"M.T.f<A>(A) -> A?", -1, 0, 0},                            /* a method */
+        {"closure #1 <A>(A) -> A? in M.f() -> ()", -1, 0, 0},
+    };
+    int fmis = 0;
+    char ffirst[200] = "";
+    for (size_t k = 0; k < sizeof freefn / sizeof *freefn; k++) {
+        unsigned g = 0, f = 0, r = 0;
+        bool ok = hao_swift_genres_free_demangled(freefn[k].d, &g, &f, &r);
+        if (ok != (freefn[k].ngen >= 0) || (ok && ((int)g != freefn[k].ngen || (int)f != freefn[k].nformal || (int)r != freefn[k].nres)))
+            if (!fmis++) snprintf(ffirst, sizeof ffirst, ": %s", freefn[k].d);
+    }
+    printf("genfree    %s  native generic module-level functions' registers from demangled entities%s\n", fmis ? "FAIL" : "PASS", ffirst);
+    if (fmis) fail = 1;
     char sw[512], cx[512];
     int s = hao_swift_demangle_selfcheck(sw, sizeof sw), x = hao_cxx_demangle_selfcheck(cx, sizeof cx);
     printf("demangle   %s  Swift %s%s, C++ %s%s\n", s == 0 && x == 0 ? "PASS" : "FAIL", s < 0 ? "no demangler" : s ? "differs: " : "as expected",

@@ -71,6 +71,7 @@ guest/svtuplexi	300	par	tests/guest/svtuplexi.sh
 guest/svnoncopy	300	par	tests/guest/svnoncopy.sh
 guest/swiftcallres	300	par	tests/guest/swiftcallres.sh
 guest/swiftcallcb	300	par	tests/guest/swiftcallcb.sh
+guest/genpair	300	par	tests/guest/genpair.sh
 guest/layoutxi	300	par	tests/guest/layoutxi.sh
 guest/sitepack	300	par	tests/guest/sitepack.sh
 guest/xpcrect	300	par	tests/guest/xpcrect.sh
