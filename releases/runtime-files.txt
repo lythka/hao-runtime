@@ -522,6 +522,10 @@ tests/guest/resultonlyalias.c
 tests/guest/resultonlycaller.S
 tests/guest/resultonlyhelper.S
 tests/guest/run-async.sh
+tests/guest/settledresult.sh
+tests/guest/settledresult.swift
+tests/guest/settledresult_lib.swift
+tests/guest/settledresult_thunks.c
 tests/guest/sighelper.c
 tests/guest/signals.c
 tests/guest/signals.sh

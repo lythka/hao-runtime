@@ -64,6 +64,7 @@ guest/svcarriers	300	par	tests/guest/svcarriers.sh
 guest/poddestroy	300	par	tests/guest/poddestroy.sh
 guest/carrierdestroy	300	par	tests/guest/carrierdestroy.sh
 guest/sealedstorage	300	par	tests/guest/sealedstorage.sh
+guest/settledresult	300	par	tests/guest/settledresult.sh
 guest/svfacts	300	par	tests/guest/svfacts.sh
 guest/svguest	300	par	tests/guest/svguest.sh
 guest/svmpenum	300	par	tests/guest/svmpenum.sh
