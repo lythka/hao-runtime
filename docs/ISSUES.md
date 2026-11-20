@@ -102,7 +102,9 @@ conversion in `svpolicy`, and certified conversion with facts in `svfacts`.
 Maps #87 remains open. After the initial successful starts with 495f03f,
 Maps on 26B131 faulted in the native SwiftUICore preference lookup in two
 of four launches on e4e6213. The crashing value and its connection to a
-declined walk are unknown. Device verification of this change is pending.
+declined walk are unknown. On the device (26B131, family A) this change does
+not fix #87: with it Maps still faulted at the same SwiftUICore site when
+opened from a `maps://?ll=` link.
 
 ## Copy-on-write defeatured processes run interpreted
 
