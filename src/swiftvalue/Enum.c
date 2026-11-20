@@ -26,6 +26,43 @@ static const char *relative(const char *p) {
 }
 static const witnesses *vwt(const void *type) { return ((const witnesses *const *)type)[-1]; }
 
+/* Case I's payload type of the enum TYPE: its field record's mangled NAME
+ * (LENGTH bytes) resolved in DESC's context with TYPE's generic arguments
+ * ARGS. Everything it depends on is fixed by TYPE's metadata, which is never
+ * freed, so a resolved payload is remembered per (TYPE, I): the walk asks for
+ * every case of every enum value at each native boundary, and demangling them
+ * each time was a quarter of a SwiftUI process's CPU when it opened a menu.
+ * A lookup that fails is not remembered (it may succeed once an image is
+ * loaded); a full table only stops remembering. The resolve runs with no
+ * lock held: it may run metadata accessors, guest code among them. */
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+#include "hao/gmap.h"
+#include <pthread.h>
+static hao_gmap payload_memo = HAO_GMAP_INIT(3, 2, 6, 18);   /* (enum metadata, case + 1) -> payload metadata */
+static pthread_mutex_t payload_lock = PTHREAD_MUTEX_INITIALIZER;
+void hao_sv_enum_fork_child(void) { payload_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER; }
+#endif
+static const void *payload_type(resolve_fn *resolve, const void *type, unsigned i, const char *name, size_t length,
+                                const char *desc, const void *const *args)
+{
+#ifdef HAO_SWIFT_VALUE_RUNTIME
+    uint64_t key[2] = {(uint64_t)(uintptr_t)type, (uint64_t)i + 1};
+    const uint64_t *e = hao_gmap_get(&payload_memo, key);
+    if (e) return (const void *)(uintptr_t)e[2];
+    const void *payload = resolve(name, length, desc, args);
+    if (!payload || !type) return payload;
+    hao_crit_enter(); pthread_mutex_lock(&payload_lock);
+    bool fresh;
+    uint64_t *slot = hao_gmap_claim(&payload_memo, key, &fresh);
+    if (slot && fresh) { slot[2] = (uint64_t)(uintptr_t)payload; hao_gmap_publish(&payload_memo, slot, key); }
+    pthread_mutex_unlock(&payload_lock); hao_crit_leave();
+    return payload;
+#else
+    (void)type; (void)i;
+    return resolve(name, length, desc, args);
+#endif
+}
+
 /* The direct cases of an enum with 2..64 payload cases and at most
  * MAX_EMPTY empty cases, whose field descriptor has kind FIELD_KIND: Enum
  * (2), as the runtime-laid-out enums below have, or MultiPayloadEnum (3), the
@@ -71,7 +108,7 @@ static int enum_cases(const void *type, unsigned field_kind, unsigned least, con
         /* Non-generic runtime-sized enums have no generic argument vector.
          * Their tuple payloads can still depend on resilient external types;
          * the caller's layout checks apply. */
-        payloads[i] = resolve(name, length, desc, (u32(desc) & 0x80) ? m + 2 : NULL);
+        payloads[i] = payload_type(resolve, type, i, name, length, desc, (u32(desc) & 0x80) ? m + 2 : NULL);
         if (!payloads[i]) return 0;
         uint64_t size = vwt(payloads[i])->size;
         if (size > largest) largest = size;
@@ -110,7 +147,7 @@ int enum_inline_payloads(const void *type, const void **payloads)
             else if (c >= 0x18 && c <= 0x1f) length += sizeof(void *);
         }
         if (length >= 4096) return -1;
-        const void *payload = resolve(name, length, desc, (u32(desc) & 0x80) ? m + 2 : NULL);
+        const void *payload = payload_type(resolve, type, i, name, length, desc, (u32(desc) & 0x80) ? m + 2 : NULL);
         if (!payload) return -1;
         payloads[n++] = payload;
     }

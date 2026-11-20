@@ -14,6 +14,8 @@ enum { HAO_SV_MAX_ENUM_PAYLOADS = 64 };
 /* The types of an enum's inline (not indirect) payload cases, at most
  * HAO_SV_MAX_ENUM_PAYLOADS: their number, or -1 when one does not resolve. */
 int enum_inline_payloads(const void *type, const void **payloads);
+/* After fork, in the child: the payload memo's writer lock (Enum.c payload_type). */
+void hao_sv_enum_fork_child(void);
 /* Returns the number of direct payload cases, or zero without a proof. */
 int enum_payloads(const void *type, const void **payloads, uint64_t *extent);
 /* Compiler-laid-out multi-payload enums the runtime tag witness does not
