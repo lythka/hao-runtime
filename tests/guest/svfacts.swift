@@ -23,8 +23,9 @@ func shown(_ v: C??) -> String {
         let nils: [C??] = [.none, .some(nil), .some(.some(C(3)))]
         let part = CommandLine.arguments.dropFirst().first ?? ""
         for v in nils {
+            if part == "report" && v == nil { continue }
             switch part {
-            case "same": let w = copied((InlineArray<2, Int>(repeating: 4), v)); print("inline", w.0[1], shown(w.1))
+            case "same", "report": let w = copied((InlineArray<2, Int>(repeating: 4), v)); print("inline", w.0[1], shown(w.1))
             case "refuse": let f = copied((Int?.some(5), v)); print("int?", f.0 ?? 0, shown(f.1))
             default: let a = copied((o, v)); print("object", a.0 === o, shown(a.1))
             }

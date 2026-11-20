@@ -59,6 +59,7 @@ guest/overlaynil	300	par	tests/guest/overlaynil.sh
 guest/viewselfnil	300	par	tests/guest/viewselfnil.sh
 guest/stripview	300	par	tests/guest/stripview.sh
 guest/viewbuffer	300	par	tests/guest/viewbuffer.sh
+guest/svreport	300	par	tests/guest/svreport.sh
 guest/svpolicy	300	par	tests/guest/svpolicy.sh
 guest/svcarriers	300	par	tests/guest/svcarriers.sh
 guest/poddestroy	300	par	tests/guest/poddestroy.sh

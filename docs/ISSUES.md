@@ -73,22 +73,36 @@ before, equal to native under JIT, `--interp`, AOT and strict after);
 extra tag byte only (fewer than 256 tags); a compiler-laid enum is still
 rule C's; the laptop run of Weather is not yet recorded here.
 
-## Report-only Swift values: patches from the walk after the report
+## Report-only Swift values preserve the sender's bytes
 
-63c872d moved the partial walk in certified_patches ahead of the report so
-that its flags could choose the refusal reason; the same walk's result also
-became the patches applied to a value passed as found. With that order a
-Catalyst SwiftUI app (Maps, 26B131) faulted on open in a native preference
-lookup during layout, right after the report-only survey of
-UIKit._Glass._GlassVariant values from a guest call of a native witness.
-The patches again come from a partial walk run after the report; the walk
-before it only supplies the flags. Measured on the laptop with the JIT-arena
-runtime: without the change Maps segfaulted at every start, with it Maps
-stayed up at every start (45 s each). Why the walk before the report finds
-other patches is not established: the trace line (HAO_VERBOSE, "nils to
-convert after the report") did not reach the unified log from the
-sandboxed app, whose post-start lines the fallback channel dropped. No host
-test reproduces the SwiftUI path.
+At e4e6213, a failed Swift value walk reported that the value would pass as
+found, then returned the partial walk's patches. Both the argument and the
+result paths could rewrite a nil in a value whose layout the walk had
+declined. Commit 495f03f collected the patches again after reporting.
+Report-only now uses the partial walk to classify the failure and returns
+zero patches. With `-v`, each decline names the walked type, reason and
+number of skipped patches. Strict mode still refuses. Experimental
+pass-through and survey mode use the partial patches collected before the
+report.
+
+In `guest/svreport`, a native generic function compares its argument bytes
+with a guest snapshot, including a live buffer pointer and count. On the
+base, an unresolved InlineArray tuple changed at offset 16 and a tuple with
+an unreflected value inside Any changed at offset 32. Each outer metatype
+nil arrived as 2 instead of 1. In the other direction, the guest received
+different bytes from those stored by the native function. After the fix all
+three comparisons match native arm64 under JIT, interpreter and AOT.
+
+Passing bytes through can still leave a native witness reading a guest nil
+as a live reference. The default-mode controls in `guest/svpolicy` and
+`guest/svfacts` now use values the native witness can copy as found. The
+outer reference nil still exercises strict refusal and experimental partial
+conversion in `svpolicy`, and certified conversion with facts in `svfacts`.
+
+Maps #87 remains open. After the initial successful starts with 495f03f,
+Maps on 26B131 faulted in the native SwiftUICore preference lookup in two
+of four launches on e4e6213. The crashing value and its connection to a
+declined walk are unknown. Device verification of this change is pending.
 
 ## Copy-on-write defeatured processes run interpreted
 

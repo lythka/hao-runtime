@@ -6,7 +6,7 @@
 # REFUSE row on Int?, which the rules certify) must be refused. Without the fixture "same" is refused. Under
 # HAO_SWIFT_VALUE_AUDIT=1 "refuse" goes on, equal to native, with one hao-swift-audit record naming the
 # refused type by its table key, its parent chain and the guest caller's image UUID and offset; a release
-# build (REL) ignores the audit and HAO_SWIFT_VALUE_STRICT, says so once, and reports "same" (report-only).
+# build (REL) ignores the audit and HAO_SWIFT_VALUE_STRICT, says so once, and reports the InlineArray (report-only).
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svfacts.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -62,12 +62,14 @@ if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/audit.out" && [ "$n" = 1
 echo "refuse   audit   rc=$rc $r ($n record)"
 [ $r = RECORDED ] || grep -a 'hao-swift-audit' "$OUT/audit.err" | head -3 | cut -c1-400 | sed 's/^/    /'
 # A release build (REL, default build/hao) ignores the audit and the strict switch, says so once, and
-# reports the uncertified value, which goes on equal to native.
+# reports the uncertified value. Use the inner nil and live reference here: copying
+# an outer nil as found would ask the native witness to retain the guest nil.
 REL=${REL:-$repo/build/hao}
 if [ -x "$REL" ]; then
-    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_AUDIT=1 "$REL" "$OUT/svfacts.arm64e" same >"$OUT/release.out" 2>"$OUT/release.err"; rc=$?
+    timeout -s KILL "$T" "$OUT/svfacts.arm64" report >"$OUT/native.report.out" || exit 1
+    timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_AUDIT=1 "$REL" "$OUT/svfacts.arm64e" report >"$OUT/release.out" 2>"$OUT/release.err"; rc=$?
     if [ $rc = 0 ] && [ "$(grep -c 'hao_swift_value_audit ignored: this libhao is not a survey build' "$OUT/release.err")" = 1 ] &&
-       cmp -s "$OUT/native.same.out" "$OUT/release.out" && ! grep -q 'Swift value boundary refused' "$OUT/release.err" &&
+       cmp -s "$OUT/native.report.out" "$OUT/release.out" && ! grep -q 'Swift value boundary refused' "$OUT/release.err" &&
        grep -q 'not certified, passed as found (report-only)' "$OUT/release.err"
     then r=IGNORED; else r=NOT-IGNORED; fail=1; fi
     echo "same     release audit rc=$rc $r"

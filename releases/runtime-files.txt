@@ -484,6 +484,9 @@ tests/guest/viewbuffer.swift
 tests/guest/svpolicy.sh
 tests/guest/svpolicy.swift
 tests/guest/svpolicy_lib.swift
+tests/guest/svreport.sh
+tests/guest/svreport.swift
+tests/guest/svreport_lib.swift
 tests/guest/svcarriers.sh
 tests/guest/svcarriers.swift
 tests/guest/svfacts.facts

@@ -13,8 +13,8 @@
 # box of Any holding guest-written C?? nils, destroyed by the runtime (dropped, after a copy of the array value,
 # assigned over): equal native arm64, converted at destruction. "frozen": a native frozen enum the guest built is
 # examined (its case read, named under HAO_BRIDGE_CHECK), equal native arm64. The refusals run under the test
-# switch HAO_SWIFT_VALUE_STRICT=1; by default "refuse" is reported (report-only) and goes on, equal native,
-# and "boxed", "task", "boxmix" and "objcbad" (known wrong: native code would misread them) are still refused.
+# switch HAO_SWIFT_VALUE_STRICT=1. By default a decline is reported and the value goes on as found.
+# Native witnesses can misread an outer nil that required conversion.
 #   OUT=dir HAO=/abs/build-ts/hao [T=60] tests/guest/svpolicy.sh
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -98,15 +98,14 @@ echo "frozen jit rc=$rc $r"
 timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_PASSTHROUGH=1 "$HAO" "$OUT/svpolicy.arm64e" refuse \
     >"$OUT/passthrough.out" 2>"$OUT/passthrough.err"; rc=$?
 if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/passthrough.out" &&
-   grep -q 'passed through unpatched (HAO_SWIFT_VALUE_PASSTHROUGH)' "$OUT/passthrough.err"; then r=SAME; else r=DIFF; fail=1; fi
+   grep -q 'partial conversion allowed (HAO_SWIFT_VALUE_PASSTHROUGH)' "$OUT/passthrough.err"; then r=SAME; else r=DIFF; fail=1; fi
 echo "passthrough rc=$rc $r"
 [ $r = SAME ] || { diff "$OUT/native.refuse.out" "$OUT/passthrough.out" | sed 's/^/    /' | head -8; tail -3 "$OUT/passthrough.err" | sed 's/^/    /'; }
-# The default (v0.0.1): an uncertified value is reported once and goes on, equal native; a known-wrong one
-# (a guest-encoded nil in a shared box, also beside a part with no rule; a child task's C?? result; an ObjC
-# reference word that is no object) is still refused.
-timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO" "$OUT/svpolicy.arm64e" refuse \
+# An InlineArray beside a live reference can be copied as found. The outer nil in "refuse"
+# needs conversion for native ownership and is exercised above under strict and pass-through.
+timeout -s KILL "$T" env HAO_NO_AOT=1 HAO_SWIFT_VALUE_STRICT=0 "$HAO" "$OUT/svpolicy.arm64e" gate \
     >"$OUT/report.out" 2>"$OUT/report.err"; rc=$?
-if [ $rc = 0 ] && cmp -s "$OUT/native.refuse.out" "$OUT/report.out" && ! grep -q 'boundary refused' "$OUT/report.err" &&
+if [ $rc = 0 ] && cmp -s "$OUT/native.gate.out" "$OUT/report.out" && ! grep -q 'boundary refused' "$OUT/report.err" &&
    [ "$(grep -c 'not certified, passed as found (report-only): unresolved active representation' "$OUT/report.err")" = 1 ] &&
    grep -q '^hao-swift-audit .*"reason":"unresolved active representation' "$OUT/report.err"; then r=SAME; else r=DIFF; fail=1; fi
 echo "report-only rc=$rc $r"
