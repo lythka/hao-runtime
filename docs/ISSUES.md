@@ -1627,6 +1627,26 @@ Limits:
   generator leaves this initializer UNKNOWN, because its arm64e code reads
   the four `Int32` with one `ldr q0`.
 
+
+## Packed stack arguments of a long call
+
+The call-site layout (swiftcc.c `hao_swift_sitepack`) had four bounds that a
+call with many arguments passes: a window of 64 instructions before the call,
+32 stack arguments, 40 x86_64 callee slots (`hao_x86_stackargs`) and 8-bit
+offsets. A private framework's struct initializer of 35 arguments (Strings,
+eleven Bools packed at `[sp+136]`..`[sp+146]`, indirect `URL?`/`Date?`
+addresses, `Decimal?`, `Float?`) takes 42 stack arguments up to `[sp+256]`,
+stored over 104 instructions; its callee reads 44 slots. The site was refused
+and got the word copy, so every argument after the Bools came from the wrong
+word, and the callee copied an indirect `Date?` from address 0 (SIGSEGV in
+`memmove` under a collection view's cell creation). Now the window is 128
+instructions, a site layout has up to 64 arguments (`HAO_SITEPACK_MAX`) with
+16-bit offsets, and the callee scan counts up to 72 slots. Interface-unit
+records (kind K) keep their 32-argument bound. `guest/sitepack` has a new
+case `wide` of that shape: before, JIT, `--interp` and AOT faulted (rc 139)
+in `memmove`; now all three print what native arm64 prints. Limits: a call
+sequence over 128 instructions, or more than 64 stack arguments, still gets
+the word copy.
 ## Guest calls of a frozen native struct's own value witnesses
 
 An optimized guest build that inlines `View.overlay(alignment:content:)`

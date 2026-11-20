@@ -551,9 +551,10 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
 /* Packed stack arguments of a native Swift function without a layout record
  * (swiftcc.c; plan kind HAO_KIND_SITEPACK): the layout the guest call site
  * returning to c->x[30] stored for its call of native, as hao_ifunit_stackpack
- * gives one (at most HAO_IF_MAX_PACK entries), or 0 when the word copy is
- * right or unproven. */
-int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width);
+ * gives one (at most HAO_SITEPACK_MAX entries, offsets past 255), or 0 when the
+ * word copy is right or unproven. */
+#define HAO_SITEPACK_MAX 64
+int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint16_t *off, uint8_t *width);
 void hao_swift_note_dispatch_thunk(const char *gname, uint64_t native);
 int hao_swift_callee_stack_slots(uint64_t native);   /* SysV stack arguments past x6, x7 its code reads; -1 not shown */
 /* interpose.c: a page the guest mapped or made executable itself (mmap,

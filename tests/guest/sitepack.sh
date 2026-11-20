@@ -10,7 +10,8 @@
 #    merges into one strh or str w, and method (
 #    an open class's method through its dispatch thunk, which reads no stack itself; the
 #    implementation its method descriptor names does), with nil String? and [String]? arguments the compiler
-#    stores from a zeroed SIMD register (`stp q0, q0`, `stur q0`) among the merged Bool? stores.
+#    stores from a zeroed SIMD register (`stp q0, q0`, `stur q0`) among the merged Bool? stores, and
+#    wide (42 stack arguments, offsets past 255, a call sequence over 64 instructions long).
 #  - tests/guest/stackpack.swift, helper stackpackhelper.swift (no library evolution): opts and mgr
 #    (three constant Bools, two of them merged), mixed (Int16/Bool/Int32/UInt8/Int64/Bool), box (a
 #    class method; its merged Bools end at a multiple of 8).
@@ -117,6 +118,7 @@ sitepack pair0 take
 sitepack pair16 take
 sitepack quad take
 sitepack method take
+sitepack wide take
 stackpack mixed take
 stackpack opts take
 stackpack mgr take

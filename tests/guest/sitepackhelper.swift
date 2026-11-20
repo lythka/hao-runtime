@@ -137,3 +137,56 @@ open class Offers {
         return "\(x0 + x7) a=\(s(a)) p=\(p ?? "nil") q=\(q ?? "nil") b=\(s(b)) r=\(r?.joined() ?? "nil") c=\(s(c)) u=\(u ?? "nil") d=\(s(d)) e=\(s(e)) n=\(n)"
     }
 }
+
+// An initializer with more than 32 stack arguments past x7, packed Bools in the middle and argument
+// offsets past 255: Strings, Optionals of resilient values passed indirectly (URL?, Date?), Double?,
+// Int64?, Decimal? and Float? (an Int32 and its tag merged into one 8-byte word), eleven Bools. The
+// caller's call sequence is longer than 64 instructions and the x86_64 callee reads 44 stack slots.
+public struct Record {
+    public let logID: String, groups: [String]?, id: String, sortTitle: String, storeID: String?, title: String
+    public let url: URL?
+    public let author: String
+    public let ratio: Double?
+    public let coverURL: String?
+    public let finished: Date?
+    public let summary: String?, path: String?
+    public let kind: Kind?
+    public let genres: [String]?
+    public let b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool, b8: Bool, b9: Bool, b10: Bool
+    public let language: String?
+    public let engaged: Date?
+    public let rating: Int64?
+    public let progress: Double
+    public let released: Date?
+    public let label: String?
+    public let number: Decimal?
+    public let sortKey: Int?
+    public let version: Float?
+
+    @inline(never)
+    public init(logID: String, groups: [String]?, id: String, sortTitle: String, storeID: String?, title: String,
+                url: URL?, author: String, ratio: Double?, coverURL: String?, finished: Date?, summary: String?,
+                path: String?, kind: Kind?, genres: [String]?, b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool,
+                b5: Bool, b6: Bool, b7: Bool, b8: Bool, b9: Bool, b10: Bool, language: String?, engaged: Date?,
+                rating: Int64?, progress: Double, released: Date?, label: String?, number: Decimal?, sortKey: Int?,
+                version: Float?) {
+        self.logID = logID; self.groups = groups; self.id = id; self.sortTitle = sortTitle; self.storeID = storeID
+        self.title = title; self.url = url; self.author = author; self.ratio = ratio; self.coverURL = coverURL
+        self.finished = finished; self.summary = summary; self.path = path; self.kind = kind; self.genres = genres
+        self.b0 = b0; self.b1 = b1; self.b2 = b2; self.b3 = b3; self.b4 = b4; self.b5 = b5; self.b6 = b6
+        self.b7 = b7; self.b8 = b8; self.b9 = b9; self.b10 = b10; self.language = language; self.engaged = engaged
+        self.rating = rating; self.progress = progress; self.released = released; self.label = label
+        self.number = number; self.sortKey = sortKey; self.version = version
+    }
+}
+
+@inline(never)
+public func describe(_ r: Record) -> String {
+    func o<T>(_ v: T?) -> String { v.map { "\($0)" } ?? "nil" }
+    let d = { (v: Date?) in v.map { "\($0.timeIntervalSince1970)" } ?? "nil" }
+    let bs = [r.b0, r.b1, r.b2, r.b3, r.b4, r.b5, r.b6, r.b7, r.b8, r.b9, r.b10].map { $0 ? "1" : "0" }.joined()
+    return "\(r.logID) \(o(r.groups)) \(r.id) \(r.sortTitle) \(o(r.storeID)) \(r.title) \(o(r.url)) \(r.author) " +
+        "\(o(r.ratio)) \(o(r.coverURL)) \(d(r.finished)) \(o(r.summary)) \(o(r.path)) \(o(r.kind)) \(o(r.genres)) " +
+        "b=\(bs) \(o(r.language)) \(d(r.engaged)) \(o(r.rating)) \(r.progress) \(d(r.released)) \(o(r.label)) " +
+        "\(o(r.number)) \(o(r.sortKey)) \(o(r.version))"
+}

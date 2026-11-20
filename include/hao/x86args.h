@@ -32,7 +32,7 @@ typedef struct {
  * know (EVEX, 3DNow!, invalid in 64-bit mode) or one cut off. */
 int hao_x86_decode(const uint8_t *p, size_t avail, hao_x86_insn *o);
 
-#define HAO_X86_MAX_SLOTS 40
+#define HAO_X86_MAX_SLOTS 72
 #define HAO_X86_WIDTH_UNKNOWN 0xff
 typedef struct {
     int nslots;                          /* highest SysV stack-argument slot accessed, + 1 */
