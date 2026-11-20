@@ -539,15 +539,19 @@ static bool native_swift_symbol(uint64_t pc)
  * (hao_thunk_native_stack_swift): the 8-byte ones of a packed layout (an interface unit's or the call
  * site's, as native_call_stackpack places them), else the words the word copy passes, as many as the
  * callee's code reads. A callee whose code does not show its stack arguments has none rewritten. */
-static void swift_stack_args(hao_thread *t, uint64_t pc, const hao_plan *p, unsigned mask)
+__attribute__((noinline)) static void swift_stack_args(hao_thread *t, uint64_t pc, const hao_plan *p, unsigned mask)
 {
     hao_cpu *c = &t->cpu;
-    uint8_t o[HAO_IF_MAX_PACK], w[HAO_IF_MAX_PACK];
-    uint16_t off[HAO_IF_MAX_PACK];
+    uint8_t o[HAO_IF_MAX_PACK], w[HAO_SITEPACK_MAX];
+    uint16_t off[HAO_SITEPACK_MAX];
+    _Static_assert(HAO_IF_MAX_PACK <= HAO_SITEPACK_MAX, "a unit's layout fits");
     char kind = p ? p->kind : 0;
-    int n = kind == HAO_IF_KIND_STACKPACK ? hao_ifunit_stackpack(p->enc, o, w) : kind == HAO_KIND_SITEPACK ? hao_swift_sitepack(c, pc, o, w) : 0;
+    int n = 0;
+    if (kind == HAO_KIND_SITEPACK) n = hao_swift_sitepack(c, pc, off, w);
+    else if (kind == HAO_IF_KIND_STACKPACK && (n = hao_ifunit_stackpack(p->enc, o, w)) > 0)
+        for (int k = 0; k < n; k++) off[k] = o[k];
     if (n > 0) {
-        for (int k = 0; k < n; k++) off[k] = w[k] == 8 ? o[k] : 1;   /* 1: not a word, skipped */
+        for (int k = 0; k < n; k++) if (w[k] != 8) off[k] = 1;   /* 1: not a word, skipped */
     } else {
         n = hao_swift_callee_stack_slots(pc);
         if (n > HAO_IF_MAX_PACK) n = HAO_IF_MAX_PACK;
