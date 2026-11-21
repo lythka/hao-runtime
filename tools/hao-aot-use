@@ -18,7 +18,7 @@ cache served), then by path. --base LIST adds a list's entries after them ('#' c
 tools/hao-image-payload --aot-list takes). With --root, the image's System root, an entry is kept only when it
 is a file under ROOT with an arm64 or arm64e slice: arm64e shared-cache images (no file of their own) and native
 programs are reported, not listed. The output (-o, default stdout) is what hao-image-payload --aot-list takes.
---report writes per image: runs, runs as the main program, what AOT found (off, aot, none, rejected, unfit),
+--report writes per image: runs, runs as the main program, what AOT found (off, aot, none, rejected, unfit, mapped),
 translated blocks, the LC_UUIDs seen, and whether it was listed and why not.
 
 The records only say what ran; the caches are still made by hao --aot from ROOT's files, bound to their cdhash
@@ -35,7 +35,7 @@ import hao_fat  # noqa: E402
 import hao_root  # noqa: E402
 
 TAG = "hao-use 1 "
-STATES = ("off", "aot", "none", "rejected", "unfit")
+STATES = ("off", "aot", "none", "rejected", "unfit", "mapped")
 
 
 def parse_records(lines):

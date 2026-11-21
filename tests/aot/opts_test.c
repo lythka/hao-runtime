@@ -133,6 +133,17 @@ int main(void)
             CHECK(o.cpu_clear == (hao_test_switches ? cf[k].clear : 0), "%s clears %#llx", cf[k].v, (unsigned long long)o.cpu_clear);
         }
     }
+    {
+        char *mapped[] = {"HAO_AOT_MAPPED=1", NULL};
+        for (int t = HAO_ENV_OPEN; t <= HAO_ENV_SETUGID; t++) {
+            hao_opts_parse(&o, mapped, NULL, NULL, false, t);
+#if defined(HAO_TEST_SWITCHES) || defined(HAO_MAPPED_AOT_TRIAL)
+            CHECK(o.aot_mapped == (t == HAO_ENV_OPEN), "mapped trial is open tier only (%d)", t);
+#else
+            CHECK(!o.aot_mapped, "stock runtime ignores mapped trials (%d)", t);
+#endif
+        }
+    }
     /* switches that make a correct program incorrect or take a signal are not "off switches": open tier only */
     {
         char *eb[] = {"HAO_NO_VARSNIFF=1", "HAO_NO_THUNKS=1", "HAO_NATIVE_LIBCXX=1", "HAO_NATIVE_APP_LIBS=1", "HAO_SIGRETURN_KERNEL=1", "HAO_NO_PROBE=1",

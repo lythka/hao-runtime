@@ -194,7 +194,7 @@ static const char *const diag_switches[] = {"HAO_VERBOSE", "HAO_CRASH_TRACE", "H
  * limit with a chosen one, or make a diagnostic fatal. Read only by a build with
  * HAO_TEST_SWITCHES defined, and there only in an OPEN process. */
 static const char *const test_switches[] = {"HAO_LIBVAL_USER", "HAO_SIGRETURN_USER", "HAO_AOT_LIMIT_KB", "HAO_BRIDGE_ABORT",
-                                            "HAO_NO_JIT_MEMORY", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_CPU_FEATURES",
+                                            "HAO_NO_JIT_MEMORY", "HAO_AOT_MAPPED", "HAO_CODE_ALIAS", "HAO_AOT_LIST_DIR", "HAO_CPU_FEATURES",
                                             "HAO_AOT_FREE_MB", "HAO_CRASH", "HAO_SWIFT_WALK_FACTS", "HAO_SWIFT_GUEST_FACTS",
                                             "HAO_SWIFT_VALUE_STRICT", "HAO_SWIFT_VALUE_LIST", NULL};
 
@@ -236,6 +236,9 @@ bool hao_env_test_switch(const char *name) { return listed(test_switches, name);
  * set-ID program by orders of magnitude, which widens every race in it. */
 bool hao_env_switch_allowed(const char *name, int tier)
 {
+#ifdef HAO_MAPPED_AOT_TRIAL
+    if (!strcmp(name, "HAO_AOT_MAPPED")) return tier == HAO_ENV_OPEN;
+#endif
     if (!hao_test_switches && listed(test_switches, name)) return false;
     if (!hao_survey_build && !hao_test_switches && !strcmp(name, "HAO_SWIFT_VALUE_AUDIT")) return false;
     if (tier <= HAO_ENV_OPEN) return true;

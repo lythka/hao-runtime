@@ -391,6 +391,42 @@ safe to show to anyone who can read the log. It is written once per kind and
 key in a process (a fixed table), so a refusal on a hot path cannot flood the
 log. It is built in fixed buffers without allocation, so it can be written
 from a signal handler.
+## File-backed AOT trial
+
+A stock build never installs v9 executable mappings. An image built with
+MAPPED_AOT_TRIAL=1 can try them when an ordinary process sets HAO_AOT_MAPPED=1. Guest images must be
+signed, bound and initializing. Admitting a cache pins that image until
+process exit because older translation tables and guest callbacks retain
+entry addresses. A process that needs to run without direct chaining uses
+the previous backend.
+
+The trial opens a UUID.aot9 container and its independently installed
+32-byte SHA-256 pin from /usr/lib/hao/aot through the system cache directory
+rules. Both descriptors must pass the fixed boot-volume rule used by the
+guest loader. An authorized image builder must authenticate the payload
+manifest that covers both files. A colocated digest on a writable volume
+cannot establish trust. Only a separate TEST_SWITCHES build recognizes a dedicated test launcher with a table of
+guest UUIDs and fixture digests in its signed __TEXT,__hao_aot_trial
+section for a controlled temporary test directory in an ordinary process
+without guest library validation. Only the test harness uses this storage
+exception. This fixture assumes exclusive control of its inputs during the
+test and cannot establish target security policy.
+
+The runtime checks the full artifact digest, ARM guest slice identity,
+libhao UUID, CPU profile, Mach-O command whitelist, code and index bounds
+and every native CodeDirectory page hash. It requires the matching hash and
+type from F_ADDFILESIGS_INFO and success from F_CHECK_LV on that same open
+descriptor. Any failure abandons the candidate. Only checked instruction
+pages receive RX access. Current and maximum protections on the private
+guest-base page and file metadata are R. Authenticated relative branches
+are final. Other exits return to dispatch. Old caches remain independent
+candidates. The artifact is generated offline with hao --aot --mapped-input
+--cache DIR FILE, then signed with tools/hao-aot-mapped. The optional
+hao-image-payload --aot-mapped-trial builds the isolated trial runtime
+and emits both v8 and v9 with that same generator UUID for each eligible
+guest and records both companions in the payload manifest. Separate release
+approval remains necessary before distributing mapped-cache images.
+
 ## AOT caches
 
 An AOT cache (`<LC_UUID>.aot`, written by `hao --aot [--cache DIR] FILE...`) is x86_64 code that

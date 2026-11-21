@@ -1,5 +1,79 @@
 # Runtime issues and measured scope
 
+## Combined mapped and copied AOT
+
+The combined native-ARM differential runs a mapped caller and callback with a
+v8 dylib: 8,012 copied blocks in 13 bursts, 57 write aliases and four mapped
+lookups. Alias mode gives the same output and counts. Disabling or rejecting
+mapped admission independently loads both v8 caches (8,018 blocks, 14 bursts,
+59 aliases); absent caches use JIT. Interpreter output also matches native ARM.
+Mapped text stays outside registered writable arenas; any alias request there
+is refused. Separate mapped-only and VM admission tests cover zero copy aliases
+and maximum RX protection; the mixed test also checks unchanged backing bytes.
+The integrated `make test` and full `make check` passed, including the sanitizer
+oracle, mapped regressions and 153 guest-suite passes with three expected skips.
+Packaging tests passed; stock/trial fixture denial, trial options and mutually
+exclusive build modes passed. These are constructed host fixtures, not Intel
+application or release acceptance.
+
+## Lazy AOT write batching (interim)
+
+Lazy cache installation formerly opened a writable alias for each copied block,
+then another for each cut branch that became chainable. Installation now copies
+whole blocks in a 64 KB stretch through one alias. A requested block crossing
+the stretch boundary extends that write to its end; speculative copying adds at
+most 64 KB beyond the required block. Blocks publish their filled flags only
+after the alias closes. Existing W^X mappings and fork freezing are unchanged.
+
+When a cut AOT branch executes, one alias repairs ready cut links in its 64 KB
+source stretch. The existing sorted link table supplies the work: no pending
+queue, reverse index, cache-format change or persistent metadata. The scan holds
+jit_lock and changes only aligned rel32 fields with atomic stores, pointing to
+already filled targets. Unaligned and non-cache exits retain the existing path.
+The ordinary validator already requires increasing code offsets; batching adds
+no new restriction that would force a valid cache into a full install.
+
+Before integration, the native-arm64 comparison in guest/aotburst measured 2,006 copied blocks in
+5 bursts with 22 write aliases, versus 2,026 aliases on the previous runtime.
+Its distant-target chaining case measured 8,012 blocks in 13 bursts with 57
+aliases, versus 12,052 on the previous runtime and 3,428 with copy-only
+batching. A four-thread variant also matches native ARM (8,030 copied blocks,
+18 bursts, 62 aliases in the focused run).
+The test counts all executable write aliases, including other startup writes;
+each alias entails two mach_vm_map calls. Full `make check` passed, including
+`make test`, the sanitizer oracle and 158 guest-suite passes with three expected
+skips. The memory-limited AOT footprint case passed at 2,535 KB overhead against
+its 3,072 KB budget.
+
+Lazy-copy batching remains the fallback when mapped AOT is unavailable. Sparse execution can copy unused neighbors,
+and links whose targets become ready at different times can require repeated
+scans of a stretch. Host counts do not establish Intel launch latency. Application
+and release-image acceptance, including cold Maps launch timing, remain untested.
+## File-backed AOT text trial
+
+On an Apple-silicon development host, an x86_64 Rosetta process executed the
+same signed ARM guest as native ARM, interpreter, JIT and v8 copy. For the
+three-block hello fixture v9 dispatched twice through the translation table,
+with zero lazy-copy installations, JIT blocks and W^X writes. A guest executable
+and its guest dylib used separate mappings across an indirect callback. With a
+1 MiB arena exhausted by an uncached dylib, parent and forked child still ran
+mapped code and gave the native output. The parent recorded seven mapped
+lookups after exhaustion. A 249 KiB cache faulted at a load in a block with
+live NZCV. Its guest signal handler recovered the native instruction PC and
+flags through one mapped reverse lookup. These counts apply to the constructed fixtures.
+
+The mapped loader is available only to open-tier processes in a trial or
+test build with HAO_AOT_MAPPED=1. Unset it to restore the existing path. Production keeps the
+v8/JIT/interpretation fallback. The signed test launcher pins controlled
+fixtures explicitly. A target trial instead needs an approved offline payload
+and fixed boot-volume backing for both the file and its digest. Intel-kernel
+page-fault enforcement, authenticated boot-volume provenance, deployment
+under release CSR/AMFI and library validation, footprint under jetsam, and
+Maps/ControlCenter/desktop timings have not been established. Guarded,
+identity-bearing and set-ID hosts cannot enable this trial. The Apple GUI
+benchmarks require separate policy and identity-tier qualification. Runtime-created
+caches and mutable stores have no mapped-execution approval.
+
 ## Report-only for every uncertified and known-wrong Swift value
 
 Since 75d8039 an uncertified value was refused unless its types were on a

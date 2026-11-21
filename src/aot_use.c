@@ -11,7 +11,7 @@
  *   hao-use 1 RUN jit BLOCKS UUID PATH          per image with translated blocks
  *
  * RUN is a random 64-bit id of the process run (a fork child takes a new one),
- * STATE what hao_aot_load found (off, aot, none, rejected, unfit: hao/aot.h
+ * STATE what hao_aot_load found (off, aot, none, rejected, unfit, mapped: hao/aot.h
  * HAO_AOT_STATE_*), BLOCKS the image's blocks the JIT translated so far
  * (cumulative: the last record of a run counts). jit records are written at
  * exit, and by one thread of hao's 60 seconds after the start and then every
@@ -39,7 +39,7 @@ static uint64_t use_run;
 static uint64_t use_reported;   /* sum of jit_blocks at the last report */
 static int use_busy;            /* one report at a time (the thread and exit) */
 
-static const char *const state_names[] = {"off", "aot", "none", "rejected", "unfit"};
+static const char *const state_names[] = {"off", "aot", "none", "rejected", "unfit", "mapped"};
 
 static void use_emit(const char *line)
 {

@@ -310,6 +310,7 @@ tests/guest/datacall.sh
 tests/guest/datacall_lib.c
 tests/guest/diaglog.c
 tests/guest/aotdefault.sh
+tests/guest/aotburst.sh
 tests/guest/dlrpath.c
 tests/guest/dlrpath.sh
 tests/guest/dlrpathlib.c
@@ -810,3 +811,13 @@ tests/host/jit-arena.c
 tests/host/jit-arena.sh
 tests/host/jit-arena-map.c
 tests/host/wx-cow.sh
+include/hao/aot_mapped.h
+include/hao/aot_mapped_vm.h
+src/aot_mapped.c
+src/aot_mapped_vm.c
+tests/aot/mapped.sh
+tests/aot/mapped_policy.c
+tests/aot/mapped_admission.c
+tests/aot/mapped_admission.sh
+tools/hao-aot-mapped
+tests/aot/combined.sh
