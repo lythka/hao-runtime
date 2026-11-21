@@ -61,6 +61,9 @@ ln -f "$R/usr/bin/prog" "$R/usr/sbin/prog2"
 U1=$(uuid_of "$R/sbin/launchd") U2=$(uuid_of "$R/usr/libexec/xpcproxy") U3=$(uuid_of "$R/usr/bin/prog")
 [ ${#U1} = 32 ] && [ ${#U2} = 32 ] && [ ${#U3} = 32 ] && [ "$U1" != "$U2" ] && [ "$U2" != "$U3" ] && [ "$U1" != "$U3" ] \
     || { echo "aotpayload: test programs need three distinct LC_UUIDs ($U1 $U2 $U3)" >&2; exit 2; }
+# Snapshot the same stock generator the payload builder will package, even
+# when a previous test run populated build/ under inherited make flags.
+make -s -C "$repo" B=build TEST_SWITCHES= SURVEY= MAPPED_AOT_TRIAL= all >/dev/null || exit 2
 GEN=$(otool -l "$B/libhao.dylib" | awk '/cmd LC_UUID/ {getline; getline; print tolower($2); exit}' | tr -d -)
 printf '%s\n' "$R/sbin/launchd" "$R/usr/libexec/xpcproxy" "$R/usr/bin/prog" "$R/usr/sbin/prog2" >"$OUT/list"
 
@@ -253,5 +256,21 @@ ln -sf /bin/ls "$R/usr/bin/escape"; printf 'usr/bin/escape\n' >>"$OUT/alist5"
 "$repo/tools/hao-image-payload" --no-embed --aot-list "$OUT/alist5" "$OUT/pay5" "$R" >"$OUT/e5.log" 2>&1; rc=$?
 [ $rc = 1 ] && grep -q "not a file under ROOT" "$OUT/e5.log" && pass "E paths that leave ROOT (.., a symlink out) fail the build (rc 1)" || bad "E outside ROOT rc $rc: $(tail -3 "$OUT/e5.log")"
 rm -f "$R/usr/bin/escape" "$R/usr/bin/script"
+if "$repo/tools/hao-image-payload" --no-embed --aot-list "$OUT/alist" --aot-mapped-trial "$OUT/pay-mapped" "$R" >"$OUT/mapped.log" 2>&1 &&
+    python3 - "$OUT/pay-mapped" <<'PYTHON'
+from pathlib import Path
+import hashlib, json, sys
+p = Path(sys.argv[1])
+summary = json.loads((p / "aot.json").read_text())["summary"]
+assert json.loads((p / "build.json").read_text())["build_dir"] == "build-mapped-trial"
+assert summary["mapped_trial_format"] == 9 and summary["mapped_trial_caches"] == summary["caches"] == 2
+manifest = json.loads((p / "payload-manifest.json").read_text())["files"]
+for f in (p / "root/usr/lib/hao/aot").glob("*.aot9"):
+    pin = f.with_suffix(".aot9.sha256")
+    assert hashlib.sha256(f.read_bytes()).digest() == pin.read_bytes()
+    assert manifest[str(f.relative_to(p))] == pin.read_bytes().hex()
+    assert manifest[str(pin.relative_to(p))] == hashlib.sha256(pin.read_bytes()).hexdigest()
+PYTHON
+then pass "mapped trial: two v9 companions and independent payload manifest pins"; else bad "mapped trial: $(tail -3 "$OUT/mapped.log")"; fi
 echo "aotpayload: $fails failed"
 exit $((fails != 0))

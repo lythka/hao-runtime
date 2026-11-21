@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Finalize an explicitly generated v9 input in an offline payload staging directory.
+
+A disrupted publication can leave the previous digest, which safely rejects
+the new file. The image builder consumes the completed pair in its manifest.
+"""
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import tempfile
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("input", type=Path, help="UUID.aot9.unsigned from hao --aot --mapped-input")
+args = parser.parse_args()
+src = args.input.resolve()
+stem = src.name.removesuffix(".aot9.unsigned")
+if src.name != stem + ".aot9.unsigned" or len(stem) != 32 or any(c not in "0123456789abcdef" for c in stem):
+    parser.error("expected a lower-case guest UUID and .aot9.unsigned")
+with src.open("rb") as f:
+    header = f.read(584)
+if len(header) != 584 or struct.unpack_from("<8I", header) != (0xfeedfacf, 0x01000007, 3, 8, 3, 216, 0, 0):
+    parser.error("expected an unsigned thin v9 Mach-O bundle")
+magic, version, length = struct.unpack_from("<8sII", header, 512)
+if magic != b"HAOMAP9\0" or version != 9 or length != 72:
+    parser.error("input lacks a v9 mapped header")
+with tempfile.TemporaryDirectory(dir=src.parent) as temp:
+    out = Path(temp) / (stem + ".aot9")
+    pin = Path(temp) / (out.name + ".sha256")
+    shutil.copyfile(src, out)
+    subprocess.run(["/usr/bin/codesign", "-f", "-s", "-", "-i", "org.hao.aot." + stem, out], check=True)
+    subprocess.run(["/usr/bin/codesign", "--verify", "--strict", out], check=True)
+    digest = hashlib.sha256()
+    with out.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    pin.write_bytes(digest.digest())
+    os.chmod(out, 0o644)
+    os.chmod(pin, 0o644)
+    os.replace(out, src.parent / out.name)
+    os.replace(pin, src.parent / pin.name)

@@ -791,6 +791,8 @@ void hao_image_register(hao_image *img)
  * reach whatever would be mapped there next. */
 static void release_image(hao_image *img, bool keep_range)
 {
+    /* Published translations and guest-PC entries survive for the process lifetime. */
+    if (__atomic_load_n(&img->aot_mapped, __ATOMIC_ACQUIRE)) return;
     bool listed = false;
     /* a lookup that still holds img (the hint, or its walk of the list)
      * finds no code ranges and skips it; the struct stays */
@@ -1020,9 +1022,8 @@ bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_n
     return uid == 0 && !(mode & (S_IWGRP | S_IWOTH)) && (mnt_flags & system) == system && acl_none;
 }
 
-static bool file_fixed(int fd, const struct stat *st)
+bool hao_file_fixed(int fd, const struct stat *st)
 {
-    if (hao_slice_test_path) return hao_slice_test_path == 1;
     struct statfs fs;
     if (fstatfs(fd, &fs) != 0 || !hao_slice_fixed_rule(st->st_uid, st->st_mode, fs.f_flags, true)) return false;
     errno = 0;
@@ -1066,7 +1067,7 @@ hao_slice *hao_slice_open(int fd, char *why, size_t n)
     if (sl->size < sizeof mh) SERR("bad mach header");
     if (sl->size > MAX_SLICE) SERR("arm64 slice of %#llx bytes", (unsigned long long)sl->size);
     size_t len = (size_t)((sl->size + PAGE - 1) & ~(PAGE - 1));
-    if (file_fixed(fd, &st)) {
+    if (hao_slice_test_path ? hao_slice_test_path == 1 : hao_file_fixed(fd, &st)) {
         void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, (off_t)sl->off);
         if (m == MAP_FAILED) SERR("map the slice: %s", strerror(errno));
         sl->bytes = m;

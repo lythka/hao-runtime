@@ -105,6 +105,7 @@ Measured on an Apple silicon development host (macOS 27.2, 16 cores) with
 | guest/dylibs | PASS | 4 | |
 | guest/eh | PASS | 19 | |
 | guest/aotdefault | PASS | 3 | `hao --aot` with no FILE: the default set from aot-list, else stub-identities (HAO_AOT_LIST_DIR); missing files counted; lists others can write not used; [N/M] lines; valid caches skipped; `--check` valid/missing/stale; `--auto` waits for free space (HAO_AOT_FREE_MB) |
+| guest/aotburst | PASS | 3 | interim lazy AOT copy and chaining bursts: N=2000 functions, then primed sources branching to distant targets, serially and on four threads; native arm64 output, at most one write alias (two mach_vm_map) per RATIO=8 copied blocks; per-block copying and copy-only batching fail |
 | guest/dlrpath | PASS | 3 | dlopen of @rpath, @executable_path and @loader_path names from an app bundle: resolved from the calling guest image; an ARM-only dylib loads as a guest image, a universal one natively |
 | guest/fenv | PASS | 1 | |
 | guest/hostcode | PASS | 2 | calls through dlsym pointers: the host-code check answers from the image (0 kernel walks); a pointer to native data is still refused |
@@ -611,3 +612,5 @@ It also checks fork inheritance/COW, failed initialization, real writable
 code aliases, and Swift task groups/native async callers under redirection
 against native ARM output. The fixture fails against 256dd30 with the original
 ENOMEM diagnostic.
+
+`make mapped-aot-test` also runs `tests/aot/combined.sh`: native ARM differential for a mapped caller, batched v8 dylib and mapped callback, ready-link batching, alias mode and independently validated copy/JIT fallbacks.

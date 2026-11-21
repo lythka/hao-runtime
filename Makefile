@@ -30,6 +30,14 @@ REPRO     := -ffile-prefix-map=$(CURDIR)=.
 ifdef TEST_SWITCHES
 REPRO     += -DHAO_TEST_SWITCHES
 endif
+# A dedicated image trial enables only boot-volume mapped-cache admission.
+# It excludes the test launcher's digest section and other test switches.
+ifdef MAPPED_AOT_TRIAL
+ifneq ($(strip $(TEST_SWITCHES)$(SURVEY)),)
+$(error MAPPED_AOT_TRIAL requires its own build without TEST_SWITCHES or SURVEY)
+endif
+REPRO     += -DHAO_MAPPED_AOT_TRIAL
+endif
 # SURVEY=1: a diagnostics build for a survey image, which honours
 # hao_swift_value_audit=1 (src/opts.c BOOT_SURVEY). Never the build that ships.
 ifdef SURVEY
@@ -39,17 +47,17 @@ WARN      := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CFLAGS    := $(ARCH) -std=gnu11 -O2 -g -ffp-contract=off $(WARN) -Iinclude -Isrc -mcx16 $(REPRO)
 OSO       := -Wl,-oso_prefix,$(CURDIR)/
 # Changing MACOS_MIN in one B rebuilds everything there.
-MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)
+MIN_STAMP := $(B)/.macos-min-$(MACOS_MIN)$(if $(MAPPED_AOT_TRIAL),-mapped-trial)$(if $(TEST_SWITCHES),-test-switches)$(if $(SURVEY),-survey)
 
 CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c \
-        src/a64_imm.c src/a64_cond.c src/a64_regs.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c \
+        src/a64_imm.c src/a64_cond.c src/a64_regs.c src/aot_mapped.c src/aot_policy.c src/opts.c src/ifunit.c src/gmap.c src/x86args.c src/cpufeat.c \
         src/native_callback.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
 RT := src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
 RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c src/valist_builder.c
-RT += src/ioreg.c src/ids.c src/aot_use.c
+RT += src/aot_mapped_vm.c src/ioreg.c src/ids.c src/aot_use.c
 RT += src/swiftvalue/Recipe.c src/swiftvalue/Enum.c src/swiftvalue/Common.c src/swiftvalue/Aggregate.c
 RT += src/swiftvalue/NativeLeaf.c src/swiftvalue/Tables.c src/swiftvalue/Facts.c
 RT_O := $(patsubst src/%.c,$(B)/%.o,$(RT)) $(B)/bridge_x86_64.o
@@ -335,9 +343,20 @@ test-guest: all $(FUZZERS)
 # TEST_SWITCHES build in its own directory; the default build stays as shipped.
 # oracle-asan (the oracle checks under ASan and UBSan) is part of the gate and
 # not of `make test`: it builds the translator a second time.
+.PHONY: mapped-aot-test
+ifndef TEST_SWITCHES
+mapped-aot-test:
+	$(MAKE) B=$(B)-ts TEST_SWITCHES=1 mapped-aot-test
+else
+mapped-aot-test: all
+	OUT=$(abspath $(B))/mapped-admission B=$(abspath $(B)) tests/aot/mapped_admission.sh
+	OUT=$(abspath $(B))/mapped-differential B=$(abspath $(B)) tests/aot/mapped.sh
+	OUT=$(abspath $(B))/mapped-combined B=$(abspath $(B)) tests/aot/combined.sh
+endif
+
 check: test
 	$(MAKE) oracle-asan
-	$(MAKE) B=$(B)-ts TEST_SWITCHES=1 test-guest
+	$(MAKE) B=$(B)-ts TEST_SWITCHES=1 test-guest mapped-aot-test
 
 # Fuzzing (tests/fuzz/README.md): ASan + trace-pc-guard targets driven by
 # tests/fuzz/driver.c (the toolchain has no libFuzzer runtime). `make fuzz`
