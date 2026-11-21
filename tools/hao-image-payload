@@ -1,7 +1,7 @@
 #!/bin/bash
 # hao-image-payload [--no-embed | --translate TLIST] [--macos-min VER] [--require-dyld-fix]
 #                   [--x86-cache X86_DYLD_DIR] [--coverage-report SUMMARY.json] [--units DIR [--units-version NAME]]
-#                   [--aot | --aot-list ALIST] [--aot-jobs N] [--async-provider DIR]
+#                   [--aot | --aot-list ALIST] [--aot-mapped-trial] [--aot-jobs N] [--async-provider DIR]
 #                   [--cryptex NAME=DIR]... [--source CHECKOUT] OUT ROOT [LIST]
 #   Build the hao payload for one macOS release image from its System root
 #   (e.g. a read-only mount of the IPSW's filesystem image):
@@ -110,7 +110,7 @@
 #   Nothing else here is tied to one release.
 set -euo pipefail
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2; }
-TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= UNITS_VERSION= X86C= AOT=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
+TLIST= NO_EMBED=0 MIN= REQUIRE_DYLD=0 COVERAGE= UNITS= UNITS_VERSION= X86C= AOT=0 MAPPED_TRIAL=0 ALIST= AJOBS= ASYNC_PROVIDER= POS=()
 CRYPTEX=() SOURCE=
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -123,6 +123,7 @@ while [ $# -gt 0 ]; do
         --units) [ $# -ge 2 ] || usage; UNITS=$2; shift 2 ;;
         --units-version) [ $# -ge 2 ] || usage; UNITS_VERSION=$2; shift 2 ;;
         --async-provider) [ $# -ge 2 ] || usage; ASYNC_PROVIDER=$2; shift 2 ;;
+        --aot-mapped-trial) MAPPED_TRIAL=1; shift ;;
         --aot) AOT=1; shift ;;
         --aot-list) [ $# -ge 2 ] || usage; ALIST=$2; AOT=1; shift 2 ;;
         --aot-jobs) [ $# -ge 2 ] || usage; AJOBS=$2; shift 2 ;;
@@ -146,6 +147,7 @@ elif [ -n "$TLIST" ]; then
 else
     MODE=embed
 fi
+if [ "$MAPPED_TRIAL" = 1 ] && [ "$AOT" != 1 ]; then echo "hao-image-payload: --aot-mapped-trial requires --aot or --aot-list" >&2; exit 2; fi
 if [ -n "$ALIST" ]; then
     [ -f "$ALIST" ] || { echo "hao-image-payload: no AOT list $ALIST" >&2; exit 2; }
     ALIST=$(cd "$(dirname "$ALIST")" && pwd)/$(basename "$ALIST")
@@ -167,14 +169,20 @@ fi
 [ ! -e "$OUT" ] || { echo "hao-image-payload: $OUT exists" >&2; exit 1; }
 [ -z "$UNITS" ] || [ -d "$UNITS" ] || { echo "hao-image-payload: no units directory $UNITS" >&2; exit 2; }
 [ -d "$ROOT" ] || { echo "hao-image-payload: no ROOT $ROOT" >&2; exit 1; }
+BDIR=build
+# A caller may be a recursive test make. Select the intended payload's
+# capabilities explicitly, independent of MAKEFLAGS and inherited variables.
+BUILD_FLAGS=(TEST_SWITCHES= SURVEY= MAPPED_AOT_TRIAL=)
+if [ "$MAPPED_TRIAL" = 1 ]; then
+    BDIR=build-mapped-trial
+    BUILD_FLAGS=(TEST_SWITCHES= SURVEY= MAPPED_AOT_TRIAL=1)
+fi
 if [ -n "$MIN" ]; then
     [[ "$MIN" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "hao-image-payload: bad --macos-min $MIN" >&2; exit 2; }
-    BDIR=build/macos-$MIN
-    make -C "$H" B="$BDIR" MACOS_MIN="$MIN" >/dev/null
-else
-    BDIR=build
-    make -C "$H" >/dev/null
+    BDIR=$BDIR/macos-$MIN
+    BUILD_FLAGS+=(MACOS_MIN="$MIN")
 fi
+make -C "$H" B="$BDIR" ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} >/dev/null
 B=$H/$BDIR
 KEXT_MIN=13.0
 "$H/kext/build.sh" "$B" "$KEXT_MIN" >/dev/null
@@ -361,8 +369,8 @@ fi
 # directory rules, so OUT and the directories above it must be owned by the user this
 # runs as (by root, when it runs as root) and not group- or other-writable.
 if [ $AOT = 1 ]; then
-    python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" "$T/tools" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF' || exit 1
-import concurrent.futures, functools, hashlib, json, os, re, struct, subprocess, sys, time
+    HAO_PAYLOAD_MAPPED_TRIAL=$MAPPED_TRIAL python3 -I - "$B/hao" "$B/libhao.dylib" "$ROOT" "$OUT" "${ALIST:-}" "${AJOBS:-}" "$T/tools" ${CRYPTEX[@]+"${CRYPTEX[@]}"} <<'EOF' || exit 1
+import concurrent.futures, functools, hashlib, json, os, re, struct, subprocess, sys, tempfile, threading, time
 hao, libhao, root, out, alist, jobs, tools, *cx = sys.argv[1:]
 sys.path.insert(0, tools)
 import hao_root
@@ -386,6 +394,7 @@ def macho_uuid(path):
 
 
 gen = macho_uuid(libhao)
+mapped_trial = os.environ.get("HAO_PAYLOAD_MAPPED_TRIAL") == "1"
 # hao_aot_hdr (include/hao/aot.h), format 8: 144 bytes; nblocks at 64, the kind of code
 # identity at 96, the CPU profile (include/hao/cpufeat.h bits) at 136.
 AOT_VERSION, AOT_HDR = 8, 144
@@ -440,6 +449,7 @@ SKIPS = [(re.compile(r'^hao-aot: output buffer overflow$'), 'too large: translat
 
 
 secs = {}
+mapped_publish = threading.Lock()
 
 
 def one(p):
@@ -471,6 +481,33 @@ def one(p):
             p.update(status='skipped', why='nothing to translate', uuid=m[3])
         else:
             p.update(status='ok', uuid=m[3], blocks=int(m[1]), insns=int(m[2]), bytes=os.path.getsize(name), cpu_profile='%#x' % cpu)
+        if mapped_trial and p['status'] == 'ok':
+            try:
+                # Distinct source files may have the same UUID. Keep their
+                # generator and signing files private until both are complete.
+                with tempfile.TemporaryDirectory(dir=cache) as staging:
+                    unsigned = os.path.join(staging, m[3] + '.aot9.unsigned')
+                    subprocess.run([hao, '--aot', '--mapped-input', '--cache', staging, '--cpu=' + CPU, '--',
+                                    tree.host(os.path.join(rroot, p['file']))], env=env, check=True, timeout=600,
+                                   stdin=subprocess.DEVNULL, capture_output=True)
+                    subprocess.run([sys.executable, '-I', os.path.join(tools, 'hao-aot-mapped'), unsigned],
+                                   check=True, timeout=120, capture_output=True)
+                    artifact = m[3] + '.aot9'
+                    pin = artifact + '.sha256'
+                    with open(os.path.join(staging, pin), 'rb') as f:
+                        digest = f.read()
+                    with mapped_publish:
+                        final_pin = os.path.join(cache, pin)
+                        if os.path.exists(final_pin):
+                            with open(final_pin, 'rb') as f:
+                                if f.read() != digest:
+                                    raise ValueError('distinct mapped outputs for guest UUID ' + m[3])
+                        else:
+                            os.replace(os.path.join(staging, artifact), os.path.join(cache, artifact))
+                            os.replace(os.path.join(staging, pin), final_pin)
+                    p['mapped_sha256'] = digest.hex()
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                p.update(status='error', why='mapped container generation: ' + str(exc))
         return p
     for rx, why in SKIPS:
         if rc != 0 and any(rx.match(l) for l in lines):
@@ -491,11 +528,12 @@ os.chmod(aotdir, 0o755)
 errors = [p for p in progs if p['status'] == 'error']
 ok = [p for p in progs if p['status'] == 'ok']
 files = sorted(n for n in os.listdir(aotdir))
-expect = sorted({p['uuid'] + '.aot' for p in ok})
+suffixes = ('.aot', '.aot9', '.aot9.sha256') if mapped_trial else ('.aot',)
+expect = sorted({p['uuid'] + s for p in ok for s in suffixes})
 if files != expect:
     errors.append({'paths': ['-'], 'why': 'cache directory holds %s, expected %s' % (sorted(set(files) - set(expect))[:5], sorted(set(expect) - set(files))[:5])})
 summary = {'source': source, 'list_sha256': hashlib.sha256(open(alist, 'rb').read()).hexdigest() if alist else None,
-           'programs': len(want), 'files': len(progs), 'caches': len(files),
+           'programs': len(want), 'files': len(progs), 'caches': len({p['uuid'] for p in ok}),
            'bytes': sum(os.path.getsize(os.path.join(aotdir, n)) for n in files),
            'blocks': sum(p['blocks'] for p in ok), 'guest_insns': sum(p['insns'] for p in ok),
            'libhao_uuid': gen, 'jobs': njobs, 'format_version': AOT_VERSION,
@@ -503,9 +541,12 @@ summary = {'source': source, 'list_sha256': hashlib.sha256(open(alist, 'rb').rea
            'cpu': CPU, 'cpu_profile': '%#x' % functools.reduce(lambda a, p: a | int(p['cpu_profile'], 16), ok, 0),
            'skipped': [{'path': p['paths'][0], 'why': p['why']} for p in progs if p['status'] == 'skipped'],
            'failures': [{'path': p['paths'][0], 'why': p['why']} for p in errors]}
+if mapped_trial:
+    summary['mapped_trial_format'] = 9
+    summary['mapped_trial_caches'] = summary['caches']
 json.dump({'summary': summary, 'programs': progs}, open(os.path.join(out, 'aot.json'), 'w'), indent=1)
 print('AOT caches: %d for %d programs, %.1f MB, %d skipped, %d failed, %.1f s, %.1f s generator CPU (%d jobs); libhao %s' % (
-    len(files), len(want), summary['bytes'] / 2**20, len(summary['skipped']), len(errors), wall, sum(secs.values()), njobs, gen))
+    summary['caches'], len(want), summary['bytes'] / 2**20, len(summary['skipped']), len(errors), wall, sum(secs.values()), njobs, gen))
 for p in errors[:20]:
     print('hao-image-payload: AOT: %s: %s' % (p['paths'][0], p['why']), file=sys.stderr)
 sys.exit(1 if errors else 0)
@@ -635,7 +676,8 @@ json.dump({'version': '%s-%s' % (ver['ProductBuildVersion'], full[:12]), 'commit
            'layout_version': LAYOUT_VERSION,
            # AOT caches in root/usr/lib/hao/aot, if any: the format and the CPU profile they were made for, which
            # every Mac the image boots must have (include/hao/cpufeat.h; baseline: aes,pclmul,avx,f16c,rdrand)
-           'aot': {k: aot[k] for k in ('format_version', 'cpu', 'cpu_profile', 'caches')} if aot else None,
+           'aot': {k: aot[k] for k in ('format_version', 'cpu', 'cpu_profile', 'caches', 'mapped_trial_format', 'mapped_trial_caches')
+                   if k in aot} if aot else None,
            'files': {r: files[r] if r in files else sha(os.path.join(out, r)) for r in sorted(listed)}},
           open(os.path.join(out, 'payload-manifest.json'), 'w'), indent=1, sort_keys=True)
 print('build.json:', ver['ProductVersion'], ver['ProductBuildVersion'], mode, 'minos', minos(os.path.join(h, bdir, 'hao')),

@@ -13,6 +13,7 @@
 
 typedef struct {
     int verbose;                /* -v/-vv, HAO_VERBOSE=N, PID 1: hao=v|V, hao_verbose=N */
+    bool aot_mapped;            /* HAO_AOT_MAPPED: mapped-container trial, open-tier test builds only */
     bool interp, stats;         /* --interp/HAO_INTERP, --stats (PID 1: hao=i|s) */
     bool allow_unsigned;        /* --allow-unsigned (HAO_FLAGS u, open tier): run an unsigned CLI guest */
     unsigned watchdog;          /* HAO_WATCHDOG=N seconds (open tier: it takes SIGALRM and exits 124) */

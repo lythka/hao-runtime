@@ -2751,6 +2751,10 @@ void hao_on_fault(int sig, siginfo_t *si, void *ctx, uint64_t tok)
     ucontext_t *uc = ctx;
     uint64_t rip = uc->uc_mcontext->__ss.__rip;
     uint64_t addr = (uint64_t)(uintptr_t)si->si_addr;
+    /* A fault in the immutable mapped cache itself cannot be resumed as
+     * guest code. Data accesses by mapped blocks still use guest delivery. */
+    if ((sig == SIGBUS || sig == SIGSEGV) && si->si_code > 0 && si->si_code < 0x10000 && hao_aot_mapped_address(addr))
+        _exit(128 + sig);
     /* hao_probe_read8's load: it reports the failure (signals.c, fault-tolerant reads) */
     if (rip == (uint64_t)(uintptr_t)hao_probe_read8_load && (sig == SIGSEGV || sig == SIGBUS)) {
         __atomic_fetch_add(&hao_probe_faults, 1, __ATOMIC_RELAXED);

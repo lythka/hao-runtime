@@ -36,6 +36,7 @@
 #include <mach/mach_vm.h>
 #include "hao/a64_imm.h"
 #include "hao/aot.h"
+#include "hao/aot_mapped_vm.h"
 #include "hao/gmap.h"
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -45,6 +46,8 @@
 #include <sys/acl.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
+#include <mach-o/getsect.h>
+#include <crt_externs.h>
 
 #define BITS(x, hi, lo) (((x) >> (lo)) & ((1u << ((hi) - (lo) + 1)) - 1))
 #define BIT(x, n) (((x) >> (n)) & 1u)
@@ -651,6 +654,7 @@ typedef struct {
      * only (vfp_prev while it is emitted) */
     bool vfp_consts, vfp_prev;
     uint64_t cpu;           /* optional CPU features (hao/cpufeat.h) this code may use */
+    bool mapped_text;       /* immutable direct exits never publish a patch site */
     bool pic;               /* AOT: every guest address must be base-relative */
     bool not_pic;           /* ... and one was not (the blob is not written) */
     bool live_out[MAX_BLOCK_INSNS + 1];
@@ -790,9 +794,12 @@ static void exit_direct(tctx *t, uint64_t target)
     }
     gaddr(t, RAX, target);
     x_mov_st(&t->b, 8, xm(RBX, CPU_OFF_PC), RAX);
-    /* record the patch site (address of rel32) for the block linker */
-    x_lea_rip(&t->b, RCX, t->b.start + j);
-    x_mov_st(&t->b, 8, xm(RBX, CPU_OFF_SCRATCH0), RCX);
+    if (t->mapped_text) {
+        x_mov_mi(&t->b, 8, xm(RBX, CPU_OFF_SCRATCH0), 0);
+    } else {
+        x_lea_rip(&t->b, RCX, t->b.start + j);
+        x_mov_st(&t->b, 8, xm(RBX, CPU_OFF_SCRATCH0), RCX);
+    }
     exit_with(t, HAO_EXIT_BRANCH);
 }
 
@@ -5066,7 +5073,8 @@ static void *translate(uint64_t pc)
         void *next = burst_find(made_blk, made, exits[k].target);
         if (!next) next = lookup(exits[k].target);
         uintptr_t site = (uintptr_t)exits[k].site;
-        if (!next || (site & 3) || hao_is_trap(exits[k].target)) continue;
+        if (!next || (site & 3) || hao_is_trap(exits[k].target) ||
+            (uintptr_t)next < (uintptr_t)cache || (uintptr_t)next >= (uintptr_t)cache_end) continue;
         int32_t rel = (int32_t)((intptr_t)next - (intptr_t)(site + 4));
         memcpy(w + (site - (uintptr_t)start), &rel, 4);
         st_links++;
@@ -5086,11 +5094,86 @@ static void *translate(uint64_t pc)
  * shared state (statistics count only real emissions; the image lookup
  * leaves the hint alone); about 1 KiB of stack besides the tctx. */
 
+/* Runtime-initialized images are pinned once they admit mapped code. The
+ * loader serializes initialization with its load lock. Reverse descriptors
+ * are published first, then the image's forward pointer, then hot entries.
+ * All three outlive signal readers, old jump tables and fork snapshots. */
+typedef struct {
+    hao_aot_mapping map;
+    uint64_t base;
+} aot_resident;
+#define AOT_RESIDENT_MAX 4096u
+static aot_resident *residents[AOT_RESIDENT_MAX];
+static uint32_t resident_count;
+static uint64_t st_mapped_lookups, st_mapped_full, st_mapped_locates;
+
+static uint32_t mapped_count(void)
+{
+    return __atomic_load_n(&resident_count, __ATOMIC_ACQUIRE);
+}
+
+static const aot_resident *mapped_owner(uint64_t addr, bool include_metadata)
+{
+    uint32_t count = mapped_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const aot_resident *r = residents[i];
+        if (addr - (uintptr_t)r->map.reservation < r->map.reserved ||
+            (include_metadata && addr - (uintptr_t)r->map.file < r->map.size)) return r;
+    }
+    return NULL;
+}
+
+bool hao_aot_mapped_address(uint64_t addr) { return mapped_owner(addr, true) != NULL; }
+
+static bool mapped_locate(uint64_t addr, uint64_t *guest, bool *flags)
+{
+    const aot_resident *r = mapped_owner(addr, false);
+    if (!r) return false;
+    uint64_t off = addr - (uintptr_t)r->map.slot;
+    const hao_aot_mapped_view *v = &r->map.view;
+    if (off < 16 || off >= v->legacy.hdr->code_size) return false;
+    uint32_t lo = 0, hi = v->header->range_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (v->ranges[mid].end <= off) lo = mid + 1; else hi = mid;
+    }
+    if (lo == v->header->range_count || off < v->ranges[lo].start) return false;
+    __atomic_fetch_add(&st_mapped_locates, 1, __ATOMIC_RELAXED);
+    *guest = r->base + v->ranges[lo].guest_off;
+    *flags = v->ranges[lo].flags_in_host != 0;
+    return true;
+}
+
+/* jit_lock held. A saturated table may still dispatch this pinned block. */
+static void *mapped_take(uint64_t pc)
+{
+    if (!mapped_count()) return NULL;
+    hao_image *im = hao_image_for_code(pc);
+    const aot_resident *r = im ? __atomic_load_n(&im->aot_mapped, __ATOMIC_ACQUIRE) : NULL;
+    if (!r || pc - r->base > UINT32_MAX || hao_is_trap(pc)) return NULL;
+    uint32_t off = (uint32_t)(pc - r->base);
+    const hao_aot_mapped_view *v = &r->map.view;
+    uint32_t lo = 0, hi = v->header->block_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (v->legacy.ents[v->forward[mid]].guest_off < off) lo = mid + 1; else hi = mid;
+    }
+    if (lo == v->header->block_count) return NULL;
+    const hao_aot_ent *e = &v->legacy.ents[v->forward[lo]];
+    if (e->guest_off != off) return NULL;
+    void *code = r->map.slot + e->code_off;
+    if (__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) __atomic_fetch_add(&st_mapped_full, 1, __ATOMIC_RELAXED);
+    else if (!wx_frozen) (void)insert(pc, code);
+    __atomic_fetch_add(&st_mapped_lookups, 1, __ATOMIC_RELAXED);
+    return code;
+}
+
 static bool aot_lazy_locate(uint64_t a, uint64_t *code, uint64_t *pc);
 static uint64_t aot_cpu_at(const hao_image *im, uint64_t code);
 
 bool hao_jit_locate(uint64_t a, uint64_t *guest_pc, bool *flags_in_host)
 {
+    if (mapped_locate(a, guest_pc, flags_in_host)) return true;
     if (!cache || a < (uint64_t)(uintptr_t)cache || a >= (uint64_t)(uintptr_t)cache_end) return false;
     uint64_t code, pc;
     if (!aot_lazy_locate(a, &code, &pc)) {
@@ -5599,7 +5682,7 @@ typedef struct {
 #define AOT_LAZY_MAX 4096
 static aot_lazy *lazy_recs[AOT_LAZY_MAX];
 static uint32_t lazy_n;        /* published with release */
-static uint64_t st_aot_lazy_bytes, st_aot_lazy_blobs;
+static uint64_t st_aot_lazy_bytes, st_aot_lazy_blobs, st_aot_lazy_bursts;
 
 static int aot_cmp_guest(void *ents, const void *a, const void *b)
 {
@@ -5619,6 +5702,7 @@ static bool aot_lazy_ok(const hao_aot_view *v)
     uint32_t nb = v->hdr->nblocks, nl = v->hdr->nlinks;
     uint64_t cs = v->hdr->code_size;
     if (!nb || v->ents[0].code_off < 8) return false;
+    /* hao_aot_validate already requires strictly increasing code offsets. */
     for (uint32_t k = 0; k < nl; k++) {
         const hao_aot_link *l = &v->links[k];
         if ((uint64_t)l->site + 4 > cs || l->target >= nb || (k && l->site <= v->links[k - 1].site)) return false;
@@ -5669,6 +5753,7 @@ static bool aot_lazy_install(hao_image *im, const hao_aot_view *v, const uint8_t
 
 /* jit_lock held. The AOT block for pc, copied in and entered now if it was
  * not yet, or NULL when pc's image has no lazy blob or no block there. */
+static bool aot_lazy_fill(aot_lazy *z, uint32_t i);
 static void *aot_lazy_take(uint64_t pc)
 {
     hao_image *im = hao_image_for_code(pc);
@@ -5681,34 +5766,152 @@ static void *aot_lazy_take(uint64_t pc)
     }
     if (lo == z->nb || z->v.ents[z->by_guest[lo]].guest_off != go) return NULL;
     uint32_t i = z->by_guest[lo];
-    uint32_t a = z->v.ents[i].code_off, e = i + 1 < z->nb ? z->v.ents[i + 1].code_off : (uint32_t)z->cs;
-    uint8_t *code = z->dst + a;
-    if (!z->filled[i]) {
-        lo = 0, hi = z->nl;
-        while (lo < hi) {
-            uint32_t m = lo + (hi - lo) / 2;
-            if (z->v.links[m].site < a) lo = m + 1; else hi = m;
-        }
-        uint64_t wend = e;   /* the block and its link sites (each within the blob: aot_lazy_ok) */
-        for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
-            if ((uint64_t)z->v.links[k].site + 4 > wend) wend = (uint64_t)z->v.links[k].site + 4;
-        hao_wx_win win;
-        uint8_t *w = hao_wx_begin(code, wend - a, &win);
-        if (!w) return NULL;   /* frozen: interpreted */
-        memcpy(w, z->v.code + a, e - a);
-        for (uint32_t k = lo; k < z->nl && z->v.links[k].site < e; k++)
-            if (z->v.links[k].target != i && !z->filled[z->v.links[k].target]) {   /* a link to itself stays */
-                int32_t unlinked = 0;
-                memcpy(w + (z->v.links[k].site - a), &unlinked, 4);
-            }
-        hao_wx_end(&win, wend - a);
-        /* complete only now: a fork child that sees it filled gets it with its links cut */
-        __atomic_store_n(&z->filled[i], 1, __ATOMIC_RELEASE);
-        st_aot_blocks++;
-        st_aot_lazy_bytes += e - a;
-    }
+    uint8_t *code = z->dst + z->v.ents[i].code_off;
+    if (!z->filled[i] && !aot_lazy_fill(z, i)) return NULL;   /* frozen: interpreted */
     if (!insert(pc, code)) { cache_exhausted(); return NULL; }
     return code;
+}
+
+/* Block J's code [*a, *e) in the blob, the end of its writes (its link sites
+ * reach past the code: each within the blob, aot_lazy_ok) and its first link. */
+static uint64_t lazy_block(const aot_lazy *z, uint32_t j, uint32_t *a, uint32_t *e, uint32_t *link)
+{
+    *a = z->v.ents[j].code_off;
+    *e = j + 1 < z->nb ? z->v.ents[j + 1].code_off : (uint32_t)z->cs;
+    uint32_t lo = 0, hi = z->nl;
+    while (lo < hi) {
+        uint32_t m = lo + (hi - lo) / 2;
+        if (z->v.links[m].site < *a) lo = m + 1; else hi = m;
+    }
+    *link = lo;
+    uint64_t wend = *e;
+    for (uint32_t k = lo; k < z->nl && z->v.links[k].site < *e; k++)
+        if ((uint64_t)z->v.links[k].site + 4 > wend) wend = (uint64_t)z->v.links[k].site + 4;
+    return wend;
+}
+/* Whether block J is copied in by the burst that writes [lo, hi) of the blob. */
+static bool lazy_in_burst(const aot_lazy *z, uint32_t j, uint64_t lo, uint64_t hi)
+{
+    uint32_t a, e, link;
+    if (z->filled[j] || z->v.ents[j].code_off < lo || z->v.ents[j].code_off >= hi) return false;
+    return lazy_block(z, j, &a, &e, &link) <= hi;
+}
+/* Each write to executable memory maps and unmaps a write alias (hao_wx_begin,
+ * hao_wx_end): two mach_vm_map calls, slow on an Intel kernel, and a launch
+ * copies in thousands of blocks one by one (most of a cold app launch on a
+ * MacBookPro9,2). So block I is copied in with every block not yet copied
+ * that lies wholly in I's AOT_LAZY_BURST-aligned stretch of the blob, through
+ * one alias. This bounds speculative copying to one stretch beyond the
+ * requested block, without allocating an index. Links between blocks
+ * of one burst stay as the file has them; a link to a block not copied is
+ * cut back to its exit stub. The alias is closed before this returns, so no
+ * code it wrote runs while it is open. jit_lock held. False when frozen. */
+#define AOT_LAZY_BURST (64u << 10)
+static bool aot_lazy_fill(aot_lazy *z, uint32_t i)
+{
+    uint32_t a, e, link;
+    uint64_t wend = lazy_block(z, i, &a, &e, &link);
+    uint64_t lo = a & ~(uint64_t)(AOT_LAZY_BURST - 1), hi = lo + AOT_LAZY_BURST;
+    if (hi < wend) hi = wend;
+    if (hi > z->cs) hi = z->cs;
+    if (hi < wend) hi = wend;
+    /* the burst's first block: the first whose code starts at lo or later */
+    uint32_t j0 = 0, top = z->nb;
+    while (j0 < top) {
+        uint32_t m = j0 + (top - j0) / 2;
+        if (z->v.ents[m].code_off < lo) j0 = m + 1; else top = m;
+    }
+    hao_wx_win win;
+    uint8_t *w = hao_wx_begin(z->dst + lo, hi - lo, &win);
+    if (!w) return false;
+    uint32_t n = 0;
+    uint64_t bytes = 0;
+    for (uint32_t j = j0; j < z->nb && z->v.ents[j].code_off < hi; j++) {
+        if (!lazy_in_burst(z, j, lo, hi)) continue;
+        uint32_t ja, je, jl;
+        (void)lazy_block(z, j, &ja, &je, &jl);
+        memcpy(w + (ja - lo), z->v.code + ja, je - ja);
+        for (uint32_t k = jl; k < z->nl && z->v.links[k].site < je; k++) {
+            uint32_t t = z->v.links[k].target;
+            if (t != j && !z->filled[t] && !lazy_in_burst(z, t, lo, hi)) {   /* a link to itself stays */
+                int32_t unlinked = 0;
+                memcpy(w + (z->v.links[k].site - lo), &unlinked, 4);
+            }
+        }
+        n++;
+        bytes += je - ja;
+    }
+    hao_wx_end(&win, hi - lo);
+    /* complete only now: a fork child that sees a block filled gets it with its links cut. Each
+     * block's membership depends on its own filled flag alone, so marking in order is exact. */
+    for (uint32_t j = j0; j < z->nb && z->v.ents[j].code_off < hi; j++)
+        if (lazy_in_burst(z, j, lo, hi)) __atomic_store_n(&z->filled[j], 1, __ATOMIC_RELEASE);
+    st_aot_blocks += n;
+    st_aot_lazy_bytes += bytes;
+    st_aot_lazy_bursts++;
+    return true;
+}
+
+/* A cut exit can become ready long after its source burst was copied. On
+ * that exit, repair all ready cut links in the same bounded source stretch.
+ * No reverse-link index or pending queue is needed. jit_lock serializes this
+ * scan with fills; executing threads see only aligned, atomic rel32 stores.
+ * Return false for an exit not described by this cache (ordinary JIT path).
+ * Caller holds hao_crit so a fork cannot inherit a partially written burst. */
+static bool aot_lazy_chain(uint64_t site, void *next)
+{
+    aot_lazy *z = NULL;
+    uint32_t nr = __atomic_load_n(&lazy_n, __ATOMIC_ACQUIRE);
+    for (uint32_t r = 0; r < nr; r++) {
+        aot_lazy *candidate = lazy_recs[r];
+        uint64_t base = (uint64_t)(uintptr_t)candidate->dst;
+        if (site >= base && site - base + 4 <= candidate->cs) { z = candidate; break; }
+    }
+    if (!z) return false;
+    bool handled = false;
+    pthread_mutex_lock(&jit_lock);
+    do {
+        uint64_t base = (uint64_t)(uintptr_t)z->dst;
+        uint32_t off = (uint32_t)(site - base), k = 0, top = z->nl;
+        while (k < top) {
+            uint32_t m = k + (top - k) / 2;
+            if (z->v.links[m].site < off) k = m + 1; else top = m;
+        }
+        if (k == z->nl || z->v.links[k].site != off ||
+            z->dst + z->v.ents[z->v.links[k].target].code_off != next) break;
+        handled = true;
+        if (wx_frozen || __atomic_load_n((int32_t *)(uintptr_t)site, __ATOMIC_ACQUIRE)) break;
+        uint64_t lo = off & ~(uint64_t)(AOT_LAZY_BURST - 1), hi = lo + AOT_LAZY_BURST;
+        if (hi > z->cs) hi = z->cs;
+        uint32_t a, e, first;
+        /* Locate the block covering lo (possibly only its tail). */
+        uint32_t j = 0;
+        top = z->nb;
+        while (j < top) {
+            uint32_t m = j + (top - j) / 2;
+            if (z->v.ents[m].code_off <= lo) j = m + 1; else top = m;
+        }
+        if (j) j--;
+        (void)lazy_block(z, j, &a, &e, &first);
+        hao_wx_win win;
+        uint8_t *w = hao_wx_begin(z->dst + lo, hi - lo, &win);
+        if (!w) break;
+        for (k = first; k < z->nl && (uint64_t)z->v.links[k].site + 4 <= hi; k++) {
+            const hao_aot_link *l = &z->v.links[k];
+            if (l->site < lo || ((base + l->site) & 3)) continue;
+            while (j + 1 < z->nb && z->v.ents[j + 1].code_off <= l->site) j++;
+            if (!z->filled[j] || !z->filled[l->target]) continue;
+            int32_t *dst = (int32_t *)(void *)(w + l->site - lo);
+            if (__atomic_load_n(dst, __ATOMIC_ACQUIRE)) continue;
+            int32_t rel;
+            memcpy(&rel, z->v.code + l->site, 4);
+            __atomic_store_n(dst, rel, __ATOMIC_RELEASE);
+            __atomic_fetch_add(&st_links, 1, __ATOMIC_RELAXED);
+        }
+        hao_wx_end(&win, hi - lo);
+    } while (0);
+    pthread_mutex_unlock(&jit_lock);
+    return handled;
 }
 
 /* For hao_jit_locate, without locks: the copied AOT block holding host pc a. */
@@ -5788,6 +5991,138 @@ static bool aot_fits(uint64_t cost, char *why, size_t n)
     return false;
 }
 
+/* The stock runtime has no approved mapped-executable store. A TEST_SWITCHES
+ * payload trial can use only digests installed on the fixed boot volume.
+ * The host differential has a separate signed test launcher carrying one
+ * digest in its own image. Its controlled fixture is never a shipping
+ * source of authority. */
+#if defined(HAO_TEST_SWITCHES) || defined(HAO_MAPPED_AOT_TRIAL)
+#ifdef HAO_TEST_SWITCHES
+/* Test launchers compare signed instruction metadata against the independent
+ * count-only re-emission used for JIT/lazy signal recovery. No code runs. */
+static bool mapped_oracle(const hao_aot_mapping *m, hao_image *im, char *why, size_t n)
+{
+    const hao_aot_mapped_view *v = &m->view;
+    uint32_t row = 0;
+    for (uint32_t i = 0; i < v->header->block_count; i++) {
+        const hao_aot_ent *e = &v->legacy.ents[i];
+        uint64_t pc = im->base + e->guest_off;
+        uint32_t insns[MAX_BLOCK_INSNS], offsets[MAX_BLOCK_INSNS + 1];
+        bool flags[MAX_BLOCK_INSNS + 1];
+        tctx t = {.dry = true, .mapped_text = true, .pic = true, .cpu = v->legacy.hdr->cpu_profile, .im = im,
+                  .base_slot = m->slot, .base = im->base, .rec_off = offsets, .rec_fl = flags};
+        xb_init_count(&t.b, m->slot + e->code_off, MAX_BLOCK_BYTES);
+        int count = fetch_block(pc, im, insns);
+        if (count <= 0) goto bad;
+        emit_block(&t, pc, insns, count);
+        if (t.b.overflow || t.b.bad || t.not_pic) goto bad;
+        for (int k = 0; k < t.nrec; k++) {
+            uint32_t end = k + 1 < t.nrec ? offsets[k + 1] : (uint32_t)xb_len(&t.b);
+            if (end == offsets[k]) continue;
+            if (row >= v->header->range_count) goto bad;
+            const hao_aot_pc_range *r = &v->ranges[row++];
+            if (r->start != e->code_off + offsets[k] || r->end != e->code_off + end ||
+                r->guest_off != e->guest_off + 4u * (unsigned)k || r->flags_in_host != flags[k]) goto bad;
+        }
+    }
+    if (row == v->header->range_count) return true;
+bad:
+    snprintf(why, n, "mapped reverse records disagree with dry emitter at record %u", row);
+    return false;
+}
+
+#endif
+
+static bool try_mapped(hao_image *im, const hao_aot_dir *dir, hao_aot_expect x)
+{
+    if (hao_env_tier() != HAO_ENV_OPEN || im->init_state != 1 || im->released || hao_opt.no_chain || hao_opt.jit_helpers_only || wx_frozen ||
+        !hao_opt.aot_mapped || x.id_kind != HAO_AOT_ID_CDHASH || im->aot_mapped || mapped_count() >= AOT_RESIDENT_MAX) return false;
+    const uint8_t *fixture = NULL;
+#ifdef HAO_TEST_SWITCHES
+    if (hao_libval_mode() == HAO_LIBVAL_OFF) {
+        unsigned long size = 0;
+        const uint8_t *pins = getsectiondata((const void *)_NSGetMachExecuteHeader(), "__TEXT", "__hao_aot_trial", &size);
+        if (pins && size <= 48u * AOT_RESIDENT_MAX && size % 48 == 0) {
+            for (size_t i = 0; i < size; i += 48)
+                if (!memcmp(pins + i, im->uuid, 16)) { fixture = pins + i + 16; break; }
+        }
+    }
+#endif
+    if (!fixture && strcmp(dir->path, HAO_AOT_SYS_RO_DIR)) return false;
+    char name[64], why[512] = "";
+    aot_name(im, name, sizeof name, "aot9");
+    struct stat st;
+    int fd = hao_aot_open_trusted(dir, name, &st, why, sizeof why);
+    if (fd < 0) {
+        if (why[0]) { im->aot_state = HAO_AOT_STATE_REJECTED; aot_reject(dir->path, name, why); }
+        return false;
+    }
+    im->aot_state = HAO_AOT_STATE_REJECTED;
+    uint8_t digest[32];
+    bool ok = false;
+    aot_resident *r = NULL;
+    aot_id id;
+    if (fixture) memcpy(digest, fixture, sizeof digest);
+    else {
+        if (!hao_file_fixed(fd, &st)) { snprintf(why, sizeof why, "mapped file is outside the fixed boot volume"); goto done; }
+        char pin[64];
+        aot_name(im, pin, sizeof pin, "aot9.sha256");
+        struct stat ps;
+        int pf = hao_aot_open_trusted(dir, pin, &ps, why, sizeof why);
+        bool trusted = pf >= 0 && ps.st_size == sizeof digest && hao_file_fixed(pf, &ps) &&
+                       pread(pf, digest, sizeof digest, 0) == sizeof digest;
+        if (pf >= 0) close(pf);
+        if (!trusted) { snprintf(why, sizeof why, "missing approved boot-volume digest"); goto done; }
+    }
+    if (!aot_image_id(im, &id, why, sizeof why)) goto done;
+    x.id_hash = id.hash;
+    x.code_id = id.id;
+    hao_aot_mapped_header mh;
+    if (st.st_size < 4096 || (uint64_t)st.st_size > HAO_AOT_MAX_FILE ||
+        pread(fd, &mh, sizeof mh, HAO_AOT_MAPPED_INFO_OFFSET) != sizeof mh) {
+        snprintf(why, sizeof why, "mapped file size or header unreadable"); goto done;
+    }
+    /* Signed-file page checks stream over clean mappings. Budget a private
+     * base page, descriptor, hashing scratch, PTEs for both file views and
+     * worst-case hot table growth including prior generations. */
+    uint64_t private_cost = 32768 + 16 * (((uint64_t)st.st_size + 4095) / 4096) +
+                            (uint64_t)mh.block_count * 8 * sizeof(tentry);
+    if (!aot_fits(private_cost, why, sizeof why)) { im->aot_state = HAO_AOT_STATE_UNFIT; goto done; }
+    r = calloc(1, sizeof *r);
+    if (!r) { snprintf(why, sizeof why, "mapped descriptor allocation failed"); goto done; }
+    if (!hao_aot_mapped_open(fd, st.st_size, digest, &x, im->base, &r->map, why, sizeof why)) goto done;
+#ifdef HAO_TEST_SWITCHES
+    if (fixture && !mapped_oracle(&r->map, im, why, sizeof why)) { hao_aot_mapping_discard(&r->map); goto done; }
+#endif
+    for (uint32_t k = 0; k < r->map.view.legacy.hdr->nlinks; k++) {
+        uint32_t dest = r->map.view.legacy.links[k].target;
+        if (hao_is_trap(im->base + r->map.view.legacy.ents[dest].guest_off)) {
+            snprintf(why, sizeof why, "mapped branch would bypass a trap");
+            hao_aot_mapping_discard(&r->map);
+            goto done;
+        }
+    }
+    r->base = im->base;
+    hao_crit_enter();
+    pthread_mutex_lock(&jit_lock);
+    uint32_t index = mapped_count();
+    if (index < AOT_RESIDENT_MAX && !im->aot_mapped && !wx_frozen) {
+        residents[index] = r;
+        __atomic_store_n(&resident_count, index + 1, __ATOMIC_RELEASE);
+        __atomic_store_n(&im->aot_mapped, r, __ATOMIC_RELEASE);
+        aot_publish(im, r->map.slot, r->map.view.legacy.hdr->code_size, r->map.view.legacy.hdr->cpu_profile);
+        ok = true;
+    }
+    pthread_mutex_unlock(&jit_lock);
+    hao_crit_leave();
+    if (!ok) hao_aot_mapping_discard(&r->map);
+done:
+    close(fd);
+    if (!ok) { free(r); aot_reject(dir->path, name, why); }
+    return ok;
+}
+#endif
+
 bool hao_aot_load(hao_image *im)
 {
     /* no code cache (no executable memory): nothing to install, run interpreted */
@@ -5807,6 +6142,13 @@ bool hao_aot_load(hao_image *im)
     aot_expect(im, gen, lo, hi, &x);
     aot_id id;
     for (int d = 0; d < nd; d++) {
+#if defined(HAO_TEST_SWITCHES) || defined(HAO_MAPPED_AOT_TRIAL)
+        if (try_mapped(im, &dirs[d], x)) {
+            im->aot_state = HAO_AOT_STATE_MAPPED;
+            if (hao_verbose) fprintf(HAO_DIAG, "hao: mapped AOT text loaded for %s\n", im->path);
+            return true;
+        }
+#endif
         struct stat st;
         int fd = hao_aot_open_trusted(&dirs[d], name, &st, why, sizeof why);
         if (fd < 0) {
@@ -5886,7 +6228,20 @@ static int aot_state(hao_image *im, const hao_aot_dir *dirs, int nd, uint64_t cp
     for (int d = 0; d < nd; d++) {
         struct stat st;
         int fd = hao_aot_open_trusted(&dirs[d], name, &st, w, sizeof w);
-        if (fd < 0) { if (w[0]) { seen = true; snprintf(why, n, "%s/%s: %s", dirs[d].path, name, w); } continue; }
+        if (fd < 0) {
+            if (w[0]) { seen = true; snprintf(why, n, "%s/%s: %s", dirs[d].path, name, w); }
+            else if (!seen) {
+                char companion[64];
+                aot_name(im, companion, sizeof companion, "aot9");
+                int candidate = hao_aot_open_trusted(&dirs[d], companion, &st, w, sizeof w);
+                if (candidate >= 0) {
+                    close(candidate);
+                    seen = true;
+                    snprintf(why, n, "%s/%s: mapped trial requires executable admission at run time", dirs[d].path, companion);
+                } else if (w[0]) { seen = true; snprintf(why, n, "%s/%s: %s", dirs[d].path, companion, w); }
+            }
+            continue;
+        }
         seen = true;
         if (x.id_kind == HAO_AOT_ID_CODE && aot_dir_system(&dirs[d], dirs[d].path, -1)) {
             close(fd);
@@ -6059,12 +6414,12 @@ static bool write_all(int fd, const uint8_t *p, size_t n)
 /* Translate every reachable block of `im` into one position-independent
  * blob and write it to dfd/<uuid>.aot. */
 static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_aot_dir *d, const char *dir, const aot_id *id,
-                        uint64_t cpu, bool verbose)
+                        uint64_t cpu, bool verbose, bool mapped)
 {
     int rc = -1, ofd = -1;
     bool oom = false;
     char name[64], tmp[96] = "", why[512];
-    aot_name(im, name, sizeof name, "aot");
+    aot_name(im, name, sizeof name, mapped ? "aot9.unsigned" : "aot");
     hao_jit_init();   /* translator options; the output goes to a heap buffer, so a refused cache is fine */
     /* leaders: function starts, entry, initializers, hints */
     size_t cap = 4096, nwork = 0, nents = 0, capents = 0, nl = 0;
@@ -6072,6 +6427,10 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     uint8_t *seen = calloc((size_t)(im->vmsize / 4) + 1, 1), *buf = NULL, *file = NULL;
     hao_aot_ent *ents = NULL;
     hao_aot_link *links = NULL;
+    hao_aot_pc_range *ranges = NULL;
+    size_t range_count = 0, range_cap = 0;
+    uint32_t offsets[MAX_BLOCK_INSNS + 1];
+    bool flags[MAX_BLOCK_INSNS + 1];
     tctx t;
     memset(&t, 0, sizeof t);
     t.cpu = cpu & hao_cpu_features() & HAO_CPU_JIT;   /* never a feature this host cannot check by running */
@@ -6127,6 +6486,11 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     t.base = im->base;
     t.base_slot = buf;
     t.pic = true;
+    t.mapped_text = mapped;
+    if (mapped) {
+        t.rec_off = offsets;
+        t.rec_fl = flags;
+    }
     uint64_t ninsns = 0;
     for (size_t wi = 0; wi < nwork; wi++) {
         uint64_t pc = work[wi];
@@ -6146,6 +6510,23 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
         nents++;
         emit_block(&t, pc, insns, n);
         if (!t.links) goto oom;
+        if (mapped && !t.b.overflow && !t.b.bad) {
+            if (range_count + t.nrec > HAO_AOT_MAX_FILE / sizeof *ranges) goto oom;
+            if (range_count + t.nrec > range_cap) {
+                range_cap = 2 * (range_count + t.nrec);
+                if (range_cap > HAO_AOT_MAX_FILE / sizeof *ranges) range_cap = HAO_AOT_MAX_FILE / sizeof *ranges;
+                hao_aot_pc_range *more = realloc(ranges, range_cap * sizeof *ranges);
+                if (!more) goto oom;
+                ranges = more;
+            }
+            for (int k = 0; k < t.nrec; k++) {
+                uint32_t end = k + 1 < t.nrec ? offsets[k + 1] : (uint32_t)xb_len(&t.b);
+                if (offsets[k] == end) continue;
+                uint64_t guest_off = pc - im->base + 4u * (unsigned)k;
+                if (guest_off > UINT32_MAX) goto out;
+                ranges[range_count++] = (hao_aot_pc_range){offsets[k], end, (uint32_t)guest_off, flags[k]};
+            }
+        }
         ninsns += (uint64_t)n;
         if (t.b.overflow) { fprintf(stderr, "hao-aot: output buffer overflow\n"); goto out; }
         if (t.b.bad) {
@@ -6228,7 +6609,9 @@ static int aot_generate(hao_image *im, const uint8_t *gen, int dfd, const hao_ao
     ofd = openat(dfd, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (ofd < 0) { fprintf(stderr, "hao-aot: %s/%s: %s\n", dir, tmp, strerror(errno)); tmp[0] = 0; goto out; }
     int cr = 0;
-    if (fchmod(ofd, 0644) != 0 || !write_all(ofd, file, (size_t)h.file_size) || fsync(ofd) != 0) cr = -1;
+    if (fchmod(ofd, 0644) != 0 ||
+        !(mapped ? hao_aot_mapped_write(ofd, file, h.file_size, sorted, ranges, (uint32_t)range_count)
+                 : write_all(ofd, file, (size_t)h.file_size)) || fsync(ofd) != 0) cr = -1;
     if (close(ofd) != 0) cr = -1;
     ofd = -1;
     if (cr != 0 || renameat(dfd, tmp, dfd, name) != 0) { fprintf(stderr, "hao-aot: %s/%s: %s\n", dir, name, strerror(errno)); goto out; }
@@ -6252,7 +6635,7 @@ oom:
 out:
     if (ofd >= 0) close(ofd);
     if (tmp[0]) unlinkat(dfd, tmp, 0);
-    free(buf); free(file); free(ents); free(links); free(sorted); free(work); free(seen); free(t.links);
+    free(ranges); free(buf); free(file); free(ents); free(links); free(sorted); free(work); free(seen); free(t.links);
     return rc;
 #undef PUSH
 }
@@ -6330,6 +6713,11 @@ fail:
  */
 int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir, uint64_t cpu)
 {
+    return hao_aot_generate_file_format(path, verbose, cache_dir, cpu, false);
+}
+
+int hao_aot_generate_file_format(const char *path, bool verbose, const char *cache_dir, uint64_t cpu, bool mapped)
+{
     const uint8_t *gen = aot_gen();
     if (!gen) { fprintf(stderr, "hao-aot: this hao build has no LC_UUID\n"); return -1; }
     if (hao_env_tier() == HAO_ENV_SETUGID) { fprintf(stderr, "hao-aot: refused in a setuid/setgid process\n"); return -1; }
@@ -6395,6 +6783,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir,
             goto out;
         }
     } else {
+        if (mapped) { fprintf(stderr, "hao-aot: %s: mapped caches require a signed guest\n", path); goto out; }
         if (aot_dir_system(&dirs[w], canon, dfd)) {
             fprintf(stderr, "hao-aot: %s: not code signed: %s is a system cache directory, which holds caches for signed code only; "
                     "no cache written\n", path, canon);
@@ -6409,7 +6798,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir,
         int rn = cache_dir ? 0 : aot_read_dirs(lv, rd, why, sizeof why);
         char where[PATH_MAX + 80];
         if (cache_dir) { rd[0] = dirs[0]; rn = 1; }
-        if (rn > 0 && aot_state(im, rd, rn, cpu, where, sizeof where, why, sizeof why) == 0) {
+        if (!mapped && rn > 0 && aot_state(im, rd, rn, cpu, where, sizeof where, why, sizeof why) == 0) {
             if (verbose) fprintf(stderr, "hao-aot: %s: valid cache %s: skipped\n", path, where);
             rc = 0;
             goto out;
@@ -6421,7 +6810,7 @@ int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir,
             goto out;
         }
     }
-    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, cpu, verbose);
+    rc = aot_generate(im, gen, dfd, &dirs[w], canon, &id, cpu, verbose, mapped);
 out:
     if (im) hao_unload_image(im);     /* and with it the last reference to the private copy */
     close(tfd);
@@ -6752,7 +7141,8 @@ static void *find_or_translate(uint64_t pc)
     hao_crit_enter();
     pthread_mutex_lock(&jit_lock);
     void *code = lookup(pc);
-    if (!code) code = aot_lazy_take(pc);
+    if (!code) code = mapped_take(pc);
+    if (!code && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) code = aot_lazy_take(pc);
     if (!code) { code = translate(pc); fresh = code != NULL; }
     pthread_mutex_unlock(&jit_lock);
     hao_crit_leave();
@@ -6771,7 +7161,7 @@ static void *find_or_translate(uint64_t pc)
  * NULL when it would be interpreted. */
 void *hao_jit_translate(uint64_t pc)
 {
-    if (!hao_jit_init() || __atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) return NULL;
+    if (!hao_jit_init() || (__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) && !mapped_count())) return NULL;
     return find_or_translate(pc);
 }
 
@@ -6819,7 +7209,7 @@ int hao_jit_run_block(hao_thread *th)
     if (!code) {
         /* Once the cache is full, a miss is interpreted without the lock:
          * JIT exits leave NZCV materialised in hao_cpu, as a64_exec expects. */
-        if (!__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE)) code = find_or_translate(c->pc);
+        if (!__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) || mapped_count()) code = find_or_translate(c->pc);
         if (!code) {
             /* as run_loop's interpreter: a64_step advances cpu.pc before the instruction's memory accesses,
              * so a signal handler gets the instruction's pc from HELPER (and HAO_CODE_ALIAS tells the
@@ -6843,7 +7233,7 @@ int hao_jit_run_block(hao_thread *th)
     uint64_t site = c->host_scratch[0];
     if (r == HAO_EXIT_BRANCH && site && !hao_opt.no_chain) {
         void *next = lookup(c->pc);
-        if (!next && hao_image_for_code(c->pc) && !hao_is_trap(c->pc) && !__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE))
+        if (!next && hao_image_for_code(c->pc) && !hao_is_trap(c->pc) && (!__atomic_load_n(&cache_full, __ATOMIC_ACQUIRE) || mapped_count()))
             next = find_or_translate(c->pc);
         /* site = address of the rel32 field of the block's exit jmp
          * (exit_direct). Other threads may be executing that jmp: one
@@ -6854,18 +7244,22 @@ int hao_jit_run_block(hao_thread *th)
          * flushed, and a future flush must first get every thread out of
          * the old code. An unaligned or foreign site is left unchained
          * (slower, not wrong; st_link_skips counts it). */
-        bool ok = next && !(site & 3) && site >= (uint64_t)(uintptr_t)cache && site + 4 <= (uint64_t)(uintptr_t)cache_end;
+        bool ok = (uintptr_t)next >= (uintptr_t)cache && (uintptr_t)next < (uintptr_t)cache_end &&
+                  !(site & 3) && site >= (uintptr_t)cache && site <= (uintptr_t)cache_end - 4;
         if (ok) {
             int32_t rel = (int32_t)((intptr_t)next - (intptr_t)(site + 4));
             hao_wx_win win;
             hao_crit_enter();
-            int32_t *w = hao_wx_begin((void *)(uintptr_t)site, 4, &win);
-            if (w) {   /* frozen: left unchained */
-                __atomic_store_n(w, rel, __ATOMIC_RELEASE);
-                hao_wx_end(&win, 4);
+            if (__atomic_load_n((int32_t *)(uintptr_t)site, __ATOMIC_ACQUIRE) != rel &&
+                !aot_lazy_chain(site, next)) {
+                int32_t *w = hao_wx_begin((void *)(uintptr_t)site, 4, &win);
+                if (w) {   /* frozen: left unchained */
+                    __atomic_store_n(w, rel, __ATOMIC_RELEASE);
+                    hao_wx_end(&win, 4);
+                    __atomic_fetch_add(&st_links, 1, __ATOMIC_RELAXED);
+                }
             }
             hao_crit_leave();
-            __atomic_fetch_add(&st_links, 1, __ATOMIC_RELAXED);
         } else if (next)
             __atomic_fetch_add(&st_link_skips, 1, __ATOMIC_RELAXED);
         if (next) {
@@ -6884,7 +7278,7 @@ void hao_jit_stats(void)
     hao_gmap_totals(&maps_mapped, &maps_grows);   /* hao's growable maps (hao/gmap.h) */
     fprintf(stderr, "hao-jit: aot_blocks=%llu aot_rejected=%llu jit_blocks=%llu guest_insns=%llu native=%llu helper=%llu (%.1f%% native) links=%llu code=%lluKB"
             " sites=%llu sites_unaligned=%llu link_skips=%llu table=%u/%u table_kb=%llu maps_kb=%llu map_grows=%u fused=%llu"
-            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu wx_writes=%llu wx_frozen=%d\n",
+            " flag_exits=%llu flag_exits_unsaved=%llu helper_calls=%llu aot_lazy_blobs=%llu aot_lazy_kb=%llu aot_lazy_bursts=%llu mapped_full=%llu mapped_lookups=%llu wx_writes=%llu wx_frozen=%d mapped_locates=%llu\n",
             (unsigned long long)st_aot_blocks, (unsigned long long)st_aot_rejected, (unsigned long long)st_blocks, (unsigned long long)st_insns, (unsigned long long)st_native,
             (unsigned long long)st_helper, st_native + st_helper ? 100.0 * st_native / (st_native + st_helper) : 0,
             (unsigned long long)st_links, (unsigned long long)(st_bytes >> 10), (unsigned long long)st_sites,
@@ -6893,7 +7287,9 @@ void hao_jit_stats(void)
             (unsigned long long)(maps_mapped >> 10), maps_grows, (unsigned long long)st_fused,
             (unsigned long long)st_fl_exits, (unsigned long long)st_fl_unsaved,
             (unsigned long long)__atomic_load_n(&st_helper_calls, __ATOMIC_RELAXED), (unsigned long long)st_aot_lazy_blobs,
-            (unsigned long long)(st_aot_lazy_bytes >> 10), (unsigned long long)st_wx, wx_frozen);
+            (unsigned long long)(st_aot_lazy_bytes >> 10), (unsigned long long)st_aot_lazy_bursts, (unsigned long long)__atomic_load_n(&st_mapped_full, __ATOMIC_RELAXED),
+            (unsigned long long)__atomic_load_n(&st_mapped_lookups, __ATOMIC_RELAXED), (unsigned long long)st_wx, wx_frozen,
+            (unsigned long long)__atomic_load_n(&st_mapped_locates, __ATOMIC_RELAXED));
     uint64_t counts[HG_COUNT][2];
     for (unsigned g = 0; g < HG_COUNT; g++)
         for (unsigned k = 0; k < 2; k++)
@@ -7175,6 +7571,7 @@ void hao_jit_alias(uint64_t entry, uint64_t guest)
     pthread_mutex_lock(&jit_lock);
     if (!lookup(entry)) {
         void *code = lookup(guest);
+        if (!code) code = mapped_take(guest);
         if (!code) code = aot_lazy_take(guest);
         if (!code) code = translate(guest);
         if (code) insert(entry, code);

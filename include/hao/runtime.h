@@ -469,6 +469,7 @@ void *hao_jit_translate(uint64_t pc);   /* host tests: translate, do not run; NU
 /* The guest instruction a host pc inside translated code belongs to:
  * false if host_pc is not in a translated block. *flags_in_host: the guest
  * NZCV lives in host RFLAGS there, not in cpu.flags. */
+bool hao_aot_mapped_address(uint64_t addr);
 bool hao_jit_locate(uint64_t host_pc, uint64_t *guest_pc, bool *flags_in_host);
 bool hao_jit_init(void);      /* false: no executable memory (interpreter, no thunks) */
 bool hao_have_thunks(void);
@@ -481,6 +482,7 @@ void hao_jit_stats(void);
 /* `hao --aot [--cache DIR] [--cpu=SPEC] FILE`: write FILE's AOT cache into cache_dir (absolute), or with
  * NULL into the directory this process writes to, translated for at most the CPU features cpu
  * (hao/cpufeat.h; hao_cpu_profile_parse); 0 or -1 (reported) */
+int hao_aot_generate_file_format(const char *path, bool verbose, const char *cache_dir, uint64_t cpu, bool mapped);
 int hao_aot_generate_file(const char *path, bool verbose, const char *cache_dir, uint64_t cpu);
 int hao_aot_check_file(const char *path, const char *cache_dir, bool print, uint64_t cpu);
 bool hao_aot_write_dir(char *out, size_t n);   /* the directory `hao --aot` with no --cache writes to; false: none */

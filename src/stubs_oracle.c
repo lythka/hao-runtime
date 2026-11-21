@@ -40,3 +40,14 @@ bool hao_guest_sig_cdhash(const uint8_t *blob, size_t len, uint8_t cdhash[20], u
     (void)blob; (void)len; (void)cdhash; (void)hash_type; (void)why; (void)n;
     return false;
 }
+
+#if defined(HAO_TEST_SWITCHES) || defined(HAO_MAPPED_AOT_TRIAL)
+/* The standalone oracle has no guest images, executable cache files or
+ * trusted store. Its test-switch build closes the same optional route. */
+#include "hao/aot_mapped_vm.h"
+bool hao_file_fixed(int fd, const struct stat *st) { return false; }
+int hao_libval_mode(void) { return HAO_LIBVAL_OFF; }
+bool hao_aot_mapped_open(int fd, size_t size, const uint8_t digest[32], const hao_aot_expect *expect,
+                         uint64_t base, hao_aot_mapping *m, char *why, size_t n) { return false; }
+void hao_aot_mapping_discard(hao_aot_mapping *m) {}
+#endif

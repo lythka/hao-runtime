@@ -31,7 +31,7 @@
 static void usage(void)
 {
     fprintf(stderr, "usage: hao [-v|-vv] [--interp] [--stats] [--allow-unsigned] [--] PROGRAM [ARGS...]\n"
-                    "       hao --aot [--check] [--cache DIR] [--cpu=baseline|host|HEX] [--] [FILE...] | hao --aot --auto\n"
+                    "       hao --aot [--check | --mapped-input] [--cache DIR] [--cpu=baseline|host|HEX] [--] [FILE...] | hao --aot --auto\n"
                     "(internal: use `hao run` / `hao aot`)\n");
     exit(64);
 }
@@ -554,11 +554,12 @@ static int aot_main(int argc, char **argv)
      * host has: a cache is never made with code this machine cannot run. */
     int bad = 0, k = 2;
     const char *cache = NULL, *cpu_spec = NULL;
-    bool check = false;
+    bool check = false, mapped = false;
     if (argc == 3 && !strcmp(argv[k], "--auto")) return aot_auto();
     char abs[PATH_MAX];
     for (; k < argc; k++) {
         if (!strcmp(argv[k], "--check")) check = true;
+        else if (!strcmp(argv[k], "--mapped-input")) mapped = true;
         else if (!strncmp(argv[k], "--cpu=", 6) && argv[k][6]) cpu_spec = argv[k] + 6;
         else if (!strcmp(argv[k], "--cache")) {
             if (k + 1 >= argc || !argv[k + 1][0]) usage();
@@ -580,6 +581,7 @@ static int aot_main(int argc, char **argv)
         if (!hao_cpu_profile_parse(cpu_spec, cpu, &cpu, why, sizeof why)) { fprintf(stderr, "hao-aot: %s\n", why); return 64; }
     }
     if (k < argc && !strcmp(argv[k], "--")) k++;
+    if (mapped && (check || !cache || k >= argc)) { fprintf(stderr, "hao-aot: --mapped-input requires --cache DIR and FILE\n"); return 64; }
     if (k >= argc) return aot_default(cache, check, false, cpu_spec, cpu);
     hao_opts_init(NULL);
     hao_verbose = 1;
@@ -593,7 +595,7 @@ static int aot_main(int argc, char **argv)
         return worst;
     }
     for (; k < argc; k++)
-        if (hao_aot_generate_file(argv[k], true, cache, cpu) < 0) bad++;   /* maps a private copy of the file (jit.c) */
+        if (hao_aot_generate_file_format(argv[k], true, cache, cpu, mapped) < 0) bad++;   /* maps a private copy of the file (jit.c) */
     return bad ? 1 : 0;
 }
 

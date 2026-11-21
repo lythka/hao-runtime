@@ -109,6 +109,7 @@ struct hao_image {
     void *jit_slot;             /* code-cache word holding `base` for PIC code */
     void *aot;                  /* loaded AOT cache in the code cache (jit.c aot_publish) */
     uint64_t aot_size, aot_cpu; /* its size and the CPU profile it was translated under (hao/aot.h cpu_profile) */
+    void *aot_mapped;           /* initialized runtime image pinned with its immutable mapped-code descriptor */
     void *aot_lazy;             /* its lazy install record (jit.c aot_lazy), or NULL when installed whole */
     uint8_t aot_state;          /* what hao_aot_load found (HAO_AOT_STATE_*, hao/aot.h): AOT use records */
     uint64_t jit_blocks;        /* blocks of this image the JIT translated (jit.c emit_block, atomic) */
@@ -206,6 +207,8 @@ void hao_slice_hand(hao_slice *sl);
 extern int hao_slice_test_path;
 /* The rule hao_slice_open maps a file by: owner uid, mode, its volume's
  * statfs flags, and whether the file has no ACL (the lookup said ENOENT). */
+struct stat;
+bool hao_file_fixed(int fd, const struct stat *st);
 bool hao_slice_fixed_rule(uid_t uid, mode_t mode, uint32_t mnt_flags, bool acl_none);
 
 /* Load path (fat or thin), choose arm64e (else arm64) slice, map, apply

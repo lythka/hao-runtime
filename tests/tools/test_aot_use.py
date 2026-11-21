@@ -39,7 +39,7 @@ def rec(run, kind, *f):
 # a: 3 runs (one in a compact log line, one from -v stderr), b: 2 runs with more JIT blocks; libl in a's runs;
 # the shared-cache image and the native program ran once each
 compact = '2026-11-18 18:39:43.044 Df hao[91558:92aa924] [com.hao:use] '
-logs = [compact + rec(1, 'main', UA, 'none', '/usr/bin/a'), compact + rec(1, 'image', UL, 'none', '/usr/lib/libl.dylib'),
+logs = [compact + rec(1, 'main', UA, 'none', '/usr/bin/a'), compact + rec(1, 'image', UL, 'mapped', '/usr/lib/libl.dylib'),
         compact + rec(1, 'jit', 10, UA, '/usr/bin/a'), compact + rec(1, 'jit', 40, UA, '/usr/bin/a'),
         compact + rec(1, 'jit', 5, UL, '/usr/lib/libl.dylib'),
         rec(2, 'main', UA, 'aot', '/usr/bin/a'), rec(3, 'main', UA, 'rejected', '/usr/bin/a'),
@@ -72,6 +72,7 @@ rows = {e['path']: e for e in r['images']}
 check(rc == 0 and lst == ['/usr/bin/a', '/usr/libexec/b', '/usr/lib/libl.dylib'], '--root keeps files with an arm64 slice: %s' % lst)
 check('shared-cache' in rows['/System/Library/PrivateFrameworks/X.framework/Versions/A/X']['why']
       and 'native' in rows['/usr/libexec/native']['why'], 'a shared-cache image and a native program are reported, not listed')
+check(rows['/usr/lib/libl.dylib']['aot'] == {'mapped': 1}, 'report identifies a file-backed mapped image')
 a, b = rows['/usr/bin/a'], rows['/usr/libexec/b']
 check(a['runs'] == 3 and a['main_runs'] == 3 and a['jit_blocks'] == 40 and a['aot'] == {'aot': 1, 'none': 1, 'rejected': 1}
       and b['jit_blocks'] == 900 and b['aot'] == {'none': 1, 'unfit': 1} and r['runs'] == 7,

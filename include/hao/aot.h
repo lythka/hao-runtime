@@ -87,7 +87,7 @@ typedef struct { uint32_t site, target; } hao_aot_link;           /* rel32 at co
  * process: HAO_NO_AOT, no executable memory, no LC_UUID), a cache loaded, no
  * cache file in any directory read, only files that were rejected, or a valid
  * cache not loaded under the process's memory limit. */
-enum { HAO_AOT_STATE_OFF = 0, HAO_AOT_STATE_LOADED, HAO_AOT_STATE_NONE, HAO_AOT_STATE_REJECTED, HAO_AOT_STATE_UNFIT };
+enum { HAO_AOT_STATE_OFF = 0, HAO_AOT_STATE_LOADED, HAO_AOT_STATE_NONE, HAO_AOT_STATE_REJECTED, HAO_AOT_STATE_UNFIT, HAO_AOT_STATE_MAPPED };
 
 /* What the loading image expects. Code ranges are image-relative [lo, hi).
  * id_kind says whether the image is signed; code_id (with id_hash) is its
