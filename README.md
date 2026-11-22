@@ -45,7 +45,10 @@ contents you can lose, never on a Mac you depend on.
 
 ## Status
 
-Pre-alpha. The system integration target is MacBookPro9,2 with Intel HD 4000; what works on it is listed in
+Developer preview: the current release is
+[v0.0.1-beta.1](https://github.com/lythka/hao-runtime/releases/tag/v0.0.1-beta.1), installed by
+[hao-patcher v0.0.1-beta.1](https://github.com/lythka/hao-patcher/releases/tag/v0.0.1-beta.1). The system
+integration target is MacBookPro9,2 with Intel HD 4000; what works on it is listed in
 [hao-patcher's Status](https://github.com/lythka/hao-patcher#status).
 
 | Area | State |
@@ -111,8 +114,7 @@ hao is installed into a macOS System volume as a payload:
 - `kext/` holds HaoExec and `kext/stamp_identity.py`, which stamps it for the
   target kernel.
 
-[Releases](docs/releases.md) describes versioned release components and the
-included 26A428 contract export.
+[Releases](docs/releases.md) describes versioned release components.
 
 ## Repository layout
 
