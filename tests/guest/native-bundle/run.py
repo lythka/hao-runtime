@@ -73,3 +73,57 @@ run(['clang','-arch','arm64','-arch','arm64e','-dynamiclib','-fobjc-arc','-frame
 result=subprocess.run(list(map(str,[HAO,OUT/'guest.arm64e',dylib,'reject'])),capture_output=True,text=True,timeout=60)
 assert result.stdout=='refused 0\n',(result.returncode,result.stdout,result.stderr)
 print('ARM-only dylib from a native caller loads PASS')
+
+# Foundation opens a guest app's universal plug-in, whose dependency has
+# only an ARM slice at run time. The native slice cannot load that dependency.
+contents = OUT / 'Fixture.app/Contents'
+main = contents / 'MacOS/Fixture'
+bundle = contents / 'PlugIns/AppPlugin.bundle'
+plugin = bundle / 'Contents/MacOS/AppPlugin'
+main.parent.mkdir(parents=True, exist_ok=True)
+plugin.parent.mkdir(parents=True, exist_ok=True)
+(bundle / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(
+    CFBundleIdentifier='test.hao.AppPlugin', CFBundleExecutable='AppPlugin',
+    CFBundlePackageType='BNDL', NSPrincipalClass='AppPlugin')))
+dep = plugin.parent / 'libRequired.dylib'
+for arches in [['-arch', 'arm64', '-arch', 'x86_64'], ['-arch', 'arm64']]:
+    run(['clang', *arches, '-dynamiclib', '-install_name', '@loader_path/' + dep.name,
+         '-x', 'c', '-', '-o', dep], input=b'int required(void) { return 1; }\n')
+    sign(dep)
+    if 'x86_64' in arches:
+        run(['clang', *arches, '-bundle', '-framework', 'Foundation', '-DCLASS=AppPlugin',
+             HERE / 'plugin.m', '-Wl,-needed_library,' + str(dep), '-o', plugin])
+sign(bundle)
+run(['clang', '-arch', 'arm64', '-framework', 'Foundation', HERE / 'app.m', '-o', main])
+sign(main)
+env = dict(os.environ)
+env.pop('HAO_NATIVE_APP_LIBS', None)
+run([main, bundle], env=env)
+run([HAO, main, bundle], env=env)
+print("guest app's universal plug-in with ARM-only dependency PASS")
+
+# A nested app owns its own plug-ins. A sibling plug-in in its outer app
+# keeps native loader semantics, including dyld's architecture refusal.
+nested = contents / 'Helpers/Nested.app/Contents/MacOS/Nested'
+nested.parent.mkdir(parents=True, exist_ok=True)
+shutil.copy2(main, nested)
+def expect_native_refusal(executable, plugin_bundle):
+    result = subprocess.run([HAO, executable, plugin_bundle], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1 and 'incompatible architecture' in result.stderr, result
+
+expect_native_refusal(nested, bundle)
+print("nested app preserves native loading of outer app's plug-in PASS")
+
+nested_bundle = nested.parent.parent / 'PlugIns/AppPlugin.bundle'
+shutil.copytree(bundle, nested_bundle, dirs_exist_ok=True)
+run([HAO, nested, nested_bundle], env=env)
+expect_native_refusal(main, nested_bundle)
+print("outer app preserves native loading of nested app's plug-in PASS")
+
+alias = nested.parent / 'OuterExecutable'
+alias.unlink(missing_ok=True)
+alias.symlink_to(main)
+run([HAO, alias, bundle], env=env)
+expect_native_refusal(alias, nested_bundle)
+print("an executable symlink preserves its owning app PASS")

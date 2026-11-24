@@ -4116,14 +4116,36 @@ static int native_bundle_expand(const char *path, const void *ra, char *out, siz
 }
 static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n);
 static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, why, n); }
-/* An ARM-only dylib dyld cannot open loads as a guest image for any caller: guest code's dlopen, and native code
- * loading the program's own frameworks and plug-ins (NSBundle/CFBundle loading a framework's MH_DYLIB, as Xcode
- * does for its plug-ins). Guest callers also keep universal app libraries in the ARM domain.
- * A native caller still gets no untyped guest function address from dlsym. */
+/* Foundation opens an NSBundle on behalf of the program. Its immediate return
+ * address is native even when the running guest requested its own plug-in. */
+static bool app_bundle_request(const char *path, const void *ra)
+{
+    hao_thread *t = hao_current_peek();
+    if (!hao_main_image || !t || !t->depth || !path || path[0] != '/') return false;
+    extern char hao_guest_image_path[1024];  /* kernel path of the opened main executable */
+    const char *end = NULL;
+    const char *component = hao_guest_image_path;
+    while ((component = strstr(component, ".app/Contents/"))) {
+        component += strlen(".app/Contents/");
+        end = component;
+    }
+    if (!end) return false;
+    Dl_info caller;
+    if (!dladdr(ra, &caller) || !caller.dli_fname ||
+        (strcmp(caller.dli_fname, "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation") &&
+         strcmp(caller.dli_fname, "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"))) return false;
+    char real[PATH_MAX];
+    size_t prefix = (size_t)(end - hao_guest_image_path);
+    return realpath(path, real) && !strncmp(hao_guest_image_path, real, prefix) &&
+           !strstr(real + prefix, ".app/Contents/");
+}
+/* Choose a guest-owned app image before asking dyld to load a native slice.
+ * After a native refusal only ARM-only images are eligible for fallback. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
     if (!ra) return bundle_open(path, flags, true, false, why, n);
-    if (!path || !guest_caller_image(ra) || !guest_app_library(path)) return NULL;
+    if (!path || (!guest_caller_image(ra) && !app_bundle_request(path, ra)) || !guest_app_library(path)) return NULL;
+    if (hao_verbose) fprintf(stderr, "hao: guest dlopen %s (app library)\n", path);
     return bundle_open(path, flags, true, true, why, n);
 }
 static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n)
