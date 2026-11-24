@@ -13,6 +13,7 @@ guest/callbacks	300	par	tests/guest/callbacks.sh
 guest/cfnull	300	par	tests/guest/cfnull.sh
 guest/diagtime	120	par	tests/guest/diagtime.sh
 guest/logclient	120	par	tests/guest/logclient.sh
+guest/ffi	120	par	tests/guest/ffi.sh
 guest/faultstack	300	par	tests/guest/faultstack.sh
 guest/fetchgiveup	120	par	tests/guest/fetchgiveup.sh
 guest/chkstk	300	par	tests/guest/chkstk.sh

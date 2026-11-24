@@ -1851,7 +1851,7 @@ static int image_exec_at(uint64_t pc)
     return -1;
 }
 
-static const char *not_host_code(uint64_t pc)
+const char *hao_not_host_code(uint64_t pc)
 {
     /* arm64 code the guest generated (a JIT): hao translates registered images only */
     if (hao_guest_exec_mapped(pc))
@@ -1880,7 +1880,7 @@ static const char *not_host_code(uint64_t pc)
 
 static const hao_plan *bind_bare(hao_thread *t, uint64_t pc)
 {
-    const char *bad = not_host_code(pc);
+    const char *bad = hao_not_host_code(pc);
     if (bad) {
         char label[32];
         snprintf(label, sizeof label, "%#llx", (unsigned long long)pc);

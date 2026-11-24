@@ -1343,6 +1343,15 @@ uint64_t hao_guest_entry_for_void_sig(uint64_t guest, const char *enc)
     return guest_entry_for_sig(guest, enc, true);
 }
 
+/* A caller with an explicit cross-architecture signature cannot fall back
+ * to a raw register thunk if an exact entry cannot be allocated. */
+uint64_t hao_guest_entry_for_exact_sig(uint64_t guest, const char *enc)
+{
+    hsig *sig = enc ? hao_sig(enc) : NULL;
+    if (!guest || !sig || sig->unmarshalable || hao_opt.no_closures) return 0;
+    return hao_sig_thunk(guest, sig);
+}
+
 uint64_t hao_guest_entry_for_sig(uint64_t guest, const char *enc)
 {
     return guest_entry_for_sig(guest, enc, false);

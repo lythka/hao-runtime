@@ -250,6 +250,7 @@ static void fork_child(void)
     hao_jit_fork_child();
     hao_code_fork_child();   /* after hao_jit_fork_child's executable memory; guest pages hao was writing */
     hao_abi_fork_child();
+    hao_ffi_fork_child();
     hao_blocks_fork_child();
     hao_bridge_fork_child();
     hao_dsc_fork_child();
@@ -4621,6 +4622,10 @@ static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
     if (!p) p = native_dlsym(h, sym, flat);
     if (!p && (p = native_bool_spelling(h, name, flat, &alt))) nname = alt;
     if (!p) return false;
+    if (hao_ffi_native(name, p, addr)) {
+        hao_bridge_bind_trap(name, HAO_BRS_TRAP);
+        return true;
+    }
     /* a function an interposer answers under another of its names (a renamed
      * re-export, an alias at the same address): its trap, as for that name */
     uint64_t trap;

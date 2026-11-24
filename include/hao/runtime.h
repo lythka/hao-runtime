@@ -72,6 +72,7 @@ typedef struct hao_thread {
     unsigned swift_results_resolving;
     bool async_contract_resolving;
     struct hao_swift_value_scope *swift_values;
+    struct hao_ffi_active *ffi_active;
     /* Nils a guest call of an Optional witness made and hao wrote in the
      * guest's encoding (swiftvalue.c witness_to_guest), a ring: a callback
      * returning such a value to native code as its indirect result gets the
@@ -340,6 +341,10 @@ void hao_objc_read_image(hao_image *img);
 void hao_objc_run_loads(hao_image *img);
 
 /* interpose.c */
+void hao_ffi_fork_child(void);
+void hao_ffi_require_live_frame(hao_thread *thread, int destination);
+const char *hao_not_host_code(uint64_t pc);
+bool hao_ffi_native(const char *name, void *implementation, uint64_t *address);
 bool hao_interpose_lookup(const char *name, uint64_t *addr);
 int hao_interpose_selfcheck(char *why, size_t n);   /* tests: table order and name indexes; 0 = sound */
 /* name is an ABI repair of a native C++ function (applies to native binds only) */
@@ -643,6 +648,7 @@ bool hao_call_native_sig(hao_cpu *c, uint64_t fn, const char *enc);
  * blocks, such fields of by-value aggregates; hao/bridge.h argmask bits), *fnret: a '^?' result */
 bool hao_sig_msgsend(const char *enc, unsigned *codeslots, bool *fnret);
 bool hao_sig_native_memret(const char *enc);
+uint64_t hao_guest_entry_for_exact_sig(uint64_t guest, const char *enc);
 uint64_t hao_guest_entry_for_sig(uint64_t guest, const char *enc);
 /* Explicit API callback contract: only supported unambiguous simple void
  * signatures receive a typed entry; everything else keeps a plain thunk. */

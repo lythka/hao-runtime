@@ -888,6 +888,7 @@ _Unwind_Reason_Code hao_eh_personality(int version, _Unwind_Action actions, uint
     if (kind == HAO_GUARD_ENTRY) {
         /* the native unwind is removing this segment: undo its entry */
         if (!(actions & _UA_SEARCH_PHASE)) {
+            hao_ffi_require_live_frame(t, s->depth - 1);
             if (s->outer) t->cpu = *s->outer;
             t->in_fault_handler = s->fault_at_entry;
             t->swift_values = s->prev ? s->prev->swift_values_at_entry : NULL;
@@ -962,6 +963,7 @@ void hao_longjmp_segment(hao_thread *t, int depth)
         fprintf(HAO_DIAG, "longjmp to segment depth %d, which is not live (current %d)\n", depth, t->depth);
         abort();
     }
+    hao_ffi_require_live_frame(t, depth);
     t->seg = s;
     t->swift_values = s->swift_values_at_entry;
     t->depth = depth;

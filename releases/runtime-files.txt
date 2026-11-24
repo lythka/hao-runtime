@@ -77,6 +77,7 @@ src/cxxstr_gen.inc
 src/dsc.c
 src/fmtattr_gen.inc
 src/fmtfamily_gen.inc
+src/ffi_bridge.c
 src/fnslots.c
 src/front/cli.c
 src/front/companion_cli.c
@@ -856,6 +857,10 @@ tests/guest/logclient.c
 tests/guest/logclient.sh
 tests/guest/faultstack.c
 tests/guest/faultstack.sh
+tests/guest/ffi.sh
+tests/guest/ffi_control.c
+tests/guest/ffi_unwind.cpp
+tests/guest/python_ctypes.py
 src/ids.c
 src/ioreg.c
 tests/guest/ioreg.c

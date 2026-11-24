@@ -46,7 +46,7 @@ CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c
         src/native_callback.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
-RT := src/companions.c src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
+RT := src/ffi_bridge.c src/companions.c src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
 RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c src/valist_builder.c
 RT += src/ioreg.c src/ids.c src/aot_use.c
@@ -89,7 +89,7 @@ NO_TLV = @if otool -l $@ | grep -q __thread_vars; then \
 	rm -f $@; exit 1; fi
 
 $(B)/libhao.dylib: $(RT_O) $(B)/libhaocore.a
-	$(CC) $(ARCH) -dynamiclib -install_name @rpath/libhao.dylib $(OSO) -o $@ $(RT_O) $(B)/libhaocore.a -lobjc
+	$(CC) $(ARCH) -dynamiclib -install_name @rpath/libhao.dylib $(OSO) -o $@ $(RT_O) $(B)/libhaocore.a -lobjc -lffi
 	$(NO_TLV)
 	codesign -s - -f $@
 
