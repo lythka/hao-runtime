@@ -812,6 +812,7 @@ tests/guest/fwbundle.sh
 tests/guest/fwbundle.swift
 tests/guest/fwbundle_late.m
 tests/guest/fwbundle_late.sh
+tests/guest/native_ctor_framework.sh
 tests/guest/fwbundle_lib.swift
 tests/guest/halfops.c
 tests/guest/halfops.sh

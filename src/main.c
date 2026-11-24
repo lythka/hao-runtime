@@ -94,7 +94,7 @@ extern void hao_objc_image_ready(const struct mach_header *);
 void hao_guest_image_init(hao_image *img)
 {
     bool prepared = hao_ids_prepare(img);
-    hao_tlv_setup(img);
+    if (!img->objc_prepared_early) hao_tlv_setup(img);
     /* Swift records first: ObjC registration runs the metadata
      * initializers of Swift classes laid out at run time (objc.c), which
      * may look up this image's types and conformances. */
@@ -102,9 +102,11 @@ void hao_guest_image_init(hao_image *img)
     hao_swiftmeta_image(img);   /* relative pointers to guest functions -> island thunks, before the runtime reads them */
     hao_swift_register_image(img);
     hao_swift_witness_setup();   /* the Optional witnesses guest calls are recognized by (swiftvalue.c) */
-    hao_objc_read_image(img);
-    hao_blocks_register_image(img);
-    hao_fnslots_image(img);
+    if (!img->objc_prepared_early) {
+        hao_objc_read_image(img);
+        hao_blocks_register_image(img);
+        hao_fnslots_image(img);
+    }
     hao_objc_image_ready((const struct mach_header *)(uintptr_t)img->base);
     hao_objc_run_loads(img);
     /* HAO_DIAG_TIME: "registered NAME" covers the steps above and the previous image's initializers */

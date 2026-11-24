@@ -103,6 +103,8 @@ struct hao_image {
     int refused_companion_ordinal; /* strong dependency refused while binding this image */
     bool binding, checking_dependencies, dependencies_checked;
     struct hao_image *objc_name_previous; /* immutable after ObjC registration */
+    bool objc_prepared_early, native_ctor_pending;
+    size_t objc_early_event;
     size_t framework_bundle_path_length;
     bool companion_rollback, companion_init_pending;
     struct hao_pending_binding *pending_binding; /* valid until original load returns */

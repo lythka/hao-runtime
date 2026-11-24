@@ -72,7 +72,7 @@ int hao_use_jit = 1;
  * guest code that runs in later destructors (guest keys, the ObjC
  * autorelease-pool drain, TLV and C++ thread_local destructors) finds this
  * thread's state instead of mapping a fresh guest stack in every pass. */
-static pthread_key_t thread_key, crit_key;
+static pthread_key_t thread_key, crit_key, mapped_dependency_key;
 static pthread_once_t thread_once = PTHREAD_ONCE_INIT;
 uint64_t hao_threads_live, hao_threads_freed;
 
@@ -140,6 +140,7 @@ static void thread_key_init(void)
 {
     pthread_key_create(&thread_key, thread_key_dtor);
     pthread_key_create(&crit_key, NULL);
+    pthread_key_create(&mapped_dependency_key, NULL);
     prev_hook = pthread_introspection_hook_install(thread_hook);
     pthread_atfork(NULL, NULL, threads_child);
 }
@@ -3354,7 +3355,11 @@ static void unlock_loads(void) { pthread_mutex_unlock(&load_lock); }
  * notifications and permits a callback to register another observer.
  * Snapshot the count before callbacks, which may grow either array. */
 typedef void (*image_observer)(const struct mach_header *);
-static const struct mach_header **objc_images;
+typedef struct {
+    const struct mach_header *header;
+    size_t first_observer, end_observer;
+} objc_image_event;
+static objc_image_event *objc_images;
 static size_t nobjc_images;
 static struct {
     image_observer callback;
@@ -3366,7 +3371,9 @@ static void deliver_objc_images(size_t observer, size_t end)
 {
     while (objc_observers[observer].next_image < end) {
         size_t next = objc_observers[observer].next_image++;
-        objc_observers[observer].callback(objc_images[next]);
+        objc_image_event event = objc_images[next];
+        if (observer >= event.first_observer && observer < event.end_observer)
+            objc_observers[observer].callback(event.header);
     }
 }
 
@@ -3411,18 +3418,38 @@ const char **hao_objc_copy_image_names(const char **native, unsigned *count)
     return result;
 }
 
-void hao_objc_image_ready(const struct mach_header *header)
+static void publish_objc_image_name(hao_image *image)
 {
-    lock_loads();
-    hao_image *image = hao_image_for_addr((uintptr_t)header);
     uint64_t size;
     if (image && hao_image_section(image, NULL, "__objc_imageinfo", &size)) {
         image->objc_name_previous = __atomic_load_n(&objc_named_images, __ATOMIC_RELAXED);
         __atomic_store_n(&objc_named_images, image, __ATOMIC_RELEASE);
     }
+}
+
+static void record_objc_image(const struct mach_header *header, size_t first, size_t end)
+{
     objc_images = hao_alloc_check(realloc(objc_images, (nobjc_images + 1) * sizeof *objc_images),
                                   "Objective-C observed images");
-    objc_images[nobjc_images++] = header;
+    objc_images[nobjc_images++] = (objc_image_event){header, first, end};
+}
+
+void hao_objc_image_ready(const struct mach_header *header)
+{
+    lock_loads();
+    hao_image *image = hao_image_for_addr((uintptr_t)header);
+    if (image && image->objc_prepared_early) {
+        objc_image_event *early = &objc_images[image->objc_early_event];
+        size_t previous = early->first_observer;
+        early->end_observer = nobjc_observers;
+        if (previous) record_objc_image(header, 0, previous);
+        /* Future observers replay normal readiness order, including images
+         * made ready by a nested dependency constructor. */
+        record_objc_image(header, nobjc_observers, SIZE_MAX);
+    } else {
+        publish_objc_image_name(image);
+        record_objc_image(header, 0, SIZE_MAX);
+    }
     size_t count = nobjc_observers;
     for (size_t k = 0; k < count; k++) deliver_objc_images(k, nobjc_images);
     unlock_loads();
@@ -4006,7 +4033,7 @@ typedef struct native_load_scope {
     int ordinal, fd;
     const char *path;
     void *pinned;
-    bool resuming;
+    bool resuming, prepared_owner;
 } native_load_scope;
 static native_load_scope *native_load;  /* under the recursive load lock */
 
@@ -4056,6 +4083,102 @@ static bool mapped_native_file(int fd, const struct mach_header_64 *header, intp
     free(mapped);
     free(copy);
     return ok;
+}
+
+extern bool hao_objc_plain_image(hao_image *);
+extern void hao_objc_read_plain_image(hao_image *);
+/* Only an already-bound launch image can expose native-callable classes.
+ * An ordinary required G -> B load is the final missing edge in this case.
+ * A failing or independent dlopen must never leave registered classes behind. */
+static bool native_edge_completes_launch(const native_load_scope *scope)
+{
+    hao_image *im = scope->owner;
+    if (scope->previous || scope->fd < 0 || !hao_main_image || hao_main_image->init_state ||
+        !hao_main_image->dependencies_checked || !im->checking_dependencies ||
+        im->objc_prepared_early || scope->ordinal < 1 || scope->ordinal > im->ndeps ||
+        im->dep_weak[scope->ordinal - 1]) return false;
+    for (hao_image *other = hao_images_first(); other; other = hao_images_next(other)) {
+        if (other->binding || other->companion_rollback || other->released || other->init_state ||
+            (other != im && (!other->dependencies_checked || other->checking_dependencies))) return false;
+    }
+    /* Verify the actual loader ancestry consists of strong, committed edges. */
+    for (hao_image *child = im; child != hao_main_image; child = child->loader) {
+        hao_image *parent = child->loader;
+        if (!parent || parent->load_seq >= child->load_seq) return false;
+        bool strong = false;
+        for (int d = 0; d < parent->ndeps; d++) {
+            if (parent->dep_handle[d] == GUEST_DEP && parent->dep_image[d] == child && !parent->dep_weak[d]) {
+                strong = true;
+                break;
+            }
+        }
+        if (!strong) return false;
+    }
+    for (int d = 0; d < im->ndeps; d++) {
+        if (d + 1 == scope->ordinal) continue;
+        void *h = im->dep_handle[d];
+        if (!h || (missing_dependency(h) && !im->dep_weak[d])) return false;
+        if (h == GUEST_DEP && (!im->dep_image[d] || im->dep_image[d]->init_state != 2)) return false;
+    }
+    for (size_t k = 0; k < im->nflat_bind_images; k++)
+        if (im->flat_bind_images[k]->init_state != 2) return false;
+    return hao_objc_plain_image(im);
+}
+
+/* dyld has bound the native mapping, but has not started its constructors.
+ * This callback must not load another image, run guest code or call observers. */
+extern intptr_t _dyld_get_image_slide(const struct mach_header *);
+extern void _dyld_register_for_bulk_image_loads(void (*)(unsigned, const struct mach_header **, const char **));
+
+static void register_ready_owner(unsigned count, const struct mach_header **headers, const char **paths)
+{
+    native_load_scope *scope = pthread_getspecific(mapped_dependency_key);
+    if (!scope || scope->resuming || scope->pinned || count != 1) return;
+    const struct mach_header *header = headers[0];
+    const struct mach_header_64 *mh = (const void *)header;
+    if (!mapped_native_file(scope->fd, mh, _dyld_get_image_slide(header))) return;
+    /* The whole batch still awaits dyld's ObjC mapping notification. A guest
+     * method can look up a class dynamically even without any classrefs. */
+    const uint8_t *cmd = (const void *)(mh + 1);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const void *)cmd;
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *seg = (const void *)cmd;
+            const struct section_64 *sections = (const void *)(seg + 1);
+            for (uint32_t j = 0; j < seg->nsects; j++) {
+                const char *name = sections[j].sectname;
+                if (!strncmp(name, "__swift", 7) || !strncmp(name, "__objc_classlist", 16) ||
+                    !strncmp(name, "__objc_catlist", 14) || !strncmp(name, "__objc_protolist", 16) ||
+                    !strncmp(name, "__objc_nl", 9)) return;
+            }
+        }
+        cmd += lc->cmdsize;
+    }
+    hao_image *im = scope->owner;
+    scope->resuming = true;
+    void *handle = runtime_dlopen(scope->path, RTLD_LAZY | RTLD_NOLOAD);
+    if (handle && _dyld_get_dlopen_image_header(handle) == header) {
+        scope->pinned = handle;
+        im->dep_handle[scope->ordinal - 1] = scope->pinned;
+        im->native_ctor_pending = true;
+        scope->prepared_owner = true;
+        hao_tlv_setup(im);
+        hao_blocks_register_image(im);
+        hao_objc_read_plain_image(im);
+        im->objc_prepared_early = true;
+        publish_objc_image_name(im);
+        /* Existing observers receive their ordinary image-ready event after
+         * the native constructor. New observers can already replay the image. */
+        im->objc_early_event = nobjc_images;
+        record_objc_image((const void *)(uintptr_t)im->base, nobjc_observers, SIZE_MAX);
+    } else if (handle) {
+        dlclose(handle);
+    }
+    scope->resuming = false;
+}
+static void observe_native_mappings(void)
+{
+    _dyld_register_for_bulk_image_loads(register_ready_owner);
 }
 
 static bool verify_required_edges(hao_image *img, char *why, size_t n)
@@ -4147,8 +4270,16 @@ static bool try_candidate(const char *cand, bool os, void *c)
         scope.path = native_path;
         native_load = &scope;
     }
+    static pthread_once_t observer_once = PTHREAD_ONCE_INIT;
+    void *prior = pthread_getspecific(mapped_dependency_key);
+    if (native_load == &scope && native_edge_completes_launch(&scope)) {
+        pthread_once(&observer_once, observe_native_mappings);
+        pthread_setspecific(mapped_dependency_key, &scope);
+    }
     void *h = (!hao_app_domain_root[0] || _dyld_shared_cache_contains_path(cand)) ?
               runtime_dlopen(cand, RTLD_LAZY | RTLD_GLOBAL) : NULL;
+    pthread_setspecific(mapped_dependency_key, prior);
+    if (scope.prepared_owner) scope.owner->native_ctor_pending = false;
     native_load = scope.previous;
     if (scope.fd >= 0) close(scope.fd);
     if (scope.pinned && h == scope.pinned) {
@@ -4637,7 +4768,8 @@ extern void hao_guest_image_init(hao_image *);
 static void defer_incomplete_images(hao_image **ims, size_t n)
 {
     for (size_t k = 0; k < n; k++)
-        ims[k]->companion_init_pending = ims[k]->binding || ims[k]->checking_dependencies || ims[k]->companion_rollback;
+        ims[k]->companion_init_pending = ims[k]->binding || ims[k]->checking_dependencies ||
+            ims[k]->native_ctor_pending || ims[k]->companion_rollback;
     bool changed;
     do {
         changed = false;

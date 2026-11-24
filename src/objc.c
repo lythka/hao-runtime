@@ -912,7 +912,81 @@ static void call_load(Class cls, uint64_t imp)
     hao_call_guest(hao_current(), imp, args, 2);
 }
 
-void hao_objc_read_image(hao_image *img)
+/* Swift class realization calls guest metadata initializers. The dyld mapping
+ * notification may only prepare classes which need no guest execution. */
+static bool ready_class_methods(hao_image *img, const class_t *cls)
+{
+    if (!cls || !is_guest_data(img, (uintptr_t)cls)) return false;
+    const class_ro_t *ro = (const void *)(uintptr_t)(cls->data & FAST_DATA_MASK);
+    return ro && is_guest_data(img, (uintptr_t)ro) &&
+           !(ro->flags & (RO_REALIZED | RO_HAS_SWIFT_INITIALIZER)) &&
+           !(ro->baseMethods & 1);
+}
+
+bool hao_objc_plain_image(hao_image *img)
+{
+    uint64_t size;
+    const struct objc_image_info *info = (const void *)(uintptr_t)hao_image_section(img, NULL, "__objc_imageinfo", &size);
+    if (img->dsc || !info || size < sizeof *info || (info->flags & 0xff00)) return false;
+    for (int i = 0; i < img->nsects; i++)
+        if (!strncmp(img->sects[i].sect, "__swift", 7)) return false;
+    const class_t *const *classes = (const void *)(uintptr_t)hao_image_section(img, NULL, "__objc_classlist", &size);
+    if (!classes || !size) return false;
+    for (size_t i = 0; i < size / sizeof *classes; i++) {
+        const class_t *cls = classes[i];
+        if (!ready_class_methods(img, cls) ||
+            !ready_class_methods(img, (const void *)(uintptr_t)cls->isa)) return false;
+        const uint64_t super = cls->superclass;
+        if (!super) continue;
+        if (class_missing(super) || class_ignored(super) || is_stub_class(super)) return false;
+        if (is_guest_data(img, super)) {
+            size_t j = 0;
+            while (j < size / sizeof *classes && (uintptr_t)classes[j] != super) j++;
+            if (j == size / sizeof *classes) return false;
+        } else if (!data_realized(super)) return false;
+    }
+    /* Registration can refuse a class. Until every local class is known,
+     * methods must not observe a reference which still needs remapping. */
+    const char *ref_sections[] = {"__objc_classrefs", "__objc_superrefs"};
+    for (size_t i = 0; i < sizeof ref_sections / sizeof *ref_sections; i++) {
+        const uint64_t *refs = (const void *)(uintptr_t)hao_image_section(img, NULL, ref_sections[i], &size);
+        for (size_t j = 0; refs && j < size / sizeof *refs; j++)
+            if (refs[j] && (hao_image_for_addr(refs[j]) || class_missing(refs[j]) ||
+                            class_ignored(refs[j]) || is_stub_class(refs[j]) || !data_realized(refs[j]))) return false;
+    }
+    /* Categories attach through independent public ObjC operations. Do not
+     * expose a class while its category methods could still be incomplete. */
+    return !hao_image_section(img, NULL, "__objc_catlist", &size) &&
+           !hao_image_section(img, NULL, "__objc_catlist2", &size);
+}
+
+typedef struct { SEL name; const char *types; IMP imp; } absolute_method;
+typedef struct { method_list_t list; absolute_method entries[]; } absolute_methods;
+
+static void copy_typed_method(SEL name, const char *types, uint64_t imp, void *context)
+{
+    absolute_methods *methods = context;
+    uint64_t guest = hao_thunk_target(imp);
+    if (!guest) guest = imp;
+    if (hao_image_for_code(guest)) imp = hao_guest_entry_for_sig(guest, types);
+    methods->entries[methods->list.count++] = (absolute_method){name, types, (IMP)(uintptr_t)imp};
+}
+
+/* objc_readClassPair publishes a class to concurrent native callers. Prepare
+ * its callable methods first, including compact relative lists whose new
+ * entries cannot express the distance to an x86 thunk. */
+static void prepare_typed_methods(class_ro_t *ro)
+{
+    if (!ro || !ro->baseMethods) return;
+    const method_list_t *original = (const void *)(uintptr_t)ro->baseMethods;
+    absolute_methods *typed = hao_alloc_check(malloc(sizeof *typed + (size_t)original->count * sizeof(absolute_method)),
+                                               "Objective-C typed methods");
+    typed->list = (method_list_t){sizeof(absolute_method), 0};
+    for_each_method(ro->baseMethods, copy_typed_method, typed);
+    ro->baseMethods = (uintptr_t)typed;
+}
+
+static void read_image(hao_image *img, bool early)
 {
     uint64_t n, a;
     const struct objc_image_info *info = (const void *)(uintptr_t)hao_image_section(img, NULL, "__objc_imageinfo", &n);
@@ -948,6 +1022,19 @@ void hao_objc_read_image(hao_image *img)
     a = hao_image_section(img, NULL, "__objc_classlist", &n);
     pending_list pl = {NULL, 0, 0};
     for (uint64_t k = 0; k < n / 8; k++) prepare_class(img, *(class_t **)(uintptr_t)(a + 8 * k), &pl, 0);
+    if (early) {
+        for (size_t k = 0; k < pl.n; k++) {
+            if (!pl.v[k].ro) continue;
+            prepare_typed_methods(pl.v[k].ro);
+            class_t *meta = (void *)(uintptr_t)pl.v[k].cls->isa;
+            prepare_typed_methods((void *)(uintptr_t)(meta->data & FAST_DATA_MASK));
+        }
+        hao_fnslots_image(img);
+        if (!hao_image_seal(img)) {
+            HAO_LOG(0, "%s: constant data cannot be made read-only before class registration\n", img->path);
+            abort();
+        }
+    }
     /* objc4 _read_images publishes every class name with readClass before
      * realizing classes. objc_readClassPair also realizes, so do not apply it
      * to incomplete Swift metadata just to publish a name. Register ordinary
@@ -997,6 +1084,9 @@ void hao_objc_read_image(hao_image *img)
     }
     HAO_LOG(2, "objc: categories done\n");
 }
+
+void hao_objc_read_image(hao_image *img) { read_image(img, false); }
+void hao_objc_read_plain_image(hao_image *img) { read_image(img, true); }
 
 /* +load: classes, then categories */
 void hao_objc_run_loads(hao_image *img)
