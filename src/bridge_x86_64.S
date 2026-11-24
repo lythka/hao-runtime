@@ -718,3 +718,13 @@ _hao_probe_read8_load:
 _hao_probe_read8_fail:
     xorl  %eax, %eax
     retq
+
+
+/* Keep the architectural breakpoint and its return in one Mach-O atom. */
+.text
+.p2align 4
+.globl _hao_guest_brk
+.private_extern _hao_guest_brk
+_hao_guest_brk:
+    int3
+    ret

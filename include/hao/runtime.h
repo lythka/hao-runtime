@@ -415,6 +415,7 @@ void hao_guest_svc(hao_thread *t);
 
 /* signals.c */
 void hao_signals_init(void);
+void hao_guest_brk(void);  /* x86 INT3 followed by RET; signals.c recognizes both saved PCs */
 int hao_signal_raw_sigaction(int sig, const void *nsa, void *osa);   /* a guest svc sigaction(2) */
 void hao_signals_stats(void);
 void hao_signals_fork_child(void);   /* the disposition lock */

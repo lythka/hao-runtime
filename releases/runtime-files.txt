@@ -273,6 +273,8 @@ tests/guest/bridgehelper.c
 tests/guest/bridgehelper.h
 tests/guest/bridgeunit.sh
 tests/guest/bridgeunit_gen.py
+tests/guest/brk_resume.c
+tests/guest/brk_resume.sh
 tests/guest/callback-routes.sh
 tests/guest/callbacks.sh
 tests/guest/carrierdestroy.sh

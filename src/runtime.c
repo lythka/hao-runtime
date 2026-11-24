@@ -377,6 +377,16 @@ static void run_trap(hao_thread *t, uint64_t pc)
 __attribute__((noinline, cold)) static void guest_fault(hao_thread *t, int st)
 {
     hao_cpu *c = &t->cpu;
+    if (st == HAO_EXIT_BRK && !hao_verbose) {
+        struct sigaction action;
+        sigset_t mask;
+        if (hao_sys_sigaction(SIGTRAP, NULL, &action) ||
+            (action.sa_handler != SIG_DFL && action.sa_sigaction != hao_abort_entry) ||
+            pthread_sigmask(SIG_SETMASK, NULL, &mask) || sigismember(&mask, SIGTRAP)) {
+            hao_guest_brk();
+            return;
+        }
+    }
     const char *what = st == HAO_EXIT_UNDEF ? "unimplemented/undefined instruction" :
                        st == HAO_EXIT_BRK ? "brk" : st == HAO_EXIT_UDF ? "udf" : "hlt";
     FILE *f = HAO_DIAG;
@@ -389,8 +399,10 @@ __attribute__((noinline, cold)) static void guest_fault(hao_thread *t, int st)
     fflush(f);
     if (hao_opt.bridge_stats) hao_bridge_stats();   /* the last report of a process that stops here */
     if (st == HAO_EXIT_BRK) {
-        /* __builtin_trap / assertion: behave like the native process would */
-        raise(SIGTRAP);
+        /* A synchronous, uniquely identifiable host stop lets the guest
+         * SIGTRAP handler resume at its saved PC, including the same BRK. */
+        hao_guest_brk();
+        return;
     }
     abort();
 }

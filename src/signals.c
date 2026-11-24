@@ -178,6 +178,8 @@ static void st_gsig(int s, uint64_t h, int fl, sigset_t m)
  * meanwhile installed another disposition (which the kernel has too) */
 static void reset_gsig(int s, const gsig_t *was)
 {
+    /* Darwin preserves these two dispositions even with SA_RESETHAND. */
+    if (s == SIGILL || s == SIGTRAP) return;
     const gsig_t *exp = was == &gsig_none ? NULL : was;
     __atomic_compare_exchange_n(&gsig[s], &exp, NULL, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
@@ -527,6 +529,12 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
     _STRUCT_X86_THREAD_STATE64 *hs = &nuc->uc_mcontext->__ss;
     /* where the guest stands */
     bool in_guest = c->host_scratch[HAO_SCRATCH_IN_GUEST] != 0, flags_in_host = false;
+    uintptr_t brk_addr = (uintptr_t)hao_guest_brk;
+    /* A sent SIGTRAP can interrupt this helper too. Require the processor's
+     * breakpoint trap and the matching fault address as well as its RIP. */
+    bool guest_brk = sig == SIGTRAP && t->seg && nuc->uc_mcontext->__es.__trapno == 3 &&
+                     (hs->__rip == brk_addr || hs->__rip == brk_addr + 1) &&
+                     ((uintptr_t)si->si_addr == brk_addr || (uintptr_t)si->si_addr == brk_addr + 1);
     uint64_t pc = c->pc;
     if (in_guest && !hao_jit_locate(hs->__rip, &pc, &flags_in_host)) {
         if (c->host_scratch[HAO_SCRATCH_HELPER]) pc = c->host_scratch[HAO_SCRATCH_HELPER];
@@ -548,6 +556,10 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
     a64_frame *fr = (a64_frame *)(uintptr_t)((sp - sizeof(a64_frame)) & ~15ull);
     memset(fr, 0, sizeof *fr);
     fr->si = *si;
+    if (guest_brk) {
+        fr->si.si_code = 0;  /* Darwin reports an architectural breakpoint at the guest PC */
+        fr->si.si_addr = (void *)(uintptr_t)pc;
+    }
     fr->uc.uc_onstack = onstack;
     fr->uc.uc_sigmask = nuc->uc_sigmask;
     fr->uc.uc_stack = alt;
@@ -602,7 +614,7 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
     if (m->ns.fpsr != orig.ns.fpsr) c->fpsr = m->ns.fpsr;
     if (m->ns.fpcr != orig.ns.fpcr) c->fpcr = m->ns.fpcr;
     if (memcmp(&fr->uc.uc_sigmask, &orig_mask, sizeof orig_mask)) nuc->uc_sigmask = fr->uc.uc_sigmask;
-    bool moved = m->ss.pc != orig.ss.pc && in_guest && t->seg;
+    bool moved = m->ss.pc != orig.ss.pc && (guest_brk || in_guest) && t->seg;
     if ((m->ss.cpsr ^ orig.ss.cpsr) >> 28) {
         hao_set_nzcv(&tmp, m->ss.cpsr >> 28);
         if (flags_in_host && !moved)
@@ -611,6 +623,14 @@ static void deliver(hao_thread *t, int sig, uint64_t h, int flags, const siginfo
     } else if (flags_in_host && moved) c->flags = fl_image;
     if (m->ss.pc != orig.ss.pc && !moved && hao_verbose)
         fprintf(stderr, "hao: signal %d handler moved pc outside guest execution; ignored\n", sig);
+    if (guest_brk) {
+        /* The dispatcher is already between guest instructions. Return to
+         * it normally with the handler's selected guest PC and registers. */
+        if (moved) __atomic_fetch_add(&st_moved, 1, __ATOMIC_RELAXED);
+        c->pc = m->ss.pc;
+        hs->__rip = ((uintptr_t)hao_guest_brk + 1);
+        return;
+    }
     if (moved) {
         /* Resume at the new pc from the dispatcher that was running the
          * interrupted guest code; the frames above it (translated block,
