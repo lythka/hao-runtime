@@ -11,6 +11,7 @@
  * hao_callback_entry, which runs the guest function on this thread.
  */
 #include "hao/runtime.h"
+#include "spawn_pref.h"
 #include <mach-o/getsect.h>
 #include <mach-o/dyld.h>
 #include <mach-o/nlist.h>
@@ -4615,6 +4616,66 @@ static void *native_bool_spelling(void *h, const char *name, bool flat, char **a
 
 /* A symbol in a native library (h may be RTLD_DEFAULT); flat: also search
  * every native library. */
+static pid_t spawn_start_pid;
+
+void hao_spawn_process_start(void)
+{
+    spawn_start_pid = getpid();
+}
+
+static bool spawn_target_path(uint64_t address, char path[PATH_MAX])
+{
+    static const char prefix[] = "/private/var/db/hao-spawn-generations/";
+    if (!probe_read(address, path, sizeof prefix - 1) || memcmp(path, prefix, sizeof prefix - 1)) return false;
+    size_t used = sizeof prefix - 1;
+    while (used < PATH_MAX) {
+        /* Read only to the next mapped page boundary, so a string at
+         * the end of its mapping needs no readable successor page. */
+        size_t n = 4096 - ((address + used) & 4095);
+        if (n > PATH_MAX-used) n = PATH_MAX-used;
+        if (!probe_read(address+used,path+used,n)) return false;
+        if (memchr(path+used,0,n)) return true;
+        used += n;
+    }
+    return false;
+}
+
+static void trap_guest_spawn(hao_thread *t, uint64_t address)
+{
+    typedef int (*spawn_fn)(pid_t *, const char *, const posix_spawn_file_actions_t *,
+                            const posix_spawnattr_t *, char *const [], char *const []);
+    spawn_fn spawn = (spawn_fn)(uintptr_t)address;
+    pid_t *pid = (void *)(uintptr_t)t->cpu.x[0];
+    const char *path = (const void *)(uintptr_t)t->cpu.x[1];
+    const posix_spawn_file_actions_t *actions = (const void *)(uintptr_t)t->cpu.x[2];
+    const posix_spawnattr_t *attr = (const void *)(uintptr_t)t->cpu.x[3];
+    char *const *args = (void *)(uintptr_t)t->cpu.x[4], *const *env = (void *)(uintptr_t)t->cpu.x[5];
+    char target[PATH_MAX];
+    int incoming_errno = errno;
+    bool eligible = getpid() == spawn_start_pid && !t->sig_nest && !t->in_fault_handler &&
+                    !actions && attr && geteuid() != 0 && !issetugid() &&
+                    spawn_target_path((uintptr_t)path,target);
+    if (eligible) {
+        lock_loads();
+        eligible = hao_spawn_generation(target);
+        unlock_loads();
+    }
+    errno = incoming_errno;
+    int result = spawn(pid,eligible ? target : path,actions,attr,args,env);
+    int spawn_errno = errno;
+    if (eligible && result == EBADARCH) {
+        posix_spawnattr_t host;
+        if (hao_spawn_host_attr(hao_bridge_original((const void *)spawn),attr,&host)) {
+            errno = incoming_errno;
+            result = spawn(pid,target,NULL,&host,args,env);
+            spawn_errno = errno;
+            posix_spawnattr_destroy(&host);
+        }
+    }
+    errno = spawn_errno;
+    t->cpu.x[0] = (uint32_t)result;
+}
+
 static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
 {
     const char *sym = name[0] == '_' ? name + 1 : name;
@@ -4641,7 +4702,10 @@ static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
     /* a function an interposer answers under another of its names (a renamed
      * re-export, an alias at the same address): its trap, as for that name */
     uint64_t trap;
-    if (hao_bridge_trap_at((uint64_t)(uintptr_t)p, &trap) > 0) {
+    if (!strcmp(name, "_posix_spawn") && hao_spawn_attr_abi(hao_bridge_original(p))) {
+        *addr = hao_trap_address(name, trap_guest_spawn, (uint64_t)(uintptr_t)p);
+        hao_bridge_bind_trap(name, HAO_BRS_TRAP);
+    } else if (hao_bridge_trap_at((uint64_t)(uintptr_t)p, &trap) > 0) {
         if (hao_verbose > 1) fprintf(stderr, "hao: %s -> trap %#llx (another name of its function)\n", name, (unsigned long long)trap);
         hao_bridge_bind_trap(name, HAO_BRS_TRAP);
         *addr = trap;

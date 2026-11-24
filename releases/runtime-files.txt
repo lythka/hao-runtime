@@ -88,6 +88,8 @@ src/native_callback.c
 src/gss.c
 src/gss_gen.inc
 src/guest_sig.c
+src/spawn_pref.c
+src/spawn_pref.h
 src/idlist.c
 src/ifunit.c
 src/interpose.c
@@ -149,6 +151,9 @@ src/varsniff.c
 src/vlist_gen.inc
 src/x86_emit.c
 src/x86args.c
+tests/spawn-pref/attr-shape.c
+tests/spawn-pref/check.sh
+tests/spawn-pref/child.c
 tests/README.md
 tests/a64/test_imm_cond.c
 tests/abi/test_layout.m
@@ -773,6 +778,7 @@ tools/hao-aot-use
 tools/hao-contract/PIN
 tools/hao-contract/hao_contract.py
 tools/hao-embed
+tools/hao-spawn-receipt
 tools/hao-image-payload
 tools/hao-install.py
 tools/hao-public-archive

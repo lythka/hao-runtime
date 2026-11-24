@@ -485,4 +485,5 @@ const hao_if_rec *hao_ifunit_find(const hao_if_view *v, const char *name);
  * HAO_IF_SYS_DIR (kind HAO_AOT_SYS_RO, root-owned). */
 int hao_if_dirs_for(int tier, const char *if_dir, hao_aot_dir *out, char *why, size_t n);
 
+const void *hao_bridge_original(const void *p);
 #endif

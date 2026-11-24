@@ -333,6 +333,7 @@ typedef struct {
     const char *by;      /* who vouched */
 } hao_imgsig;
 typedef int (*hao_imgsig_fn)(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n);
+bool hao_spawn_signed_slice(const char *path, int cpu, uint32_t subtype, const uint8_t cdhash[20]);
 int hao_guest_sig_image(const hao_slice *sl, const char *path, const char *team, hao_imgsig *out, char *why, size_t n);
 /* The runtime hands libval.c the signer check (guest_sig.c), and whether to
  * establish signers in user space even where the kernel could

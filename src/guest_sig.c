@@ -340,19 +340,53 @@ static bool sec_satisfies(SecStaticCodeRef_ code, const char *req_text)
 /* team (may be NULL): *team_ok when the CMS's leaf certificate is issued for
  * that Team ID by Apple's developer anchor (a library's Team ID is the
  * CodeDirectory's, which only the certificate binds). */
+static SecStaticCodeRef_ selected_static_code(const char *path, int cpu, uint32_t subtype, char *why, size_t n)
+{
+    if (!sec_load()) { snprintf(why, n, "cannot load Security.framework"); return NULL; }
+    CFURLRef url = cf.url(NULL, (const UInt8 *)path, (CFIndex)strlen(path), false);
+    int sub = (int)(subtype & ~CPU_SUBTYPE_MASK);
+    CFNumberRef c = cf.num(NULL, kCFNumberIntType, &cpu), sn = cf.num(NULL, kCFNumberIntType, &sub);
+    SecStaticCodeRef_ code = NULL;
+    if (url && c && sn) {
+        const void *keys[] = {*sec.k_arch, *sec.k_subarch}, *vals[] = {c, sn};
+        CFDictionaryRef attrs = cf.dict(NULL, keys, vals, 2, cf.keycb, cf.valcb);
+        if (attrs) {
+            OSStatus st = sec.create(url, 0, attrs, &code);
+            cf.release(attrs);
+            if (st) {
+                if (code) cf.release(code);
+                code = NULL;
+                snprintf(why, n, "Security cannot open selected code (OSStatus %d)", (int)st);
+            }
+        }
+    }
+    if (c) cf.release(c);
+    if (sn) cf.release(sn);
+    if (url) cf.release(url);
+    return code;
+}
+
+/* Caller holds the loader lock and has verified the permanent generation,
+ * both selected CodeDirectories, and whole-file digest against its receipt. */
+bool hao_spawn_signed_slice(const char *path, int cpu, uint32_t subtype, const uint8_t cdhash[20])
+{
+    char why[128];
+    SecStaticCodeRef_ code = selected_static_code(path, cpu, subtype, why, sizeof why);
+    if (!code) return false;
+    CFDictionaryRef info = NULL;
+    bool valid = sec.check(code, 1u << 4 /* kSecCSStrictValidate */, NULL) == 0 &&
+                 sec.info(code, kSecCSSigningInformation_, &info) == 0 && info &&
+                 cfdata_is(cf.dict_get(info, *sec.k_unique), cdhash);
+    if (info) cf.release(info);
+    cf.release(code);
+    return valid;
+}
+
 static int sec_verdict(const char *path, uint32_t subtype, const hao_codesig *s, bool *apple, const char *team, bool *team_ok,
                        char *why, size_t n)
 {
-    if (!sec_load()) { snprintf(why, n, "cannot load Security.framework to check the CMS signature"); return -1; }
-    CFURLRef url = cf.url(NULL, (const UInt8 *)path, (CFIndex)strlen(path), false);
-    int cpu = CPU_TYPE_ARM64, sub = (int)(subtype & ~CPU_SUBTYPE_MASK);
-    CFNumberRef c = cf.num(NULL, kCFNumberIntType, &cpu), sn = cf.num(NULL, kCFNumberIntType, &sub);
-    const void *keys[] = {*sec.k_arch, *sec.k_subarch}, *vals[] = {c, sn};
-    CFDictionaryRef attrs = cf.dict(NULL, keys, vals, 2, cf.keycb, cf.valcb);
-    SecStaticCodeRef_ code = NULL;
-    OSStatus st = sec.create(url, 0, attrs, &code);
-    cf.release(attrs); cf.release(c); cf.release(sn); cf.release(url);
-    if (st || !code) { snprintf(why, n, "Security cannot open the arm64 code (OSStatus %d)", (int)st); return -1; }
+    SecStaticCodeRef_ code = selected_static_code(path, CPU_TYPE_ARM64, subtype, why, n);
+    if (!code) return -1;
     int rc = 0;
     OSStatus valid = sec.check(code, kSecCSBasic_, NULL);
     if (valid) { snprintf(why, n, "code signature invalid (OSStatus %d)", (int)valid); rc = -1; goto out; }

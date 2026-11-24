@@ -3,6 +3,7 @@
  *   hao [-v] [--interp] PROGRAM [ARGS...]
  */
 #include "hao/runtime.h"
+#include "spawn_pref.h"
 #include "hao/swiftvalue.h"
 #include "hao/identity.h"
 #include "hao/native_bundle.h"
@@ -945,6 +946,7 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
         fprintf(stderr, "hao: this CPU lacks %s; hao needs an Intel CPU with AVX (Sandy Bridge or later)\n", missing);
         return 126;
     }
+    hao_spawn_process_start();
     g_argc = argc; g_argv = argv; g_envp = envp;
     hao_opts_init(NULL);          /* the front end already took the snapshot */
     hao_verbose = hao_opt.verbose;

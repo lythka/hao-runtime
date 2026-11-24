@@ -46,7 +46,7 @@ CORE := src/a64_interp.c src/a64_simd.c src/a64_fp.c src/sysreg.c src/x86_emit.c
         src/native_callback.c
 CORE_O := $(patsubst src/%.c,$(B)/%.o,$(CORE))
 
-RT := src/ffi_bridge.c src/companions.c src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
+RT := src/ffi_bridge.c src/spawn_pref.c src/companions.c src/bridge.c src/macho.c src/code.c src/libval.c src/dsc.c src/commpage.c src/runtime.c src/interpose.c src/varsniff.c src/vafmt.c src/syscall.c src/signals.c src/objc.c src/regvar.c src/abi.c src/blocks.c src/fnslots.c src/swiftmeta.c src/swiftobjects.c src/callbacks.c src/gss.c src/cxxstr.c src/thunks.c src/libm.c src/swift.c src/swiftcc.c src/jit.c src/trust.c src/idlist.c src/guest_sig.c src/main.c src/unwind.c
 RT += src/swiftresult.c src/swiftvalue.c src/swiftschema.c
 RT += src/async_contract.c src/valist_builder.c
 RT += src/ioreg.c src/ids.c src/aot_use.c
@@ -320,7 +320,14 @@ ioregtest: all $(B)/test_ioreg_guest
 	timeout -s KILL 30 $(B)/hao $(B)/test_ioreg_guest
 	timeout -s KILL 30 $(B)/hao --interp $(B)/test_ioreg_guest
 
-test: companion-test jit-arena-test wx-cow-test unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
+$(B)/test_spawn_shape: tests/spawn-pref/attr-shape.c src/spawn_pref.h $(B)/libhao.dylib $(B)/libhao_identity.dylib
+	$(CC) $(CFLAGS) -o $@ $< -L$(B) -lhao -lhao_identity -Wl,-rpath,@executable_path
+
+.PHONY: spawn-pref-test
+spawn-pref-test: all $(B)/test_spawn_shape
+	tests/spawn-pref/check.sh $(abspath $(B))
+
+test: spawn-pref-test companion-test jit-arena-test wx-cow-test unit oracle aot bridgetest async-contract-test legacy-dyld-test indexed-mulhigh-test forktest jitlocktest ioregtest
 	tools/check_x86.sh
 	python3.14 -I -B tests/host/fork_locks.py
 

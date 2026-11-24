@@ -599,6 +599,12 @@ static uint64_t typed_at(uint64_t native)
     return identity_original ? (uint64_t)(uintptr_t)identity_original((const void *)(uintptr_t)native) : native;
 }
 
+const void *hao_bridge_original(const void *p)
+{
+    return (const void *)(uintptr_t)typed_at((uint64_t)(uintptr_t)p);
+}
+
+
 /* The generated tables' source build against this system's (hao/gen_stamp.h). */
 bool hao_gen_stamp_check(char *running, size_t n)
 {

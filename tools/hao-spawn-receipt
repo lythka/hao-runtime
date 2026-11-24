@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Emit a binary identity receipt for a verified two-slice macOS spawn target."""
+import argparse
+import hashlib
+from pathlib import Path
+import runpy
+import struct
+import subprocess
+import sys
+
+from hao_codesig import check
+from hao_fat import CPU_ARM64, CPU_X86_64, load_commands, slices
+
+
+def receipt(source):
+    data = source.read_bytes()
+    parts = slices(data) or []
+    if sorted(cpu for cpu, _, _ in parts) != sorted([CPU_ARM64, CPU_X86_64]):
+        raise ValueError("expected exactly one ARM64 and one x86_64 executable")
+    records = {}
+    embed = runpy.run_path(str(Path(__file__).with_name("hao-embed")))
+    for cpu, subtype, image in parts:
+        if len(image) < 32 or struct.unpack_from("<IIII", image) != (0xFEEDFACF, cpu, subtype, 2):
+            raise ValueError("fat entry does not identify the contained executable")
+        if (subtype & 0xffffff) not in ((0, 2) if cpu == CPU_ARM64 else (3,)):
+            raise ValueError("unsupported executable CPU subtype")
+        platforms = [struct.unpack_from("<I", image, offset + 8)[0]
+                     for cmd, offset, size in load_commands(image) if cmd == 0x32 and size >= 24]
+        if platforms != [1]:
+            raise ValueError("expected a macOS executable")
+        signature = check(image)
+        if signature["verdict"] != "valid":
+            raise ValueError("slice signature integrity check failed")
+        records[cpu] = bytes([signature["hash_type"]]) + signature["cdhash"]
+    images = {cpu: image for cpu, _, image in parts}
+    host = images[CPU_X86_64]
+    section = ("__TEXT", "__hao_slice")
+    area = embed["section_ranges"](host, {section}).get(section)
+    if not area:
+        raise ValueError("missing host slice binding")
+    offset, size = area
+    if host[offset:offset + size] != embed["slice_record"](images[CPU_ARM64]):
+        raise ValueError("host signature binds a different ARM executable")
+    # Application main executables may seal their external Info.plist. Validate
+    # at the original location so Security sees the same bundle as the kernel.
+    for cpu, subtype, _ in parts:
+        arch = "x86_64" if cpu == CPU_X86_64 else ("arm64e" if subtype & 0xffffff == 2 else "arm64")
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "--architecture",
+                        arch, str(source.resolve(strict=True))], check=True)
+    if source.read_bytes() != data:
+        raise ValueError("carrier changed during verification")
+    return b"haospwn1" + hashlib.sha256(data).digest() + records[CPU_X86_64] + records[CPU_ARM64]
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("carrier", type=Path)
+    try:
+        sys.stdout.buffer.write(receipt(parser.parse_args().carrier))
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))
