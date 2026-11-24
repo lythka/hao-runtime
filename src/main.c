@@ -989,8 +989,16 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
      * descriptor, not a second resolution of PATH (the loader closes fd) */
     char err[512], real[MAXPATHLEN];
     if (mapped_path) snprintf(real, sizeof real, "%s", mapped_path);
-    else if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
-    hao_image *img = hao_load_main_image(path, fd, mapped, entry, err, sizeof err);
+    else if (fcntl(fd, F_GETPATH, real) != 0) {
+        struct stat st;
+        if (fstat(fd, &st) || !realpath(path, real) || !names_vnode(real, st.st_dev, st.st_ino)) {
+            close(fd);
+            return refuse(path, "cannot identify the opened main executable");
+        }
+    }
+    /* dyld resolves install names from the image file, including when the
+     * invocation uses a symlink. Keep that spelling for _NSGetExecutablePath. */
+    hao_image *img = hao_load_main_image(real, fd, mapped, entry, err, sizeof err);
     if (!img) return refuse(path, "%s", err);
     hao_phase("load");
     /* PATH is absolute and unresolved, as dyld presents the main executable */

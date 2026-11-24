@@ -323,6 +323,7 @@ tests/guest/aotdefault.sh
 tests/guest/dlrpath.c
 tests/guest/dlrpath.sh
 tests/guest/dlrpathlib.c
+tests/guest/dlrpathmain.c
 tests/guest/dsc.sh
 tests/guest/dsc/ccan.c
 tests/guest/dsc/ccan_stub.c

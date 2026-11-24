@@ -12,6 +12,7 @@ OUT=${OUT:-$(mktemp -d -t hao-dlrpath)}
 HAO=${HAO:-$repo/build/hao}
 T=${T:-60}
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd) || exit 2
 set -e
 for a in arm64e arm64; do
     app=$OUT/$a/Test.app/Contents
@@ -33,6 +34,33 @@ for a in arm64e arm64; do
     done
     codesign -s - -f "$app/Frameworks/libplug.dylib" "$app/Frameworks/sub/libsub.dylib" "$app/Frameworks/libnat.dylib" \
         "$app/MacOS/dlrpath" 2>/dev/null
+done
+# Both load commands on the main executable are relative to its real image
+# directory. The symlink directory deliberately offers a different provider.
+for token in @executable_path @loader_path; do
+    root=$(mktemp -d "$OUT/relative-${token#@}.XXXXXX")
+    mkdir -p "$root/real/bin" "$root/alias/bin"
+    for dir in real alias; do
+        value=11; [ "$dir" != alias ] || value=22
+        clang -arch arm64 -dynamiclib -DLEAF_VALUE="$value" -install_name "$token/../libLeaf.dylib" \
+            "$here/dlrpathlib.c" -o "$root/$dir/libLeaf.dylib"
+    done
+    clang -arch arm64 "$here/dlrpathmain.c" "$root/real/libLeaf.dylib" -o "$root/real/bin/main"
+    ln -s ../../real/bin/main "$root/alias/bin/main"
+    timeout -s KILL "$T" "$root/alias/bin/main" "$root/alias/bin/main"
+    timeout -s KILL "$T" "$HAO" "$root/alias/bin/main" "$root/alias/bin/main"
+    if [ "$token" = @executable_path ]; then
+        python3 "$repo/tools/hao-embed" --host-test --self-contained --stub "$(dirname "$HAO")/hao-stub" \
+            -o "$root/real/bin/mapped" "$root/real/bin/main"
+        ln -s ../../real/bin/mapped "$root/alias/bin/mapped"
+        timeout -s KILL "$T" arch -x86_64 "$root/alias/bin/mapped" "$root/alias/bin/mapped"
+    fi
+    mv "$root/alias/libLeaf.dylib" "$root/alias/hidden"
+    timeout -s KILL "$T" "$HAO" "$root/alias/bin/main" "$root/alias/bin/main"
+    mv "$root/alias/hidden" "$root/alias/libLeaf.dylib"
+    mv "$root/real/libLeaf.dylib" "$root/real/hidden"
+    if timeout -s KILL "$T" "$HAO" "$root/alias/bin/main" "$root/alias/bin/main" >"$root/refusal.log" 2>&1; then exit 1; fi
+    grep -q 'Library not loaded:' "$root/refusal.log"
 done
 set +e
 fail=0
