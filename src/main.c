@@ -618,7 +618,6 @@ static int aot_main(int argc, char **argv)
 int hao_cli_main(int argc, char **argv, char **envp)
 {
     hao_phase_mark();
-    if (argc >= 2 && !strcmp(argv[1], "--aot")) return aot_main(argc, argv);
     /* HAO_EXEC is stage 1's hand-off to stage 2, which stage 1 runs with
      * argv[0] = the program: it is the absolute path stage 1 made of that
      * argv[0]. Any other HAO_EXEC was not set by stage 1 for this exec:
@@ -633,6 +632,7 @@ int hao_cli_main(int argc, char **argv, char **envp)
         path = NULL;
     }
     if (!path) {
+        if (argc >= 2 && !strcmp(argv[1], "--aot")) return aot_main(argc, argv);
         /* The options go to stage 2 as letters (v, V, i, s, u, as in
          * HAO_FLAGS) in HAO_EXEC_FLAGS, apart from an inherited HAO_FLAGS:
          * stage 2 honours each where its tier honours the environment

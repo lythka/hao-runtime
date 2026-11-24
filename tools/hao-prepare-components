@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""Stage embedded developer copies of supported ARM executables from a package receipt."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import runpy
+import shutil
+import stat
+import subprocess
+import sys
+
+import hao_codesig
+from hao_fat import CPU_ARM64, CPU_X86_64, slices
+from hao_macho import header_slices
+
+
+EMBED = Path(__file__).with_name("hao-embed").resolve()
+ENGINE = runpy.run_path(str(EMBED))
+
+
+from hao_package_metadata import check_file_flags, check_quarantine
+
+
+def receipt(volume, package):
+    command = ["/usr/sbin/pkgutil", "--volume", str(volume)]
+    info = plistlib.loads(subprocess.check_output([*command, "--pkg-info-plist", package]))
+    entries = subprocess.check_output([*command, "--only-files", "--files", package], text=True)
+    if info["pkgid"] != package:
+        raise ValueError("unexpected package identifier")
+    return info, entries.splitlines()
+
+
+def check_execute_access(source):
+    if not os.access(source, os.X_OK, effective_ids=True):
+        raise ValueError("staging user cannot execute the original file")
+
+
+def source_stamp(st):
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_flags, st.st_ctime_ns, st.st_mtime_ns)
+
+
+def verify_original(source, signature, arch):
+    requirement = f'cdhash H"{signature["cdhash"].hex()}"'
+    if signature["flags"] & 2:  # CS_ADHOC
+        if signature["team"]:
+            raise ValueError("ad-hoc CodeDirectory claims a publisher Team ID")
+    else:
+        requirement += " and anchor trusted"
+    subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-a", arch, "-R=" + requirement, str(source)],
+                   check=True, capture_output=True)
+
+
+def supported_entitlements(path, signature, arch):
+    if not signature["ents"] and not signature["der_ents"]:
+        return
+    result = subprocess.run(["/usr/bin/codesign", "-d", "-a", arch, "--entitlements", "-", "--xml", str(path)],
+                            check=True, capture_output=True)
+    effective = plistlib.loads(result.stdout)
+    if signature["ents"] and plistlib.loads(signature["ents"][8:]) != effective:
+        raise ValueError("original entitlement records disagree")
+    public = {"com.apple.security.app-sandbox", "com.apple.security.get-task-allow"}
+    if not isinstance(effective, dict) or any(key not in public or type(value) is not bool
+                                               for key, value in effective.items()):
+        raise ValueError("requires publisher preparation for original entitlements")
+
+
+def check_acl(path, flags):
+    listing = subprocess.check_output(["/bin/ls", flags, str(path)], env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"})
+    if re.search(rb"(?m)^\s*\d+: .* (?:allow|deny) ", listing):
+        raise ValueError("ACL-bearing member in signed package context")
+
+
+def check_bundle_metadata(bundle):
+    def fail(error):
+        raise error
+    for parent, directories, files in os.walk(bundle, onerror=fail, followlinks=False):
+        for name in [".", *directories, *files]:
+            path = Path(parent) / name
+            metadata = path.lstat()
+            check_file_flags(metadata)
+            mode = metadata.st_mode
+            if mode & (stat.S_ISUID | stat.S_ISGID):
+                raise ValueError("set-ID member in signed bundle context")
+            if stat.S_ISLNK(mode):
+                if not path.resolve().is_relative_to(bundle):
+                    raise ValueError("external symbolic link in signed bundle context")
+            elif not stat.S_ISDIR(mode) and not stat.S_ISREG(mode):
+                raise ValueError("special file in signed bundle context")
+    # Inspect link metadata too; a context must preserve platform access restrictions.
+    attributes = subprocess.check_output(["/usr/bin/xattr", "-rs", str(bundle)])
+    if any(line.endswith(b": com.apple.quarantine") or line == b"com.apple.quarantine"
+           for line in attributes.splitlines()):
+        raise ValueError("quarantined member in signed bundle context")
+    # libarchive does not consistently round-trip Darwin deny ACLs under an unprivileged extractor.
+    for flags in ("-lde", "-leaR"):
+        check_acl(bundle, flags)
+
+
+
+def verify_context(source, destination, sidecars, arch):
+    """Validate the delivered executable in a copy of its complete signed resource context."""
+    if not sidecars:
+        for cpu in (arch, "x86_64"):
+            subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-a", cpu, destination],
+                           check=True, capture_output=True)
+        return None
+    bundle = source.parent.parent.parent
+    check_bundle_metadata(bundle)
+    private = destination.parent.parent.parent.parent / ".verification"
+    private.mkdir()
+    copy = private / bundle.name
+    subprocess.run(["/bin/cp", "-cRp", bundle, copy], check=True, capture_output=True)
+    check_bundle_metadata(copy)
+    executable = copy / source.relative_to(bundle)
+    if executable.resolve(strict=True) != executable or not executable.is_file():
+        raise ValueError("copied bundle has an indirect executable")
+    shutil.copyfile(destination, executable)
+    for cpu in (arch, "x86_64"):
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-a", cpu, executable],
+                       check=True, capture_output=True)
+    # Apple's archive tool preserves ACLs, extended attributes and file flags.
+    # Replacing executable bytes must not introduce the current clock into a generation.
+    original_stat = source.stat()
+    os.utime(executable, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    archive = private / "context.tar"
+    metadata = ["--acls", "--xattrs", "--fflags", "--mac-metadata"]
+    subprocess.run(["/usr/bin/tar", *metadata, "-cf", archive, "-C", private, "./" + bundle.name],
+                   check=True, capture_output=True)
+    extracted = private / "delivered"
+    extracted.mkdir()
+    subprocess.run(["/usr/bin/tar", *metadata, "-xpf", archive, "-C", extracted], check=True, capture_output=True)
+    for cpu in (arch, "x86_64"):
+        delivered = extracted / bundle.name / source.relative_to(bundle)
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-a", cpu, delivered],
+                       check=True, capture_output=True)
+    return archive
+
+
+def prepare_file(source, destination, stub, cache):
+    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        st = os.fstat(stream.fileno())
+        if not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o111:
+            return None
+        arches = header_slices(stream.read(4096))
+        if not arches or any(cpu != CPU_ARM64 for cpu, _, _ in arches):
+            return None
+        stream.seek(arches[0][2] + 12)
+        if int.from_bytes(stream.read(4), "little") != 2:  # MH_EXECUTE
+            return None
+        stream.seek(0)
+        data = stream.read()
+    if ENGINE["eligible"](data, False):
+        return None
+    guest = ENGINE["arm_slice"](data)
+    if ENGINE["build_version"](guest)[0] not in (1, 6):
+        return None
+    signature = hao_codesig.check(guest)
+    if signature["verdict"] != "valid":
+        raise ValueError("ARM signature does not pass integrity verification")
+    check_file_flags(st)
+    check_execute_access(source)
+    if st.st_mode & (stat.S_ISUID | stat.S_ISGID):
+        raise ValueError("requires original set-ID context")
+    subtype = int.from_bytes(guest[8:12], "little") & 0xff
+    arch = "arm64e" if subtype == 2 else "arm64"
+    verify_original(source, signature, arch)
+    check_quarantine(source)
+    check_acl(source, "-lde")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    sidecars = {}
+    for _, original_path, blob in ENGINE["bound_data"](str(source), data):
+        if original_path and Path(original_path).is_absolute():
+            relative = Path(original_path).relative_to(source.parent.parent)
+            sidecar = destination.parent.parent / relative
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_bytes(blob)
+            sidecars[Path(original_path)] = hashlib.sha256(blob).digest()
+    destination.write_bytes(data)
+    destination.chmod(0o755)
+    supported_entitlements(destination, signature, arch)
+    command = [sys.executable, str(EMBED), "--in-place", "--stub", str(stub)]
+    if cache:
+        command += ["--x86-cache", str(cache)]
+    subprocess.run([*command, str(destination)], check=True, capture_output=True)
+    prepared = destination.read_bytes()
+    if prepared == data or ENGINE["arm_slice"](prepared) != guest:
+        raise ValueError("embedding did not preserve the selected ARM slice")
+    original_arms = [(sub, payload) for cpu, sub, payload in slices(data) if cpu == CPU_ARM64]
+    merged = slices(prepared)
+    if [(sub, payload) for cpu, sub, payload in merged if cpu == CPU_ARM64] != original_arms:
+        raise ValueError("original ARM slices differ after embedding")
+    stub_slice = next(payload for cpu, _, payload in merged if cpu == CPU_X86_64)
+    key = ENGINE["SLICE_SECTION"]
+    offset, size = ENGINE["section_ranges"](stub_slice, {key})[key]
+    if stub_slice[offset:offset + size] != ENGINE["slice_record"](guest):
+        raise ValueError("stub binding does not match original ARM signature")
+    if hao_codesig.check(stub_slice)["verdict"] != "valid":
+        raise ValueError("invalid generated stub signature")
+    digest = hashlib.sha256(prepared).hexdigest()
+    result = {"input_sha256": hashlib.sha256(data).hexdigest(), "output_sha256": digest,
+              "object": digest + ".macho", "original_team": (signature["team"] or b"").decode(),
+              "original_mode": stat.S_IMODE(st.st_mode)}
+    context = verify_context(source, destination, sidecars, arch)
+    if context:
+        with context.open("rb") as stream:
+            result["context_object"] = hashlib.file_digest(stream, "sha256").hexdigest() + ".tar"
+    return result, source_stamp(st), sidecars, context
+
+
+
+def stage(volume, package, output, stub, cache, read_receipt=receipt):
+    volume = volume.resolve(strict=True)
+    info, entries = read_receipt(volume, package)
+    location = Path(info["install-location"].lstrip("/"))
+    if ".." in location.parts:
+        raise ValueError("invalid package installation location")
+    output.mkdir(mode=0o700, parents=True, exist_ok=True)
+    out = ENGINE["OutDir"](str(output))
+    try:
+        st = os.fstat(out.fd)
+        if st.st_uid != os.getuid() or st.st_mode & 0o077:
+            raise ValueError("output directory must be privately owned with mode 0700")
+        with hao_codesig.PrivateDir("hao-components.") as work:
+            return stage_generation(volume, package, output, out, stub, cache, read_receipt,
+                                    info, entries, location, Path(work.name))
+    finally:
+        os.close(out.fd)
+
+
+def publish_product(out, name, product):
+    temporary = ".hao-components-" + os.urandom(12).hex()
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=out.fd)
+    try:
+        with os.fdopen(fd, "wb") as target, product.open("rb") as source:
+            shutil.copyfileobj(source, target, length=1024 * 1024)
+            os.fchmod(target.fileno(), 0o600)  # staged data; executable modes belong to the installation context
+        os.rename(temporary, name, src_dir_fd=out.fd, dst_dir_fd=out.fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=out.fd)
+        except FileNotFoundError:
+            pass
+
+
+def stage_generation(volume, package, output, out, stub, cache, read_receipt, info, entries, location, generation):
+    files, refused, stamps, products, bound_files = {}, {}, {}, {}, {}
+    for index, entry in enumerate(sorted(set(entries))):
+        relative = location / entry
+        if not entry or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("invalid receipt path")
+        source = volume / relative
+        destination = generation / str(index) / relative
+        if source.resolve(strict=False) != source:
+            # Receipts also list links. Prepare the actual file at its own receipt entry.
+            continue
+        try:
+            record = prepare_file(source, destination, stub, cache)
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+            destination.unlink(missing_ok=True)
+            if isinstance(error, subprocess.CalledProcessError):
+                reason = error.stderr or error.stdout or str(error)
+                if isinstance(reason, bytes):
+                    reason = reason.decode(errors="replace")
+                reason = reason.replace(str(destination), entry).strip()
+            else:
+                reason = str(error)
+            refused[str(relative)] = reason
+            continue
+        if record:
+            result, stamp, sidecars, context = record
+            if context:
+                products[result["context_object"]] = context
+            for path, digest in sidecars.items():
+                if bound_files.setdefault(path, digest) != digest:
+                    raise RuntimeError("signed bundle resource changed during preparation")
+            products[result["object"]] = destination
+            files[str(relative)], stamps[str(relative)] = result, stamp
+    if read_receipt(volume, package) != (info, entries):
+        raise RuntimeError("package receipt changed during preparation")
+    for relative, record in files.items():
+        source = volume / relative
+        check_quarantine(source)
+        check_acl(source, "-lde")
+        check_file_flags(source.lstat())
+        check_execute_access(source)
+        if "context_object" in record:
+            check_bundle_metadata(source.parent.parent.parent)
+        if (source.resolve(strict=True) != source or source_stamp(source.lstat()) != stamps[relative]
+                or hashlib.sha256(source.read_bytes()).hexdigest() != record["input_sha256"]):
+            raise RuntimeError("package executable changed during preparation")
+    for path, digest in bound_files.items():
+        if hashlib.sha256(path.read_bytes()).digest() != digest:
+            raise RuntimeError("signed bundle resource changed during preparation")
+    manifest = {"receipt": package, "version": info["pkg-version"], "files": files, "refused": refused}
+    contents = json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n"
+    for name, product in products.items():
+        publish_product(out, name, product)
+    name = hashlib.sha256(contents).hexdigest() + ".json"
+    out.publish(name, contents, 0o600)
+    return output / name
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("receipt")
+    parser.add_argument("--volume", type=Path, default=Path("/"))
+    parser.add_argument("--output", type=Path, required=True, help="private directory for staged generations")
+    parser.add_argument("--stub", type=Path, required=True)
+    parser.add_argument("--x86-cache", type=Path)
+    args = parser.parse_args()
+    try:
+        artifact = stage(args.volume, args.receipt, args.output, args.stub, args.x86_cache)
+        print(artifact)
+        result = json.loads(artifact.read_text())
+        print(f"{len(result['files'])} prepared, {len(result['refused'])} refused", file=sys.stderr)
+        if result["refused"]:
+            sys.exit(3)
+    except (KeyError, OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        sys.exit(str(exc))

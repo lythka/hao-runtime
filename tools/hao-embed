@@ -1192,7 +1192,8 @@ def bound_data(path, data):
         cands = []
         if contents and os.path.isfile(os.path.join(contents, name)):
             f = os.path.join(contents, name)
-            cands.append((f, open(f, "rb").read()))
+            with open(f, "rb") as stream:
+                cands.append((f, stream.read()))
         if slot == hao_codesig.CSSLOT_INFOSLOT and section:
             cands.append((",".join(INFO_SECTION), section[0]))
         for src, blob in cands:

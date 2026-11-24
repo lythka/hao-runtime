@@ -79,6 +79,7 @@ src/fmtattr_gen.inc
 src/fmtfamily_gen.inc
 src/fnslots.c
 src/front/cli.c
+src/front/companion_cli.c
 src/front/stub.c
 src/frozenstruct_gen.inc
 src/gmap.c
@@ -275,6 +276,13 @@ tests/guest/callback-routes.sh
 tests/guest/callbacks.sh
 tests/guest/carrierdestroy.sh
 tests/guest/carrierdestroy.swift
+tests/guest/framework-xpc/build.py
+tests/guest/framework-xpc/capability.c
+tests/guest/framework-xpc/client.c
+tests/guest/framework-xpc/declared_launcher.c
+tests/guest/framework-xpc/framework.c
+tests/guest/framework-xpc/observer.c
+tests/guest/framework-xpc/service.c
 tests/guest/sealedstorage.s
 tests/guest/sealedstorage.sh
 tests/guest/sealedstorage.swift
@@ -704,6 +712,7 @@ tests/tools/stubdeps.sh
 tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
+tests/tools/test_app_inventory.py
 tests/tools/test_codesig.py
 tests/tools/test_catalog_gate.py
 tests/tools/test_contract.py
@@ -714,6 +723,9 @@ tests/tools/test_install_overlay.py
 tests/tools/test_release.py
 tests/tools/test_aot_use.py
 tests/tools/test_swift_keys.py
+tests/tools/test_prepare_components.py
+tests/tools/test_prepare_framework.py
+tests/tools/companion_cli.sh
 tests/tools/test_root.py
 tests/tools/test_trustlist.py
 tests/translate/run.sh
@@ -743,6 +755,7 @@ tests/xcode-fixtures/run-demo.sh
 tools/check_distribution.py
 tools/check_x86.sh
 tools/dyld-ignition-fix.py
+tools/hao-app-inventory
 tools/hao-aot-extend
 tools/hao-aot-use
 tools/hao-contract/PIN
@@ -752,6 +765,11 @@ tools/hao-image-payload
 tools/hao-install.py
 tools/hao-public-archive
 tools/hao-runtime-from-source
+tools/hao-prepare-components
+tools/hao-prepare-framework
+tools/hao-companion-record
+tools/hao-companion-launcher
+tools/hao_package_metadata.py
 tools/hao-runtime-on-mac
 tools/hao-trust-list
 tools/hao.entitlements

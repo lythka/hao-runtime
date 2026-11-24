@@ -337,6 +337,10 @@ def file_slices(path):
             h = f.read(4096)
     except OSError:
         return []
+    return header_slices(h)
+
+
+def header_slices(h):
     if len(h) < 8: return []
     magic = struct.unpack_from('>I', h)[0]
     out = []

@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""Stage a signed macOS framework with a file-backed, implementation-free Intel slice."""
+import argparse
+import ctypes
+import hashlib
+from contextlib import contextmanager
+from collections import deque
+import os
+from pathlib import Path
+import plistlib
+import re
+import stat
+import struct
+import subprocess
+import tempfile
+
+import hao_codesig
+import hao_fat
+from hao_package_metadata import check_file_flags, check_quarantine
+
+
+def run(*args, **kwargs):
+    return subprocess.run(list(map(str, args)), check=True, **kwargs)
+
+
+def verify(path):
+    run("/usr/bin/codesign", "--verify", "--all-architectures", "--deep", "--strict", path)
+
+
+def identity(arm):
+    if struct.unpack_from("<I", arm, 12)[0] != 6:
+        raise ValueError("framework binary is not MH_DYLIB")
+    dylib = None
+    macos = False
+    for cmd, off, size in hao_fat.load_commands(arm):
+        if cmd == 13 and size >= 24:
+            index, _, current, compat = struct.unpack_from("<IIII", arm, off + 8)
+            if not 24 <= index < size:
+                raise ValueError("invalid install name offset")
+            name = arm[off + index:off + size].split(b"\0", 1)[0].decode()
+            dylib = name, current, compat
+        if cmd == 0x32 and size >= 24:
+            macos = struct.unpack_from("<I", arm, off + 8)[0] == 1
+        elif cmd == 0x24:
+            macos = True
+    if not macos or not dylib:
+        raise ValueError("requires a macOS dylib with an install name")
+    return dylib
+
+
+def version(value):
+    return f"{value >> 16}.{value >> 8 & 255}.{value & 255}"
+
+
+def check_tree(root):
+    attrs = subprocess.check_output(["/usr/bin/xattr", "-rs", root])
+    if any(line.rsplit(b": ", 1)[-1] == b"com.apple.quarantine" for line in attrs.splitlines()):
+        raise ValueError("quarantined framework member")
+    check_file_flags(root.lstat())
+    for directory, dirs, files in os.walk(root):
+        for name in dirs + files:
+            path = Path(directory, name)
+            metadata = path.lstat()
+            check_file_flags(metadata)
+            mode = metadata.st_mode
+            if mode & (stat.S_ISUID | stat.S_ISGID):
+                raise ValueError(f"set-ID member in framework: {path}")
+            if stat.S_ISLNK(mode):
+                if os.path.isabs(os.readlink(path)) or not path.resolve(strict=True).is_relative_to(root):
+                    raise ValueError(f"framework link escapes staging: {path}")
+            elif not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise ValueError(f"unexpected framework file type: {path}")
+
+
+@contextmanager
+def directory_handle(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def publish(source, destination, destination_fd):
+    rename = ctypes.CDLL(None, use_errno=True).renameatx_np
+    with directory_handle(source.parent) as source_fd:
+        status = rename(source_fd, os.fsencode(source.name), destination_fd,
+                        os.fsencode(destination.name), 4)
+    if status:  # RENAME_EXCL on Darwin
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), destination)
+
+
+def prepare(source, destination, signer):
+    requested = source.absolute()
+    check_quarantine(requested)
+    source = source.resolve(strict=True)
+    check_quarantine(source)
+    check_tree(source)
+    source_id = source.stat()
+    destination = destination.parent.resolve(strict=True) / destination.name
+    if (source.suffix != ".framework" or destination.name != source.name or
+            destination.is_relative_to(source) or os.path.lexists(destination)):
+        raise ValueError("choose a fresh same-named .framework outside the source framework")
+    with directory_handle(destination.parent) as destination_fd, tempfile.TemporaryDirectory(
+            dir=destination.parent) as scratch:
+        temp = Path(scratch)
+        staged = temp / "result" / source.name
+        host = temp / "sign" / source.name
+        staged.parent.mkdir()
+        host.parent.mkdir()
+        run("/usr/bin/ditto", source, staged)
+        check_tree(staged)
+        verify(staged)
+        plist = staged / "Resources/Info.plist"
+        if not plist.exists():
+            plist = staged / "Info.plist"
+        executable = plistlib.loads(plist.read_bytes())["CFBundleExecutable"]
+        if not executable or Path(executable).name != executable or executable in (".", ".."):
+            raise ValueError("invalid framework executable basename")
+        binary = (staged / executable).resolve(strict=True)
+        original = binary.read_bytes()
+        slices = hao_fat.slices(original)
+        if not slices or len(slices) != 1 or slices[0][0] != hao_fat.CPU_ARM64:
+            raise ValueError("requires one ARM slice; existing slices will not be replaced")
+        arm = slices[0][2]
+        signed = hao_codesig.check(arm)
+        if signed["verdict"] != "valid":
+            raise ValueError("original ARM CodeDirectory did not verify")
+        install_name, current, compat = identity(arm)
+        marker = temp / "binding"
+        marker.write_bytes(b"haoslice" + bytes((1, signed["hash_type"], 0, 0)) + signed["cdhash"])
+        run("/usr/bin/ditto", staged, host)
+        host_binary = host / binary.relative_to(staged)
+        empty = temp / "empty.c"
+        empty.touch()
+        generated = temp / "loader.dylib"
+        run("/usr/bin/xcrun", "--sdk", "macosx", "clang", "-arch", "x86_64", "-dynamiclib",
+            "-mmacosx-version-min=13.0", empty, "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+            "-Xlinker", "__hao_framework", "-Xlinker", marker, "-install_name", install_name,
+            "-current_version", version(current), "-compatibility_version", version(compat),
+            "-o", generated)
+        host_binary.write_bytes(generated.read_bytes())
+        run("/usr/bin/codesign", "--force", "--sign", signer, host)
+        verify(host)
+        native = host_binary.read_bytes()
+        combined = hao_fat.combine(original, native)
+        binary.write_bytes(combined)
+        verify(staged)
+        native_signature = hao_codesig.check(native)
+        if native_signature["verdict"] != "valid":
+            raise ValueError("generated loader CodeDirectory did not verify")
+        if signed["ident"] != native_signature["ident"]:
+            raise ValueError("source and generated loader have different signing identifiers")
+        policy_bits = 0x10000 | 0x2000 | 0x800 | 0x300  # runtime, library validation, restricted, hard/kill
+        if (signed["flags"] ^ native_signature["flags"]) & policy_bits:
+            raise ValueError("source and generated loader have different enforcement flags")
+        if (hao_codesig.constraints(arm) != hao_codesig.constraints(native) or
+                any(hao_codesig.special_slots(arm, slot) != hao_codesig.special_slots(native, slot)
+                    for slot in (5, 7))):
+            raise ValueError("generated loader does not preserve signed entitlement or constraint slots")
+        if arm != next(data for cpu, _, data in hao_fat.slices(binary.read_bytes())
+                       if cpu == hao_fat.CPU_ARM64):
+            raise ValueError("ARM slice changed")
+        check_quarantine(requested)
+        check_quarantine(source)
+        if not os.path.samestat(source_id, requested.stat()):
+            raise ValueError("source framework was replaced during preparation")
+        check_tree(source)
+        verify(source)
+        if (source / binary.relative_to(staged)).read_bytes() != original:
+            raise ValueError("source executable was updated during preparation")
+        publish(staged, destination, destination_fd)
+
+
+def service_acl(path):
+    listing = subprocess.check_output(["/bin/ls", "-bdne", path], env={"LC_ALL": "C"})
+    return tuple(listing.splitlines()[1:])
+
+
+def check_service_ancestors(service, destination):
+    # Check every directory traversed, including a symlink's "Gate/..".
+    # The destination keeps its own already-traversed enclosing directories.
+    shared = {destination, *destination.parents}
+    pending = deque(service.absolute().parts[1:])
+    node = Path("/")
+    links = 0
+    while pending:
+        if node not in shared and (node.stat().st_mode & 0o111 != 0o111 or service_acl(node)):
+            raise ValueError(f"advertising would omit an enclosing access restriction: {node}")
+        component = pending.popleft()
+        if component == "..":
+            node = node.parent
+            continue
+        candidate = node / component
+        if candidate.is_symlink():
+            links += 1
+            if links > 40:
+                raise ValueError("too many links in service source path")
+            target = Path(os.readlink(candidate))
+            parts = target.parts
+            if target.is_absolute():
+                node = Path("/")
+                parts = parts[1:]
+            pending.extendleft(reversed(parts))
+        else:
+            node = candidate
+
+
+def advertised_service_tree(service):
+    """Compare files, ownership, access modes, ACLs and internal links."""
+    check_tree(service)
+    verify(service)
+    entries = {}
+    for path in (service, *sorted(service.rglob("*"))):
+        name = path.relative_to(service)
+        status = path.lstat()
+        metadata = (status.st_mode, status.st_uid, status.st_gid, service_acl(path))
+        content = None
+        if path.is_symlink():
+            content = os.readlink(path)
+        elif path.is_file():
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            content = digest.digest()
+        entries[name] = metadata, content
+    return entries
+
+
+def check_service_adapter(service, info, adapter_identifier):
+    declared = info.get("HaoAdvertisedAdapterIdentifiers")
+    if declared is not None:
+        if not isinstance(declared, list) or adapter_identifier not in declared:
+            raise ValueError("service does not declare this adapter identifier")
+        return
+    if info.get("XPCService") != {"ServiceType": "User"}:
+        raise ValueError("service has additional launch configuration and no declared adapter")
+    name = info["CFBundleExecutable"]
+    if not name or Path(name).name != name:
+        raise ValueError("invalid service executable")
+    slices = hao_fat.slices((service / "Contents/MacOS" / name).read_bytes())
+    if not slices:
+        raise ValueError("missing service executable slices")
+    for _, _, image in slices:
+        signature = hao_codesig.check(image)
+        if signature["verdict"] != "valid" or signature["ents"] or signature["der_ents"]:
+            raise ValueError("service has entitlement metadata or invalid signature and no declared adapter")
+
+
+def prepare_adapter(source, destination, signer, associate_original=None, services=()):
+    """Build a distinct host framework containing the signed original as nested code."""
+    requested = source.absolute()
+    source = source.resolve(strict=True)
+    check_quarantine(requested)
+    check_quarantine(source)
+    check_tree(source)
+    verify(source)
+    source_stat = source.stat()
+    destination = destination.parent.resolve(strict=True) / destination.name
+    name = destination.stem
+    if (source.suffix != ".framework" or destination.suffix != ".framework" or
+            destination.name == source.name or destination.is_relative_to(source) or
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name) or os.path.lexists(destination)):
+        raise ValueError("adapter requires a new, distinct framework name outside the source")
+    with directory_handle(destination.parent) as parent, tempfile.TemporaryDirectory(
+            dir=destination.parent) as scratch:
+        temp = Path(scratch)
+        adapter = temp / destination.name
+        version_dir = adapter / "Versions/A"
+        original = version_dir / "Frameworks" / source.name
+        original.parent.mkdir(parents=True)
+        run("/usr/bin/ditto", source, original)
+        check_tree(original)
+        verify(original)
+        resources = version_dir / "Resources"
+        resources.mkdir()
+        info = original / "Resources/Info.plist"
+        if not info.is_file():
+            info = original / "Info.plist"
+        metadata = plistlib.loads(info.read_bytes())
+        adapter_identifier = "org.hao.adapter." + name.lower()
+        if metadata["CFBundleIdentifier"].casefold() == adapter_identifier.casefold():
+            raise ValueError("host adapter identifier collides with nested framework")
+        executable = metadata["CFBundleExecutable"]
+        if not executable or executable in (".", "..") or Path(executable).name != executable:
+            raise ValueError("invalid nested framework executable")
+        nested_binary = original / executable
+        data = nested_binary.read_bytes()
+        parts = hao_fat.slices(data) or []
+        if len(parts) != 1 or parts[0][0] != hao_fat.CPU_ARM64:
+            raise ValueError("adapter requires a single original ARM slice")
+        arm = parts[0][2]
+        install_name, _, _ = identity(arm)
+        signed = hao_codesig.check(arm)
+        if signed["verdict"] != "valid":
+            raise ValueError("nested ARM signature did not verify")
+        marker = temp / "binding"
+        marker.write_bytes(b"haoslice" + bytes((1, signed["hash_type"], 0, 0)) + signed["cdhash"])
+        adapter_info = dict(
+            CFBundleIdentifier=adapter_identifier, CFBundleExecutable=name,
+            CFBundleName=name, CFBundlePackageType="FMWK", CFBundleVersion="1",
+            HaoOriginalFramework=source.name, HaoOriginalIdentifier=metadata["CFBundleIdentifier"],
+            HaoOriginalExecutableSHA256=hashlib.sha256(data).hexdigest())
+        if associate_original is not None:
+            path = associate_original.resolve(strict=True)
+            if not associate_original.is_absolute() or path != (source / executable).resolve(strict=True):
+                raise ValueError("association must identify the supplied original framework executable")
+            adapter_info["HaoOriginalAssociation"] = dict(
+                Version=1, Path=str(path), InstallName=install_name,
+                BundleIdentifier=metadata["CFBundleIdentifier"],
+                SigningIdentifier=signed["ident"].decode("utf-8"),
+                HashType=signed["hash_type"], CDHash=signed["cdhash"],
+                SHA256=hashlib.sha256(arm).digest(), AdapterIdentifier=adapter_identifier)
+        advertised = {}
+        for service in services:
+            if (Path(service).name != service or not service.endswith(".xpc") or
+                    service in advertised):
+                raise ValueError("expected a unique direct .xpc service name")
+            member = original / "XPCServices" / service
+            if not member.is_dir() or member.is_symlink():
+                raise ValueError("original framework has no matching nested service")
+            check_service_ancestors(requested / "XPCServices" / service, destination.parent)
+            snapshot = advertised_service_tree(member)
+            info = plistlib.loads((member / "Contents/Info.plist").read_bytes())
+            if info.get("CFBundlePackageType") != "XPC!":
+                raise ValueError("expected a signed XPC service")
+            check_service_adapter(member, info, adapter_identifier)
+            copied = version_dir / "XPCServices" / service
+            copied.parent.mkdir(exist_ok=True)
+            run("/usr/bin/ditto", member, copied)
+            if advertised_service_tree(copied) != snapshot:
+                raise ValueError("advertised service changed during copy")
+            advertised[service] = snapshot
+        if advertised:
+            (adapter / "XPCServices").symlink_to("Versions/Current/XPCServices")
+        (resources / "Info.plist").write_bytes(plistlib.dumps(adapter_info))
+        (adapter / "Versions/Current").symlink_to("A")
+        for member in (name, "Resources", "Frameworks"):
+            (adapter / member).symlink_to("Versions/Current/" + member)
+        empty = temp / "empty.c"
+        empty.touch()
+        run("/usr/bin/xcrun", "--sdk", "macosx", "clang", "-arch", "x86_64", "-dynamiclib",
+            "-mmacosx-version-min=13.0", empty, "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+            "-Xlinker", "__hao_adapter", "-Xlinker", marker, "-install_name",
+            f"@rpath/{destination.name}/Versions/A/{name}", "-o", version_dir / name)
+        run("/usr/bin/codesign", "--force", "--sign", signer, adapter)
+        verify(adapter)
+        verify(original)
+        check_quarantine(requested)
+        check_quarantine(source)
+        check_tree(source)
+        verify(source)
+        if (not os.path.samestat(source_stat, requested.stat()) or
+                (source / executable).read_bytes() != data or nested_binary.read_bytes() != data):
+            raise ValueError("original framework changed during preparation")
+        if associate_original is not None and (
+                associate_original.resolve(strict=True) != path or
+                (source / executable).resolve(strict=True) != path):
+            raise ValueError("original executable path changed during association")
+        for service, snapshot in advertised.items():
+            check_service_ancestors(requested / "XPCServices" / service, destination.parent)
+            for framework in (source, original, adapter):
+                if advertised_service_tree(framework / "XPCServices" / service) != snapshot:
+                    raise ValueError("advertised service changed during preparation")
+        publish(adapter, destination, parent)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("--sign", default="-", help="actual signing identity for the generated slice")
+    parser.add_argument("--separate-adapter", action="store_true",
+                        help="place the original inside a distinct owner-signed framework")
+    parser.add_argument("--associate-original", type=Path, metavar="ABSOLUTE_EXECUTABLE",
+                        help="seal the verified original executable path and identity in the adapter")
+    parser.add_argument("--advertise-service", action="append", default=[], metavar="SERVICE.xpc",
+                        help="advertise a nested signed user service, or a service naming this adapter "
+                             "in HaoAdvertisedAdapterIdentifiers (repeatable)")
+    args = parser.parse_args()
+    if args.advertise_service and not args.separate_adapter:
+        parser.error("--advertise-service requires --separate-adapter")
+    if args.associate_original is not None and not args.separate_adapter:
+        parser.error("--associate-original requires --separate-adapter")
+    try:
+        if args.separate_adapter:
+            prepare_adapter(args.source, args.destination, args.sign, args.associate_original, args.advertise_service)
+        else:
+            prepare(args.source, args.destination, args.sign)
+    except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"hao-prepare-framework: {error}\n")

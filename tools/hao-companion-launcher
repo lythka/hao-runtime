@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Link an independently signed launcher for one installed ARM executable and verified adapters."""
+import argparse
+import json
+import os
+from pathlib import Path
+import plistlib
+import runpy
+import struct
+import subprocess
+import tempfile
+
+import hao_fat
+
+tools = Path(__file__).resolve().parent
+packager = runpy.run_path(str(tools / "hao-prepare-framework"))
+embedding = runpy.run_path(str(tools / "hao-embed"))
+
+
+def run(*args):
+    subprocess.run(list(map(str, args)), check=True)
+
+
+def build(program, adapters, runtime, output, signer):
+    program = program.resolve(strict=True)
+    packager["check_quarantine"](program)
+    packager["verify"](program)
+    parts = hao_fat.slices(program.read_bytes()) or []
+    if len(parts) != 1 or parts[0][0] != hao_fat.CPU_ARM64:
+        raise ValueError("requires an unambiguous signed ARM program")
+    arm = parts[0][2]
+    if struct.unpack_from("<I", arm, 12)[0] != 2:
+        raise ValueError("original is not MH_EXECUTE")
+    main_binding = embedding["slice_record"](arm)
+    output = output.parent.resolve(strict=True) / output.name
+    if os.path.lexists(output):
+        raise ValueError("refusing to replace an existing output")
+    with packager["directory_handle"](output.parent) as fd, tempfile.TemporaryDirectory(
+            dir=output.parent) as scratch:
+        tmp = Path(scratch)
+        main_record = tmp / "main-record"
+        main_record.write_bytes(main_binding)
+        record = tmp / "record"
+        run(tools / "hao-companion-record", *adapters, "-o", record)
+        native = []
+        for path in adapters:
+            adapter = path.resolve(strict=True)
+            metadata = plistlib.loads((adapter / "Resources/Info.plist").read_bytes())
+            image = (adapter / metadata["CFBundleExecutable"]).resolve(strict=True)
+            name, _, _ = packager["identity"](image.read_bytes())
+            native.append((image, name))
+        ids = [name for _, name in native]
+        if len(set(ids)) != len(ids):
+            raise ValueError("ambiguous native adapter install names")
+        linked = tmp / "launcher"
+        args = ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-arch", "x86_64",
+                "-mmacosx-version-min=27.0", "-Wall", "-Wextra", "-Werror",
+                "-DHAO_PROGRAM=" + json.dumps(str(program)), tools.parent / "src/front/companion_cli.c",
+                "-L", runtime, "-lhao", "-lhao_identity", "-Wl,-rpath,/usr/lib/hao",
+                "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__hao_companions",
+                "-Xlinker", record, "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+                "-Xlinker", "__hao_slice", "-Xlinker", main_record, "-headerpad_max_install_names"]
+        for image, _ in native:
+            args.extend(["-Xlinker", "-needed_library", "-Xlinker", image])
+        run(*args, "-o", linked)
+        for image, name in native:
+            run("/usr/bin/install_name_tool", "-change", name, image, linked)
+        run("/usr/bin/codesign", "--force", "--sign", signer, "--identifier",
+            "org.hao.companion-launcher." + output.stem, linked)
+        packager["verify"](linked)
+        packager["publish"](linked, output, fd)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("program", type=Path)
+    parser.add_argument("adapters", nargs="+", type=Path)
+    parser.add_argument("--runtime", required=True, type=Path, help="link-time libhao directory")
+    parser.add_argument("--sign", default="-")
+    parser.add_argument("-o", "--output", required=True, type=Path)
+    args = parser.parse_args()
+    try:
+        build(args.program, args.adapters, args.runtime, args.output, args.sign)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"hao-companion-launcher: {exc}\n")

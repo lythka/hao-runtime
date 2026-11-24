@@ -339,6 +339,16 @@ if r=$(timeout 300 python3 -I "$here/test_root.py" "$OUT/root" "$G" /bin/ls "$B/
     pass "--cryptex: $(echo "$r" | tr '\n' ';')"
 else bad "--cryptex: $(echo "$r" | grep FAIL)"; fi
 # --- hao-aot-use: AOT use records (src/aot_use.c) -> the AOT list hao-image-payload --aot-list takes
+if r=$(B="$B" timeout 120 python3 -I "$here/test_prepare_components.py" 2>&1); then
+    pass "receipt-based staging: install, replace and refuse"
+else
+    bad "receipt-based staging: $r"
+fi
+if r=$(timeout 60 python3 -I "$here/test_app_inventory.py" 2>&1); then
+    pass "app inventory: install, interruption, replacement and signature rejection"
+else
+    bad "app inventory: $r"
+fi
 if r=$(timeout 120 python3 -I "$here/test_aot_use.py" "$OUT/aotuse" 2>&1); then
     pass "hao-aot-use: $(echo "$r" | tr '\n' ';')"
 else bad "hao-aot-use: $(echo "$r" | grep FAIL)"; fi

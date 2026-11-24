@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Generate a launcher's __TEXT,__hao_companions data from signed framework adapters."""
+import argparse
+import hashlib
+from pathlib import Path
+import plistlib
+import runpy
+import subprocess
+
+import hao_codesig
+import hao_fat
+
+packager = runpy.run_path(str(Path(__file__).with_name("hao-prepare-framework")))
+
+
+def encode(adapter):
+    adapter = adapter.resolve(strict=True)
+    packager["verify"](adapter)
+    info = plistlib.loads((adapter / "Resources/Info.plist").read_bytes())
+    association = info.get("HaoOriginalAssociation")
+    if not isinstance(association, dict) or association.get("Version") != 1:
+        raise ValueError(f"{adapter}: missing version 1 association")
+    if association["AdapterIdentifier"] != info["CFBundleIdentifier"]:
+        raise ValueError("adapter bundle identifier differs from its association")
+    host = (adapter / info["CFBundleExecutable"]).resolve(strict=True)
+    path = Path(association["Path"])
+    if not host.is_relative_to(adapter) or path.resolve(strict=True) != path:
+        raise ValueError("adapter or original executable path is not canonical")
+    original_name = info["HaoOriginalFramework"]
+    if Path(original_name).name != original_name or not original_name.endswith(".framework"):
+        raise ValueError("invalid nested framework name")
+    original_bundle = next((p for p in path.parents if p.name == original_name), None)
+    if original_bundle is None:
+        raise ValueError("original path does not identify the declared framework")
+    packager["verify"](original_bundle)
+    packager["check_tree"](original_bundle)
+    packager["check_quarantine"](original_bundle)
+    nested = (adapter / "Frameworks" / original_name).resolve(strict=True)
+    if not nested.is_relative_to(adapter):
+        raise ValueError("nested framework outside adapter")
+    original_info = original_bundle / "Resources/Info.plist"
+    if not original_info.exists():
+        original_info = original_bundle / "Info.plist"
+    meta = plistlib.loads(original_info.read_bytes())
+    if (original_bundle / meta["CFBundleExecutable"]).resolve(strict=True) != path:
+        raise ValueError("original bundle executable differs from association")
+    original = path.read_bytes()
+    if (nested / path.relative_to(original_bundle)).read_bytes() != original:
+        raise ValueError("nested original differs from declared file")
+    arm_parts = [b for cpu, _, b in hao_fat.slices(original) or [] if cpu == hao_fat.CPU_ARM64]
+    host_parts = hao_fat.slices(host.read_bytes())
+    if len(arm_parts) != 1 or not host_parts or len(host_parts) != 1 or host_parts[0][0] != hao_fat.CPU_X86_64:
+        raise ValueError("ambiguous original ARM or host Intel slice")
+    arm = arm_parts[0]
+    guest_sig = hao_codesig.check(arm)
+    host_sig = hao_codesig.check(host_parts[0][2])
+    if any(sig["verdict"] != "valid" for sig in (guest_sig, host_sig)):
+        raise ValueError("host or original signature did not verify")
+    install, _, _ = packager["identity"](arm)
+    digest = hashlib.sha256(arm).digest()
+    if (install != association["InstallName"] or meta["CFBundleIdentifier"] != association["BundleIdentifier"]
+            or guest_sig["ident"].decode() != association["SigningIdentifier"]
+            or host_sig["ident"].decode() != association["AdapterIdentifier"]
+            or digest != association["SHA256"] or guest_sig["cdhash"] != association["CDHash"]
+            or guest_sig["hash_type"] != association["HashType"]):
+        raise ValueError("association does not match actual source and host identity")
+    keys = str(path), install, str(host)
+    fields = b"".join(key.encode("utf-8") + b"\0" for key in keys)
+    return (bytes([guest_sig["hash_type"]]) + guest_sig["cdhash"] +
+            bytes([host_sig["hash_type"]]) + host_sig["cdhash"] + digest + fields), keys
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("adapters", type=Path, nargs="+")
+    parser.add_argument("-o", "--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        records = bytearray(b"haocomp1")
+        seen = [set(), set(), set()]
+        for adapter in args.adapters:
+            record, keys = encode(adapter)
+            for values, key in zip(seen, keys):
+                if key in values:
+                    raise ValueError(f"duplicate companion association {key}")
+                values.add(key)
+            records.extend(record)
+        with args.output.open("xb") as out:
+            out.write(records)
+    except (KeyError, ValueError, OSError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"hao-companion-record: {error}\n")
+
+
+if __name__ == "__main__":
+    main()
