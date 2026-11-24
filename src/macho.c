@@ -764,6 +764,10 @@ static int legacy_stream(hao_image *img, const uint8_t *data, uint32_t size, int
             }
             off += 8 + skip;
         }
+        /* Legacy rebase streams can end at the declared byte bound after
+         * the last action. A state opcode or zero-count action still needs
+         * a terminator; bind and lazy records keep their own DONE rules. */
+        if (mode == LEGACY_REBASE && p == end) done = true;
     }
     if (size && !done) DERR("missing DONE opcode");
     return 0;

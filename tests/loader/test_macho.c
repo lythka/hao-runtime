@@ -203,7 +203,11 @@ static void legacy_tests(void)
     BAD("unset bind symbol/ordinal",1,"symbol or library",0x51,0x71,0,0x90,0);
     BAD("positive library ordinal out of range",1,"ordinal out of range",0x11,0);
     BAD("special library ordinal out of range",1,"ordinal out of range",0x3c,0);
-    BAD("missing DONE",0,"missing DONE",0x11,0x21,0,0x51);
+    static const uint8_t bounded_rebase[]={0x11,0x21,0,0x52};
+    legacy_case("length-terminated final rebase action",bounded_rebase,sizeof bounded_rebase,0,NULL,0,2,0);
+    BAD("trailing rebase state without DONE",0,"missing DONE",0x11,0x21,0,0x51,0x40);
+    BAD("trailing zero-count rebase without DONE",0,"missing DONE",0x11,0x21,0,0x51,0x50);
+    BAD("bind without DONE",1,"missing DONE",0x30,0x40,'_','u',0,0x51,0x71,0,0x90);
     BAD("lazy record state reset",3,"segment not mapped",0x30,0x40,'_','u',0,0x71,0,0x90,0,0x90,0);
     BAD("nonzero trailing bytes",0,"after DONE",0,0x11);
     BAD("count bomb",0,"count exceeds",0x11,0x21,0,0x60,0xff,0xff,0xff,0xff,0x7f,0);
