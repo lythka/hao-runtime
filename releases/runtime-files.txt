@@ -358,6 +358,8 @@ tests/guest/fmtposhelper.m
 tests/guest/fnhelper.h
 tests/guest/fnhelper.mm
 tests/guest/fnslots.mm
+tests/guest/imagewatch.m
+tests/guest/imagewatch.sh
 tests/guest/footprint.m
 tests/guest/footprint.sh
 tests/guest/footprint_front.c

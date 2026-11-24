@@ -89,6 +89,7 @@ static void print_stats(void)
 static int g_argc; static char **g_argv, **g_envp; static const char *g_apple[2];
 static struct { uint64_t mh, argc, argv, envp, progname; } g_progvars;
 extern bool hao_ids_prepare(hao_image *img);
+extern void hao_objc_image_ready(const struct mach_header *);
 void hao_guest_image_init(hao_image *img)
 {
     bool prepared = hao_ids_prepare(img);
@@ -100,9 +101,11 @@ void hao_guest_image_init(hao_image *img)
     hao_swiftmeta_image(img);   /* relative pointers to guest functions -> island thunks, before the runtime reads them */
     hao_swift_register_image(img);
     hao_swift_witness_setup();   /* the Optional witnesses guest calls are recognized by (swiftvalue.c) */
-    hao_objc_register_image(img);
+    hao_objc_read_image(img);
     hao_blocks_register_image(img);
     hao_fnslots_image(img);
+    hao_objc_image_ready((const struct mach_header *)(uintptr_t)img->base);
+    hao_objc_run_loads(img);
     /* HAO_DIAG_TIME: "registered NAME" covers the steps above and the previous image's initializers */
     char what[160];
     const char *base = strrchr(img->path, '/') ? strrchr(img->path, '/') + 1 : img->path;

@@ -41,6 +41,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/loader.h>
 #include <pthread.h>
+#include <objc/runtime.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdatomic.h>
@@ -362,6 +363,15 @@ static const struct section_64 *carried_sect(const struct mach_header_64 *mh, co
     for (uint32_t i = 0; i < ncsegs; i++)
         if ((s = find_sect(csegs[i].cmd, seg, sect))) return s;
     return NULL;
+}
+
+/* The native registry owns native images. The runtime owns guest images and
+ * serializes their replay with the same lock as guest image initialization. */
+static void hao_addLoadImageFunc(objc_func_loadImage callback)
+{
+    objc_addLoadImageFunc(callback);
+    void (*observe)(objc_func_loadImage) = dlsym(RTLD_DEFAULT, "hao_objc_observe_images");
+    if (observe) observe(callback);
 }
 
 /* ---- libmacho on the main executable: hao's own header first, then the carried copies.
@@ -932,6 +942,7 @@ static const struct { const void *replacement, *original; } hao_interposers[] = 
     {(const void *)hao_getsectdata, (const void *)getsectdata},
     {(const void *)hao_getsectbynamefromheader_64, (const void *)getsectbynamefromheader_64},
     {(const void *)hao_getsectdatafromheader_64, (const void *)getsectdatafromheader_64},
+    {(const void *)hao_addLoadImageFunc, (const void *)objc_addLoadImageFunc},
     {(const void *)hao_getsectiondata, (const void *)getsectiondata},
     {(const void *)hao_getsegmentdata, (const void *)getsegmentdata},
 };

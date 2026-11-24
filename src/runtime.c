@@ -3344,6 +3344,50 @@ static void lock_loads(void) { pthread_once(&load_once, load_lock_init); pthread
 static void loads_fork_child(void) { load_lock_init(); }   /* recursive: re-made, not unlocked */
 static void unlock_loads(void) { pthread_mutex_unlock(&load_lock); }
 
+/* Registered headers and observers are process-lifetime objects, as in
+ * libobjc. The recursive load lock serializes initial replay with later
+ * notifications and permits a callback to register another observer.
+ * Snapshot the count before callbacks, which may grow either array. */
+typedef void (*image_observer)(const struct mach_header *);
+static const struct mach_header **objc_images;
+static size_t nobjc_images;
+static struct {
+    image_observer callback;
+    size_t next_image;
+} *objc_observers;
+static size_t nobjc_observers;
+
+static void deliver_objc_images(size_t observer, size_t end)
+{
+    while (objc_observers[observer].next_image < end) {
+        size_t next = objc_observers[observer].next_image++;
+        objc_observers[observer].callback(objc_images[next]);
+    }
+}
+
+void hao_objc_observe_images(image_observer callback)
+{
+    lock_loads();
+    objc_observers = hao_alloc_check(realloc(objc_observers, (nobjc_observers + 1) * sizeof *objc_observers),
+                                     "Objective-C image observers");
+    size_t index = nobjc_observers++;
+    objc_observers[index].callback = callback;
+    objc_observers[index].next_image = 0;
+    deliver_objc_images(index, nobjc_images);
+    unlock_loads();
+}
+
+void hao_objc_image_ready(const struct mach_header *header)
+{
+    lock_loads();
+    objc_images = hao_alloc_check(realloc(objc_images, (nobjc_images + 1) * sizeof *objc_images),
+                                  "Objective-C observed images");
+    objc_images[nobjc_images++] = header;
+    size_t count = nobjc_observers;
+    for (size_t k = 0; k < count; k++) deliver_objc_images(k, nobjc_images);
+    unlock_loads();
+}
+
 /* Guest libraries by real path. */
 static struct guest_lib { char *path; hao_image *img; hao_image *loader; } *glibs;
 static int nglibs, capglibs;
