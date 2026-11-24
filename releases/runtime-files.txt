@@ -279,6 +279,10 @@ tests/guest/callback-routes.sh
 tests/guest/callbacks.sh
 tests/guest/carrierdestroy.sh
 tests/guest/carrierdestroy.swift
+tests/guest/debugger-snapshot/laptop-accept.sh
+tests/guest/debugger-snapshot/run.sh
+tests/guest/debugger-snapshot/session.py
+tests/guest/debugger-snapshot/target.c
 tests/guest/framework-xpc/build.py
 tests/guest/framework-xpc/capability.c
 tests/guest/framework-xpc/client.c
