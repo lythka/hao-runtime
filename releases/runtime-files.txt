@@ -713,6 +713,7 @@ tests/tools/stubdeps_guest.c
 tests/tools/stubdeps_lib.c
 tests/tools/stubdeps_main.c
 tests/tools/test_app_inventory.py
+tests/tools/test_watch_apps.py
 tests/tools/test_codesig.py
 tests/tools/test_catalog_gate.py
 tests/tools/test_contract.py
@@ -756,6 +757,7 @@ tools/check_distribution.py
 tools/check_x86.sh
 tools/dyld-ignition-fix.py
 tools/hao-app-inventory
+tools/hao-watch-apps
 tools/hao-aot-extend
 tools/hao-aot-use
 tools/hao-contract/PIN

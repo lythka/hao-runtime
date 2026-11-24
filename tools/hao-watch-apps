@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Publish prepared copies of eligible installed apps into a private, user-owned directory."""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import os
+import plistlib
+import sys
+from pathlib import Path
+import runpy
+import shutil
+import stat
+import subprocess
+import tempfile
+import time
+from xml.parsers.expat import ExpatError
+
+from hao_package_metadata import check_quarantine
+
+TOOLS = Path(__file__).resolve().parent
+inventory = runpy.run_path(str(TOOLS / "hao-app-inventory"))
+components = runpy.run_path(str(TOOLS / "hao-prepare-components"))
+
+
+@contextlib.contextmanager
+def pinned_directory(path):
+    previous = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    target = components["ENGINE"]["OutDir"](str(path))
+    try:
+        os.fchdir(target.fd)
+        yield
+    finally:
+        os.fchdir(previous)
+        os.close(previous)
+        os.close(target.fd)
+
+
+@contextlib.contextmanager
+def scratch(directory):
+    path = directory / (".pending-" + os.urandom(16).hex())
+    path.mkdir(mode=0o700)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path)
+
+
+def checked_tree(bundle):
+    components["check_bundle_metadata"](bundle)
+    digest = hashlib.sha256()
+    for path in [bundle, *sorted(bundle.rglob("*"))]:
+        st = path.lstat()
+        if st.st_uid != os.getuid() or st.st_mode & 0o022:
+            raise ValueError("bundle member permits another user to change the prepared input")
+        fields = [os.fsencode(path.relative_to(bundle)), str(st.st_mode).encode(), str(st.st_gid).encode(), str(st.st_flags).encode()]
+        if stat.S_ISLNK(st.st_mode):
+            fields.append(os.fsencode(os.readlink(path)))
+        elif stat.S_ISREG(st.st_mode):
+            with path.open("rb") as stream:
+                fields.append(hashlib.file_digest(stream, "sha256").digest())
+        attributes = subprocess.check_output(["/usr/bin/xattr", "-lsx", path])
+        fields.append(attributes)
+        for field in fields:
+            digest.update(len(field).to_bytes(8, "big"))
+            digest.update(field)
+    return digest.hexdigest()
+
+
+def prepare(bundle, output, stub, cache):
+    check_quarantine(bundle)
+    row = inventory["inspect"](bundle)
+    if not row or "x86_64" in row["architectures"] or "x86_64h" in row["architectures"]:
+        return None
+    input_digest = checked_tree(bundle)
+    with stub.open("rb") as stream:
+        stub_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    version = hashlib.sha256(repr((input_digest, stub_digest, str(cache), bundle.name)).encode()).hexdigest()
+    store = output / ".generations"
+    store.mkdir(mode=0o700, exist_ok=True)
+    if store.is_symlink() or store.stat().st_uid != os.getuid() or store.stat().st_mode & 0o077:
+        raise ValueError("generation store must be private")
+    guard = components["ENGINE"]["OutDir"](str(store))
+    try:
+        components["check_acl"](store, "-lde")
+    finally:
+        os.close(guard.fd)
+    version_path = store / version / bundle.name
+    seal = version_path.parent / "sha256"
+    if version_path.exists():
+        if version_path.is_symlink() or checked_tree(version_path) != seal.read_text():
+            raise ValueError("prepared generation failed its integrity check")
+    else:
+        with scratch(store) as work:
+            generation = work / "generation"
+            generation.mkdir()
+            product = generation / bundle.name
+            subprocess.run(["/bin/cp", "-cRp", bundle, product], check=True)
+            if checked_tree(product) != input_digest:
+                raise ValueError("application changed while copying installation")
+            main = product / "Contents/MacOS" / inventory["main_name"](product / "Contents/Info.plist")
+            with tempfile.TemporaryDirectory() as staging:
+                destination = Path(staging).resolve() / main.relative_to(generation)
+                prepared = components["prepare_file"](main.resolve(strict=True), destination, stub, cache)
+                if not prepared:
+                    raise ValueError("main executable is ineligible")
+                shutil.copyfile(destination, main)
+            for arch in (row["architectures"][0], "x86_64"):
+                subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-a", arch, product], check=True)
+            (generation / "sha256").write_text(checked_tree(product))
+            os.rename(generation, version_path.parent)
+    if input_digest != checked_tree(bundle):
+        raise ValueError("application updated during preparation")
+    return version_path
+
+
+def reconcile(directory, output, stub, cache):
+    if os.getuid() == 0 or output.name in ("", ".", ".."):
+        raise ValueError("use an ordinary user and a named private output directory")
+    directory = directory.resolve(strict=True)
+    stub = stub.resolve(strict=True)
+    if cache is not None:
+        cache = cache.resolve(strict=True)
+    parent = output.parent.resolve(strict=True)
+    with pinned_directory(parent):
+        requested = Path.cwd() / output.name
+        if requested.is_relative_to(directory) or directory.is_relative_to(requested):
+            raise ValueError("installation and output directories overlap")
+        child = Path(output.name)
+        child.mkdir(mode=0o700, exist_ok=True)
+        with pinned_directory(child):
+            opened = Path.cwd()
+            if opened.is_relative_to(directory) or directory.is_relative_to(opened):
+                raise ValueError("installation and output directories overlap")
+            st = os.stat(".")
+            if st.st_uid != os.getuid() or st.st_mode & 0o077:
+                raise ValueError("output must be a privately owned directory")
+            lock_fd = os.open(".lock", os.O_RDWR | os.O_NOFOLLOW | os.O_CREAT, 0o600)
+            with os.fdopen(lock_fd, "r+") as lock:
+                scan(directory, Path("."), stub, cache, lock)
+
+
+def scan(directory, output, stub, cache, lock):
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    current = set()
+    for bundle in sorted(directory.glob("*.app")):
+        try:
+            version = prepare(bundle, output, stub, cache)
+            if version:
+                link = output / bundle.name
+                check_quarantine(bundle)
+                if not link.is_symlink() or Path(os.readlink(link)) != version:
+                    with scratch(output) as temporary:
+                        pending = temporary / "prepared"
+                        pending.symlink_to(version)
+                        os.replace(pending, link)
+                current.add(link)
+        except (ValueError, RuntimeError, OSError, ExpatError, plistlib.InvalidFileException,
+                subprocess.CalledProcessError) as error:
+            print(f"{bundle}: {error}", file=sys.stderr, flush=True)
+    for link in output.glob("*.app"):
+        if link.is_symlink() and link not in current and Path(os.readlink(link)).is_relative_to(output / ".generations"):
+            link.unlink()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--stub", type=Path, required=True)
+    parser.add_argument("--x86-cache", type=Path)
+    parser.add_argument("--interval", type=int, default=0, help="rescan every N seconds; default scans once")
+    args = parser.parse_args()
+    if args.interval < 0:
+        parser.error("interval must be nonnegative")
+    while True:
+        reconcile(args.directory.resolve(strict=True), args.output.absolute(), args.stub.resolve(strict=True), args.x86_cache)
+        if not args.interval:
+            break
+        time.sleep(args.interval)

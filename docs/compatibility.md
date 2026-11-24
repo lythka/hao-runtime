@@ -170,3 +170,9 @@ the same code on Apple silicon:
 Applications, extensions and system services are tested on the target system
 (above). A passing test suite establishes the tested behaviour only; it does
 not establish that every application works.
+
+### Watching a user-owned application directory
+
+Run `tools/hao-watch-apps ~/Applications --output ~/PreparedApps --stub /path/to/hao-stub --interval 30` as the user who owns the applications. On each scan a signed ARM-only app with a supported main executable gets a prepared copy at `~/PreparedApps/Name.app`. LaunchServices activation of this prepared copy on Intel remains unverified. Updates switch the link after validation. Removal, quarantine, and integrity failures withdraw the link on the next scan. Previously published generations are retained because running processes may still use their resources.
+
+This mode prepares the main program and preserves the original bundle. Nested tools, universal-app selection, enrollment at login and routing a launch from the original path require separate integration. Large directories incur a full signature and content scan.

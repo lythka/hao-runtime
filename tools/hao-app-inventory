@@ -28,12 +28,8 @@ def regular_file(path):
     return stream
 
 
-def inspect(bundle):
-    contents = bundle / "Contents"
-    macos = contents / "MacOS"
-    if any(path.is_symlink() for path in (bundle, contents, macos)):
-        raise ValueError("symbolic link in application path")
-    with regular_file(contents / "Info.plist") as stream:
+def main_name(path):
+    with regular_file(path) as stream:
         try:
             info = plistlib.load(stream)
         except (AttributeError, OverflowError, RecursionError, IndexError, TypeError) as exc:
@@ -41,6 +37,15 @@ def inspect(bundle):
     name = info.get("CFBundleExecutable") if isinstance(info, dict) else None
     if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
         raise ValueError("invalid CFBundleExecutable")
+    return name
+
+
+def inspect(bundle):
+    contents = bundle / "Contents"
+    macos = contents / "MacOS"
+    if any(path.is_symlink() for path in (bundle, contents, macos)):
+        raise ValueError("symbolic link in application path")
+    name = main_name(contents / "Info.plist")
     executable = macos / name
     with regular_file(executable) as stream:
         before = os.fstat(stream.fileno())

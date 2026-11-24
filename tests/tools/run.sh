@@ -344,6 +344,11 @@ if r=$(B="$B" timeout 120 python3 -I "$here/test_prepare_components.py" 2>&1); t
 else
     bad "receipt-based staging: $r"
 fi
+if r=$(B="$B" timeout 120 python3 -I "$here/test_watch_apps.py" 2>&1); then
+    pass "application update reconciliation"
+else
+    bad "application update reconciliation: $r"
+fi
 if r=$(timeout 60 python3 -I "$here/test_app_inventory.py" 2>&1); then
     pass "app inventory: install, interruption, replacement and signature rejection"
 else
