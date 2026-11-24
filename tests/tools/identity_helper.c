@@ -69,7 +69,11 @@ int idplug_marker(void) { return 1; }
 int idenv_marker(void) { return 2; }
 #elif defined(ROLE_INSERT)
 __attribute__((constructor)) static void inserted(void) {
-    printf("inserted library loaded\n");
+#if defined(__arm64__)
+    puts("inserted library loaded arm64");
+#else
+    puts("inserted library loaded x86_64");
+#endif
     fflush(stdout);
 }
 #else

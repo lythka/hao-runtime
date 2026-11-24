@@ -107,6 +107,13 @@ for n in idprog restrict; do
     if [ -s $n.ins.native ] && diff <(grep -c '^inserted' $n.ins.native) <(grep -c '^inserted' $n.ins.hao) >/dev/null; then
         pass "$n: DYLD_INSERT_LIBRARIES as natively ($(grep -q '^inserted' $n.ins.native && echo inserted || echo ignored))"
     else bad "$n: DYLD_INSERT_LIBRARIES: native '$(grep -c '^inserted' $n.ins.native)' embedded '$(grep -c '^inserted' $n.ins.hao)'"; fi
+    for output in "$n.ins.native" "$n.ins.hao"; do
+        order=$(awk '/^inserted library loaded/{print "inserted"} /^identity-event /{sub(/^identity-event /,""); print}' "$output")
+        expected=$(printf 'main constructor\nmain entry')
+        if [ "$n" = idprog ]; then expected=$(printf 'inserted\n%s' "$expected"); fi
+        if [ "$order" = "$expected" ]; then pass "$output: constructors precede main in native order"
+        else bad "$output: observed constructor order '$order'"; fi
+    done
 done
 # what native arm64 shows (the fixture is what it says)
 want="source_version 1234.5.6.0.0;LC_MAIN stacksize 0x1000000;rpath @executable_path/plug;"
