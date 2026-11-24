@@ -996,7 +996,10 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
 
     /* guest dylibs bottom-up, then the main executable */
     hao_phase("bound");
-    hao_run_initializers();
+    if (!hao_run_initializers()) {
+        fprintf(stderr, "hao: native dependency changed during guest initialization\n");
+        return 126;
+    }
     hao_phase("main");
     uint64_t args[4] = {(uint64_t)argc, (uint64_t)(uintptr_t)argv, (uint64_t)(uintptr_t)envp, (uint64_t)(uintptr_t)g_apple};
     uint64_t rc = hao_call_guest(hao_current(), img->entry, args, 4);

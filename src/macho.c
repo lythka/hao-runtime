@@ -405,11 +405,53 @@ typedef struct {
 
 typedef struct {
     int ordinal;
-    bool weak;
+    bool weak, required_weak;
     const char *name;
     int64_t addend;
     uint64_t value;
 } import_t;
+
+/* Decode all fixup locations from the immutable input mapping before a
+ * resolver can enter a native dependency and run its constructors. */
+typedef struct {
+    uint64_t location, value;
+    size_t import_index;  /* SIZE_MAX for a rebase */
+} fixup_write;
+
+typedef struct hao_pending_binding {
+    import_t *imports;
+    size_t import_count, import_capacity;
+    fixup_write *writes;
+    size_t write_count, write_capacity;
+    unsigned auth_count, generation;
+    size_t next_import;
+    const seginfo *segments;
+    int segment_count;
+    hao_resolver resolve;
+    bool finished, failed, map_only, writes_applied;
+    char why[320];
+} fixup_plan;
+
+static bool reserve_fixups(void **items, size_t *capacity, size_t needed, size_t stride)
+{
+    if (needed <= *capacity) return true;
+    size_t cap = *capacity ? *capacity : 64;
+    while (cap < needed && cap <= SIZE_MAX / 2) cap *= 2;
+    if (cap < needed || cap > SIZE_MAX / stride) return false;
+    void *grown = realloc(*items, cap * stride);
+    if (!grown) return false;
+    *items = grown;
+    *capacity = cap;
+    return true;
+}
+
+static bool plan_write(fixup_plan *plan, uint64_t location, uint64_t value, size_t index)
+{
+    if (!reserve_fixups((void **)&plan->writes, &plan->write_capacity, plan->write_count + 1, sizeof *plan->writes))
+        return false;
+    plan->writes[plan->write_count++] = (fixup_write){location, value, index};
+    return true;
+}
 
 /* Library ordinal from an import entry: 1..n dependencies, 0 self, and the
  * special negatives -1 (main executable), -2 (flat), -3 (weak lookup). */
@@ -437,7 +479,7 @@ static void note_fnslot(hao_image *img, uint64_t loc)
     img->fnslots[img->nfnslots++] = loc;
 }
 
-static int apply_chained(hao_image *img, const uint8_t *lc_data, uint32_t lc_size, hao_resolver resolve,
+static int plan_chained(hao_image *img, const uint8_t *lc_data, uint32_t lc_size, fixup_plan *plan,
                          const seginfo *segs, int nseg, char *err, size_t errlen)
 {
     const struct dyld_chained_fixups_header *h = (const void *)lc_data;
@@ -487,13 +529,6 @@ static int apply_chained(hao_image *img, const uint8_t *lc_data, uint32_t lc_siz
         /* a library this image calls with C++ names (runtime.c: such a library may run as guest code) */
         if (imp[k].ordinal > 0 && !strncmp(imp[k].name, "__Z", 3)) img->dep_cxx[imp[k].ordinal - 1] = true;
     }
-    for (uint32_t k = 0; k < count; k++) {
-        bool found = false;
-        imp[k].value = resolve(img, imp[k].ordinal, imp[k].name, imp[k].weak, &found);
-        if (!found && !imp[k].weak) img->n_unresolved++;
-        imp[k].value += (uint64_t)imp[k].addend;
-    }
-
     const uint8_t *sib = lc_data + h->starts_offset;
     uint64_t si_size = lc_size - h->starts_offset;
     uint32_t seg_count;
@@ -542,55 +577,51 @@ static int apply_chained(hao_image *img, const uint8_t *lc_data, uint32_t lc_siz
                 uint64_t raw;
                 memcpy(&raw, (void *)(uintptr_t)loc, 8);
                 uint64_t val, next;
-                bool is_rebase;
+                size_t index = SIZE_MAX;
                 if (stride == 8) {
                     bool auth = raw >> 63, bind = (raw >> 62) & 1;
                     next = (raw >> 51) & 0x7ff;
-                    is_rebase = !bind;
                     if (bind) {
                         uint32_t ord = fmt == DYLD_CHAINED_PTR_ARM64E_USERLAND24 ? (uint32_t)(raw & 0xffffff) : (uint32_t)(raw & 0xffff);
                         if (ord >= count) CERR("bind ordinal %u out of range (%u imports)", ord, count);
-                        val = imp[ord].value;
+                        index = ord;
+                        val = 0;
                         if (!auth) {
                             int64_t add = ((int64_t)(raw << 13)) >> 45;  /* bits 32..50, signed 19 */
                             val += (uint64_t)add;
-                        } else img->n_auth++;
-                        img->n_bind++;
+                        } else plan->auth_count++;
                     } else if (auth) {
                         val = img->base + (raw & 0xffffffffull);
-                        img->n_auth++;
-                        img->n_rebase++;
+                        plan->auth_count++;
                     } else {
                         uint64_t target = raw & 0x7ffffffffffull, high8 = (raw >> 43) & 0xff;
                         val = (fmt == DYLD_CHAINED_PTR_ARM64E) ? target + img->slide : img->base + target;
                         val |= high8 << 56;
-                        img->n_rebase++;
                     }
                 } else {
                     bool bind = raw >> 63;
                     next = (raw >> 51) & 0xfff;
-                    is_rebase = !bind;
                     if (bind) {
                         uint32_t ord = (uint32_t)(raw & 0xffffff);
                         if (ord >= count) CERR("bind ordinal %u out of range (%u imports)", ord, count);
-                        val = imp[ord].value + ((raw >> 24) & 0xff);
-                        img->n_bind++;
+                        index = ord;
+                        val = (raw >> 24) & 0xff;
                     } else {
                         uint64_t target = raw & 0xfffffffffull, high8 = (raw >> 36) & 0xff;
                         val = (fmt == DYLD_CHAINED_PTR_64) ? target + img->slide : img->base + target;
                         val |= high8 << 56;
-                        img->n_rebase++;
                     }
                 }
-                memcpy((void *)(uintptr_t)loc, &val, 8);
-                if (is_rebase && hao_is_guest_function(val)) note_fnslot(img, loc);
+                if (!plan_write(plan, loc, val, index)) CERR("out of memory for fixup records");
                 if (!next) break;
                 off += next * (uint64_t)stride;    /* next > 0: strictly forward, so no cycles */
             }
         }
     }
 #undef CERR
-    free(imp);
+    plan->imports = imp;
+    plan->import_count = count;
+    plan->import_capacity = count;
     return 0;
 }
 
@@ -619,7 +650,7 @@ static int64_t legacy_sleb(const uint8_t **p, const uint8_t *end, bool *bad)
 }
 
 static int legacy_stream(hao_image *img, const uint8_t *data, uint32_t size, int mode,
-                         const seginfo *segs, int nseg, hao_resolver resolve, bool apply,
+                         const seginfo *segs, int nseg, fixup_plan *plan,
                          char *err, size_t errlen)
 {
 #define DERR(...) do { snprintf(err, errlen, "legacy dyld: " __VA_ARGS__); return -1; } while (0)
@@ -715,22 +746,21 @@ static int legacy_stream(hao_image *img, const uint8_t *data, uint32_t size, int
         if (mode != LEGACY_REBASE && ordinal > 0 && !strncmp(name, "__Z", 3)) img->dep_cxx[ordinal - 1] = true;
         for (uint64_t k = 0; k < count; k++) {
             if (!in_range(off, 8, sg->vmsize)) DERR("fixup outside its segment");
-            if (apply) {
-                uint64_t loc = sg->vmaddr + img->slide + off, value;
+            if (plan) {
+                uint64_t loc = sg->vmaddr + img->slide + off, value = 0;
+                size_t index = SIZE_MAX;
                 if (mode == LEGACY_REBASE) {
                     memcpy(&value, (void *)(uintptr_t)loc, 8);
                     value += img->slide;
-                    img->n_rebase++;
                 } else {
-                    bool found = false;
-                    value = resolve(img, ordinal, name, weak || mode == LEGACY_WEAK, &found);
-                    if (!found && mode == LEGACY_WEAK) DERR("weak definition %s not found", name);
-                    if (!found && !weak) img->n_unresolved++;
-                    value += (uint64_t)addend;
-                    img->n_bind++;
+                    if (!reserve_fixups((void **)&plan->imports, &plan->import_capacity,
+                                        plan->import_count + 1, sizeof *plan->imports))
+                        DERR("out of memory for imports");
+                    index = plan->import_count++;
+                    plan->imports[index] = (import_t){.ordinal=ordinal, .weak=weak || mode == LEGACY_WEAK,
+                                                      .required_weak=mode == LEGACY_WEAK, .name=name, .addend=addend};
                 }
-                memcpy((void *)(uintptr_t)loc, &value, 8);
-                if (mode == LEGACY_REBASE && hao_is_guest_function(value)) note_fnslot(img, loc);
+                if (!plan_write(plan, loc, value, index)) DERR("out of memory for fixup records");
             }
             off += 8 + skip;
         }
@@ -738,6 +768,88 @@ static int legacy_stream(hao_image *img, const uint8_t *data, uint32_t size, int
     if (size && !done) DERR("missing DONE opcode");
     return 0;
 #undef DERR
+}
+
+static int apply_plan(hao_image *img, fixup_plan *plan, hao_resolver resolve, char *why, size_t size)
+{
+    unsigned generation = ++plan->generation;
+    while (plan->next_import < plan->import_count) {
+        import_t *imp = &plan->imports[plan->next_import];
+        bool found = false;
+        uint64_t addr = resolve(img, imp->ordinal, imp->name, imp->weak, &found);
+        if (generation != plan->generation) {
+            if (plan->finished) return 0;
+            snprintf(why, size, "%s", plan->why);
+            return -1;
+        }
+        if (!found && imp->required_weak) {
+            snprintf(why, size, "legacy dyld: weak definition %s not found", imp->name);
+            return -1;
+        }
+        if (!found && !imp->weak) img->n_unresolved++;
+        imp->value = addr + (uint64_t)imp->addend;
+        plan->next_import++;
+    }
+    if (plan->writes_applied) return 0;
+    for (size_t i = 0; i < plan->write_count; i++) {
+        const fixup_write *write = &plan->writes[i];
+        uint64_t value = write->value;
+        if (write->import_index == SIZE_MAX) img->n_rebase++;
+        else {
+            value += plan->imports[write->import_index].value;
+            img->n_bind++;
+        }
+        memcpy((void *)(uintptr_t)write->location, &value, sizeof value);
+        if (write->import_index == SIZE_MAX && hao_is_guest_function(value)) note_fnslot(img, write->location);
+    }
+    plan->writes_applied = true;
+    img->n_auth += plan->auth_count;
+    return 0;
+}
+
+/* A stack-owned plan can outlive its current resolver call when native
+ * dyld enters a constructor. The original load retains the immutable
+ * import names and segment table until every nested call returns. */
+bool hao_resume_image_binding(hao_image *img, hao_required_edges_fn check, char *why, size_t n)
+{
+    fixup_plan *plan = img->pending_binding;
+    if (!plan) return !img->binding && !img->released;
+    if (plan->finished) return true;
+    if (plan->failed) goto failed;
+    if (apply_plan(img, plan, plan->resolve, why, n) != 0) goto reject;
+    if (plan->finished) return true;  /* reentrant owner already completed */
+
+    void (*prepare)(hao_image *) = __atomic_load_n(&hao_companion_dependency_gate, __ATOMIC_ACQUIRE);
+    if (!plan->map_only && prepare && !img->refused_companion_ordinal) prepare(img);
+    if (plan->finished) return true;
+    if (check && !check(img, why, n)) goto reject;
+    if (plan->finished) return true;
+    if (img->companion_rollback || img->refused_companion_ordinal) {
+        if (img->refused_companion_ordinal)
+            snprintf(why, n, "declared framework dependency %s refused", img->deps[img->refused_companion_ordinal - 1]);
+        else snprintf(why, n, "required framework load rolled back");
+        goto reject;
+    }
+    for (int k = 0; k < plan->segment_count; k++) {
+        const seginfo *sg = &plan->segments[k];
+        if (sg->pagezero || !sg->vmsize) continue;
+        int prot = (sg->initprot & (VM_PROT_READ | VM_PROT_EXECUTE)) ? PROT_READ : 0;
+        if (sg->initprot & VM_PROT_WRITE) prot |= PROT_WRITE;
+        if (mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot)) {
+            snprintf(why, n, "cannot set guest segment protection (errno %d)", errno);
+            goto reject;
+        }
+    }
+    hao_code_poison(img);
+    plan->finished = true;
+    img->binding = false;
+    return true;
+reject:
+    snprintf(plan->why, sizeof plan->why, "%s", why);
+    plan->failed = true;
+failed:
+    snprintf(why, n, "%s", plan->why);
+    return false;
 }
 
 static uint64_t null_resolver(hao_image *img, int o, const char *n, bool w, bool *found)
@@ -1255,6 +1367,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     uint32_t legacy_size[4] = {0};
     bool legacy_seen = false;
     seginfo *segs = NULL;
+    fixup_plan plan = {0};
     bool linked = false, visible = false;
     if (!img) {
         hao_slice_close(sl);
@@ -1626,7 +1739,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     for (int k = 0; k < 4; k++) {
         if (!legacy[k]) continue;
         if (chained) ERR("%s: both chained and legacy dyld fixups", path);
-        if (legacy_stream(img, legacy[k], legacy_size[k], k, segs, nseg, resolve, false, why, sizeof why) < 0)
+        if (legacy_stream(img, legacy[k], legacy_size[k], k, segs, nseg, map_only ? NULL : &plan, why, sizeof why) < 0)
             ERR("%s: %s", path, why);
     }
 
@@ -1639,36 +1752,18 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     linked = true;
     if (mapped) { mapped(img, ctx); visible = true; }
 
-    if (!map_only && chained && apply_chained(img, chained, chained_size, resolve, segs, nseg, why, sizeof why) < 0)
+    if (!map_only && chained && plan_chained(img, chained, chained_size, &plan, segs, nseg, why, sizeof why) < 0)
         ERR("%s: %s", path, why);
-
-    for (int k = 0; !map_only && k < 4; k++)
-        if (legacy[k] && legacy_stream(img, legacy[k], legacy_size[k], k, segs, nseg, resolve, true, why, sizeof why) < 0)
-            ERR("%s: %s", path, why);
-
-    void (*prepare_companions)(hao_image *) = __atomic_load_n(&hao_companion_dependency_gate, __ATOMIC_ACQUIRE);
-    if (prepare_companions && !map_only && !img->refused_companion_ordinal) prepare_companions(img);
-    if (img->companion_rollback)
-        ERR("%s: required framework load rolled back", path);
-    if (img->refused_companion_ordinal)
-        ERR("%s: declared framework dependency %s refused", path, img->deps[img->refused_companion_ordinal - 1]);
-    /* final protections: never executable for the host */
-    FOR_EACH_CMD(p) {
-        const struct load_command *lc = (const void *)p;
-        if (lc->cmd != LC_SEGMENT_64) continue;
-        const struct segment_command_64 *sg = (const void *)p;
-        if (is_pagezero(sg) || !sg->vmsize) continue;
-        int prot = 0;
-        if (sg->initprot & VM_PROT_READ) prot |= PROT_READ;
-        if (sg->initprot & VM_PROT_WRITE) prot |= PROT_WRITE;
-        if (sg->initprot & VM_PROT_EXECUTE) prot |= PROT_READ;  /* code is data for the translator */
-        /* SG_READ_ONLY segments (__DATA_CONST) stay writable for hao's adaptations of the image and
-         * are made read-only before its initializers run (hao_image_seal), as dyld does after binding */
-        if (mprotect((void *)(uintptr_t)(sg->vmaddr + img->slide), sg->vmsize, prot) != 0)
-            ERR("%s: cannot set the protection of segment %.16s (errno %d)", path, sg->segname, errno);
-    }
-    hao_code_poison(img);   /* HAO_CODE_ALIAS */
+    plan.map_only = map_only;
+    plan.resolve = resolve;
+    plan.segments = segs;
+    plan.segment_count = nseg;
+    img->pending_binding = &plan;
+    if (!hao_resume_image_binding(img, NULL, why, sizeof why)) ERR("%s: %s", path, why);
+    img->pending_binding = NULL;
 #undef FOR_EACH_CMD
+    free(plan.imports);
+    free(plan.writes);
     free(segs);
     hao_slice_close(sl);
     /* everything is mapped or copied: the file is not needed again, and an
@@ -1679,6 +1774,9 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     return img;
 
 fail:
+    img->pending_binding = NULL;
+    free(plan.imports);
+    free(plan.writes);
     free(segs);
     hao_slice_close(sl);
     if (!linked) img->next = NULL;

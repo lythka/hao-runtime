@@ -101,7 +101,10 @@ struct hao_image {
      * from: its hash type (0: the image was not verified) and cdhash */
     uint8_t cdhash_type, cdhash[20];
     int refused_companion_ordinal; /* strong dependency refused while binding this image */
-    bool binding, companion_rollback, companion_init_pending;
+    bool binding, checking_dependencies, dependencies_checked;
+    bool companion_rollback, companion_init_pending;
+    struct hao_pending_binding *pending_binding; /* valid until original load returns */
+
     struct hao_image **flat_bind_images; /* actual guest providers for flat imports during selected loads */
     size_t nflat_bind_images;
     bool companion_verified; /* actual mapped guest slice matched all signed association fields */
@@ -202,6 +205,8 @@ void hao_rollback_companion_load(hao_image *img);
 void hao_discard_image(hao_image *img); /* detach and retain inaccessible address reservation */
 extern void (*hao_companion_dependency_gate)(hao_image *);
 void hao_prepare_companion_dependencies(hao_image *img);
+typedef bool (*hao_required_edges_fn)(hao_image *, char *, size_t);
+bool hao_resume_image_binding(hao_image *img, hao_required_edges_fn check, char *why, size_t n);
 extern bool (*hao_companion_slice_gate)(hao_image *, hao_slice *, char *, size_t);
 bool hao_companions_init(char *why, size_t n);
 bool hao_companions_active(void);
