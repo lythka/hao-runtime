@@ -149,6 +149,7 @@ aot/crypto-mutations	900	par	tests/aot/crypto_mutations.sh
 aot/cpu-profile	120	par	tests/aot/cpu_profile.sh
 aot/cpu-haswell	900	par	tests/aot/cpu_haswell.sh
 guest/satshift	900	par	tests/guest/satshift.sh
+guest/float16-description	300	par	bash tests/guest/float16-description.sh
 guest/halfops	900	par	tests/guest/halfops.sh
 guest/satmul	300	par	tests/guest/satmul.sh
 guest/complex	900	par	tests/guest/complex.sh

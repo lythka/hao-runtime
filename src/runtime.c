@@ -4077,6 +4077,20 @@ static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
     return true;
 }
 
+/* An arm64-only Swift standard library getter, after ordinary symbol lookup
+ * on the import's actual native dependency has failed. */
+static bool missing_swift_getter(hao_image *im, int ordinal, void *handle, const char *name, uint64_t *addr)
+{
+    const char *core = "/usr/lib/swift/libswiftCore.dylib";
+    if (!handle || handle == MISSING_DEP || handle == RTLD_DEFAULT ||
+        strcmp(name, "_$ss7Float16V11descriptionSSvg") || strcmp(im->deps[ordinal - 1], core)) return false;
+    void *constructor = dlsym(handle, "$sSS7cStringSSSPys4Int8VG_tcfC");
+    if (!constructor || !defined_in(constructor, core)) return false;
+    *addr = hao_swift_float16_description(name, constructor);
+    hao_bridge_bind_trap(name, HAO_BRS_TRAP);
+    return true;
+}
+
 static bool guest_lookup(hao_image *im, const char *name, uint64_t *addr, int depth);
 
 /* `name` as exported by dependency `ord` of `im` (two-level, no flat search). */
@@ -4087,7 +4101,7 @@ static bool dep_lookup(hao_image *im, int ord, const char *name, uint64_t *addr,
     if (h == MISSING_DEP || h == RTLD_DEFAULT) return false;
     /* a guest image's re-export of a native symbol binds natively: its ABI repair applies */
     if (hao_interpose_abi_repair(name) && interposed(name, addr, true)) return true;
-    return native_sym(h, name, false, addr);
+    return native_sym(h, name, false, addr) || missing_swift_getter(im, ord, h, name, addr);
 }
 
 /* `name` as exported by a guest image: its own definitions, trie re-exports,
@@ -4135,7 +4149,8 @@ uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool 
         } else if (h == MISSING_DEP && img->dep_weak[ordinal - 1]) {
             a = 0;  /* a missing weak library: every symbol from it is NULL */
             goto out;
-        } else if (interposed(name, &a, true) || native_sym(h == MISSING_DEP ? RTLD_DEFAULT : h, name, true, &a)) goto out;
+        } else if (interposed(name, &a, true) || native_sym(h == MISSING_DEP ? RTLD_DEFAULT : h, name, true, &a) ||
+                   missing_swift_getter(img, ordinal, h, name, &a)) goto out;
     }
     *found = false;
     unlock_loads();

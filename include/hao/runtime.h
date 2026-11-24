@@ -562,6 +562,7 @@ void *hao_swift_viewself_call(const hao_cpu *c, uint64_t native);
  * gives one (at most HAO_IF_MAX_PACK entries), or 0 when the word copy is
  * right or unproven. */
 int hao_swift_sitepack(const hao_cpu *c, uint64_t native, uint8_t *off, uint8_t *width);
+uint64_t hao_swift_float16_description(const char *name, void *constructor);
 void hao_swift_note_dispatch_thunk(const char *gname, uint64_t native);
 int hao_swift_callee_stack_slots(uint64_t native);   /* SysV stack arguments past x6, x7 its code reads; -1 not shown */
 /* interpose.c: a page the guest mapped or made executable itself (mmap,

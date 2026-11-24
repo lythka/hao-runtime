@@ -11,12 +11,85 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <stdint.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 typedef void (*reg_fn)(const void *begin, const void *end);
+
+/* A finite binary16 magnitude in units of 2^-24 (one subnormal step). */
+static uint64_t half_units(unsigned magnitude)
+{
+    unsigned exponent = magnitude >> 10, fraction = magnitude & 1023;
+    return exponent ? (uint64_t)(1024 + fraction) << (exponent - 1) : fraction;
+}
+
+static void half_description(uint16_t bits, char out[32])
+{
+    unsigned magnitude = bits & 0x7fff;
+    const char *sign = bits & 0x8000 ? "-" : "";
+    if (magnitude >= 0x7c00) {
+        strcpy(out, magnitude > 0x7c00 ? "nan" : bits & 0x8000 ? "-inf" : "inf");
+        return;
+    }
+    const uint64_t unit = 1u << 24;
+    uint64_t value = half_units(magnitude);
+    if (value % unit == 0) {
+        snprintf(out, 32, "%s%llu.0", sign, value / unit);
+        return;
+    }
+    /* Shortest decimal inside the half's rounding interval. The midpoints
+     * belong to this value when its significand is even. By eight decimal
+     * places the grid is finer than the smallest binary16 gap. Nonintegral
+     * halves are below 2048, so even doubled scaled values fit uint64_t. */
+    uint64_t low = value + half_units(magnitude - 1);
+    uint64_t high = value + half_units(magnitude + 1);
+    uint64_t scale = 1, decimal = 0;
+    unsigned places;
+    for (places = 0; places <= 8; places++, scale *= 10) {
+        uint64_t scaled = value * scale;
+        uint64_t floor = scaled / unit, remainder = scaled % unit;
+        bool up = 2 * remainder > unit || (2 * remainder == unit && (floor & 1));
+        decimal = floor + up;
+        for (unsigned attempt = 0; attempt < 2; attempt++) {
+            uint64_t twice = 2 * decimal * unit;
+            if ((twice > low * scale && twice < high * scale) ||
+                (!(magnitude & 1) && (twice == low * scale || twice == high * scale))) goto found;
+            decimal = floor + !up;
+        }
+    }
+    abort();   /* eight decimal places always separate adjacent half values */
+found:
+    if (value * 10000 < unit) {
+        char digits[24];
+        int count = snprintf(digits, sizeof digits, "%llu", decimal);
+        snprintf(out, 32, "%s%c%s%se-%02u", sign, digits[0], count > 1 ? "." : "", digits + 1,
+                 places + 1 - (unsigned)count);
+    } else if (places) {
+        snprintf(out, 32, "%s%llu.%0*llu", sign, decimal / scale, (int)places, decimal % scale);
+    } else {
+        snprintf(out, 32, "%s%llu.0", sign, decimal);
+    }
+}
+
+typedef struct { uint64_t word[2]; } swift_string;
+typedef swift_string __attribute__((swiftcall)) make_string_fn(const char *);
+
+static void float16_description_trap(hao_thread *t, uint64_t constructor)
+{
+    char text[32];
+    half_description(t->cpu.v[0].h[0], text);
+    swift_string result = ((make_string_fn *)(uintptr_t)constructor)(text);
+    t->cpu.x[0] = result.word[0];
+    t->cpu.x[1] = result.word[1];
+}
+
+uint64_t hao_swift_float16_description(const char *name, void *constructor)
+{
+    return hao_trap_address(name, float16_description_trap, (uint64_t)(uintptr_t)constructor);
+}
 
 /* Swift.Float16's metadata once its 2-byte POD witnesses are installed and
  * read back (float16_layout); NULL before, or if that failed. */

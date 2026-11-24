@@ -357,6 +357,8 @@ tests/guest/fmtpos.sh
 tests/guest/fmtposhelper.m
 tests/guest/fnhelper.h
 tests/guest/fnhelper.mm
+tests/guest/float16-description.sh
+tests/guest/float16-description.swift
 tests/guest/fnslots.mm
 tests/guest/imagewatch.m
 tests/guest/imagewatch.sh
