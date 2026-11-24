@@ -3690,13 +3690,15 @@ static hao_image *load_cache_image(hao_image *loader, const char *path)
  * (path .../NAME.framework/[Versions/V/]NAME) and keep it: CF's tables then
  * answer the identifier. CF returns the existing bundle for a URL it already
  * knows (a framework native code opened as a bundle). */
-static void register_framework_bundle(const char *rp)
+static void register_framework_bundle(hao_image *image, const char *rp)
 {
     static void *(*url_create)(void *, const uint8_t *, long, unsigned char);
     static void *(*bundle_create)(void *, void *);
     static void (*release)(const void *);
+    if (image->framework_bundle_path_length) return;
     const char *fw = strstr(rp, ".framework/");
     if (!fw) return;
+    for (const char *next; (next = strstr(fw + 1, ".framework/")); ) fw = next;
     const char *slash = fw;
     while (slash > rp && slash[-1] != '/') slash--;
     size_t nlen = (size_t)(fw - slash), dlen = (size_t)(fw - rp) + strlen(".framework");
@@ -3711,8 +3713,33 @@ static void register_framework_bundle(const char *rp)
     void *url = url_create(NULL, (const uint8_t *)rp, (long)dlen, 1);
     if (!url) return;
     void *bundle = bundle_create(NULL, url);   /* kept: guest images stay resident */
+    if (bundle) image->framework_bundle_path_length = dlen;
     release(url);
     if (hao_verbose > 1) fprintf(stderr, "hao: framework bundle %.*s %s\n", (int)dlen, rp, bundle ? "registered" : "not created");
+}
+
+bool hao_guest_framework_loaded(const char *path)
+{
+    if (!path) return false;
+    /* NSBundle keeps its bundle URL when an already loaded executable is
+     * moved or unlinked. Compare the directory recorded at publication. */
+    char canonical[PATH_MAX];
+    const char *directory = realpath(path, canonical);
+    if (!directory) directory = path;
+    size_t length = strlen(directory);
+    bool loaded = false;
+    lock_loads();
+    for (int k = 0; k < nglibs; k++) {
+        hao_image *im = glibs[k].img;
+        if (im && im->framework_bundle_path_length == length && length &&
+            !strncmp(im->path, directory, length) && !im->released && !im->companion_rollback &&
+            !im->companion_init_pending) {
+            loaded = true;
+            break;
+        }
+    }
+    unlock_loads();
+    return loaded;
 }
 
 static hao_image *load_guest_canonical(hao_image *loader, const char *rp)
@@ -3742,7 +3769,6 @@ static hao_image *load_guest_canonical(hao_image *loader, const char *rp)
         glibs[slot].img = NULL;
         return NULL;
     }
-    register_framework_bundle(rp);
     if (hao_verbose)
         fprintf(stderr, "hao: loaded guest dylib %s at %#llx%s%s%s\n", rp, (unsigned long long)im->base,
                 im->libval_route[0] ? " (code signature: " : "", im->libval_route, im->libval_route[0] ? ")" : "");
@@ -4592,6 +4618,14 @@ bool hao_run_initializers(void)
         free(ims);
     }
     defer_incomplete_images(ims, n);
+    /* Publish the complete dependency closure before the first constructor
+     * can query its own bundle or another newly loaded framework. */
+    for (size_t k = 0; k < n; k++) {
+        hao_image *im = ims[k];
+        if (!im->init_state && im->dependencies_checked && !im->companion_init_pending &&
+            !im->companion_rollback && !im->released)
+            register_framework_bundle(im, im->path);
+    }
     for (size_t k = 0; k < n; k++) init_tree(ims[k], 0);
     free(ims);
     if (hao_main_image && hao_main_image->init_state == 2) launched = true;

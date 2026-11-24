@@ -787,6 +787,8 @@ tests/guest/fpscalar_stable.c
 tests/guest/fpscalar_stable.sh
 tests/guest/fwbundle.sh
 tests/guest/fwbundle.swift
+tests/guest/fwbundle_late.m
+tests/guest/fwbundle_late.sh
 tests/guest/fwbundle_lib.swift
 tests/guest/halfops.c
 tests/guest/halfops.sh

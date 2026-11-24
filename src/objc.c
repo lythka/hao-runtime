@@ -1379,8 +1379,10 @@ static void msgsend_fnret(hao_cpu *c)
 static SEL sel_setarg, sel_methsig, sel_argtype, sel_nargs, sel_fts, sel_msfs, sel_rettype;
 static IMP imp_root_fts;
 static Class cls_invocation;
+static SEL bundle_is_loaded;
 static void msgsend_init(void)   /* before the first guest objc_msgSend: its import's binding */
 {
+    bundle_is_loaded = sel_registerName("isLoaded");
     sel_fts = sel_registerName("forwardingTargetForSelector:");
     imp_root_fts = class_getMethodImplementation(objc_getClass("NSObject"), sel_fts);
     sel_msfs = sel_registerName("methodSignatureForSelector:");
@@ -1479,6 +1481,29 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
     c->x[0] = (uint64_t)(uintptr_t)recv;
     uint64_t g = hao_guest_of_entry((uint64_t)(uintptr_t)imp);
     if (g) { c->pc = g; return; }               /* guest method: stay in translated code */
+    if (sel == bundle_is_loaded && !kind) {
+        Class bundle = objc_getClass("NSBundle");
+        Class current = cls;
+        while (current && current != bundle) current = class_getSuperclass(current);
+        static char queried_before_load;
+        Dl_info method_image;
+        if (current && imp == class_getMethodImplementation(bundle, sel) &&
+            dladdr((const void *)imp, &method_image) && method_image.dli_fname &&
+            method_image.dli_saddr == (const void *)imp && method_image.dli_sname &&
+            !strcmp(method_image.dli_sname, "-[NSBundle isLoaded]") &&
+            !strcmp(method_image.dli_fname, "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation") &&
+            !objc_getAssociatedObject(recv, &queried_before_load)) {
+            id directory = msg0(recv, "bundlePath");
+            if (hao_guest_framework_loaded((const char *)msg0(directory, "fileSystemRepresentation"))) {
+                c->x[0] = 1;
+                return;
+            }
+            /* Foundation retains its native answer when a bundle first reports
+             * its state before an external dlopen. A later NSBundle-managed
+             * load may still change that answer. */
+            objc_setAssociatedObject(recv, &queried_before_load, (id)bundle, OBJC_ASSOCIATION_ASSIGN);
+        }
+    }
     bool forwarded = imp == _objc_msgForward && !class_getInstanceMethod(cls, sel);
     if (forwarded) {
         id to = forwarding_target(recv, sel);

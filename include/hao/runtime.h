@@ -272,6 +272,7 @@ hao_image *hao_load_main_image(const char *path, int fd, hao_slice *mapped, int 
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */
+bool hao_guest_framework_loaded(const char *path);
 bool hao_run_initializers(void);
 /* A guest library hao loads for itself (thunks.c), mapped and bound; NULL with err set. */
 hao_image *hao_load_guest_library(const char *path, char *err, size_t n);
