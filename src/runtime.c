@@ -3330,6 +3330,10 @@ void hao_install_fault_handler(void)
  */
 #define GUEST_DEP ((void *)(uintptr_t)-7)
 #define MISSING_DEP ((void *)(uintptr_t)-9)
+/* An explicitly selected dependency failed its binding. Preserve this
+ * distinction on the ordinal, including when an alias selected the record. */
+#define REFUSED_COMPANION_DEP ((void *)(uintptr_t)-10)
+static bool missing_dependency(void *h) { return h == MISSING_DEP || h == REFUSED_COMPANION_DEP; }
 
 static pthread_mutex_t load_lock;
 static pthread_once_t load_once = PTHREAD_ONCE_INIT;
@@ -3391,6 +3395,54 @@ void hao_objc_image_ready(const struct mach_header *header)
 /* Guest libraries by real path. */
 static struct guest_lib { char *path; hao_image *img; hao_image *loader; } *glibs;
 static int nglibs, capglibs;
+
+/* Both rollback and initialization follow the edges actually bound by guest
+ * code. A flat import's defining image need not be a declared dependency. */
+static bool depends_on_marked_image(const hao_image *im, bool initializing)
+{
+    for (int k = 0; k < im->ndeps; k++) {
+        const hao_image *dep = im->dep_image[k];
+        if (dep && (initializing ? dep->companion_init_pending : dep->companion_rollback)) return true;
+    }
+    for (size_t k = 0; k < im->nflat_bind_images; k++) {
+        const hao_image *dep = im->flat_bind_images[k];
+        if (initializing ? dep->companion_init_pending : dep->companion_rollback) return true;
+    }
+    return false;
+}
+
+/* The loader publishes in-progress images so dependency cycles can bind.
+ * Mark every image bound to a failed member, including flat guest imports,
+ * before removing any edge. Images still on the binding stack return their
+ * own failure; completed members are detached now. */
+static uint64_t companion_failures;
+void hao_rollback_companion_load(hao_image *root)
+{
+    lock_loads();
+    companion_failures++;
+    root->companion_rollback = true;
+    bool changed;
+    do {
+        changed = false;
+        for (hao_image *im = hao_images_first(); im; im = hao_images_next(im)) {
+            if (im->companion_rollback) continue;
+            if (depends_on_marked_image(im, false)) { im->companion_rollback = true; changed = true; }
+        }
+    } while (changed);
+    for (int k = 0; k < nglibs; k++) {
+        hao_image *im = glibs[k].img;
+        if (!im || !im->companion_rollback || im->binding) continue;
+        free(glibs[k].path);
+        glibs[k].path = NULL;
+        glibs[k].img = NULL;
+    }
+    for (hao_image *im = hao_images_first(); im;) {
+        hao_image *next = hao_images_next(im);
+        if (im->companion_rollback && !im->binding) hao_discard_image(im);
+        im = next;
+    }
+    unlock_loads();
+}
 
 static void glib_mapped(hao_image *img, void *ctx)
 {
@@ -3636,25 +3688,24 @@ static void register_framework_bundle(const char *rp)
     if (hao_verbose > 1) fprintf(stderr, "hao: framework bundle %.*s %s\n", (int)dlen, rp, bundle ? "registered" : "not created");
 }
 
-static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
+static hao_image *load_guest_canonical(hao_image *loader, const char *rp)
 {
-    char path[2048], rp[PATH_MAX];
-    const char *root = hao_opt.guest_root;
-    if (os && *root)
-        snprintf(path, sizeof path, "%s%s", root, cand);
-    else
-        snprintf(path, sizeof path, "%s", cand);
-    if (access(path, R_OK) != 0 || !realpath(path, rp)) {
-        /* no file: an OS library that exists only in the arm64e shared cache */
-        if (os && cand[0] == '/' && hao_dsc_has(cand)) return load_cache_image(loader, cand);
-        snprintf(last_load_err, sizeof last_load_err, "%s", errno == ENOENT ? "no such file" : strerror(errno));
+    /* already loaded, or still binding (a dependency cycle) */
+    if (glib_known(rp)) {
+        hao_image *resident = glib_find(rp);
+        if (hao_companion_resident(rp, resident)) return resident;
+        snprintf(last_load_err, sizeof last_load_err, "resident ARM image differs from declared framework companion");
         return NULL;
     }
-    /* already loaded, or still binding (a dependency cycle) */
-    if (glib_known(rp)) return glib_find(rp);
     intptr_t slot = glib_slot(rp, loader);
     char err[512];
-    hao_image *im = hao_load_image_cb(rp, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
+    hao_image *im = NULL;
+    if (hao_companion_original(rp)) {
+        int fd = hao_companion_open(rp, err, sizeof err);
+        if (fd >= 0) im = hao_load_image_fd_cb(rp, fd, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
+    } else {
+        im = hao_load_image_cb(rp, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
+    }
     if (!im) {   /* report guest signature, validation and loading failures */
         note_load_err(rp, err);
         hao_diag_prefix(HAO_DIAG);
@@ -3671,15 +3722,39 @@ static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
     return im;
 }
 
+static hao_image *load_guest_file(hao_image *loader, const char *cand, bool os)
+{
+    char path[2048], rp[PATH_MAX];
+    const char *root = hao_opt.guest_root;
+    if (os && *root)
+        snprintf(path, sizeof path, "%s%s", root, cand);
+    else
+        snprintf(path, sizeof path, "%s", cand);
+    if (access(path, R_OK) != 0 || !realpath(path, rp)) {
+        /* no file: an OS library that exists only in the arm64e shared cache */
+        if (os && cand[0] == '/' && hao_dsc_has(cand)) return load_cache_image(loader, cand);
+        snprintf(last_load_err, sizeof last_load_err, "%s", errno == ENOENT ? "no such file" : strerror(errno));
+        return NULL;
+    }
+    return load_guest_canonical(loader, rp);
+}
+
 /* A guest library hao loads for itself (a thunk library's arm64e slice,
  * src/thunks.c): mapped and bound like a dependency, by its real path. */
 hao_image *hao_load_guest_library(const char *path, char *err, size_t n)
 {
     char rp[PATH_MAX];
-    if (!realpath(path, rp)) { snprintf(err, n, "%s: %s", path, strerror(errno)); return NULL; }
+    const char *original = hao_companion_original(path);
+    if (!original) {
+        if (!realpath(path, rp)) { snprintf(err, n, "%s: %s", path, strerror(errno)); return NULL; }
+        original = hao_companion_original(rp);
+    }
     lock_loads();
     hao_image *im = NULL;
-    if (glib_known(rp)) im = glib_find(rp);
+    if (original) {
+        im = load_guest_canonical(NULL, original);
+        if (!im) snprintf(err, n, "%s", last_load_err);
+    } else if (glib_known(rp)) im = glib_find(rp);
     else {
         intptr_t slot = glib_slot(rp, NULL);
         im = hao_load_image_cb(rp, hao_resolve_import, glib_mapped, (void *)slot, err, n);
@@ -3690,7 +3765,7 @@ hao_image *hao_load_guest_library(const char *path, char *err, size_t n)
 }
 
 
-struct try_ctx { hao_image *loader; void *handle; hao_image *guest; bool cxx; char *tried; size_t tn; };
+struct try_ctx { hao_image *loader; void *handle; hao_image *guest; bool cxx; char *tried; size_t tn; bool refused_companion; };
 
 /*
  * Guest libc++. libc++'s interface is full of
@@ -3801,6 +3876,18 @@ static bool guest_app_library(const char *path)
 static bool try_candidate(const char *cand, bool os, void *c)
 {
     struct try_ctx *x = c;
+    if (hao_companions_active()) {
+        char real[PATH_MAX];
+        const char *original = hao_companion_original(cand);
+        if (!original && realpath(cand, real)) original = hao_companion_original(real);
+        if (original) {
+            x->guest = load_guest_canonical(x->loader, original);
+            x->refused_companion = !x->guest;
+            if (!x->guest && x->tried && x->tn) snprintf(x->tried, x->tn, "%s", last_load_err);
+            return true;
+        }
+    }
+    uint64_t before = companion_failures;
     bool app = guest_app_library(cand);
     if (app) {
         last_load_err[0] = 0;
@@ -3818,14 +3905,82 @@ static bool try_candidate(const char *cand, bool os, void *c)
     hao_image *g = load_guest_file(x->loader, cand, os);
     if (g) { x->guest = g; return true; }
 failed:
+    if (before != companion_failures) x->refused_companion = true;
     if (x->tried) {   /* dyld's "tried:" entry for this path */
         size_t l = strlen(x->tried);
         snprintf(x->tried + l, x->tn - l, "%s'%s' (%s)", l ? ", " : "", cand, last_load_err[0] ? last_load_err : "not loaded");
     }
-    return false;
+    return x->refused_companion;
 }
 
 static bool header_has_install_name(const struct mach_header_64 *mh, const char *lib);
+
+struct first_file { char *out; size_t n; bool found; };
+static bool first_file(const char *cand, bool os, void *ctx)
+{
+    (void)os;
+    struct first_file *ff = ctx;
+    if (access(cand, F_OK) != 0) return false;
+    ff->found = (size_t)snprintf(ff->out, ff->n, "%s", cand) < ff->n;
+    return ff->found;
+}
+/* Resolve with the caller's ordinary dyld search and restricted-launch rules.
+ * An association verifies the first actual candidate. It never licenses an
+ * alternative search path. Keep an already loaded install-name alias only if
+ * its exact mapped ARM bytes passed the same binding. load lock held. */
+static bool companion_candidate(hao_image *loader, const char *name, const char *original, char *why, size_t n)
+{
+    for (int k = 0; k < nglibs; k++) {
+        hao_image *resident = glibs[k].img;
+        if (resident && header_has_install_name((const void *)(uintptr_t)resident->base, name)) {
+            if (hao_companion_resident(original, resident)) return true;
+            if (why && n) snprintf(why, n, "resident install-name alias differs from declared original framework");
+            return false;
+        }
+    }
+    char candidate[PATH_MAX], real[PATH_MAX];
+    struct first_file first = {candidate, sizeof candidate, false};
+    const char *refused;
+    for_each_candidate(loader, name, first_file, &first, &refused);
+    if (first.found && realpath(candidate, real) && !strcmp(real, original)) return true;
+    if (why && n) snprintf(why, n, "framework lookup differs from declared original%s%s", refused ? ": " : "", refused ? refused : "");
+    return false;
+}
+
+static void *open_companion(hao_image *img, const char *name, const char *original, hao_image **guest, char *tried, size_t n)
+{
+    if (!companion_candidate(img, name, original, tried, n)) return REFUSED_COMPANION_DEP;
+    *guest = load_guest_canonical(img, original);
+    if (!*guest && tried && n) snprintf(tried, n, "%s", last_load_err);
+    return *guest ? GUEST_DEP : REFUSED_COMPANION_DEP;
+}
+
+/* An LC_LOAD_DYLIB can be required even without any imports. Resolve only
+ * remaining selected dependencies before their owning image can initialize.
+ * Other dependencies retain the ordinary loader's ordering. */
+void hao_prepare_companion_dependencies(hao_image *img)
+{
+    if (!hao_companions_active()) return;
+    lock_loads();
+    for (int k = 0; k < img->ndeps; k++) {
+        if (img->dep_handle[k] || img->dep_weak[k]) continue;
+        const char *name = img->deps[k], *original = hao_companion_original(name);
+        if (!original) {
+            char candidate[PATH_MAX], real[PATH_MAX];
+            struct first_file first = {candidate, sizeof candidate, false};
+            const char *refused;
+            for_each_candidate(img, name, first_file, &first, &refused);
+            if (first.found && realpath(candidate, real)) original = hao_companion_original(real);
+        }
+        if (!original) continue;
+        img->dep_handle[k] = open_companion(img, name, original, &img->dep_image[k], NULL, 0);
+        if (img->dep_handle[k] == REFUSED_COMPANION_DEP) {
+            img->refused_companion_ordinal = k + 1;
+            break;
+        }
+    }
+    unlock_loads();
+}
 
 /* Load (once) and return the library a load command names: a native handle,
  * GUEST_DEP (img->dep_image) or MISSING_DEP. */
@@ -3833,6 +3988,8 @@ static void *open_library(hao_image *img, const char *name, bool cxx, hao_image 
 {
     struct try_ctx x = {img, NULL, NULL, cxx, tried, tn};
     if (tried && tn) tried[0] = 0;
+    const char *original = hao_companion_original(name);
+    if (original) return open_companion(img, name, original, guest, tried, tn);
     /* dyld satisfies an @rpath load command from the first resident dylib
      * with that install name before expanding the caller's run paths. An
      * explicit pathname passed to dlopen remains a distinct request. */
@@ -3855,6 +4012,7 @@ static void *open_library(hao_image *img, const char *name, bool cxx, hao_image 
         if (hao_verbose) fprintf(stderr, "hao: %s: %s (set-ID process)\n", name, refused);
     }
     *guest = x.guest;
+    if (x.refused_companion) return REFUSED_COMPANION_DEP;
     return x.handle ? x.handle : x.guest ? GUEST_DEP : MISSING_DEP;
 }
 
@@ -3912,10 +4070,12 @@ static void *dep_handle(hao_image *img, int ord)
         hao_image *g = NULL;
         char tried[2048];
         void *h = open_library(img, img->deps[k], img->dep_cxx[k], &g, tried, sizeof tried);
+        if (h == REFUSED_COMPANION_DEP && !img->dep_weak[k])
+            img->refused_companion_ordinal = ord;
         /* dyld: a non-weak dependency that does not load ends the launch */
-        if (h == MISSING_DEP && !img->dep_weak[k] && !launched && (img == hao_main_image || img->loader))
+        if (missing_dependency(h) && !img->dep_weak[k] && !launched && (img == hao_main_image || img->loader))
             dyld_halt_library(img, img->deps[k], tried);
-        if (h == MISSING_DEP && !img->dep_weak[k] && hao_verbose)
+        if (missing_dependency(h) && !img->dep_weak[k] && hao_verbose)
             fprintf(stderr, "hao: %s: dependency %s not found (native or guest)\n", img->path, img->deps[k]);
         img->dep_image[k] = g;
         img->dep_handle[k] = h;
@@ -4082,7 +4242,7 @@ static bool native_sym(void *h, const char *name, bool flat, uint64_t *addr)
 static bool missing_swift_getter(hao_image *im, int ordinal, void *handle, const char *name, uint64_t *addr)
 {
     const char *core = "/usr/lib/swift/libswiftCore.dylib";
-    if (!handle || handle == MISSING_DEP || handle == RTLD_DEFAULT ||
+    if (!handle || missing_dependency(handle) || handle == RTLD_DEFAULT ||
         strcmp(name, "_$ss7Float16V11descriptionSSvg") || strcmp(im->deps[ordinal - 1], core)) return false;
     void *constructor = dlsym(handle, "$sSS7cStringSSSPys4Int8VG_tcfC");
     if (!constructor || !defined_in(constructor, core)) return false;
@@ -4098,7 +4258,7 @@ static bool dep_lookup(hao_image *im, int ord, const char *name, uint64_t *addr,
 {
     void *h = dep_handle(im, ord);
     if (h == GUEST_DEP) return guest_lookup(im->dep_image[ord - 1], name, addr, depth);
-    if (h == MISSING_DEP || h == RTLD_DEFAULT) return false;
+    if (missing_dependency(h) || h == RTLD_DEFAULT) return false;
     /* a guest image's re-export of a native symbol binds natively: its ABI repair applies */
     if (hao_interpose_abi_repair(name) && interposed(name, addr, true)) return true;
     return native_sym(h, name, false, addr) || missing_swift_getter(im, ord, h, name, addr);
@@ -4128,7 +4288,13 @@ uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool 
     lock_loads();
     /* Load the library the import names even when a trap answers it (a trap
      * finds its native function with dlsym(RTLD_DEFAULT) at call time). */
-    if (ordinal > 0) (void)dep_handle(img, ordinal);
+    if (ordinal > 0) {
+        void *handle = dep_handle(img, ordinal);
+        if (handle == REFUSED_COMPANION_DEP) {
+            if (img->dep_weak[ordinal - 1]) goto out;
+            goto unresolved;
+        }
+    }
     /* runtime interposers first; ABI repairs only where the import binds natively */
     if (interposed(name, &a, false)) goto out;
     if (ordinal == 0 && guest_lookup(img, name, &a, 0)) goto out;
@@ -4152,6 +4318,7 @@ uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool 
         } else if (interposed(name, &a, true) || native_sym(h == MISSING_DEP ? RTLD_DEFAULT : h, name, true, &a) ||
                    missing_swift_getter(img, ordinal, h, name, &a)) goto out;
     }
+unresolved:
     *found = false;
     unlock_loads();
     if (weak) return 0;
@@ -4169,6 +4336,21 @@ uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool 
     /* A call lands in a trap that names the symbol instead of jumping to 0. */
     return unresolved_trap(name);
 out:
+    /* Two-level imports already have a dependency edge. Record actual flat
+     * guest providers too, so a later failed cycle cannot leave a bound
+     * pointer live in a cached consumer. */
+    if (ordinal <= 0 && a && img->binding && hao_companions_active()) {
+        hao_image *provider = hao_image_for_addr(a);
+        if (provider && provider != img && !provider->init_state) {
+            size_t i = 0;
+            while (i < img->nflat_bind_images && img->flat_bind_images[i] != provider) i++;
+            if (i == img->nflat_bind_images) {
+                img->flat_bind_images = hao_alloc_check(realloc(img->flat_bind_images, (i + 1) * sizeof provider),
+                                                        "flat guest binding providers");
+                img->flat_bind_images[img->nflat_bind_images++] = provider;
+            }
+        }
+    }
     unlock_loads();
     return a;
 }
@@ -4177,10 +4359,30 @@ out:
 
 extern void hao_guest_image_init(hao_image *);
 
+/* Native library initializers can reopen a guest bundle while an outer
+ * guest image is still binding. Initialize independent completed images, but
+ * defer the incomplete graph (including completed members of its cycles)
+ * until a subsequent sweep, after its binding succeeds. */
+static void defer_incomplete_images(hao_image **ims, size_t n)
+{
+    for (size_t k = 0; k < n; k++)
+        ims[k]->companion_init_pending = ims[k]->binding || ims[k]->companion_rollback;
+    bool changed;
+    do {
+        changed = false;
+        for (size_t k = 0; k < n; k++) {
+            if (!ims[k]->companion_init_pending && depends_on_marked_image(ims[k], true)) {
+                ims[k]->companion_init_pending = true;
+                changed = true;
+            }
+        }
+    } while (changed);
+}
+
 /* Dependencies first; upward dependencies do not order (they may be cycles). */
 static void init_tree(hao_image *im, int depth)
 {
-    if (im->init_state || depth > 512) return;
+    if (im->init_state || im->companion_init_pending || im->companion_rollback || depth > 512) return;
     im->init_state = 1;
     for (int k = 0; k < im->ndeps; k++)
         if (!im->dep_upward[k] && im->dep_handle[k] == GUEST_DEP && im->dep_image[k]) init_tree(im->dep_image[k], depth + 1);
@@ -4202,14 +4404,17 @@ void hao_run_initializers(void)
     for (;;) {
         ims = images_in_order(&n);
         if (done >= n) break;
-        for (size_t k = done; k < n; k++)
+        for (size_t k = done; k < n; k++) {
+            if (hao_companions_active() && (ims[k]->binding || ims[k]->companion_rollback)) continue;
             for (int d = 0; d < ims[k]->ndeps; d++) (void)dep_handle(ims[k], d + 1);
+        }
         free(ims);
         done = n;
     }
+    if (hao_companions_active()) defer_incomplete_images(ims, n);
     for (size_t k = 0; k < n; k++) init_tree(ims[k], 0);
     free(ims);
-    launched = true;
+    if (!hao_companions_active() || (hao_main_image && hao_main_image->init_state == 2)) launched = true;
     unlock_loads();
 }
 
@@ -4235,21 +4440,14 @@ static hao_image *guest_caller_image(const void *ra)
     hao_image *im = t ? hao_image_for_code(t->cpu.x[30]) : NULL;
     return im ? im : hao_main_image;
 }
-struct first_file { char *out; size_t n; bool found; };
-static bool first_file(const char *cand, bool os, void *ctx)
-{
-    (void)os;
-    struct first_file *ff = ctx;
-    if (access(cand, F_OK) != 0) return false;
-    ff->found = (size_t)snprintf(ff->out, ff->n, "%s", cand) < ff->n;
-    return ff->found;
-}
 /* An @rpath, @loader_path or @executable_path name guest code dlopens: the first existing candidate dyld would try
  * from the calling guest image (its LC_RPATHs, its loaders', the main executable's; set-ID rules included) */
 static int native_bundle_expand(const char *path, const void *ra, char *out, size_t n)
 {
     hao_image *im = path && path[0] == '@' ? guest_caller_image(ra) : NULL;
-    if (!im) return 0;
+    /* Keep a selected install name intact until the pre-open hook verifies
+     * its resolution. Otherwise an earlier run path could erase the binding. */
+    if (!im || hao_companion_original(path)) return 0;
     struct first_file ff = {out, n, false};
     const char *refused;
     lock_loads();
@@ -4257,8 +4455,8 @@ static int native_bundle_expand(const char *path, const void *ra, char *out, siz
     unlock_loads();
     return ff.found;
 }
-static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n);
-static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, why, n); }
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, bool pinned, char *why, size_t n);
+static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, false, why, n); }
 /* Foundation opens an NSBundle on behalf of the program. Its immediate return
  * address is native even when the running guest requested its own plug-in. */
 static bool app_bundle_request(const char *path, const void *ra)
@@ -4286,21 +4484,43 @@ static bool app_bundle_request(const char *path, const void *ra)
  * After a native refusal only ARM-only images are eligible for fallback. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
-    if (!ra) return bundle_open(path, flags, true, false, why, n);
-    if (!path || (!guest_caller_image(ra) && !app_bundle_request(path, ra)) || !guest_app_library(path)) return NULL;
+    if (!ra) return bundle_open(path, flags, true, false, false, why, n);
+    hao_image *caller = path ? guest_caller_image(ra) : NULL;
+    bool app_request = path && (caller || app_bundle_request(path, ra));
+    char resolved[PATH_MAX];
+    const char *original = app_request ? hao_companion_original(path) : NULL;
+    if (!original && app_request && hao_companions_active() && realpath(path, resolved))
+        original = hao_companion_original(resolved);
+    if (original) {
+        lock_loads();
+        bool ok = companion_candidate(caller ? caller : hao_main_image, path, original, why, n);
+        void *h = ok ? bundle_open(original, flags, true, true, true, why, n) : NULL;
+        if (!h && !why[0]) snprintf(why, n, "declared original framework could not be opened");
+        unlock_loads();
+        return h;
+    }
+    if (!app_request || !guest_app_library(path)) return NULL;
     if (hao_verbose) fprintf(stderr, "hao: guest dlopen %s (app library)\n", path);
-    return bundle_open(path, flags, true, true, why, n);
+    return bundle_open(path, flags, true, true, false, why, n);
 }
-static void *bundle_open(const char *path, int flags, bool dylib, bool app, char *why, size_t n)
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, bool pinned, char *why, size_t n)
 {
     if (!path || (!app && (path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)))) return NULL;
     const int supported = RTLD_LAZY | RTLD_NOW | RTLD_LOCAL | RTLD_GLOBAL | RTLD_NOLOAD | RTLD_NODELETE | RTLD_FIRST;
     if (flags & ~supported) { snprintf(why, n, "unsupported guest bundle dlopen flags"); return NULL; }
-    char real[PATH_MAX];
-    if (!realpath(path, real)) return NULL;
+    char resolved[PATH_MAX];
+    const char *real = pinned ? path : realpath(path, resolved);
+    if (!real) return NULL;
     lock_loads();
     hao_image *im = glib_find(real);
-    if (!im && !(flags & RTLD_NOLOAD)) {
+    if (im && !hao_companion_resident(real, im)) {
+        snprintf(why, n, "resident ARM image differs from declared original");
+        unlock_loads();
+        return NULL;
+    }
+    if (!im && !(flags & RTLD_NOLOAD) && hao_companion_original(real)) {
+        im = load_guest_canonical(hao_main_image, real);
+    } else if (!im && !(flags & RTLD_NOLOAD)) {
         intptr_t slot = glib_slot(real, hao_main_image);
         im = dylib ? hao_load_dlopen_cb(real, app, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
                    : hao_load_bundle_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
@@ -4337,13 +4557,13 @@ static int bundle_sym(void *handle, const char *name, bool guest_caller, void **
     uint64_t address = 0;
     char symbol[2048];
     bool found = false;
-    if (name && snprintf(symbol, sizeof symbol, "_%s", name) < (int)sizeof symbol) {
+    if ((!h || (!h->image->companion_rollback && !h->image->companion_init_pending)) && name && snprintf(symbol, sizeof symbol, "_%s", name) < (int)sizeof symbol) {
         if (h) {
             if (h->first) found = hao_image_export_info(h->image, symbol, &address, NULL, NULL) == HAO_EXPORT_ADDR;
             else found = guest_lookup(h->image, symbol, &address, 0);
         } else {
             for (h = bundle_handles; h && !found; h = h->next)
-                if (h->global) found = guest_lookup(h->image, symbol, &address, 0);
+                if (h->global && !h->image->companion_rollback && !h->image->companion_init_pending) found = guest_lookup(h->image, symbol, &address, 0);
         }
     }
     /* ObjC principal classes use registered method encodings. Untyped C function exports have no
@@ -4370,15 +4590,16 @@ static const char *native_bundle_class(const void *cls)
     hao_identity_info info;
     return hao_identity_guest_image(cls, &info) ? info.path : NULL;
 }
-void hao_native_bundles_init(void)
+bool hao_native_bundles_init(void)
 {
     hao_bundle_install2_fn install2 = (hao_bundle_install2_fn)dlsym(RTLD_DEFAULT, "hao_identity_bundle_hooks2");
     if (install2) {
         native_open = install2(native_bundle_open2, native_bundle_sym2, native_bundle_close, native_bundle_class, native_bundle_expand);
-        return;
+        return native_open != NULL;
     }
     hao_bundle_install_fn install = (hao_bundle_install_fn)dlsym(RTLD_DEFAULT, "hao_identity_bundle_hooks");
     if (install) native_open = install(native_bundle_open, native_bundle_sym, native_bundle_close, native_bundle_class);
+    return false;
 }
 
 /* ---------------------------------------------------- lazy loading */
@@ -4396,25 +4617,35 @@ void hao_native_bundles_init(void)
  */
 static uint32_t rd32(const uint8_t *b) { uint32_t v; memcpy(&v, b, 4); return v; }
 
-static bool lazy_bind(hao_image *img, const uint8_t *b, uint32_t size)
+static bool provisional_lazy_provider(const hao_image *im)
 {
+    return im && hao_companions_active() && (im->binding || im->companion_init_pending || im->companion_rollback);
+}
+
+static int lazy_bind(hao_image *img, const uint8_t *b, uint32_t size)
+{
+    if (size < 24 || img->vmsize < 4) return HAO_LAZY_INVALID;
     uint32_t path_off = rd32(b), state_off = rd32(b + 4), slots_off = rd32(b + 12), count = rd32(b + 16),
              names_off = rd32(b + 20);
-    if (path_off >= size || names_off > size || count > (size - names_off) / 4 || slots_off >= img->vmsize ||
-        count > (img->vmsize - slots_off) / 8 || state_off > img->vmsize - 4)
-        return false;
+    if (path_off >= size || !memchr(b + path_off, 0, size - path_off) ||
+        names_off > size || count > (size - names_off) / 4 || slots_off >= img->vmsize ||
+        count > (img->vmsize - slots_off) / 8 || state_off > img->vmsize - 4) return HAO_LAZY_INVALID;
     const char *lib = (const char *)b + path_off;
     hao_image *g = NULL;
     void *h = open_library(img, lib, false, &g, NULL, 0);
+    if (h == REFUSED_COMPANION_DEP) return HAO_LAZY_INVALID;
     if (h == MISSING_DEP) {
         hao_diag_prefix(HAO_DIAG);
         fprintf(HAO_DIAG, "lazy-loaded library %s not found (native or guest)\n", lib);
     }
     if (g) hao_run_initializers();
-    uint64_t *slot = (uint64_t *)(uintptr_t)(img->base + slots_off);
+    if (provisional_lazy_provider(g)) return HAO_LAZY_DEFERRED;
+    uint64_t *values = count ? malloc((size_t)count * sizeof *values) : NULL;
+    if (count && !values) return HAO_LAZY_INVALID;
+    int result = HAO_LAZY_INVALID;
     for (uint32_t k = 0; k < count; k++) {
         uint32_t no = rd32(b + names_off + 4 * k);
-        if (no >= size) return false;
+        if (no >= size || !memchr(b + no, 0, size - no)) goto done;
         const char *name = (const char *)b + no;
         uint64_t a = 0;
         bool ok = interposed(name, &a, false) ||
@@ -4424,30 +4655,55 @@ static bool lazy_bind(hao_image *img, const uint8_t *b, uint32_t size)
             if (h != MISSING_DEP) fprintf(stderr, "hao: unresolved lazy import %s from %s in %s\n", name, lib, img->path);
             a = unresolved_trap(name);
         }
-        slot[k] = a;
+        if (hao_companions_active() && provisional_lazy_provider(hao_image_for_addr(a))) {
+            result = HAO_LAZY_DEFERRED;
+            goto done;
+        }
+        values[k] = a;
     }
+    if (count) memcpy((void *)(uintptr_t)(img->base + slots_off), values, (size_t)count * sizeof *values);
     if (hao_verbose) fprintf(stderr, "hao: lazy-loaded %s for %s (%u symbols)\n", lib, img->path, count);
-    return true;
+    result = HAO_LAZY_READY;
+done:
+    free(values);
+    return result;
+}
+
+/* Publish a complete lazy record and its flag together. A preparation
+ * caller can retry a deferred provider after its outer load settles. The
+ * system ABI's actual calling stub has no error return or fallback callee. */
+int hao_try_lazy_load(uint64_t state, uint64_t mh)
+{
+    lock_loads();
+    hao_image *img = hao_image_for_addr(mh);
+    int result = HAO_LAZY_INVALID;
+    for (int k = 0; img && img->base == mh && k < img->nlazy; k++) {
+        const uint8_t *b = img->lazy_info[k];
+        if (img->lazy_info_size[k] < 24 || img->vmsize < 4) continue;
+        uint32_t off = rd32(b + 4);
+        if ((off & 3) || off > img->vmsize - 4 || img->base + off != state) continue;
+        uint32_t *flag = (void *)(uintptr_t)state;
+        if (provisional_lazy_provider(img)) result = HAO_LAZY_DEFERRED;
+        else if (__atomic_load_n(flag, __ATOMIC_ACQUIRE)) result = HAO_LAZY_READY;
+        else {
+            result = lazy_bind(img, b, img->lazy_info_size[k]);
+            if (result == HAO_LAZY_READY) __atomic_store_n(flag, 1, __ATOMIC_RELEASE);
+        }
+        break;
+    }
+    unlock_loads();
+    return result;
 }
 
 static void trap_dyld_lazy_load(hao_thread *t, uint64_t arg)
 {
     (void)arg;
     uint64_t state = t->cpu.x[0], mh = t->cpu.x[1];
-    lock_loads();
-    hao_image *img = hao_image_for_addr(mh);
-    bool done = false;
-    if (img && img->base == mh && __atomic_load_n((uint32_t *)(uintptr_t)state, __ATOMIC_ACQUIRE)) done = true;
-    for (int k = 0; img && img->base == mh && !done && k < img->nlazy; k++)
-        if (img->base + rd32(img->lazy_info[k] + 4) == state && lazy_bind(img, img->lazy_info[k], img->lazy_info_size[k])) {
-            __atomic_store_n((uint32_t *)(uintptr_t)state, 1, __ATOMIC_RELEASE);
-            done = true;
-        }
-    unlock_loads();
-    if (done) return;
+    int result = hao_try_lazy_load(state, mh);
+    if (result == HAO_LAZY_READY) return;
     hao_diag_prefix(HAO_DIAG);
-    fprintf(HAO_DIAG, "__dyld_lazy_load(%#llx, %#llx): no lazy-load record for this image\n", (unsigned long long)state,
-            (unsigned long long)mh);
+    fprintf(HAO_DIAG, "__dyld_lazy_load(%#llx, %#llx): %s\n", (unsigned long long)state, (unsigned long long)mh,
+            result == HAO_LAZY_DEFERRED ? "provider is still binding in a reentrant load" : "invalid or refused lazy-load record");
     abort();
 }
 

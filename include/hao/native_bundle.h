@@ -1,5 +1,6 @@
 #ifndef HAO_NATIVE_BUNDLE_H
 #define HAO_NATIVE_BUNDLE_H
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Linked identity shim to runtime. */
@@ -19,5 +20,5 @@ typedef void *(*hao_bundle_open2_fn)(const char *, int, const void *, char *, si
 typedef int (*hao_bundle_sym2_fn)(void *, const char *, const void *, void **);
 typedef hao_real_dlopen_fn (*hao_bundle_install2_fn)(hao_bundle_open2_fn, hao_bundle_sym2_fn, hao_bundle_close_fn,
                                                      hao_bundle_class_fn, hao_bundle_expand_fn);
-void hao_native_bundles_init(void);
+bool hao_native_bundles_init(void);
 #endif

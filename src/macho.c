@@ -825,7 +825,13 @@ static void release_image(hao_image *img, bool keep_range)
     free(img->fstarts);
     free(img->fnslots);
     free(img->identity_ranges);
+    free(img->flat_bind_images);
     free(img);
+}
+
+void hao_discard_image(hao_image *img)
+{
+    if (img) release_image(img, true);
 }
 
 void hao_unload_image(hao_image *img)
@@ -998,6 +1004,9 @@ static uint8_t *blob_copy(const uint8_t *p, uint32_t size)
 /* ------------------------------------------------------------- slices */
 
 int hao_slice_test_path;
+void (*hao_companion_dependency_gate)(hao_image *);
+void (*hao_companion_rollback_gate)(hao_image *);
+bool (*hao_companion_slice_gate)(hao_image *, hao_slice *, char *, size_t);
 
 /* Can the bytes of the file open on fd not change? It is on the volume the
  * system booted from, mounted read-only (MNT_ROOTFS, MNT_RDONLY, MNT_LOCAL):
@@ -1288,6 +1297,8 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     int nseg = sl->nsegs;
     /* library validation (libval.c): on the bytes the image is then built from */
     if (!map_only && hao_libval_image(img, sl, why, sizeof why) != 0) ERR("%s: %s", path, why);
+    bool (*gate)(hao_image *, hao_slice *, char *, size_t) = __atomic_load_n(&hao_companion_slice_gate, __ATOMIC_ACQUIRE);
+    if (gate && !gate(img, sl, why, sizeof why)) ERR("%s: %s", path, why);
     if (sl->sig.cd) {
         img->cdhash_type = sl->sig.hash_type;
         memcpy(img->cdhash, sl->sig.cdhash, sizeof img->cdhash);
@@ -1623,6 +1634,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
 
     /* link into the image list before binding so self-references resolve,
      * and let the caller record it (a dependency cycle then finds it) */
+    img->binding = true;
     hao_image_register(img);
     linked = true;
     if (mapped) { mapped(img, ctx); visible = true; }
@@ -1634,6 +1646,12 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         if (legacy[k] && legacy_stream(img, legacy[k], legacy_size[k], k, segs, nseg, resolve, true, why, sizeof why) < 0)
             ERR("%s: %s", path, why);
 
+    void (*prepare_companions)(hao_image *) = __atomic_load_n(&hao_companion_dependency_gate, __ATOMIC_ACQUIRE);
+    if (prepare_companions && !map_only && !img->refused_companion_ordinal) prepare_companions(img);
+    if (img->companion_rollback)
+        ERR("%s: required framework load rolled back", path);
+    if (img->refused_companion_ordinal)
+        ERR("%s: declared framework dependency %s refused", path, img->deps[img->refused_companion_ordinal - 1]);
     /* final protections: never executable for the host */
     FOR_EACH_CMD(p) {
         const struct load_command *lc = (const void *)p;
@@ -1657,12 +1675,15 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
      * open descriptor would leak into every child the guest spawns */
     if (img->fd >= 0) close(img->fd);
     img->fd = -1;
+    img->binding = false;
     return img;
 
 fail:
     free(segs);
     hao_slice_close(sl);
     if (!linked) img->next = NULL;
+    void (*rollback)(hao_image *) = __atomic_load_n(&hao_companion_rollback_gate, __ATOMIC_ACQUIRE);
+    if (rollback && linked && (img->refused_companion_ordinal || img->companion_rollback)) rollback(img);
     release_image(img, visible);
     return NULL;
 }

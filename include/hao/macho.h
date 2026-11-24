@@ -100,6 +100,11 @@ struct hao_image {
     /* the CodeDirectory its pages were verified with (libval.c hao_slice_verify), on the bytes it was built
      * from: its hash type (0: the image was not verified) and cdhash */
     uint8_t cdhash_type, cdhash[20];
+    int refused_companion_ordinal; /* strong dependency refused while binding this image */
+    bool binding, companion_rollback, companion_init_pending;
+    struct hao_image **flat_bind_images; /* actual guest providers for flat imports during selected loads */
+    size_t nflat_bind_images;
+    bool companion_verified; /* actual mapped guest slice matched all signed association fields */
     uint64_t func_starts_off;   /* LC_FUNCTION_STARTS (file offset in slice) */
     uint32_t func_starts_size;
     uint64_t *fstarts;          /* sorted absolute function start addresses */
@@ -190,6 +195,19 @@ typedef struct hao_slice {
 } hao_slice;
 /* Page-hash passes hao_slice_verify has made in this process (tests: one for each signed image). */
 extern unsigned hao_slice_verify_passes;
+/* Selected by signed native launcher metadata. The resolver and the Mach-O
+ * loader both use the association; unit-only loaders leave the gate unset. */
+extern void (*hao_companion_rollback_gate)(hao_image *);
+void hao_rollback_companion_load(hao_image *img);
+void hao_discard_image(hao_image *img); /* detach and retain inaccessible address reservation */
+extern void (*hao_companion_dependency_gate)(hao_image *);
+void hao_prepare_companion_dependencies(hao_image *img);
+extern bool (*hao_companion_slice_gate)(hao_image *, hao_slice *, char *, size_t);
+bool hao_companions_init(char *why, size_t n);
+bool hao_companions_active(void);
+int hao_companion_open(const char *original, char *why, size_t n);
+const char *hao_companion_original(const char *name);
+bool hao_companion_resident(const char *path, const hao_image *image);
 /* The slice the loader runs (arm64e, else arm64) of the regular file open on
  * fd; NULL with why filled if there is none or its header or load commands
  * are malformed. */

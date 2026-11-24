@@ -70,6 +70,7 @@ src/callbacks.c
 src/code.c
 src/code_identity.c
 src/commpage.c
+src/companions.c
 src/cpufeat.c
 src/cxxstr.c
 src/cxxstr_gen.inc
@@ -834,6 +835,7 @@ tests/host/ioreg.c
 tests/guest/appdomain.c
 tests/guest/appdomain.sh
 tests/image/launchd-scan.sh
+tests/host/companions.py
 tests/host/jit-arena.c
 tests/host/jit-arena.sh
 tests/host/jit-arena-map.c

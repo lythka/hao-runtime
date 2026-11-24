@@ -324,6 +324,8 @@ bool hao_dsc_bind_slot(uint64_t a);
 extern hao_image *hao_main_image;
 extern int hao_verbose;
 extern int hao_use_jit;
+enum { HAO_LAZY_INVALID, HAO_LAZY_READY, HAO_LAZY_DEFERRED };
+int hao_try_lazy_load(uint64_t state, uint64_t mach_header);
 /* Set by host test drivers that load and register an image without running
  * any of its code: hao_run aborts instead of entering the guest. */
 extern bool hao_no_guest_code;

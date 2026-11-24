@@ -911,6 +911,17 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
     g_argc = argc; g_argv = argv; g_envp = envp;
     hao_opts_init(NULL);          /* the front end already took the snapshot */
     hao_verbose = hao_opt.verbose;
+    char companion_error[512];
+    bool companions_ready = hao_companions_init(companion_error, sizeof companion_error);
+    if (companions_ready && hao_companions_active() && !hao_native_bundles_init()) {
+        snprintf(companion_error, sizeof companion_error, "declared framework companions require the pre-open identity hook");
+        companions_ready = false;
+    }
+    if (!companions_ready) {
+        hao_slice_close(mapped);
+        if (fd >= 0) close(fd);
+        return refuse(path, "%s", companion_error);
+    }
     if (hao_opt.interp) hao_use_jit = 0;
     hao_fork_init();
 
@@ -957,7 +968,7 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
     void (*oslog_hook)(int (*)(const void *), int (*)(const void *, size_t)) =
         (void (*)(int (*)(const void *), int (*)(const void *, size_t)))dlsym(RTLD_DEFAULT, "hao_identity_oslog_hook");
     if (oslog_hook) oslog_hook(oslog_is_guest, oslog_immutable);
-    hao_native_bundles_init();
+    if (!hao_companions_active()) hao_native_bundles_init();
     if (hao_verbose)
         fprintf(stderr, "hao: loaded %s at %#llx (slide %#llx): %llu rebases, %llu binds, %llu auth, %llu unresolved\n",
                 path, (unsigned long long)img->base, (unsigned long long)img->slide, (unsigned long long)img->n_rebase,
