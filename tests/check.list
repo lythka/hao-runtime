@@ -104,6 +104,7 @@ guest/refuse	300	par	tests/guest/refuse.sh
 guest/run-async	300	par	tests/guest/run-async.sh -k
 guest/keypath-identity	300	par	python3.14 -I tests/guest/keypath-identity/run.py
 guest/late-method-signatures	300	par	python3.14 -I tests/guest/late-method-signatures/run.py
+guest/task-info	60	par	bash tests/guest/task_info.sh
 guest/imagewatch	120	par	bash tests/guest/imagewatch.sh
 guest/native-bundle	300	par	python3.14 -I tests/guest/native-bundle/run.py
 guest/objc-class-order	300	par	python3.14 -I tests/guest/objc-class-order/run.py

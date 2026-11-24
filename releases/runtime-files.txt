@@ -489,6 +489,8 @@ tests/guest/refuse.m
 tests/guest/refuse.sh
 tests/guest/refusehelper.h
 tests/guest/refusehelper.m
+tests/guest/task_info.c
+tests/guest/task_info.sh
 tests/guest/viewselfnil.sh
 tests/guest/viewselfnil.swift
 tests/guest/stripview.sh

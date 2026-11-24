@@ -537,6 +537,20 @@ static void trap_vm(hao_thread *t, uint64_t which)
     }
 }
 
+/* The ARM64 SDK uses flavor 18 for the ten-word LP64 basic result.
+ * On ARM, legacy flavor 5 returns the same eight words as flavor 4.
+ * Let the native MIG routine check the supplied port, capacity and pointers. */
+static void trap_task_info(hao_thread *t, uint64_t arg)
+{
+    enum { ARM_TASK_BASIC_INFO_LEGACY = 5, ARM_TASK_BASIC_INFO_64_2 = 18 };
+    uint64_t *x = t->cpu.x;
+    task_flavor_t flavor = (task_flavor_t)x[1];
+    if (flavor == ARM_TASK_BASIC_INFO_64_2) flavor = TASK_BASIC_INFO_64;
+    else if (flavor == ARM_TASK_BASIC_INFO_LEGACY) flavor = TASK_BASIC_INFO_32;
+    x[0] = (uint32_t)task_info((task_name_t)x[0], flavor, (task_info_t)(uintptr_t)x[2],
+                               (mach_msg_type_number_t *)(uintptr_t)x[3]);
+}
+
 /* The Mach VM calls a guest makes on its own task: refused where they would change hao's executable
  * memory or sealed constant data (hao_guest_vm_guarded), else made with the guest's arguments. The
  * 64-bit and vm_ forms take the same arguments on arm64 and x86_64; arm64 passes those past the
@@ -915,13 +929,12 @@ static bool table_agrees(const char *name, int nfixed)
  * variadic tables (va_list variants, functions taking a va_list, integer variadics), the fixed
  * traps and the generic integer variadics. The generated tables leave out every name the
  * hand-written tables here handle, so a name is in at most one table. */
-/* ABI repairs of libc++'s own functions (std::exception_ptr results through
- * x8): they apply to binds to native libc++ only. With libc++ loaded as a
+/* ABI repairs apply only to native definitions. With libc++ loaded as a
  * guest image (runtime.c, guest_libcxx) arm64 code calls arm64 code and
  * nothing needs repairing. Every other interposer is a runtime service
  * (setjmp, unwinding, dyld and Mach-O queries, variadics, signals, ObjC) and
  * applies to every bind of a native symbol, guest libc++'s own included. */
-static const char *const abi_repair[] = {"__ZSt17current_exceptionv", "__ZNSt13exception_ptr31__from_native_exception_pointerEPv"};
+static const char *const abi_repair[] = {"__ZSt17current_exceptionv", "__ZNSt13exception_ptr31__from_native_exception_pointerEPv", "_task_info"};
 
 bool hao_interpose_abi_repair(const char *name)
 {
@@ -957,6 +970,7 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
     {"_xo_warn", trap_xo_err, 2}, {"_xo_warnx", trap_xo_err, 0}, {"_xo_warn_c", trap_xo_err, 2 | 4},
     {"_execl", trap_execl, 0}, {"_execle", trap_execl, 1}, {"_execlp", trap_execl, 2},
     {"_vfork", trap_vfork, 0},
+    {"_task_info", trap_task_info, 0},
     {"_mmap", trap_vm, 0}, {"_mprotect", trap_vm, 1}, {"_munmap", trap_vm, 2},
     {"_mach_vm_protect", trap_mvm, MVM_PROTECT}, {"_vm_protect", trap_mvm, MVM_PROTECT},
     {"_mach_vm_deallocate", trap_mvm, MVM_DEALLOCATE}, {"_vm_deallocate", trap_mvm, MVM_DEALLOCATE},
