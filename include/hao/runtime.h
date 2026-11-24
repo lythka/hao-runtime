@@ -308,6 +308,7 @@ uint64_t hao_dsc_selector_base(void);
  * range (counted in hao_dsc_sels_mapped), else x1. */
 extern uint64_t hao_dsc_sel_lo, hao_dsc_sel_span, hao_dsc_sels_mapped;
 uint64_t hao_dsc_sel_map(uint64_t x1);
+const char *hao_dsc_method_encoding(const char *path, const char *cls, bool meta, const char *selector, const char *symbol);
 uint64_t hao_dsc_load_ptr(uint64_t a);
 bool hao_dsc_foreign(uint64_t a);
 void hao_dsc_writable(uint64_t a, uint64_t n);

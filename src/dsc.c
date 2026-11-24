@@ -58,6 +58,7 @@
 #include "near_map.h"
 #include <fcntl.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2313,6 +2314,114 @@ bool hao_dsc_redirect(uint64_t pc, uint64_t *native, uint64_t *x1)
 }
 
 /* ------------------------------------------------------ ObjC support */
+
+/* Read reflection data from the immutable cache view. None of these classes
+ * are registered with the native runtime. All addresses here are unslid. */
+static uint64_t metadata_pointer(uint64_t slot)
+{
+    if (!mapped_span(slot, 8)) return 0;
+    uint64_t raw = u64(code_at(slot)), target, high;
+    const dmap *m = map_of(slot);
+    return raw && m->slide && m->slide_size >= 24 && decode_ptr(m, raw, &target, &high) ? target : 0;
+}
+
+static const char *metadata_string(uint64_t va)
+{
+    const dmap *m = map_of(va);
+    if (!m) return NULL;
+    const char *s = code_at(va);
+    return memchr(s, 0, m->size - (va - m->addr)) ? s : NULL;
+}
+
+/* Require the exact named ARM implementation, including the category name.
+ * A closest symbol or another category with the same selector is insufficient. */
+static uint64_t method_implementation(const struct mach_header_64 *mh, const char *name)
+{
+    size_t len = strlen(name);
+    FOR_EACH_CMD(mh, lc) {
+        if (lc->cmd != LC_SYMTAB || lc->cmdsize < sizeof(struct symtab_command)) continue;
+        const struct symtab_command *sc = (const void *)lc;
+        if (sc->nsyms > UINT32_MAX / sizeof(struct nlist_64)) return 0;
+        const struct nlist_64 *syms = (const void *)linkedit_ptr(mh, sc->symoff, sc->nsyms * sizeof *syms);
+        const char *strings = (const void *)linkedit_ptr(mh, sc->stroff, sc->strsize);
+        if (!syms || !strings) return 0;
+        for (uint32_t i = 0; i < sc->nsyms; i++) {
+            uint32_t off = syms[i].n_un.n_strx;
+            if ((syms[i].n_type & (N_STAB | N_TYPE)) != N_SECT || off >= sc->strsize || len >= sc->strsize - off) continue;
+            if (!memcmp(strings + off, name, len + 1)) return syms[i].n_value;
+        }
+    }
+    return 0;
+}
+
+static const char *encoding_in_list(uint64_t list, const char *selector, uint64_t imp)
+{
+    if (!mapped_span(list, 8)) return NULL;
+    uint32_t flags = code32(list), count = code32(list + 4), stride = flags & 0xfffc;
+    bool small = (flags >> 31) != 0;
+    if (stride < (small ? 12u : 24u) || !mapped_span(list + 8, (uint64_t)stride * count)) return NULL;
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t e = list + 8 + (uint64_t)stride * i, name, type;
+        if (small) {
+            uint32_t n = code32(e), t = code32(e + 4);
+            name = flags & 0x40000000u ? D.selbase + n : metadata_pointer(e + (int32_t)n);
+            type = flags & 0x20000000u ? D.selbase + t : e + 4 + (int32_t)t;
+        } else {
+            name = metadata_pointer(e);
+            type = metadata_pointer(e + 8);
+        }
+        const char *s = metadata_string(name);
+        if (s && !strcmp(s, selector)) {
+            uint64_t target = small ? e + 8 + (int32_t)code32(e + 8) : metadata_pointer(e + 16);
+            if (target == imp) return metadata_string(type);
+        }
+    }
+    return NULL;
+}
+
+static const char *class_encoding(uint64_t cls, const char *selector, uint64_t imp)
+{
+    uint64_t ro = metadata_pointer(cls + 32) & ~7ull;
+    uint64_t list = metadata_pointer(ro + 32);
+    if (!(list & 1)) return encoding_in_list(list, selector, imp);
+    list &= ~1ull;
+    if (!mapped_span(list, 8) || code32(list) != 8) return NULL;
+    uint32_t count = code32(list + 4);
+    if (!mapped_span(list + 8, 8ull * count)) return NULL;
+    const char *result = NULL;
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t e = list + 8 + 8ull * i;
+        const char *types = encoding_in_list(e + ((int64_t)u64(code_at(e)) >> 16), selector, imp);
+        if (types && result && strcmp(types, result)) return NULL;
+        if (types) result = types;
+    }
+    return result;
+}
+
+const char *hao_dsc_method_encoding(const char *path, const char *cls, bool meta, const char *selector, const char *symbol)
+{
+    const char *result = NULL, *prefix = meta ? "_OBJC_METACLASS_$_" : "_OBJC_CLASS_$_";
+    size_t len = strlen(prefix);
+    hao_crit_enter();
+    pthread_mutex_lock(&dsc_lock);
+    int idx = dsc_open() ? find_image(path) : -1;
+    if (idx >= 0 && (D.code_delta || !D.images[idx].img)) {
+        (void)rev_name((uint32_t)idx, 0);
+        dimg *im = &D.images[idx];
+        for (size_t i = 0; i < im->nrev; i++) {
+            const char *sym = im->rev[i].name;
+            if (!strncmp(sym, prefix, len) && !strcmp(sym + len, cls)) {
+                const struct mach_header_64 *mh = image_header(idx);
+                uint64_t imp = mh ? method_implementation(mh, symbol) : 0;
+                if (imp) result = class_encoding(im->rev[i].addr, selector, imp);
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&dsc_lock);
+    hao_crit_leave();
+    return result;
+}
 
 uint64_t hao_dsc_selector_base(void)
 {

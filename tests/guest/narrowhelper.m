@@ -28,3 +28,11 @@ void nh_call_with_pred(void (^cb)(nh_pred_t pred, CGRect r))
 {
     cb(^BOOL(int x) { return (BOOL)nh_c(x < 0); }, CGRectMake(1, 2, 3, 4));
 }
+
+/* The x86 encoding of this category's signed-char method is identical to
+ * NSMeasurement's original BOOL signature. Reflection must identify the category. */
+@interface NSMeasurement (HaoReflectionFixture)
+@end
+@implementation NSMeasurement (HaoReflectionFixture)
+- (signed char)canBeConvertedToUnit:(NSUnit *)unit { return -1; }
+@end

@@ -1566,7 +1566,57 @@ static void trap_msgsend(hao_thread *t, uint64_t kind)
  * signature thunk when the encoding is not register-exact (a struct
  * returned in memory, say). The generic argument pass would give it a plain
  * thunk, which takes the x86 sret pointer for self. */
-enum { IMP_ADD, IMP_REPLACE, IMP_SET, IMP_GET, IMP_GET_STRET, IMP_OF_METHOD };
+enum { IMP_ADD, IMP_REPLACE, IMP_SET, IMP_GET, IMP_GET_STRET, IMP_OF_METHOD, IMP_TYPES };
+static bool rd_guarded(uint64_t a, void *buf, size_t n);
+
+/* Small cache methods keep their original relative IMP in the immutable
+ * method record. ObjC stores replacements elsewhere. Derive the declaration
+ * from this record, so a swizzle cannot change the reflected signature. */
+static const char *guest_method_types(Method m)
+{
+    const char *native = method_getTypeEncoding(m);
+    if (!native || !strchr(native, 'c') || ((uintptr_t)m & 3) != 1) return native;
+    Dl_info list, impl;
+    if (!dladdr(m, &list) || !list.dli_fname || !list.dli_sname || !list.dli_saddr) return native;
+    if (strncmp(list.dli_sname, "_OBJC_$_INSTANCE_METHODS_", sizeof "_OBJC_$_INSTANCE_METHODS_" - 1) &&
+        strncmp(list.dli_sname, "_OBJC_$_CLASS_METHODS_", sizeof "_OBJC_$_CLASS_METHODS_" - 1)) return native;
+    uintptr_t entry = (uintptr_t)m - 1, base = (uintptr_t)list.dli_saddr;
+    if (entry < base + 8) return native;
+    method_list_t ml;
+    if (!rd_guarded(base, &ml, sizeof ml)) return native;
+    unsigned stride = ml.entsize_flags & 0xfffc;
+    if (!(ml.entsize_flags & ML_SMALL) || stride < 12 ||
+        (entry - base - 8) % stride || (entry - base - 8) / stride >= ml.count) return native;
+    int32_t delta;
+    if (!rd_guarded(entry + 8, &delta, sizeof delta)) return native;
+    const void *imp = (const void *)(entry + 8 + (intptr_t)delta);
+    if (!dladdr(imp, &impl) || impl.dli_saddr != imp || !impl.dli_fname ||
+        strcmp(list.dli_fname, impl.dli_fname)) return native;
+    const char *sym = impl.dli_sname;
+    if (!sym || (sym[0] != '+' && sym[0] != '-') || sym[1] != '[') return native;
+    const char *space = strchr(sym + 2, ' ');
+    if (!space) return native;
+    char name[512];
+    const char *category = memchr(sym + 2, '(', (size_t)(space - (sym + 2)));
+    if (category && space[-1] != ')') return native;
+    size_t n = (size_t)((category ? category : space) - (sym + 2));
+    if (!n || n >= sizeof name) return native;
+    memcpy(name, sym + 2, n);
+    name[n] = 0;
+    const char *selector = sel_getName(method_getName(m));
+    size_t len = strlen(selector);
+    if (strncmp(space + 1, selector, len) || strcmp(space + 1 + len, "]")) return native;
+    Class cls = objc_getClass(name);
+    if (!cls) return native;
+    const char *path = class_getImageName(cls);
+    if (!path || strcmp(path, list.dli_fname)) return native;
+    const char *arm = hao_dsc_method_encoding(path, name, sym[0] == '+', selector, sym);
+    if (!arm) return native;
+    size_t i = 0;
+    while (native[i] && (native[i] == arm[i] || (native[i] == 'c' && arm[i] == 'B'))) i++;
+    return !native[i] && !arm[i] ? arm : native;
+}
+
 static uint64_t guest_imp_entry(uint64_t imp, const char *types)
 {
     /* an IMP loaded from a slot fnslots.c rewrote is a plain thunk */
@@ -1578,6 +1628,9 @@ static void trap_set_imp(hao_thread *t, uint64_t kind)
 {
     hao_cpu *c = &t->cpu;
     switch (kind) {
+    case IMP_TYPES:
+        c->x[0] = (uintptr_t)guest_method_types((Method)(uintptr_t)c->x[0]);
+        break;
     case IMP_ADD: case IMP_REPLACE: {
         Class cls = (Class)(uintptr_t)c->x[0];
         SEL sel = (SEL)(uintptr_t)c->x[1];
@@ -1623,7 +1676,7 @@ static void trap_set_imp(hao_thread *t, uint64_t kind)
 static const struct { const char *name; uint64_t kind; } imp_traps[] = {
     {"_class_addMethod", IMP_ADD}, {"_class_replaceMethod", IMP_REPLACE}, {"_method_setImplementation", IMP_SET},
     {"_class_getMethodImplementation", IMP_GET}, {"_class_getMethodImplementation_stret", IMP_GET_STRET},
-    {"_method_getImplementation", IMP_OF_METHOD},
+    {"_method_getImplementation", IMP_OF_METHOD}, {"_method_getTypeEncoding", IMP_TYPES},
 };
 
 static hao_name_index imp_traps_ix = HAO_NAME_INDEX(imp_traps, NULL);

@@ -8,6 +8,7 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreServices/CoreServices.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 #include <os/lock.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -100,6 +101,30 @@ int main(void)
         printf("-charForRect: %d\n", (int)[n charForRect:NSMakeRect(0, 0, 7, 1)]);
         long long wide = [n shortMinus];
         printf("shortMinus as long long %lld\n", wide);
+
+        /* The native x86 runtime encodes both BOOL and signed char as c.
+         * ARM reflection distinguishes the two, including argument types. */
+        Method override = class_getInstanceMethod([NSMeasurement class], @selector(canBeConvertedToUnit:));
+        printf("category canBeConvertedToUnit: %s\n", method_getTypeEncoding(override));
+        unsigned nmethods = 0;
+        Method *methods = class_copyMethodList([NSNumber class], &nmethods);
+        for (unsigned i = 0; i < nmethods; i++) {
+            if (method_getName(methods[i]) == @selector(boolValue))
+                printf("enumerated boolValue %s\n", method_getTypeEncoding(methods[i]));
+        }
+        free(methods);
+        for (NSString *name in @[@"boolValue", @"charValue", @"initWithBool:", @"initWithChar:"]) {
+            Method method = class_getInstanceMethod([NSNumber class], NSSelectorFromString(name));
+            printf("NSNumber %s %s\n", name.UTF8String, method_getTypeEncoding(method));
+        }
+        Method swizzled = class_getInstanceMethod([NSScanner class], @selector(isAtEnd));
+        Method other = class_getInstanceMethod([NSNumber class], @selector(charValue));
+        IMP saved = method_setImplementation(swizzled, method_getImplementation(other));
+        const char *declaration = method_getTypeEncoding(swizzled);
+        method_setImplementation(swizzled, saved);
+        printf("swizzled isAtEnd %s\n", declaration);
+        Method factory = class_getClassMethod([NSNumber class], @selector(numberWithBool:));
+        printf("NSNumber numberWithBool: %s\n", method_getTypeEncoding(factory));
 
         /* native blocks called from guest code */
         nh_pred_t p = [n predicate];
