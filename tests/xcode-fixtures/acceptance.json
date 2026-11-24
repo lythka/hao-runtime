@@ -22,5 +22,12 @@
     "standard": "c++20",
     "expected_stdout": "CXX PASS 500500 4000 exception"
   },
-  "timing": "Measure laptop clean and incremental times after functional correctness. No timing claim yet."
+  "timing": "Measure laptop clean and incremental times after functional correctness. No timing claim yet.",
+  "local_dependency_tests": {
+    "path": "LocalDependencyClient",
+    "dependency": "../BoundaryPackage",
+    "xctest_test_count": 1,
+    "swift_testing_test_count": 0,
+    "expected": "one XCTest passes; no Swift Testing tests declared"
+  }
 }
