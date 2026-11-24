@@ -1273,7 +1273,25 @@ def constraint_pin(arm, slot, blob):
     return hao_codesig.CONSTRAINT_SLOTS[slot], hao_codesig.check(bytes(arm))["cdhash"].hex(), hashlib.sha256(blob).hexdigest()
 
 
-def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset(), pdir=None):
+def mapped_main_payload(arm):
+    """Only native-readable mapped ranges and zero alignment padding may be carried."""
+    mapped = bytearray(len(arm))
+    for cmd, off, size in hao_fat.load_commands(arm):
+        if cmd != 0x19:  # LC_SEGMENT_64
+            continue
+        if size < 72:
+            raise ValueError("short segment in self-contained main")
+        fileoff, filesize, _, initprot = struct.unpack_from("<QQii", arm, off + 40)
+        if fileoff > len(arm) or filesize > len(arm) - fileoff:
+            raise ValueError("main segment exceeds the ARM slice")
+        if initprot & 1:
+            mapped[fileoff:fileoff + filesize] = arm[fileoff:fileoff + filesize]
+    if mapped != arm:
+        raise ValueError("main contains nonzero bytes outside native-readable segment mappings")
+    return mapped
+
+
+def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset(), pdir=None, self_contained=False):
     """Sign a copy of the stub as SRC's identity; returns (path, identifier,
     entitlement keys, bound, deps, constraints) with bound from bound_data (the
     slots set), deps (links, skipped) from native_deps and constraints
@@ -1295,6 +1313,8 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
         identity_rules.check_rules(arm)
         build_version(arm)   # exactly one (a zippered program is refused)
         sections[SLICE_SECTION] = (slice_record(arm), 5, 5)
+        if self_contained:
+            sections[("__HAO_MAIN", "__program")] = (mapped_main_payload(arm), 1, 1)
         own = {name for _, name, _, _ in dylib_commands(open(stub, "rb").read())} - {LIBSYSTEM}
         links, skipped, _ = native_deps(src, data, x86, own)
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test,
@@ -1469,6 +1489,8 @@ def main():
     ap.add_argument("--host-test", action="store_true",
                     help="keep only public entitlements and add an rpath to the stub's build directory "
                          "(for running on an AMFI-enforcing development host)")
+    ap.add_argument("--self-contained", action="store_true",
+                    help="map the signed main program in a read-only, non-executable segment of its local stub")
     ap.add_argument("--translate", action="store_true",
                     help="also give universal programs the stub, in place of their own x86_64 slices")
     if len(sys.argv) == 3 and sys.argv[1] == "--scan":
@@ -1507,6 +1529,8 @@ def main():
         sys.exit(f"hao-embed: --save-skeletons: {e}")
     if not os.path.exists(a.stub):
         sys.exit(f"hao-embed: no stub at {a.stub} (run make)")
+    if a.self_contained and (a.stubs or a.save_skeletons or a.skeletons):
+        sys.exit("hao-embed: --self-contained requires local executable output without distributable stubs or skeletons")
     if a.scan and not a.root:
         sys.exit("hao-embed: --scan needs --root")
     if a.cryptex and not a.root:
@@ -1575,7 +1599,7 @@ def main():
                 rel = tree.relpath(p) if a.root else None
                 may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, real, rel}))
                 stub, ident, keys, bound, (links, skipped), (carried, dropped) = signed_stub(
-                    src, a.stub, work, a.host_test, data, x86, may_drop, pdir)
+                    src, a.stub, work, a.host_test, data, x86, may_drop, pdir, a.self_contained)
                 stub_bytes = open(stub, "rb").read()
                 merged = hao_fat.combine(data, stub_bytes, drop_x86_64=translate)
                 if a.stubs:

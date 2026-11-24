@@ -175,7 +175,7 @@ static int oslog_immutable(const void *p, size_t n)
     return 0;
 }
 
-static int run_guest(const char *path, int fd, int entry, int argc, char **argv, char **envp);
+static int run_guest(const char *path, int fd, hao_slice *mapped, const char *mapped_path, int entry, int argc, char **argv, char **envp);
 static int refuse(const char *exe, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 /*
@@ -692,8 +692,9 @@ int hao_cli_main(int argc, char **argv, char **envp)
     base = strrchr(base, '/') ? strrchr(base, '/') + 1 : base;
     int procname[2] = {CTL_KERN, KERN_PROCNAME};
     sysctl(procname, 2, NULL, NULL, (void *)base, strlen(base));
-    return run_guest(guest_path, fd, HAO_ENTRY_CLI, argc, argv, envp);
+    return run_guest(guest_path, fd, NULL, NULL, HAO_ENTRY_CLI, argc, argv, envp);
 }
+
 
 /*
  * Embedded form: this process's main executable is a fat file whose x86_64
@@ -839,26 +840,38 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
     if (pid1) pid1_report();
     /* exe is the path the exec was given, made absolute. What it names now
      * need not be what the kernel started: load only this process's own file. */
-    int fd = open(exe, O_RDONLY | O_CLOEXEC);
-    struct stat st;
-    if (fd < 0) {
-        return refuse(exe, "open %s: %s", exe, strerror(errno));
+    const struct mach_header_64 *mh = (const void *)_NSGetMachExecuteHeader();
+    unsigned long size = 0;
+    const void *bytes = getsectiondata(mh, "__HAO_MAIN", "__program", &size);
+    char w[600], canonical[MAXPATHLEN];
+    int fd = -1;
+    hao_slice *sl;
+    if (bytes) {
+        const struct segment_command_64 *segment = getsegbyname("__HAO_MAIN");
+        if (!segment || segment->initprot != VM_PROT_READ || segment->maxprot != VM_PROT_READ)
+            return refuse(exe, "mapped main must be read-only and non-executable");
+        const char *actual = vpath[0] ? vpath : exe;
+        if (!realpath(actual, canonical) || !names_vnode(canonical, dev, ino))
+            return refuse(exe, "cannot identify the mapped main executable");
+        sl = hao_slice_mapped_main(bytes, size, dev, ino, w, sizeof w);
+    } else {
+        fd = open(exe, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return refuse(exe, "open %s: %s", exe, strerror(errno));
+        struct stat st;
+        if (fstat(fd, &st) != 0 || st.st_dev != dev || st.st_ino != ino) {
+            close(fd);
+            return refuse(exe, "%s no longer names the file this process runs", exe);
+        }
+        sl = hao_slice_open(fd, w, sizeof w);
     }
-    if (fstat(fd, &st) != 0 || st.st_dev != dev || st.st_ino != ino) {
-        return refuse(exe, "%s no longer names the file this process runs; refusing to load its ARM code from another file", exe);
-    }
-    /* The slice is taken once, here, and left for the loader. It is authenticated first, before anything
-     * the environment selects can load: its signature verified and its cdhash the one the stub names (the
-     * loader's gate asks again and gets the same answer). Its policy then decides which switches stand. */
-    char w[600];
-    hao_slice *sl = hao_slice_open(fd, w, sizeof w);
     if (!sl || hao_libval_stub_bound(sl, w, sizeof w) != 0) {
         hao_slice_close(sl);
+        if (fd >= 0) close(fd);
         return refuse(exe, "%s: %s", exe, w);
     }
     hao_guest_switches_for(&sl->sig);
-    hao_slice_hand(sl);
-    return run_guest(exe, fd, HAO_ENTRY_EMBEDDED, argc, argv, envp);
+    if (!bytes) hao_slice_hand(sl);
+    return run_guest(exe, fd, bytes ? sl : NULL, bytes ? canonical : NULL, HAO_ENTRY_EMBEDDED, argc, argv, envp);
 }
 
 /* fd: the open main executable, checked by the caller; the loader takes it.
@@ -885,7 +898,7 @@ static const char *cpu_profile_missing(void)
     return NULL;
 }
 
-static int run_guest(const char *path, int fd, int entry, int argc, char **argv, char **envp)
+static int run_guest(const char *path, int fd, hao_slice *mapped, const char *mapped_path, int entry, int argc, char **argv, char **envp)
 {
     const char *missing = cpu_profile_missing();
     if (missing) {
@@ -924,8 +937,9 @@ static int run_guest(const char *path, int fd, int entry, int argc, char **argv,
     /* the real path of the file being loaded: the kernel's path for this
      * descriptor, not a second resolution of PATH (the loader closes fd) */
     char err[512], real[MAXPATHLEN];
-    if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
-    hao_image *img = hao_load_main_image(path, fd, entry, err, sizeof err);
+    if (mapped_path) snprintf(real, sizeof real, "%s", mapped_path);
+    else if (fcntl(fd, F_GETPATH, real) != 0 && !realpath(path, real)) snprintf(real, sizeof real, "%s", path);
+    hao_image *img = hao_load_main_image(path, fd, mapped, entry, err, sizeof err);
     if (!img) return refuse(path, "%s", err);
     hao_phase("load");
     /* PATH is absolute and unresolved, as dyld presents the main executable */

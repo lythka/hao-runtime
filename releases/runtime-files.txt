@@ -834,3 +834,4 @@ tests/host/jit-arena.c
 tests/host/jit-arena.sh
 tests/host/jit-arena-map.c
 tests/host/wx-cow.sh
+tests/tools/test_self_contained.py

@@ -193,6 +193,7 @@ extern unsigned hao_slice_verify_passes;
 /* The slice the loader runs (arm64e, else arm64) of the regular file open on
  * fd; NULL with why filled if there is none or its header or load commands
  * are malformed. */
+hao_slice *hao_slice_mapped_main(const void *bytes, size_t size, dev_t dev, ino_t ino, char *why, size_t n);
 hao_slice *hao_slice_open(int fd, char *why, size_t n);
 void hao_slice_close(hao_slice *sl);
 /* Leave sl for the loader: the next hao_load_image_fd_cb of sl->fd builds the
@@ -224,6 +225,7 @@ hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_
  * descriptor and must load what it checked (the slice it left with
  * hao_slice_hand, if any). The image owns fd from here on; it is closed
  * whether the load succeeds or fails. */
+hao_image *hao_load_mapped_main(const char *path, hao_slice *sl, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t n);
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                                 char *err, size_t errlen);
 /* Native bundle fallback: recheck ARM-only MH_BUNDLE on the descriptor used

@@ -1048,6 +1048,66 @@ void hao_slice_close(hao_slice *sl)
     free(sl);
 }
 
+static bool parse_main_slice(hao_slice *sl, bool check_sub, uint32_t fat_sub, char *why, size_t n)
+{
+#define PERR(...) do { snprintf(why, n, __VA_ARGS__); return false; } while (0)
+    struct mach_header_64 mh;
+    memcpy(&mh, sl->bytes, sizeof mh);
+    if (mh.magic != MH_MAGIC_64) PERR("bad mach header");
+    if (mh.cputype != CPU_TYPE_ARM64) PERR("arm64 slice holds cputype %#x", mh.cputype);
+    /* the fat header is outside every signature: what it says of the slice must be what the slice says */
+    if (check_sub && ((fat_sub ^ (uint32_t)mh.cpusubtype) & ~CPU_SUBTYPE_MASK))
+        PERR("fat header names cpusubtype %#x for a slice whose header says %#x", fat_sub, (uint32_t)mh.cpusubtype);
+    sl->cpusubtype = (uint32_t)mh.cpusubtype;
+    sl->filetype = mh.filetype;
+    sl->flags = mh.flags;
+    if (!in_range(sizeof mh, mh.sizeofcmds, sl->size)) PERR("load commands (%u bytes) overrun the slice", mh.sizeofcmds);
+    if (mh.sizeofcmds > MAX_CMDS) PERR("%u bytes of load commands", mh.sizeofcmds);
+    sl->cmds = sl->bytes + sizeof mh;
+    sl->ncmds = mh.ncmds;
+    sl->sizeofcmds = mh.sizeofcmds;
+    if (hao_macho_check_cmds(sl->cmds, sl->sizeofcmds, sl->ncmds, &sl->nsegs, why, n) != 0) return false;
+    const uint8_t *p = sl->cmds;
+    for (uint32_t k = 0; k < sl->ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct linkedit_data_command *ld = (const void *)p;
+        if (ld->cmd != LC_CODE_SIGNATURE) continue;       /* at most one, of full size (hao_macho_check_cmds) */
+        sl->sig_off = ld->dataoff;
+        sl->sig_size = ld->datasize;
+    }
+    return true;
+#undef PERR
+}
+
+/* The kernel-mapped, read-only main program of the running stub. Copy it
+ * into the same owned, read-only snapshot used for ordinary writable files.
+ * The caller must verify the ARM pages against the signed stub binding. */
+hao_slice *hao_slice_mapped_main(const void *bytes, size_t size, dev_t dev, ino_t ino, char *why, size_t n)
+{
+    if (!bytes || size < sizeof(struct mach_header_64) || size > MAX_SLICE) {
+        snprintf(why, n, "invalid mapped main size");
+        return NULL;
+    }
+    hao_slice *sl = calloc(1, sizeof *sl);
+    if (!sl) { snprintf(why, n, "cannot allocate mapped main"); return NULL; }
+    sl->fd = -1;
+    sl->dev = dev;
+    sl->ino = ino;
+    sl->size = size;
+    sl->copied = true;
+    size_t len = (size + PAGE - 1) & ~(PAGE - 1);
+    void *copy = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (copy == MAP_FAILED) { snprintf(why, n, "no memory for mapped main"); free(sl); return NULL; }
+    memcpy(copy, bytes, size);
+    sl->bytes = copy;
+    if (mprotect(copy, len, PROT_READ)) snprintf(why, n, "cannot protect mapped main");
+    else if (parse_main_slice(sl, false, 0, why, n)) {
+        if (sl->filetype == MH_EXECUTE) return sl;
+        snprintf(why, n, "mapped main is not an executable");
+    }
+    hao_slice_close(sl);
+    return NULL;
+}
+
 hao_slice *hao_slice_open(int fd, char *why, size_t n)
 {
 #define SERR(...) do { snprintf(why, n, __VA_ARGS__); goto fail; } while (0)
@@ -1085,28 +1145,7 @@ hao_slice *hao_slice_open(int fd, char *why, size_t n)
         }
         if (mprotect(m, len, PROT_READ) != 0) SERR("cannot make the copy of the slice read-only (errno %d)", errno);
     }
-    memcpy(&mh, sl->bytes, sizeof mh);
-    if (mh.magic != MH_MAGIC_64) SERR("bad mach header");
-    if (mh.cputype != CPU_TYPE_ARM64) SERR("arm64 slice holds cputype %#x", mh.cputype);
-    /* the fat header is outside every signature: what it says of the slice must be what the slice says */
-    if ((fat_sub ^ (uint32_t)mh.cpusubtype) & ~CPU_SUBTYPE_MASK)
-        SERR("fat header names cpusubtype %#x for a slice whose header says %#x", fat_sub, (uint32_t)mh.cpusubtype);
-    sl->cpusubtype = (uint32_t)mh.cpusubtype;
-    sl->filetype = mh.filetype;
-    sl->flags = mh.flags;
-    if (!in_range(sizeof mh, mh.sizeofcmds, sl->size)) SERR("load commands (%u bytes) overrun the slice", mh.sizeofcmds);
-    if (mh.sizeofcmds > MAX_CMDS) SERR("%u bytes of load commands", mh.sizeofcmds);
-    sl->cmds = sl->bytes + sizeof mh;
-    sl->ncmds = mh.ncmds;
-    sl->sizeofcmds = mh.sizeofcmds;
-    if (hao_macho_check_cmds(sl->cmds, sl->sizeofcmds, sl->ncmds, &sl->nsegs, why, n) != 0) goto fail;
-    const uint8_t *p = sl->cmds;
-    for (uint32_t k = 0; k < sl->ncmds; k++, p += ((const struct load_command *)p)->cmdsize) {
-        const struct linkedit_data_command *ld = (const void *)p;
-        if (ld->cmd != LC_CODE_SIGNATURE) continue;       /* at most one, of full size (hao_macho_check_cmds) */
-        sl->sig_off = ld->dataoff;
-        sl->sig_size = ld->datasize;
-    }
+    if (!parse_main_slice(sl, true, fat_sub, why, n)) goto fail;
     return sl;
 fail:
     hao_slice_close(sl);
@@ -1161,23 +1200,28 @@ bool hao_is_arm_loadable(const char *path, bool dylib)
 }
 bool hao_is_arm_only_bundle(const char *path) { return hao_is_arm_only_loadable(path, false); }
 
-static hao_image *load_image(const char *, int, hao_resolver, hao_mapped_fn, void *, int, char *, size_t);
+static hao_image *load_image(const char *, int, hao_resolver, hao_mapped_fn, void *, int, hao_slice *, char *, size_t);
 hao_image *hao_load_bundle_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                               char *err, size_t errlen)
 {
-    return load_image(path, -1, resolve, mapped, ctx, 1, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, 1, NULL, err, errlen);
 }
 /* A guest dlopen: the ARM slice of a bundle or dylib. */
 hao_image *hao_load_dlopen_cb(const char *path, bool universal, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
 {
-    return load_image(path, -1, resolve, mapped, ctx, universal ? 3 : 2, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, universal ? 3 : 2, NULL, err, errlen);
+}
+
+hao_image *hao_load_mapped_main(const char *path, hao_slice *sl, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t n)
+{
+    return load_image(path, -1, resolve, mapped, ctx, 0, sl, err, n);
 }
 
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                                 char *err, size_t errlen)
 {
     if (fd < 0) { snprintf(err, errlen, "%s: no open descriptor to load from", path); return NULL; }
-    return load_image(path, fd, resolve, mapped, ctx, false, err, errlen);
+    return load_image(path, fd, resolve, mapped, ctx, false, NULL, err, errlen);
 }
 
 hao_image *hao_load_image(const char *path, hao_resolver resolve, char *err, size_t errlen)
@@ -1188,29 +1232,30 @@ hao_image *hao_load_image(const char *path, hao_resolver resolve, char *err, siz
 hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err,
                              size_t errlen)
 {
-    return load_image(path, -1, resolve, mapped, ctx, false, err, errlen);
+    return load_image(path, -1, resolve, mapped, ctx, false, NULL, err, errlen);
 }
 /* fd >= 0: the file, already open (the image owns the descriptor from here
  * on, also when the load fails); path then only names it. Otherwise path is
  * opened. */
 static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
-                             int bundle_only, char *err, size_t errlen)
+                             int bundle_only, hao_slice *prepared, char *err, size_t errlen)
 {
     hao_image *img = calloc(1, sizeof *img);
-    hao_slice *sl = NULL;
+    hao_slice *sl = prepared;
     const uint8_t *chained = NULL, *legacy[4] = {0};
     uint32_t legacy_size[4] = {0};
     bool legacy_seen = false;
     seginfo *segs = NULL;
     bool linked = false, visible = false;
     if (!img) {
+        hao_slice_close(sl);
         if (fd >= 0) close(fd);
         snprintf(err, errlen, "%s: out of memory", path);
         return NULL;
     }
     snprintf(img->path, sizeof img->path, "%s", path);
-    img->fd = fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
-    if (img->fd < 0) ERR("open %s: %s", path, strerror(errno));
+    img->fd = prepared || fd >= 0 ? fd : open(path, O_RDONLY | O_CLOEXEC);
+    if (!prepared && img->fd < 0) ERR("open %s: %s", path, strerror(errno));
     if (bundle_only && !arm_bundle_fd(img->fd, bundle_only >= 2, bundle_only != 3))
         ERR(bundle_only >= 2 ? "%s: guest dlopen requires an ARM MH_BUNDLE or MH_DYLIB" : "%s: native fallback requires an ARM-only MH_BUNDLE", path);
     char why[320];
@@ -1221,7 +1266,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
         slice_pending->dev == (uint64_t)st.st_dev && slice_pending->ino == (uint64_t)st.st_ino) {
         sl = slice_pending;
         slice_pending = NULL;
-    } else if (!(sl = hao_slice_open(img->fd, why, sizeof why))) ERR("%s: %s", path, why);
+    } else if (!prepared && !(sl = hao_slice_open(img->fd, why, sizeof why))) ERR("%s: %s", path, why);
     img->dev = sl->dev;
     img->ino = sl->ino;
     img->slice_off = sl->off;
@@ -1610,7 +1655,7 @@ static hao_image *load_image(const char *path, int fd, hao_resolver resolve, hao
     hao_slice_close(sl);
     /* everything is mapped or copied: the file is not needed again, and an
      * open descriptor would leak into every child the guest spawns */
-    close(img->fd);
+    if (img->fd >= 0) close(img->fd);
     img->fd = -1;
     return img;
 

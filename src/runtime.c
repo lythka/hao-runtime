@@ -3364,12 +3364,13 @@ static void libval_report(const char *line)
     fflush(HAO_DIAG);
 }
 
-hao_image *hao_load_main_image(const char *path, int fd, int entry, char *err, size_t errlen)
+hao_image *hao_load_main_image(const char *path, int fd, hao_slice *mapped, int entry, char *err, size_t errlen)
 {
     lock_loads();
     hao_libval_set_verifier(hao_guest_sig_image, hao_opt.libval_user, libval_report);
     hao_libval_expect_main(!hao_opt.no_libval, entry);   /* its signature sets library validation before any dependency loads */
-    hao_image *img = hao_load_image_fd_cb(path, fd, hao_resolve_import, set_main_mapped, NULL, err, errlen);
+    hao_image *img = mapped ? hao_load_mapped_main(path, mapped, hao_resolve_import, set_main_mapped, NULL, err, errlen)
+                            : hao_load_image_fd_cb(path, fd, hao_resolve_import, set_main_mapped, NULL, err, errlen);
     if (!img) hao_main_image = NULL;
     unlock_loads();
     return img;

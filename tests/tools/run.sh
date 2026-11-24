@@ -372,5 +372,8 @@ PY
 if [ $re != 0 ] && grep -q "no private place" "$d/e.log" && [ $rt != 0 ] && grep -q "no private place" "$d/t.log" && [ $rp = 0 ]; then
     pass "codesign work: a shared TMPDIR (/private/tmp) is refused; a replaced file or directory fails the check; ACL allow entries with inheritance flags count"
 else bad "codesign work: re $re rt $rt rp $rp: $(cat "$d/e.log" "$d/t.log" "$d/p.log")"; fi
+if r=$(timeout 300 python3 -I "$here/test_self_contained.py" "$OUT/self-contained" --build "$B" 2>&1); then
+    pass "self-contained main: $r"
+else bad "self-contained main: $r"; fi
 echo "tools: $fails failed"
 exit $((fails != 0))

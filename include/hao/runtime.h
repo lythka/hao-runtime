@@ -268,7 +268,7 @@ uint64_t hao_resolve_import(hao_image *img, int ordinal, const char *name, bool 
  * checked (main.c); path only names it, entry is the launcher
  * (HAO_ENTRY_CLI or HAO_ENTRY_EMBEDDED, hao/macho.h). The loader owns fd
  * from here on. hao_main_image is set before its imports bind. */
-hao_image *hao_load_main_image(const char *path, int fd, int entry, char *err, size_t errlen);
+hao_image *hao_load_main_image(const char *path, int fd, hao_slice *mapped, int entry, char *err, size_t errlen);
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */
