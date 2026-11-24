@@ -106,6 +106,15 @@ python3 tools/hao-embed --in-place $(cat programs.txt)
   the embedded files over.
 - The stubs' ad hoc signatures run on Macs set up with hao's boot
   configuration, as the macOS images hao is built into are.
+- For a local installation on Intel, `--arm-app-member /absolute/Installed.app/Contents/…`
+  selects the ARM slice of that executable and binds the selection to its installed path.
+  Prepare each app-owned executable separately, including nested apps and helper tools.
+  The outermost app defines the boundary for libraries. Missing or invalid required ARM code
+  causes a load error. System shared-cache libraries can still execute natively. The selected
+  native launcher restricts dyld environment instrumentation before guest startup.
+  Use `HAO_VERBOSE=1` on a selected workload to inspect library routing. Restore the original
+  executable to revert selection. Authored direct-exec tests cover this mode. LaunchServices,
+  XPC activation, and a complete selected Xcode installation require separate validation.
 - An app update replaces the embedded programs: embed it again.
 - Laptop test 2026-11-14, image f112087 (26B131): Xcode 27.2 embedded this
   way starts and stays up for about 3.5 minutes, until a plug-in load fails.

@@ -272,6 +272,7 @@ hao_image *hao_load_main_image(const char *path, int fd, hao_slice *mapped, int 
 /* Load every image's remaining dependencies, then run the initialisation of
  * each image not yet initialised, dependencies first (main.c
  * hao_guest_image_init: TLV, ObjC, Swift, blocks, fnslots, AOT, initializers). */
+uint32_t hao_dyld_guest_images(uint32_t wanted, hao_image **match);
 bool hao_guest_framework_loaded(const char *path);
 bool hao_run_initializers(void);
 /* A guest library hao loads for itself (thunks.c), mapped and bound; NULL with err set. */
@@ -323,6 +324,7 @@ uint64_t hao_dsc_bound_ptr(uint64_t a);
  * natively, or slid); true if it is bound now (swiftmeta.c: key path patterns). */
 bool hao_dsc_bind_slot(uint64_t a);
 extern hao_image *hao_main_image;
+extern char hao_app_domain_root[1024];
 extern int hao_verbose;
 extern int hao_use_jit;
 enum { HAO_LAZY_INVALID, HAO_LAZY_READY, HAO_LAZY_DEFERRED };

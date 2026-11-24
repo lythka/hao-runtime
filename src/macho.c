@@ -1333,6 +1333,18 @@ hao_image *hao_load_dlopen_cb(const char *path, bool universal, hao_resolver res
     return load_image(path, -1, resolve, mapped, ctx, universal ? 3 : 2, NULL, err, errlen);
 }
 
+hao_image *hao_load_app_member(const char *real, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen)
+{
+    char actual[PATH_MAX];
+    int fd = open(real, O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC | O_NOFOLLOW_ANY);
+    if (fd < 0 || fcntl(fd, F_GETPATH, actual) < 0 || strcmp(actual, real)) {
+        if (fd >= 0) close(fd);
+        snprintf(err, errlen, "cannot bind ARM app member to canonical path %s", real);
+        return NULL;
+    }
+    return load_image(real, fd, resolve, mapped, ctx, 3, NULL, err, errlen);
+}
+
 hao_image *hao_load_mapped_main(const char *path, hao_slice *sl, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t n)
 {
     return load_image(path, -1, resolve, mapped, ctx, 0, sl, err, n);

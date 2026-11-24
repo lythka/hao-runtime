@@ -249,6 +249,7 @@ hao_image *hao_load_image_cb(const char *path, hao_resolver resolve, hao_mapped_
  * descriptor and must load what it checked (the slice it left with
  * hao_slice_hand, if any). The image owns fd from here on; it is closed
  * whether the load succeeds or fails. */
+hao_image *hao_load_app_member(const char *real, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t errlen);
 hao_image *hao_load_mapped_main(const char *path, hao_slice *sl, hao_resolver resolve, hao_mapped_fn mapped, void *ctx, char *err, size_t n);
 hao_image *hao_load_image_fd_cb(const char *path, int fd, hao_resolver resolve, hao_mapped_fn mapped, void *ctx,
                                 char *err, size_t errlen);

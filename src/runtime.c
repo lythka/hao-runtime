@@ -3394,8 +3394,34 @@ void hao_objc_image_ready(const struct mach_header *header)
 }
 
 /* Guest libraries by real path. */
+char hao_app_domain_root[1024];
+static bool path_under(const char *path, const char *root);
+static bool selected_arm_path(const char *canonical)
+{
+    return hao_app_domain_root[0] && path_under(canonical, hao_app_domain_root);
+}
+
 static struct guest_lib { char *path; hao_image *img; hao_image *loader; } *glibs;
 static int nglibs, capglibs;
+
+/* The guest loader reserves slots in load order. Only committed, bound
+ * images can be enumerated; rolled-back slots never identify usable code. */
+uint32_t hao_dyld_guest_images(uint32_t wanted, hao_image **match)
+{
+    uint32_t count = 0;
+    lock_loads();
+    if (match) *match = NULL;
+    for (int k = 0; k < nglibs; k++) {
+        hao_image *im = glibs[k].img;
+        if (!im || im == hao_main_image || im->binding || im->checking_dependencies ||
+            !im->dependencies_checked || im->companion_rollback || im->companion_init_pending || im->released)
+            continue;
+        if (match && count == wanted) *match = im;
+        count++;
+    }
+    unlock_loads();
+    return count;
+}
 
 /* Both rollback and initialization follow the edges actually bound by guest
  * code. A flat import's defining image need not be a declared dependency. */
@@ -3573,10 +3599,15 @@ static bool main_has_restrict(void)
     return false;
 }
 
+static int guest_dependency_tier(void)
+{
+    return hao_env_restricted() || main_has_restrict() ? HAO_ENV_SETUGID : hao_env_tier();
+}
+
 static bool for_each_candidate(hao_image *loader, const char *name, cand_fn fn, void *ctx, const char **refused)
 {
     char buf[2048];
-    int tier = hao_env_restricted() || main_has_restrict() ? HAO_ENV_SETUGID : hao_env_tier();
+    int tier = guest_dependency_tier();
     const char *why;
     *refused = NULL;
     if (!strncmp(name, "@rpath/", 7)) {
@@ -3757,6 +3788,8 @@ static hao_image *load_guest_canonical(hao_image *loader, const char *rp)
     if (hao_companion_original(rp)) {
         int fd = hao_companion_open(rp, err, sizeof err);
         if (fd >= 0) im = hao_load_image_fd_cb(rp, fd, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
+    } else if (selected_arm_path(rp)) {
+        im = hao_load_app_member(rp, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
     } else {
         im = hao_load_image_cb(rp, hao_resolve_import, glib_mapped, (void *)slot, err, sizeof err);
     }
@@ -4050,6 +4083,17 @@ static bool try_candidate(const char *cand, bool os, void *c)
         }
     }
     uint64_t before = companion_failures;
+    char owned_path[PATH_MAX];
+    if (hao_app_domain_root[0] && realpath(cand, owned_path) && selected_arm_path(owned_path)) {
+        if (native_library_loaded(owned_path))
+            snprintf(last_load_err, sizeof last_load_err, "selected app library is already native: %s", owned_path);
+        else
+            x->guest = load_guest_canonical(x->loader, owned_path);
+        x->refused_companion = !x->guest;
+        if (hao_verbose) fprintf(stderr, "hao: ARM selection linked %s %s\n", owned_path, x->guest ? "loaded" : "refused");
+        if (x->guest) return true;
+        goto failed;
+    }
     bool app = guest_app_library(cand);
     if (app) {
         last_load_err[0] = 0;
@@ -4068,7 +4112,8 @@ static bool try_candidate(const char *cand, bool os, void *c)
         scope.path = native_path;
         native_load = &scope;
     }
-    void *h = runtime_dlopen(cand, RTLD_LAZY | RTLD_GLOBAL);
+    void *h = (!hao_app_domain_root[0] || _dyld_shared_cache_contains_path(cand)) ?
+              runtime_dlopen(cand, RTLD_LAZY | RTLD_GLOBAL) : NULL;
     native_load = scope.previous;
     if (scope.fd >= 0) close(scope.fd);
     if (scope.pinned && h == scope.pinned) {
@@ -4671,8 +4716,8 @@ static int native_bundle_expand(const char *path, const void *ra, char *out, siz
     unlock_loads();
     return ff.found;
 }
-static void *bundle_open(const char *path, int flags, bool dylib, bool app, bool pinned, char *why, size_t n);
-static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, false, why, n); }
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, bool pinned, hao_image *loader, char *why, size_t n);
+static void *native_bundle_open(const char *path, int flags, char *why, size_t n) { return bundle_open(path, flags, false, false, false, NULL, why, n); }
 /* Foundation opens an NSBundle on behalf of the program. Its immediate return
  * address is native even when the running guest requested its own plug-in. */
 static bool app_bundle_request(const char *path, const void *ra)
@@ -4700,8 +4745,15 @@ static bool app_bundle_request(const char *path, const void *ra)
  * After a native refusal only ARM-only images are eligible for fallback. */
 static void *native_bundle_open2(const char *path, int flags, const void *ra, char *why, size_t n)
 {
-    if (!ra) return bundle_open(path, flags, true, false, false, why, n);
+    if (!ra) return bundle_open(path, flags, true, false, false, NULL, why, n);
     hao_image *caller = path ? guest_caller_image(ra) : NULL;
+    if (hao_app_domain_root[0] && path && path[0] != '/' && path[0] != '@' && strchr(path, '/')) {
+        const char *refused;
+        if (!hao_dep_path_allowed(path, false, caller == hao_main_image, guest_dependency_tier(), &refused)) {
+            snprintf(why, n, "%s", refused);
+            return NULL;
+        }
+    }
     bool app_request = path && (caller || app_bundle_request(path, ra));
     char resolved[PATH_MAX];
     const char *original = app_request ? hao_companion_original(path) : NULL;
@@ -4710,16 +4762,49 @@ static void *native_bundle_open2(const char *path, int flags, const void *ra, ch
     if (original) {
         lock_loads();
         bool ok = companion_candidate(caller ? caller : hao_main_image, path, original, why, n);
-        void *h = ok ? bundle_open(original, flags, true, true, true, why, n) : NULL;
+        void *h = ok ? bundle_open(original, flags, true, true, true, caller, why, n) : NULL;
         if (!h && !why[0]) snprintf(why, n, "declared original framework could not be opened");
         unlock_loads();
         return h;
     }
+    if (hao_app_domain_root[0] && path && !_dyld_shared_cache_contains_path(path)) {
+        char candidate[PATH_MAX];
+        if (!strchr(path, '/')) {
+            /* An existing relative file, then the guest caller's runpaths,
+             * then the native system leaf fallback. Keep the path policy of
+             * each source image and open a cache fallback by absolute name. */
+            struct first_file first = {candidate, sizeof candidate, false};
+            const char *refused = NULL;
+            lock_loads();
+            for_each_candidate(caller, path, first_file, &first, &refused);
+            if (!first.found && !refused && caller &&
+                snprintf(resolved, sizeof resolved, "@rpath/%s", path) < (int)sizeof resolved)
+                for_each_candidate(caller, resolved, first_file, &first, &refused);
+            unlock_loads();
+            if (first.found) path = candidate;
+            else if (snprintf(resolved, sizeof resolved, "/usr/lib/%s", path) < (int)sizeof resolved &&
+                     _dyld_shared_cache_contains_path(resolved)) {
+                void *system = runtime_dlopen(resolved, flags);
+                if (!system) snprintf(why, n, "could not open shared-cache image %s", resolved);
+                return system;
+            } else {
+                snprintf(why, n, "%s", refused ? refused : "selected ARM library not found on permitted search paths");
+                return NULL;
+            }
+        }
+        if (realpath(path, resolved) && !native_library_loaded(resolved)) {
+            void *h = bundle_open(resolved, flags, true, true, true, caller, why, n);
+            if (hao_verbose) fprintf(stderr, "hao: ARM selection dlopen %s %s\n", resolved, h ? "loaded" : "refused");
+            if (h) return h;
+        }
+        if (!why[0]) snprintf(why, n, "selected ARM process requires a validated guest disk image");
+        return NULL;
+    }
     if (!app_request || !guest_app_library(path)) return NULL;
     if (hao_verbose) fprintf(stderr, "hao: guest dlopen %s (app library)\n", path);
-    return bundle_open(path, flags, true, true, false, why, n);
+    return bundle_open(path, flags, true, true, false, caller, why, n);
 }
-static void *bundle_open_impl(const char *path, int flags, bool dylib, bool app, bool pinned, char *why, size_t n)
+static void *bundle_open_impl(const char *path, int flags, bool dylib, bool app, bool pinned, hao_image *loader, char *why, size_t n)
 {
     if (!path || (!app && (path[0] != '/' || !hao_is_arm_only_loadable(path, dylib)))) return NULL;
     const int supported = RTLD_LAZY | RTLD_NOW | RTLD_LOCAL | RTLD_GLOBAL | RTLD_NOLOAD | RTLD_NODELETE | RTLD_FIRST;
@@ -4729,16 +4814,19 @@ static void *bundle_open_impl(const char *path, int flags, bool dylib, bool app,
     if (!real) return NULL;
     lock_loads();
     hao_image *im = glib_find(real);
+    if (!loader) loader = hao_main_image;
     if (im && !hao_companion_resident(real, im)) {
         snprintf(why, n, "resident ARM image differs from declared original");
         unlock_loads();
         return NULL;
     }
     if (!im && !(flags & RTLD_NOLOAD) && hao_companion_original(real)) {
-        im = load_guest_canonical(hao_main_image, real);
+        im = load_guest_canonical(loader, real);
     } else if (!im && !(flags & RTLD_NOLOAD)) {
-        intptr_t slot = glib_slot(real, hao_main_image);
-        im = dylib ? hao_load_dlopen_cb(real, app, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
+        intptr_t slot = glib_slot(real, loader);
+        if (hao_app_domain_root[0] && pinned)
+            im = hao_load_app_member(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
+        else im = dylib ? hao_load_dlopen_cb(real, app, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err)
                    : hao_load_bundle_cb(real, hao_resolve_import, glib_mapped, (void *)slot, last_load_err, sizeof last_load_err);
         if (!im) { free(glibs[slot].path); glibs[slot].path = NULL; glibs[slot].img = NULL; }
     }
@@ -4770,12 +4858,12 @@ static void *bundle_open_impl(const char *path, int flags, bool dylib, bool app,
     unlock_loads();
     return h;
 }
-static void *bundle_open(const char *path, int flags, bool dylib, bool app, bool pinned, char *why, size_t n)
+static void *bundle_open(const char *path, int flags, bool dylib, bool app, bool pinned, hao_image *loader, char *why, size_t n)
 {
     lock_loads();
     load_operation op;
     begin_load_operation(&op);
-    struct bundle_handle *h = bundle_open_impl(path, flags, dylib, app, pinned, why, n);
+    struct bundle_handle *h = bundle_open_impl(path, flags, dylib, app, pinned, loader, why, n);
     if (!end_load_operation(&op, why, n)) {
         if (h) h->refs--;
         h = NULL;

@@ -8,6 +8,7 @@
 #include "hao/native_bundle.h"
 #include "hao/bridge.h"
 #include "hao/cpufeat.h"
+#include <CommonCrypto/CommonDigest.h>
 #include <cpuid.h>
 #include <crt_externs.h>
 #include <sys/sysctl.h>
@@ -872,6 +873,40 @@ int hao_self_main(int argc, char **argv, char **envp, char **apple)
         if (fd >= 0) close(fd);
         return refuse(exe, "%s: %s", exe, w);
     }
+    unsigned long marker_size = 0;
+    const void *domain = getsectiondata(mh, "__TEXT", "__hao_arm_app", &marker_size);
+    if (domain) {
+        const char *why = NULL;
+        if (!bytes && fcntl(fd, F_GETPATH, canonical) < 0 &&
+            (!realpath(vpath[0] ? vpath : exe, canonical) || !names_vnode(canonical, dev, ino)))
+            why = "cannot identify selected app executable";
+        if (!why) {
+            const char *end = strstr(canonical, ".app/Contents/");
+            unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+            CC_SHA256(canonical, (CC_LONG)strlen(canonical), digest);
+            if (!end || marker_size != sizeof digest || memcmp(domain, digest, sizeof digest))
+                why = "selected ARM app executable moved from its prepared path";
+            else {
+                size_t len = (size_t)(end - canonical) + strlen(".app");
+                memcpy(hao_app_domain_root, canonical, len);
+                hao_app_domain_root[len] = 0;
+                for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+                    if (_dyld_get_image_header(i) == (const struct mach_header *)mh) continue;
+                    const char *name = _dyld_get_image_name(i);
+                    char real[PATH_MAX];
+                    if (name && realpath(name, real) && !strncmp(real, canonical, len) && real[len] == '/') {
+                        why = "selected ARM app already contains a native mapped library";
+                        break;
+                    }
+                }
+            }
+        }
+        if (why) {
+            hao_slice_close(sl);
+            if (fd >= 0) close(fd);
+            return refuse(exe, "%s", why);
+        }
+    }
     hao_guest_switches_for(&sl->sig);
     if (!bytes) hao_slice_hand(sl);
     return run_guest(exe, fd, bytes ? sl : NULL, bytes ? canonical : NULL, HAO_ENTRY_EMBEDDED, argc, argv, envp);
@@ -913,8 +948,8 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
     hao_verbose = hao_opt.verbose;
     char companion_error[512];
     bool companions_ready = hao_companions_init(companion_error, sizeof companion_error);
-    if (companions_ready && hao_companions_active() && !hao_native_bundles_init()) {
-        snprintf(companion_error, sizeof companion_error, "declared framework companions require the pre-open identity hook");
+    if (companions_ready && (hao_companions_active() || hao_app_domain_root[0]) && !hao_native_bundles_init()) {
+        snprintf(companion_error, sizeof companion_error, "selected app or declared companions require the pre-open identity hook");
         companions_ready = false;
     }
     if (!companions_ready) {
@@ -968,7 +1003,7 @@ static int run_guest(const char *path, int fd, hao_slice *mapped, const char *ma
     void (*oslog_hook)(int (*)(const void *), int (*)(const void *, size_t)) =
         (void (*)(int (*)(const void *), int (*)(const void *, size_t)))dlsym(RTLD_DEFAULT, "hao_identity_oslog_hook");
     if (oslog_hook) oslog_hook(oslog_is_guest, oslog_immutable);
-    if (!hao_companions_active()) hao_native_bundles_init();
+    if (!hao_companions_active() && !hao_app_domain_root[0]) hao_native_bundles_init();
     if (hao_verbose)
         fprintf(stderr, "hao: loaded %s at %#llx (slide %#llx): %llu rebases, %llu binds, %llu auth, %llu unresolved\n",
                 path, (unsigned long long)img->base, (unsigned long long)img->slide, (unsigned long long)img->n_rebase,

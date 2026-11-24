@@ -1291,7 +1291,7 @@ def mapped_main_payload(arm):
     return mapped
 
 
-def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset(), pdir=None, self_contained=False):
+def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozenset(), pdir=None, self_contained=False, arm_app_member=None):
     """Sign a copy of the stub as SRC's identity; returns (path, identifier,
     entitlement keys, bound, deps, constraints) with bound from bound_data (the
     slots set), deps (links, skipped) from native_deps and constraints
@@ -1313,10 +1313,19 @@ def signed_stub(src, stub, work, host_test, data=None, x86=None, drop_ok=frozens
         identity_rules.check_rules(arm)
         build_version(arm)   # exactly one (a zippered program is refused)
         sections[SLICE_SECTION] = (slice_record(arm), 5, 5)
+        if arm_app_member:
+            if not hardened(data):
+                # Keep the original ARM slice and entitlements untouched.
+                # The explicitly selected native bootstrap must ignore dyld
+                # environment inputs before the ARM loader starts.
+                sections[("__RESTRICT", "__restrict")] = (b"", 1, 1)
+            sections[("__TEXT", "__hao_arm_app")] = (hashlib.sha256(os.fsencode(arm_app_member)).digest(), 5, 5)
         if self_contained:
             sections[("__HAO_MAIN", "__program")] = (mapped_main_payload(arm), 1, 1)
         own = {name for _, name, _, _ in dylib_commands(open(stub, "rb").read())} - {LIBSYSTEM}
         links, skipped, _ = native_deps(src, data, x86, own)
+        if arm_app_member:
+            links = [link for link in links if link[1] in x86.ids and link[1].startswith("/")]
         stub = relink_stub(sections, work, os.path.dirname(os.path.abspath(stub)), stub, host_test,
                            links, data, arm, skeleton_key(data))
     elif sections or host_test:
@@ -1491,6 +1500,9 @@ def main():
                          "(for running on an AMFI-enforcing development host)")
     ap.add_argument("--self-contained", action="store_true",
                     help="map the signed main program in a read-only, non-executable segment of its local stub")
+    ap.add_argument("--arm-app-member", metavar="INSTALLED_EXECUTABLE",
+                    help="select ARM for this app member and its libraries, restrict host dyld inputs, "
+                         "and bind the native launcher to its canonical installed member path")
     ap.add_argument("--translate", action="store_true",
                     help="also give universal programs the stub, in place of their own x86_64 slices")
     if len(sys.argv) == 3 and sys.argv[1] == "--scan":
@@ -1529,6 +1541,11 @@ def main():
         sys.exit(f"hao-embed: --save-skeletons: {e}")
     if not os.path.exists(a.stub):
         sys.exit(f"hao-embed: no stub at {a.stub} (run make)")
+    if a.arm_app_member:
+        name = a.arm_app_member
+        if (not os.path.isabs(name) or os.path.normpath(name) != name or ".app/Contents/" not in name or
+                len(a.programs) != 1 or a.list or a.scan or a.stubs or a.save_skeletons or a.skeletons):
+            sys.exit("hao-embed: --arm-app-member requires a canonical installed app member and one local executable")
     if a.self_contained and (a.stubs or a.save_skeletons or a.skeletons):
         sys.exit("hao-embed: --self-contained requires local executable output without distributable stubs or skeletons")
     if a.scan and not a.root:
@@ -1591,15 +1608,17 @@ def main():
                     data = target.read()
                 else:
                     data = open(src, "rb").read()
-                why = eligible(data, a.translate)
+                why = eligible(data, a.translate or a.arm_app_member)
                 if why:
+                    if a.arm_app_member:
+                        raise ValueError("cannot select ARM app member: " + why)
                     print(f"skip\t{p}\t{why}")
                     continue
                 translate = hao_fat.has_cpu(data, hao_fat.CPU_X86_64)
                 rel = tree.relpath(p) if a.root else None
                 may_drop = set().union(*(drop_ok.get(k, set()) for k in {p, real, rel}))
                 stub, ident, keys, bound, (links, skipped), (carried, dropped) = signed_stub(
-                    src, a.stub, work, a.host_test, data, x86, may_drop, pdir, a.self_contained)
+                    src, a.stub, work, a.host_test, data, x86, may_drop, pdir, a.self_contained, a.arm_app_member)
                 stub_bytes = open(stub, "rb").read()
                 merged = hao_fat.combine(data, stub_bytes, drop_x86_64=translate)
                 if a.stubs:

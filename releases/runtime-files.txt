@@ -432,12 +432,15 @@ tests/guest/narrowhelper.m
 tests/guest/narrowret.m
 tests/guest/narrowret.sh
 tests/guest/narrowret.swift
+tests/guest/native-bundle/activation.c
+tests/guest/native-bundle/build_activation.py
 tests/guest/native-bundle/README.md
 tests/guest/native-bundle/app.m
 tests/guest/native-bundle/helper.m
 tests/guest/native-bundle/main.c
 tests/guest/native-bundle/plugin.m
 tests/guest/native-bundle/run.py
+tests/guest/native-bundle/selection.c
 tests/guest/nativesig.c
 tests/guest/nativesig.sh
 tests/guest/nativesighelper.c

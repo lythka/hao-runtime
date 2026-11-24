@@ -756,34 +756,43 @@ static void trap_dladdr(hao_thread *t, uint64_t a)
  * inside libmacho, where no import trap reaches) read the guest's header.
  * Guest images are not registered with dyld, so the address-to-image
  * queries answer for them here. */
-static void trap_dyld_image_header(hao_thread *t, uint64_t a)
-{
-    (void)a;
-    if (t->cpu.x[0] == 0 && hao_main_image) { t->cpu.x[0] = hao_main_image->base; return; }
-    t->cpu.x[0] = (uint64_t)(uintptr_t)_dyld_get_image_header((uint32_t)t->cpu.x[0]);
-}
-
 extern const struct mach_header *_dyld_get_prog_image_header(void);
 extern const char *dyld_image_path_containing_address(const void *addr);
 extern const struct mach_header *dyld_image_header_containing_address(const void *addr);
 extern intptr_t _dyld_get_image_slide(const struct mach_header *mh);
 
-enum { DY_NAME, DY_VMSLIDE, DY_PROG_HEADER, DY_SLIDE, DY_PATH_AT, DY_HEADER_AT };
+enum { DY_PROG_HEADER, DY_SLIDE, DY_PATH_AT, DY_HEADER_AT };
 static const char *image_path(const hao_image *im)
 {
     return im == hao_main_image && hao_guest_image_path[0] ? hao_guest_image_path : im->path;
 }
+enum { DY_COUNT, DY_HEADER, DY_NAME, DY_VMSLIDE };
+static void trap_dyld_index(hao_thread *t, uint64_t kind)
+{
+    uint32_t native_count = _dyld_image_count();
+    if (kind == DY_COUNT) {
+        t->cpu.x[0] = native_count + (hao_app_domain_root[0] ? hao_dyld_guest_images(0, NULL) : 0);
+        return;
+    }
+    uint32_t index = (uint32_t)t->cpu.x[0];
+    hao_image *guest = index == 0 ? hao_main_image : NULL;
+    if (index >= native_count) {
+        if (hao_app_domain_root[0]) hao_dyld_guest_images(index - native_count, &guest);
+        if (!guest) { t->cpu.x[0] = 0; return; }
+    }
+    if (kind == DY_HEADER)
+        t->cpu.x[0] = guest ? guest->base : (uintptr_t)_dyld_get_image_header(index);
+    else if (kind == DY_NAME)
+        t->cpu.x[0] = (uintptr_t)(guest ? image_path(guest) : _dyld_get_image_name(index));
+    else
+        t->cpu.x[0] = guest ? guest->slide : (uint64_t)_dyld_get_image_vmaddr_slide(index);
+}
+
 static void trap_dyld_main(hao_thread *t, uint64_t kind)
 {
     uint64_t *x = t->cpu.x;
     hao_image *m = hao_main_image, *im;
     switch (kind) {
-    case DY_NAME:
-        x[0] = x[0] == 0 && m ? (uint64_t)(uintptr_t)image_path(m) : (uint64_t)(uintptr_t)_dyld_get_image_name((uint32_t)x[0]);
-        break;
-    case DY_VMSLIDE:
-        x[0] = x[0] == 0 && m ? m->slide : (uint64_t)_dyld_get_image_vmaddr_slide((uint32_t)x[0]);
-        break;
     case DY_PROG_HEADER: x[0] = m ? m->base : (uint64_t)(uintptr_t)_dyld_get_prog_image_header(); break;
     case DY_SLIDE:
         im = hao_image_for_addr(x[0]);
@@ -933,8 +942,8 @@ static const struct { const char *name; hao_trap_fn fn; uint64_t arg; } fixed[] 
      * see a guest call */
     {"___chkstk_darwin", trap_nop, 0},
     {"__NSGetMachExecuteHeader", trap_exec_header, 0},
-    {"__dyld_get_image_header", trap_dyld_image_header, 0}, {"_dladdr", trap_dladdr, 0},
-    {"__dyld_get_image_name", trap_dyld_main, DY_NAME}, {"__dyld_get_image_vmaddr_slide", trap_dyld_main, DY_VMSLIDE},
+    {"__dyld_image_count", trap_dyld_index, DY_COUNT}, {"__dyld_get_image_header", trap_dyld_index, DY_HEADER}, {"_dladdr", trap_dladdr, 0},
+    {"__dyld_get_image_name", trap_dyld_index, DY_NAME}, {"__dyld_get_image_vmaddr_slide", trap_dyld_index, DY_VMSLIDE},
     {"__dyld_get_prog_image_header", trap_dyld_main, DY_PROG_HEADER}, {"__dyld_get_image_slide", trap_dyld_main, DY_SLIDE},
     {"_dyld_image_path_containing_address", trap_dyld_main, DY_PATH_AT},
     {"_dyld_image_header_containing_address", trap_dyld_main, DY_HEADER_AT},
