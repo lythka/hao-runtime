@@ -367,6 +367,16 @@ static const struct section_64 *carried_sect(const struct mach_header_64 *mh, co
 
 /* The native registry owns native images. The runtime owns guest images and
  * serializes their replay with the same lock as guest image initialization. */
+static const char **hao_copyImageNames(unsigned *outCount)
+{
+    unsigned count = 0;
+    const char **names = objc_copyImageNames(&count);
+    const char **(*append)(const char **, unsigned *) = dlsym(RTLD_DEFAULT, "hao_objc_copy_image_names");
+    if (append) names = append(names, &count);
+    if (outCount) *outCount = count;
+    return names;
+}
+
 static void hao_addLoadImageFunc(objc_func_loadImage callback)
 {
     objc_addLoadImageFunc(callback);
@@ -942,6 +952,7 @@ static const struct { const void *replacement, *original; } hao_interposers[] = 
     {(const void *)hao_getsectdata, (const void *)getsectdata},
     {(const void *)hao_getsectbynamefromheader_64, (const void *)getsectbynamefromheader_64},
     {(const void *)hao_getsectdatafromheader_64, (const void *)getsectdatafromheader_64},
+    {(const void *)hao_copyImageNames, (const void *)objc_copyImageNames},
     {(const void *)hao_addLoadImageFunc, (const void *)objc_addLoadImageFunc},
     {(const void *)hao_getsectiondata, (const void *)getsectiondata},
     {(const void *)hao_getsegmentdata, (const void *)getsegmentdata},

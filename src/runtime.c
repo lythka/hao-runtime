@@ -3382,9 +3382,44 @@ void hao_objc_observe_images(image_observer callback)
     unlock_loads();
 }
 
+/* These images and their paths remain allocated after removal (release_image).
+ * Native callers may hold a Foundation once lock. Snapshot readers therefore
+ * avoid taking the guest loader lock. */
+static hao_image *objc_named_images;
+
+const char **hao_objc_copy_image_names(const char **native, unsigned *count)
+{
+    hao_image *head = __atomic_load_n(&objc_named_images, __ATOMIC_ACQUIRE);
+    if (!head) return native;
+    size_t capacity = *count;
+    for (hao_image *im = head; im; im = im->objc_name_previous) capacity++;
+    if (capacity > UINT_MAX) return native;
+    const char **result = hao_alloc_check(realloc(native, (capacity + 1) * sizeof *native),
+                                          "Objective-C image paths");
+    size_t first = capacity;
+    for (hao_image *im = head; im; im = im->objc_name_previous)
+        if (!__atomic_load_n(&im->released, __ATOMIC_ACQUIRE)) result[--first] = im->path;
+    size_t used = *count;
+    for (size_t k = first; k < capacity; k++) {
+        bool duplicate = false;
+        for (size_t j = 0; j < used; j++)
+            if (!strcmp(result[j], result[k])) { duplicate = true; break; }
+        if (!duplicate) result[used++] = result[k];
+    }
+    result[used] = NULL;
+    *count = (unsigned)used;
+    return result;
+}
+
 void hao_objc_image_ready(const struct mach_header *header)
 {
     lock_loads();
+    hao_image *image = hao_image_for_addr((uintptr_t)header);
+    uint64_t size;
+    if (image && hao_image_section(image, NULL, "__objc_imageinfo", &size)) {
+        image->objc_name_previous = __atomic_load_n(&objc_named_images, __ATOMIC_RELAXED);
+        __atomic_store_n(&objc_named_images, image, __ATOMIC_RELEASE);
+    }
     objc_images = hao_alloc_check(realloc(objc_images, (nobjc_images + 1) * sizeof *objc_images),
                                   "Objective-C observed images");
     objc_images[nobjc_images++] = header;
