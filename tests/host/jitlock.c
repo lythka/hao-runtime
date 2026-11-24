@@ -5,10 +5,7 @@
  *                                    threads translate: the AOT regions must
  *                                    not overlap each other or their blocks,
  *                                    and every block must still run
- *   test_jitlock sigs                signature thunks keep their signature
- *                                    up to 65536, are made once per (guest,
- *                                    sig), and past the area are refused (0;
- *                                    the script checks the one-time warning)
+ *   test_jitlock sigs                grow, reuse and execute callback entries across pool limits
  *   test_jitlock closure N           every signature thunk maps back to its
  *                                    guest (hao_guest_of_entry), and a miss
  *                                    stays cheap
@@ -28,6 +25,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -164,33 +162,70 @@ static bool sig_imm(uint64_t e, uint64_t g, uint64_t s)
     return hao_sig_thunk_target(e) == g && hao_sig_thunk_sig(e) == s;
 }
 
-static int t_sigs(void)
+static void *grow_thunks(void *arg)
 {
-    hao_jit_init();
-    const int n1 = 30000, n3 = 40000;   /* 70000 in all: past the area's 65536 */
-    int lost = 0, first_lost = -1;
-    uint64_t e0 = 0;
-    for (int k = 0; k < n1; k++) {
-        uint64_t g = 0x7100000000ull + 16ull * (unsigned)k, s = 0x500000000000ull + (unsigned)k;
-        uint64_t e = hao_sig_thunk(g, (void *)(uintptr_t)s);
-        if (!k) e0 = e;
-        if (!sig_imm(e, g, s)) { if (first_lost < 0) first_lost = k; lost++; }
+    uintptr_t lane = (uintptr_t)arg;
+    /* Cross both former dedup map load limits, using shared keys from two writers. */
+    for (unsigned i = 0; i < 400000; i++) {
+        unsigned index = lane ? 399999 - i : i;
+        uint64_t guest = 0x7100000000ull + 16ull * index;
+        uint64_t entry = hao_thunk_for(guest);
+        if (entry == guest || hao_thunk_target(entry) != guest || hao_thunk_for(guest) != entry)
+            return (void *)1;
+        if (index >= 100000) continue;
+        void *signature = (void *)(uintptr_t)(0x500000000000ull + index);
+        uint64_t typed = hao_sig_thunk(guest, signature);
+        if (!sig_imm(typed, guest, (uintptr_t)signature) || hao_sig_thunk(guest, signature) != typed)
+            return (void *)1;
     }
-    int dup = 0;   /* the same pair again: the same thunk */
-    for (int k = 0; k < 100000; k++) dup += hao_sig_thunk(0x7100000000ull, (void *)(uintptr_t)0x500000000000ull) != e0;
-    int sig_ok = 0, plain = 0, other = 0;
-    for (int k = n1; k < n1 + n3; k++) {
-        uint64_t g = 0x7100000000ull + 16ull * (unsigned)k, s = 0x500000000000ull + (unsigned)k;
-        uint64_t e = hao_sig_thunk(g, (void *)(uintptr_t)s);
-        if (!e) plain++;   /* area full: none (abi.c then notes the signature) */
-        else if (sig_imm(e, g, s) && hao_guest_of_entry(e) == g) sig_ok++;
-        else other++;
+    return NULL;
+}
+
+static int t_sigs(const char *path)
+{
+    if (!hao_jit_init()) return 1;
+    hao_fork_init();
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, grow_thunks, (void *)1)) return 1;
+    void *other;
+    bool ok = grow_thunks(NULL) == NULL;
+    if (pthread_join(thread, &other) || other) ok = false;
+    /* Clang emits this incomplete encoding for a vector-returning IMP. It
+     * needs its own refusing entry even after the initial pools are full. */
+    uint64_t guest = 0x7100f00000ull;
+    uint64_t refused = hao_guest_entry_for_sig(guest, "16@0:8");
+    uint64_t plain = hao_thunk_for(guest);
+    ok &= sig_imm(refused, guest, (uintptr_t)hao_sig("16@0:8")) &&
+          hao_guest_entry_for_sig(guest, "16@0:8") == refused &&
+          hao_thunk_target(plain) == guest && plain != refused;
+    char error[256];
+    hao_image *image = hao_load_image(path, hao_resolve_import, error, sizeof error);
+    if (!image) { fprintf(stderr, "%s\n", error); return 1; }
+    typedef struct { uint64_t word[8]; } Large;
+    typedef Large __attribute__((swiftcall)) (*ReturnWords)(uint64_t);
+    uint64_t integer_fn, double_fn, swift_fn;
+    if (!hao_image_export(image, "_sum", &integer_fn) ||
+        !hao_image_export(image, "_add_double", &double_fn) ||
+        !hao_image_export(image, "_make_words", &swift_fn)) return 1;
+    int (*sum)(int, int) = (void *)(uintptr_t)hao_thunk_for(integer_fn);
+    double (*add_double)(double, double) = (void *)(uintptr_t)hao_guest_entry_for_sig(double_fn, "ddd");
+    ok &= sum(18, 24) == 42 && add_double(0.25, 0.5) == 0.75;
+    /* SwiftCC's indirect result arrives in x86 rax and must reach ARM x8. */
+    uint64_t swift = hao_swift_thunk_for(swift_fn);
+    if (!sig_imm(swift, swift_fn, HAO_CB_SWIFTCC)) return 1;
+    ReturnWords make_words = (ReturnWords)(uintptr_t)swift;
+    const uint64_t base = 0xaf12345678900000ull;
+    Large value = make_words(base);
+    for (unsigned i = 0; i < 8; i++) ok &= value.word[i] == base + 17 * i;
+    pid_t child = fork();
+    if (!child) {
+        if (hao_sig_thunk_target(refused) != guest || hao_thunk_for(guest) != plain) _exit(17);
+        ((void (*)(void))(uintptr_t)refused)();
+        _exit(18);
     }
-    /* 65536 signature thunks fit: n1 + (65536 - n1) more, the rest fall back */
-    int want_sig = 65536 - n1;
-    bool ok = !lost && !dup && sig_ok == want_sig && plain == n1 + n3 - 65536 && !other;
-    printf("sigs: first=%d lost_signature=%d (first #%d) repeat_new_address=%d; next=%d: signature=%d none_past_area=%d wrong=%d -> %s\n",
-           n1, lost, first_lost, dup, n3, sig_ok, plain, other, ok ? "PASS" : "FAIL");
+    int status;
+    ok &= child > 0 && waitpid(child, &status, 0) == child && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+    printf("sigs: 400000 plain, 100000 typed, concurrent identity and inherited refusal -> %s\n", ok ? "PASS" : "FAIL");
     return !ok;
 }
 
@@ -277,7 +312,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IONBF, 0);
     const char *m = argc > 1 ? argv[1] : "";
     if (!strcmp(m, "aot") && argc > 3) return t_aot(atoi(argv[2]), argv[3]);
-    if (!strcmp(m, "sigs")) return t_sigs();
+    if (!strcmp(m, "sigs") && argc > 2) return t_sigs(argv[2]);
     if (!strcmp(m, "closure")) return t_closure(argc > 2 ? atoi(argv[2]) : 20000);
     if (!strcmp(m, "full")) return t_full(argc > 2 ? atoi(argv[2]) : 20000);
     fprintf(stderr, "usage: test_jitlock aot N GUEST | sigs | closure [N] | full [N]\n");

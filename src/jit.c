@@ -294,11 +294,18 @@ static pthread_mutex_t jit_lock = PTHREAD_MUTEX_INITIALIZER;
  * All of these need jit_lock (and so hao_crit). */
 
 /* n bytes, 16-aligned, or NULL if the code space cannot hold them */
-static void *cache_alloc(size_t n)
+static uint8_t *cache_space(size_t n)
 {
     if (hao_crit_depth() <= 0) { hao_diag_prefix(HAO_DIAG); fprintf(HAO_DIAG, "cache_alloc outside a hao critical section\n"); abort(); }
     uint8_t *p = (uint8_t *)(((uintptr_t)cache_ptr + 15) & ~(uintptr_t)15);
     if (p > cache_end || (size_t)(cache_end - p) < n) return NULL;
+    return p;
+}
+
+static void *cache_alloc(size_t n)
+{
+    uint8_t *p = cache_space(n);
+    if (!p) return NULL;
     cache_ptr = p + ((n + 15) & ~(size_t)15);
     if (cache_ptr > cache_end) cache_ptr = cache_end;
     return p;
@@ -7004,13 +7011,10 @@ int hao_jit_exec_code(hao_cpu *c, const uint32_t *code, int n, uint64_t base)
  * out. hao_thunk_target and hao_sig_thunk_target read them back. The
  * tables name guest code only; what runs natively stays read/execute.
  *
- * Capacity: THUNK_SLOTS plain thunks and 65536 signature thunks. When
- * either runs out, the request is logged once: a plain thunk request gets
- * the guest address itself (the NX-fault path, which behaves like a plain
- * thunk, only slower), a signature thunk request gets 0 (abi.c notes the
- * signature for hao_callback). */
-/* guest -> thunk; grows with use (hao/gmap.h), up to the area's THUNK_SLOTS */
-static hao_gmap thunks = HAO_GMAP_INIT(2, 1, 8, 19);
+ * The initial pools keep common registrations cheap. Once either fills,
+ * extra entries grow in the shared code reservation, within its configured
+ * memory budget. A genuine allocation failure keeps the existing fallback. */
+static hao_gmap thunks = HAO_GMAP_INIT(2, 1, 8, 31);
 static pthread_mutex_t thunk_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* thunk_lock held: the code of the next page of an area (slots of `slot` bytes, tab: `words` table words a
@@ -7043,6 +7047,44 @@ static bool thunk_page(uint8_t *area, uint8_t **gen, uint8_t *end, unsigned slot
     return true;
 }
 
+/* Beyond the initial pools, allocate callback entries from the shared JIT
+ * reservation. This also works after a sandbox disallows new MAP_JIT mappings.
+ * Publish the reverse mapping before exposing an entry to any caller. */
+static hao_gmap extra_plain = HAO_GMAP_INIT(2, 1, 8, 31);
+static hao_gmap extra_typed = HAO_GMAP_INIT(3, 1, 8, 31);
+
+static uint64_t extra_thunk(uint64_t guest, uint64_t signature, bool typed)
+{
+    hao_gmap *targets = typed ? &extra_typed : &extra_plain;
+    pthread_mutex_lock(&jit_lock);
+    uint8_t *entry = wx_frozen ? NULL : cache_space(32);
+    if (!entry) goto failed;
+    uint64_t address = (uintptr_t)entry;
+    bool fresh;
+    uint64_t *record = hao_gmap_claim1(targets, address, &fresh);
+    if (!record) goto failed;
+    hao_wx_win win;
+    uint8_t *w = hao_wx_begin(entry, 32, &win);
+    if (!w) goto failed;
+    /* movabs r11,guest; movabs r10,signature; jmp thunk_entry */
+    w[0] = 0x49; w[1] = 0xbb; memcpy(w + 2, &guest, 8);
+    w[10] = 0x49; w[11] = 0xba; memcpy(w + 12, &signature, 8);
+    w[20] = 0xe9;
+    int32_t jump = (int32_t)(thunk_entry - (entry + 25));
+    memcpy(w + 21, &jump, sizeof jump);
+    memset(w + 25, 0xcc, 7);
+    hao_wx_end(&win, 32);
+    block_commit(entry, 32);
+    pthread_mutex_unlock(&jit_lock);
+    record[1] = guest;
+    if (typed) record[2] = signature;
+    hao_gmap_publish1(targets, record, address);
+    return address;
+failed:
+    pthread_mutex_unlock(&jit_lock);
+    return 0;
+}
+
 /* fork child: the holders of these locks were not copied (see jit_lock) */
 void hao_jit_fork_child(void)
 {
@@ -7071,17 +7113,20 @@ uint64_t hao_thunk_for(uint64_t guest)
     bool fresh;
     uint64_t *s = guest ? hao_gmap_claim1(&thunks, guest, &fresh) : NULL;
     if (s && !fresh) r = s[1];
-    else if (s && thunk_ptr + 32 <= thunk_end &&
+    else if (s && thunk_ptr == thunk_end) r = extra_thunk(guest, 0, false);
+    else if (s && thunk_ptr < thunk_end &&
              (thunk_ptr < thunk_gen || thunk_page(thunk_area, &thunk_gen, thunk_end, 32, thunk_tab, 1))) {   /* else: the fault path */
         __atomic_store_n(&thunk_tab[(thunk_ptr - thunk_area) / 32], guest, __ATOMIC_RELEASE);
         r = (uint64_t)(uintptr_t)thunk_ptr;
         __atomic_store_n(&thunk_ptr, thunk_ptr + 32, __ATOMIC_RELEASE);
+    }
+    if (r && fresh) {
         s[1] = r;
         hao_gmap_publish1(&thunks, s, guest);
     }
     pthread_mutex_unlock(&thunk_lock);
     hao_crit_leave();
-    if (!r && thunk_ptr + 32 > thunk_end) full_once(&tfull, "thunk table full: further guest functions keep the NX-fault path");
+    if (!r && guest) full_once(&tfull, "thunk table full: further guest functions keep the NX-fault path");
     return r ? r : guest;
 }
 
@@ -7104,7 +7149,10 @@ bool hao_in_code_cache(uint64_t a)
 uint64_t hao_thunk_target(uint64_t a)
 {
     uint8_t *end = __atomic_load_n(&thunk_ptr, __ATOMIC_ACQUIRE);
-    if (!thunk_area || a < (uint64_t)(uintptr_t)thunk_area || a >= (uint64_t)(uintptr_t)end) return 0;
+    if (!thunk_area || a < (uintptr_t)thunk_area || a >= (uintptr_t)end) {
+        const uint64_t *record = hao_gmap_get1(&extra_plain, a);
+        return record ? record[1] : 0;
+    }
     if ((a - (uint64_t)(uintptr_t)thunk_area) & 31) return 0;
     return __atomic_load_n(&thunk_tab[(a - (uint64_t)(uintptr_t)thunk_area) / 32], __ATOMIC_ACQUIRE);
 }
@@ -7116,7 +7164,7 @@ uint64_t hao_thunk_target(uint64_t a)
  * and callers repeat (class_replaceMethod, re-registered methods). The
  * dedup map, (guest, sig) -> thunk, grows with use (hao/gmap.h); its
  * lookup is lock-free, like thunks'. */
-static hao_gmap sigthunks = HAO_GMAP_INIT(3, 2, 7, 17);
+static hao_gmap sigthunks = HAO_GMAP_INIT(3, 2, 7, 31);
 
 uint64_t hao_sig_thunk(uint64_t guest, void *sig)
 {
@@ -7130,13 +7178,16 @@ uint64_t hao_sig_thunk(uint64_t guest, void *sig)
     bool fresh;
     uint64_t *s = hao_gmap_claim(&sigthunks, key, &fresh);
     if (s && !fresh) r = s[2];
-    else if (!s || sig_ptr + SIG_SLOT > sig_end) __atomic_fetch_or(&warn_pending, WARN_SIGS, __ATOMIC_RELAXED);
-    else if (sig_ptr < sig_gen || thunk_page(sig_area, &sig_gen, sig_end, SIG_SLOT, sig_tab, 2)) {   /* else 0: abi.c notes the signature */
+    else if (s && sig_ptr == sig_end) r = extra_thunk(guest, key[1], true);
+    else if (s && (sig_ptr < sig_gen || thunk_page(sig_area, &sig_gen, sig_end, SIG_SLOT, sig_tab, 2))) {   /* else 0: abi.c notes the signature */
         uint64_t *t = &sig_tab[(sig_ptr - sig_area) / SIG_SLOT * 2];
         __atomic_store_n(&t[0], guest, __ATOMIC_RELAXED);
         __atomic_store_n(&t[1], key[1], __ATOMIC_RELEASE);
         r = (uint64_t)(uintptr_t)sig_ptr;
         __atomic_store_n(&sig_ptr, sig_ptr + SIG_SLOT, __ATOMIC_RELEASE);
+    }
+    if (!r) __atomic_fetch_or(&warn_pending, WARN_SIGS, __ATOMIC_RELAXED);
+    if (r && fresh) {
         s[2] = r;
         hao_gmap_publish(&sigthunks, s, key);
     }
@@ -7150,8 +7201,11 @@ uint64_t hao_sig_thunk(uint64_t guest, void *sig)
 uint64_t hao_sig_thunk_sig(uint64_t a)
 {
     uint8_t *end = __atomic_load_n(&sig_ptr, __ATOMIC_ACQUIRE);
-    if (!sig_area || a < (uint64_t)(uintptr_t)sig_area || a >= (uint64_t)(uintptr_t)end || ((a - (uint64_t)(uintptr_t)sig_area) & (SIG_SLOT - 1)))
-        return 0;
+    if (!sig_area || a < (uintptr_t)sig_area || a >= (uintptr_t)end) {
+        const uint64_t *record = hao_gmap_get1(&extra_typed, a);
+        return record ? record[2] : 0;
+    }
+    if ((a - (uintptr_t)sig_area) & (SIG_SLOT - 1)) return 0;
     return __atomic_load_n(&sig_tab[(a - (uint64_t)(uintptr_t)sig_area) / SIG_SLOT * 2 + 1], __ATOMIC_ACQUIRE);
 }
 
@@ -7159,7 +7213,10 @@ uint64_t hao_sig_thunk_sig(uint64_t a)
 uint64_t hao_sig_thunk_target(uint64_t a)
 {
     uint8_t *end = __atomic_load_n(&sig_ptr, __ATOMIC_ACQUIRE);
-    if (!sig_area || a < (uint64_t)(uintptr_t)sig_area || a >= (uint64_t)(uintptr_t)end) return 0;
+    if (!sig_area || a < (uintptr_t)sig_area || a >= (uintptr_t)end) {
+        const uint64_t *record = hao_gmap_get1(&extra_typed, a);
+        return record ? record[1] : 0;
+    }
     if ((a - (uint64_t)(uintptr_t)sig_area) & (SIG_SLOT - 1)) return 0;
     return __atomic_load_n(&sig_tab[(a - (uint64_t)(uintptr_t)sig_area) / SIG_SLOT * 2], __ATOMIC_ACQUIRE);
 }

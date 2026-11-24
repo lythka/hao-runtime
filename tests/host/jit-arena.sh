@@ -16,6 +16,7 @@ codesign -s - -f "$OUT/jit-arena"
 for mb in 1 256 1024; do
     timeout -s KILL 120 env HAO_JIT_CACHE_MB=$mb "$OUT/jit-arena"
 done
+timeout -s KILL 120 env HAO_JIT_CACHE_MB=1 "$OUT/jit-arena" 3
 for stage in 1 2; do
     timeout -s KILL 120 "$OUT/jit-arena" "$stage" >"$OUT/failure-$stage.out" 2>"$OUT/failure-$stage.err"
     cat "$OUT/failure-$stage.out"

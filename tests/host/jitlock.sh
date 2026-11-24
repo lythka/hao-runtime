@@ -2,8 +2,7 @@
 # Code cache, thunk areas and hao's locks (tests/host/jitlock.c against libhao):
 #   aot       hao_aot_load of 40 copies of /usr/bin/awk (cache made by
 #             hao --aot) while 4 threads translate (AOT_RUNS runs)
-#   sigs      65536 signature thunks keep their signatures, one per (guest,
-#             sig), none past that, with one warning
+#   sigs      concurrent growing plain and typed pools, inherited refusing entry
 #   closure-* signature thunks map back to their guest at 20000 and 60000,
 #             and a miss stays cheap
 #   full      HAO_JIT_CACHE_MB=8: blocks past the limit run in the
@@ -50,9 +49,19 @@ done
 unset HAO_CACHE
 check aot $([ $pass = "$AOT_RUNS" ] && echo 1 || echo 0) "$pass/$AOT_RUNS runs pass${last:+; last failure: $last}"
 
-one sigs 60 sigs
+clang -arch arm64 -dynamiclib -x c -o "$OUT/callbacks.dylib" - <<'EOF' || exit 1
+typedef struct { unsigned long long word[8]; } Large;
+__attribute__((swiftcall)) Large make_words(unsigned long long base) {
+    Large value;
+    for (unsigned i = 0; i < 8; i++) value.word[i] = base + i * 17;
+    return value;
+}
+int sum(int a, int b) { return a + b; }
+double add_double(double a, double b) { return a + b; }
+EOF
+one sigs 60 sigs "$OUT/callbacks.dylib"
 w=$(grep -c 'signature thunk area full' "$OUT/sigs.err")
-[ "$w" = 1 ] || ok=0
+[ "$w" = 0 ] && grep -q "REFUSED callback" "$OUT/sigs.err" || ok=0
 check sigs $ok "rc=$rc warnings=$w ${line:-(no summary)}"
 
 for n in 20000 60000; do

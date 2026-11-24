@@ -8,8 +8,13 @@ uintptr_t arena;
 size_t arena_size;
 unsigned redirected;
 unsigned fail_stage;
+unsigned denied_maps;
 static void *redirect_mmap(void *hint, size_t size, int prot, int flags, int fd, off_t off)
 {
+    if (fail_stage == 3 && !hint && (flags & MAP_ANON) && !(flags & MAP_JIT)) {
+        denied_maps++;
+        return MAP_FAILED;
+    }
     if (arena && hint && (flags & MAP_ANON) && !(flags & (MAP_JIT | MAP_FIXED))) {
         /* Reserve without overwriting anything, then replace only our reservation. */
         for (unsigned k = 8; k < 24; k++) {

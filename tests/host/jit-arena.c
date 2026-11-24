@@ -16,7 +16,7 @@
 extern uintptr_t arena;
 extern size_t arena_size;
 extern unsigned redirected;
-extern unsigned fail_stage;
+extern unsigned fail_stage, denied_maps;
 
 static int protection(uintptr_t a, int want, int max_want)
 {
@@ -74,6 +74,32 @@ static int alias_control(void)
 int main(int argc, char **argv)
 {
     if (argc > 1) fail_stage = (unsigned)atoi(argv[1]);
+    if (fail_stage == 3) {
+        fail_stage = 0;
+        if (!hao_jit_init()) return 1;
+        uint64_t base = 0x7100000000ull, first, last;
+        void *sig = (void *)0x500000000000ull;
+        for (unsigned i = 0; i < 65536; i++)
+            if (!hao_sig_thunk(base + i, sig)) return 1;
+        /* The next callback needs a reverse-map page. Retry past the entire
+         * 1 MiB shared cache budget while denying that allocation. */
+        fail_stage = 3;
+        for (unsigned i = 0; i < 40000; i++)
+            if (hao_sig_thunk(base + 65536, sig)) return 1;
+        fail_stage = 0;
+        if (denied_maps != 40000) return 1;
+        first = hao_sig_thunk(base + 65536, sig);
+        last = first;
+        unsigned count = 0;
+        while (last && count < 40000) {
+            ++count;
+            last = hao_sig_thunk(base + 65536 + count, sig);
+        }
+        bool ok = count == (1u << 20) / 32 && !last &&
+                  hao_sig_thunk(base + 65536, sig) == first;
+        printf("thunk allocation failure: rejected=%u recovered=%u -> %s\n", denied_maps, count, ok ? "PASS" : "FAIL");
+        return !ok;
+    }
     if (fail_stage) {
         bool initialized = hao_jit_init();
         void *(*records)(void) = dlsym(RTLD_DEFAULT, "hao_jit_async_records");
