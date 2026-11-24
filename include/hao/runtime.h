@@ -42,6 +42,8 @@ typedef struct hao_seg {
     const struct hao_plan *nc_plan;
     uint64_t nc_target, nc_key, nc_x1, nc_gen;
     bool nc_hit;
+    uint64_t async_target;  /* guest continuation of the pending native async tail call */
+    bool async_resume;  /* native_step resumes the guest continuation at cpu.pc */
 } hao_seg;
 
 /* An exception whose guest handler the search phase found (unwind.c). */

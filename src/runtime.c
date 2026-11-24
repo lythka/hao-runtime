@@ -20,6 +20,7 @@
 #include "hao/swiftvalue.h"
 #include "hao/bridge.h"
 #include "hao/native_bundle.h"
+#include "hao/dlsym_once.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <objc/runtime.h>
@@ -696,6 +697,32 @@ static void ncache_put(hao_thread *t, uint64_t gen, uint64_t pc, uint64_t target
     __atomic_store_n(&t->ncache_owner, 0, __ATOMIC_RELAXED);
 }
 
+static uint64_t plain_callback_sp(const hao_cpu *outer);
+
+static uint64_t expected_async_resume(const hao_seg *seg, const hao_plan *plan)
+{
+    const hao_cpu *c = &seg->t->cpu;
+    if (!seg->outer || c->x[30] != HAO_RETURN_MAGIC || c->x[31] != plain_callback_sp(seg->outer)) return 0;
+    /* A synchronous result conversion or borrowed receiver must finish on
+     * the original frame. A packed call also borrows a temporary guest
+     * stack; its continuation stays on the ordinary callback path. A
+     * site-inferred plan can still call with the original SP when there is
+     * no packed layout; resume_async_tail checks the actual SP. */
+    if (plan && ((plan->flags & HAO_PLAN_VIEWSELF) || plan->src == HAO_BRS_OBJCIMP ||
+                 (plan->kind && !hao_swift_async_kind(plan->kind) &&
+                  plan->kind != HAO_KIND_SITEPACK))) return 0;
+    uint64_t target;
+    if (plan && (plan->flags & HAO_PLAN_SWIFTASYNC) && c->x[22] && !(c->x[22] & 7)) {
+        /* AsyncContext.ResumeParent, before the native call prepares any result conversion. */
+        target = ((const uint64_t *)(uintptr_t)c->x[22])[1];
+    } else if (c->pc == (uint64_t)(uintptr_t)HAO_DLSYM("swift_task_switch")) {
+        target = c->x[0];   /* TaskContinuationFunction resumeFunction */
+    } else return 0;
+    target &= 0x00007fffffffffffull;
+    uint64_t guest = hao_guest_of_entry(target);
+    return guest ? guest : target;
+}
+
 /* One native call or trap of segment `arg`. Runs inside a NATIVE guard
  * (hao_eh_guard), so an exception unwinding out of it meets the guest's
  * catch handlers and cleanups (unwind.c). */
@@ -742,6 +769,7 @@ static void native_step(void *arg)
      * in the argument slots the plan names, or in all of them */
     unsigned mask = p && (p->flags & HAO_PLAN_MASKED) ? p->argmask : HAO_BR_SCAN_ALL;
     bool swiftfn = (p && p->swiftfn) || native_swift_symbol(pc);
+    seg->async_target = expected_async_resume(seg, p);
     hao_thunk_native_args_mask(t, mask, swiftfn);
     if (swiftfn) swift_stack_args(t, pc, p, mask);
     t->native_calls++;
@@ -766,6 +794,8 @@ static void native_step(void *arg)
         fprintf(stderr, "hao: <- %s = %#llx [isa %#llx]\n", sn, (unsigned long long)r0, (unsigned long long)w0);
     } else
     native_call(c, pc, p);
+    seg->async_target = 0;
+    if (seg->async_resume) { seg->async_resume = false; return; }
     if (objc_enum_result) hao_objc_enum_result(c, objc_enum_result);
     if (swift_enum & HAO_SWIFT_ENUM_RESULT) c->x[0] = hao_swift_textalign_value(c->x[0]);
     c->pc = c->x[30];
@@ -871,6 +901,8 @@ void hao_run(hao_thread *t, const hao_cpu *outer)
     seg.t = t;
     seg.outer = outer;
     seg.depth = ++t->depth;
+    seg.async_target = 0;
+    seg.async_resume = false;
     seg.fault_at_entry = t->in_fault_handler;
     seg.nest_at_entry = t->sig_nest;
     seg.swift_values_at_entry = t->swift_values;
@@ -880,6 +912,8 @@ void hao_run(hao_thread *t, const hao_cpu *outer)
      * (hao_longjmp_segment) and for a guest signal handler that moved pc
      * while this segment ran guest code (signals.c); cpu.pc is set. */
     if (_setjmp(seg.jb)) {
+        seg.async_target = 0;
+        seg.async_resume = false;
         t->swift_values = seg.swift_values_at_entry;
         t->cpu_saves_n = seg.cpu_saves_at_entry;   /* saves of the skipped native-to-guest calls */
         /* frames above this hao_run are gone, among them an interrupted cache store at this depth or deeper */
@@ -1190,6 +1224,8 @@ static void callback_swift(hao_cb_frame *f, const hao_swift_reverse *s, const ha
 static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc);
 static uint64_t callback_plain_local(hao_cb_frame *f, hao_thread *t, bool swiftcc);
 
+static bool resume_async_tail(hao_cb_frame *f, hao_thread *t, uint64_t *pop);
+
 uint64_t hao_callback(hao_cb_frame *f)
 {
     /* f->sig on entry: a signature thunk's hsig* or tagged Swift recipe,
@@ -1229,6 +1265,8 @@ uint64_t hao_callback(hao_cb_frame *f)
     bool swiftcc = marked || f->ret == hao_native_call_ret || guest_swift_symbol(f->target) ||
                    (guest_reads_x8(f->target) && native_swift_image(f->ret));
     hao_thread *t = hao_current();
+    uint64_t tail_pop;
+    if (f->ret == hao_native_call_ret && resume_async_tail(f, t, &tail_pop)) return tail_pop;
     unsigned mark;
     hao_cpu *saved = cpu_save_push(t, &mark);
     if (!saved) return callback_plain_local(f, t, swiftcc);
@@ -1283,13 +1321,15 @@ static uint64_t noret_area(hao_thread *t)
     return (uint64_t)(uintptr_t)(m + (size_t)(NORET_LEVEL + NORET_GUARD) * level);
 }
 
-/* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry). */
-static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc)
+static uint64_t plain_callback_sp(const hao_cpu *outer)
+{
+    /* Leave a gap below suspended guest frames, including a signal handler's. */
+    return (((outer->x[31] - 256) & ~15ull) - 1024 - CB_STACK_AREA) & ~15ull;
+}
+
+static bool plain_callback_args(const hao_cb_frame *f, hao_thread *t, bool swiftcc, uint64_t sp)
 {
     hao_cpu *c = &t->cpu;
-    c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
-    t->callbacks++;
-    if (hao_verbose > 1) { callback_trace_entry(f, t); if (swiftcc) fprintf(stderr, "hao:   (a Swift entry: rax %#llx)\n", (unsigned long long)f->swift[3]); }
     for (int k = 0; k < 6; k++) c->x[k] = f->gpr[k];
     /* SysV stack args 0,1 -> x6,x7; the rest are copied to the guest stack */
     c->x[6] = f->stack_args[0];
@@ -1299,13 +1339,6 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     c->x[20] = f->swift[1];
     c->x[22] = f->swift[2];
     c->x[0] = hao_swift_async_extend_result(f->target, c->x[0]);
-    /* Guest stack: the SysV stack arguments from slot 2 at sp, 1 KB below
-     * the caller's frames (the room x8 used to point at). Kept: without it
-     * tests/guest/uresume's alarm cases see stack arguments overwritten
-     * while signals arrive during the call. */
-    enum { GAP = 1024 };
-    uint64_t top = (saved->x[31] - 256) & ~15ull;
-    uint64_t sp = (top - GAP - CB_STACK_AREA) & ~15ull;
     memcpy((void *)(uintptr_t)sp, &f->stack_args[2], 8 * CB_STACK_COPY);
     /* x8 is the indirect-result register: native swiftcc passes it in rax.
      * A C caller leaves anything there, often the function pointer it just
@@ -1321,7 +1354,39 @@ static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, b
     c->x[31] = sp;
     c->x[30] = HAO_RETURN_MAGIC;
     c->pc = f->target;
-    c->native_pop = 0;       /* per activation; nested callbacks restore it */
+    c->native_pop = 0;
+    return data;
+}
+
+/* Both sides tail-called: translated async code has restored its entry SP
+ * and LR, and the native callee jumped into its guest continuation without
+ * leaving a native frame. Reuse this segment for the continuation. */
+static bool resume_async_tail(hao_cb_frame *f, hao_thread *t, uint64_t *pop)
+{
+    hao_cpu *c = &t->cpu;
+    hao_seg *seg = t->seg;
+    if (!seg || seg->async_target != f->target || f->rbp != c->bridge_rbp ||
+        c->x[31] != plain_callback_sp(seg->outer)) return false;
+    const char *why;
+    *pop = frame_pop(f, c, 8, &why);
+    plain_callback_args(f, t, true, c->x[31]);
+    /* hao_native_call copies the return registers back to the CPU. Carry
+     * the continuation's converted first argument through that copy. */
+    f->gpr[0] = c->x[0];
+    seg->async_resume = true;
+    t->callbacks++;
+    return true;
+}
+
+/* A native-to-guest call without a signature (NX fault, plain thunk, a Swift function's entry). */
+static uint64_t callback_plain(hao_cb_frame *f, hao_thread *t, hao_cpu *saved, bool swiftcc)
+{
+    hao_cpu *c = &t->cpu;
+    c->host_scratch[HAO_SCRATCH_IN_GUEST] = c->host_scratch[HAO_SCRATCH_HELPER] = 0;
+    t->callbacks++;
+    if (hao_verbose > 1) { callback_trace_entry(f, t); if (swiftcc) fprintf(stderr, "hao:   (a Swift entry: rax %#llx)\n", (unsigned long long)f->swift[3]); }
+    uint64_t r = f->swift[3];
+    bool data = plain_callback_args(f, t, swiftcc, plain_callback_sp(saved));
     unsigned objc_enum_result = hao_objc_enum_args(c, f->target, true);
     unsigned made = t->swift_made_n;
     uint64_t a[6];
