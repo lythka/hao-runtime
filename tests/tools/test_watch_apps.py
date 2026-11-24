@@ -26,6 +26,12 @@ class AppUpdates(unittest.TestCase):
                 "CFBundleIdentifier": "org.hao.fixture", "CFBundleExecutable": "Fixture",
                 "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
             }))
+            resources = app / "Contents/Resources"
+            resources.mkdir()
+            (resources / "value").write_text("content")
+            alias = resources / "internal"
+            alias.symlink_to("value")
+            os.chmod(alias, 0o777, follow_symlinks=False)
             stub = Path(os.environ.get("B", REPO / "build")).resolve() / "hao-stub"
             engine = runpy.run_path(str(REPO / "tools/hao-embed"))
             local_cache = next(Path(path) for path in engine["HOST_X86_CACHES"]
@@ -51,6 +57,7 @@ class AppUpdates(unittest.TestCase):
             malformed.mkdir(parents=True)
             (malformed / "Info.plist").write_bytes(b'<?xml version="1.0"?><plist><dict>')
             publish(1)
+            self.assertEqual(os.readlink(link / "Contents/Resources/internal"), "value")
             first = link.resolve()
             reconcile(install, output, stub, cache)
             self.assertEqual(first, link.resolve())
