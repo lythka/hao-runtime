@@ -5,4 +5,5 @@ if [ "$#" -ne 3 ]; then
     exit 2
 fi
 fixture=$(cd "$(dirname "$0")" && pwd)
-exec python3 "$fixture/session.py" --lldb "$1" "$2" "$3"
+python3 "$fixture/session.py" --lldb "$1" "$2" "$3"
+python3 "$fixture/session.py" --continuous --lldb "$1" "$2" "$3"

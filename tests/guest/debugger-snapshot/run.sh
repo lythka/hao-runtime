@@ -11,6 +11,7 @@ done
 python3 "$fixture/session.py" "$out/arm64" > "$out/native"
 python3 "$fixture/session.py" "${HAO:-$root/build/hao}" "$out/arm64" > "$out/translated"
 diff -u "$out/native" "$out/translated"
+python3 "$fixture/session.py" --continuous "${HAO:-$root/build/hao}" "$out/arm64"
 FIXTURE_CORRUPT_PC=1 python3 "$fixture/session.py" --invalid-pc "${HAO:-$root/build/hao}" "$out/arm64"
 python3 "$fixture/session.py" --stale-ack "${HAO:-$root/build/hao}" "$out/arm64"
 python3 "$fixture/session.py" --negative "$out/x86_64"
