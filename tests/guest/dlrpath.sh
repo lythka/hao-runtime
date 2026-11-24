@@ -21,6 +21,16 @@ for a in arm64e arm64; do
     clang -arch $a -O1 -dynamiclib -DSUB -install_name @loader_path/sub/libsub.dylib -o "$app/Frameworks/sub/libsub.dylib" "$here/dlrpathlib.c"
     clang -arch x86_64 -arch arm64 -arch arm64e -O1 -dynamiclib -DNAT -install_name @rpath/libnat.dylib \
         -o "$app/Frameworks/libnat.dylib" "$here/dlrpathlib.c"
+    for dir in A B; do
+        value=1; [ "$dir" = B ] && value=2
+        dest=$app/Frameworks/$dir
+        mkdir -p "$dest"
+        clang -arch "$a" -dynamiclib -DLEAF_VALUE=$value -install_name @rpath/leaf.dylib \
+            "$here/dlrpathlib.c" -o "$dest/leaf.dylib"
+        clang -arch "$a" -dynamiclib -DPARENT -install_name "@rpath/parent$dir.dylib" \
+            -Wl,-rpath,@loader_path "$here/dlrpathlib.c" "$dest/leaf.dylib" -o "$dest/parent.dylib"
+        codesign -s - -f "$dest/leaf.dylib" "$dest/parent.dylib" 2>/dev/null
+    done
     codesign -s - -f "$app/Frameworks/libplug.dylib" "$app/Frameworks/sub/libsub.dylib" "$app/Frameworks/libnat.dylib" \
         "$app/MacOS/dlrpath" 2>/dev/null
 done

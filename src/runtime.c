@@ -3780,12 +3780,26 @@ failed:
     return false;
 }
 
+static bool header_has_install_name(const struct mach_header_64 *mh, const char *lib);
+
 /* Load (once) and return the library a load command names: a native handle,
  * GUEST_DEP (img->dep_image) or MISSING_DEP. */
 static void *open_library(hao_image *img, const char *name, bool cxx, hao_image **guest, char *tried, size_t tn)
 {
     struct try_ctx x = {img, NULL, NULL, cxx, tried, tn};
     if (tried && tn) tried[0] = 0;
+    /* dyld satisfies an @rpath load command from the first resident dylib
+     * with that install name before expanding the caller's run paths. An
+     * explicit pathname passed to dlopen remains a distinct request. */
+    if (!strncmp(name, "@rpath/", 7)) {
+        for (int k = 0; k < nglibs; k++) {
+            hao_image *loaded = glibs[k].img;
+            if (loaded && header_has_install_name((const void *)(uintptr_t)loaded->base, name)) {
+                *guest = loaded;
+                return GUEST_DEP;
+            }
+        }
+    }
     const char *refused;
     for_each_candidate(img, name, try_candidate, &x, &refused);
     if (refused && !x.handle && !x.guest) {
@@ -3922,17 +3936,15 @@ static void *native_dlsym(void *h, const char *sym, bool flat)
     return p;
 }
 
-static bool defined_in(void *p, const char *lib)
+static bool header_has_install_name(const struct mach_header_64 *mh, const char *lib)
 {
-    Dl_info di;
-    if (!dladdr(p, &di) || !di.dli_fbase) return false;
-    const struct mach_header_64 *mh = di.dli_fbase;
     if (mh->magic != MH_MAGIC_64) return false;
     const uint8_t *c = (const uint8_t *)(mh + 1), *end = c + mh->sizeofcmds;
     for (uint32_t i = 0; i < mh->ncmds && end - c >= (ptrdiff_t)sizeof(struct load_command); i++) {
         const struct load_command *lc = (const void *)c;
         if (lc->cmdsize < sizeof *lc || lc->cmdsize > (size_t)(end - c)) return false;
         if (lc->cmd == LC_ID_DYLIB) {
+            if (lc->cmdsize < sizeof(struct dylib_command)) return false;
             const struct dylib_command *d = (const void *)c;
             size_t off = d->dylib.name.offset, n = lc->cmdsize;
             return off < n && strnlen((const char *)c + off, n - off) < n - off && !strcmp((const char *)c + off, lib);
@@ -3940,6 +3952,12 @@ static bool defined_in(void *p, const char *lib)
         c += lc->cmdsize;
     }
     return false;
+}
+
+static bool defined_in(void *p, const char *lib)
+{
+    Dl_info di;
+    return dladdr(p, &di) && di.dli_fbase && header_has_install_name(di.dli_fbase, lib);
 }
 
 /* A C++ import with BOOL in its signature (bridge.h hao_cxx_bool_types):

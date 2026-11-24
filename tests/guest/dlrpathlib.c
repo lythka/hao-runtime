@@ -20,3 +20,11 @@ int nat_value(void) {
 #endif
 }
 #endif
+
+#ifdef LEAF_VALUE
+int leaf_value(void) { return LEAF_VALUE; }
+#endif
+#ifdef PARENT
+extern int leaf_value(void);
+int parent_value(void) { return leaf_value(); }
+#endif

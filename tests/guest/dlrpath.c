@@ -4,6 +4,13 @@
  * images under hao); libnat is universal (its ARM slice runs under hao). */
 #include <dlfcn.h>
 #include <stdio.h>
+static int read_value(const char *path, const char *symbol)
+{
+    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    int (*get)(void) = h ? (int (*)(void))dlsym(h, symbol) : NULL;
+    return get ? get() : -1;
+}
+
 int main(void)
 {
     void *h = dlopen("@rpath/libplug.dylib", RTLD_NOW);
@@ -16,5 +23,11 @@ int main(void)
     int (*nat)(void) = n ? (int (*)(void))dlsym(n, "nat_value") : NULL;
     printf("nat_value=%d\n", nat ? nat() : -1);
     printf("missing: %s\n", dlopen("@rpath/libmissing.dylib", RTLD_NOW) ? "opened" : "NULL");
+    /* The two parents name distinct files as @rpath/leaf.dylib. First load
+     * wins for dependency lookup; an explicit file open still distinguishes them. */
+    int a = read_value("@executable_path/../Frameworks/A/parent.dylib", "parent_value");
+    int b = read_value("@executable_path/../Frameworks/B/parent.dylib", "parent_value");
+    int explicit_b = read_value("@executable_path/../Frameworks/B/leaf.dylib", "leaf_value");
+    printf("rpath dependencies %d %d, explicit leaf %d\n", a, b, explicit_b);
     return 0;
 }
