@@ -544,14 +544,18 @@ set -- $m
 
 # A log directory another user may write is not used (they could put a file of their own in the log's place), and
 # what the log does not take goes to the unified log as private records: they hold register values and addresses,
-# which any user may read from a public one. The verbose run writes at least one diagnostics line.
+# which any user may read from a public one. The timed run emits startup diagnostics through the same private sink.
+# Confirm the selected guest emits a record beyond the normal boot header.
+producer=$(mktemp -d "$OUT/diag-producer.XXXXXXXX") || exit 1
+timeout -s KILL "$T" env -i PATH=/usr/bin:/bin HAO_DIAG_DIR="$producer" HAO_DIAG_TIME=1 "$HAO" "$G" >/dev/null 2>&1
+if [ "$?" -ne 7 ] || ! grep -q 'phase ' "$producer/console.log"; then bad "M timed guest produced no phase diagnostic"; fi
 for d in w777 r555; do mkdir -p "$OUT/$d"; done; chmod 777 "$OUT/w777"; chmod 555 "$OUT/r555"
 m=$(python3 -I - "$HAO" "$G" "$OUT" "$T" <<'EOF'
 import os, subprocess, sys, time
 hao, guest, out, t = sys.argv[1:]
 res = []
 for d in ('w777', 'r555'):
-    p = subprocess.Popen([hao, guest], env={'HAO_DIAG_DIR': out + '/' + d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+    p = subprocess.Popen([hao, guest], env={'HAO_DIAG_DIR': out + '/' + d, 'HAO_DIAG_TIME': '1', 'PATH': '/usr/bin:/bin'},
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     rc = p.wait(timeout=int(t))
     recs = []
@@ -587,7 +591,7 @@ with open(p, 'wb') as f:
     f.truncate(cap - keep - 30)
 os.chmod(p, 0o600)
 for k in range(2):
-    subprocess.run([hao, guest], env={'HAO_DIAG_DIR': d, 'HAO_VERBOSE': '1', 'PATH': '/usr/bin:/bin'},
+    subprocess.run([hao, guest], env={'HAO_DIAG_DIR': d, 'HAO_DIAG_TIME': '1', 'PATH': '/usr/bin:/bin'},
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=int(t))
     if k == 0: first = os.path.getsize(p)
 size = os.path.getsize(p)
