@@ -1,0 +1,38 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+0000000000000000000003E8 = { isa = PBXFileReference; path = Assets.xcassets; sourceTree = "<group>"; lastKnownFileType = folder.assetcatalog; };
+0000000000000000000003E9 = { isa = PBXBuildFile; fileRef = 0000000000000000000003E8; };
+0000000000000000000003EA = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000003E9); runOnlyForDeploymentPostprocessing = 0; };
+000000000000000000000064 = { isa = PBXFileReference; path = "App.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+00000000000000000000012C = { isa = PBXBuildFile; fileRef = 000000000000000000000064; };
+000000000000000000000065 = { isa = PBXFileReference; path = "Worker0.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+00000000000000000000012D = { isa = PBXBuildFile; fileRef = 000000000000000000000065; };
+000000000000000000000066 = { isa = PBXFileReference; path = "Worker1.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+00000000000000000000012E = { isa = PBXBuildFile; fileRef = 000000000000000000000066; };
+000000000000000000000067 = { isa = PBXFileReference; path = "Worker2.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+00000000000000000000012F = { isa = PBXBuildFile; fileRef = 000000000000000000000067; };
+000000000000000000000068 = { isa = PBXFileReference; path = "Worker3.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+000000000000000000000130 = { isa = PBXBuildFile; fileRef = 000000000000000000000068; };
+000000000000000000000069 = { isa = PBXFileReference; path = "Worker4.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+000000000000000000000131 = { isa = PBXBuildFile; fileRef = 000000000000000000000069; };
+00000000000000000000006A = { isa = PBXFileReference; path = "Worker5.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+000000000000000000000132 = { isa = PBXBuildFile; fileRef = 00000000000000000000006A; };
+00000000000000000000006B = { isa = PBXFileReference; path = "Worker6.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+000000000000000000000133 = { isa = PBXBuildFile; fileRef = 00000000000000000000006B; };
+00000000000000000000006C = { isa = PBXFileReference; path = "Worker7.swift"; sourceTree = "<group>"; lastKnownFileType = sourcecode.swift; };
+000000000000000000000134 = { isa = PBXBuildFile; fileRef = 00000000000000000000006C; };
+00000000000000000000006D = { isa = PBXFileReference; path = "Native.mm"; sourceTree = "<group>"; lastKnownFileType = sourcecode.cpp.objcpp; };
+000000000000000000000135 = { isa = PBXBuildFile; fileRef = 00000000000000000000006D; };
+000000000000000000000005 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = HaoStress.app; sourceTree = BUILT_PRODUCTS_DIR; };
+000000000000000000000002 = { isa = PBXGroup; children = (0000000000000000000003E8,000000000000000000000064,000000000000000000000065,000000000000000000000066,000000000000000000000067,000000000000000000000068,000000000000000000000069,00000000000000000000006A,00000000000000000000006B,00000000000000000000006C,00000000000000000000006D,000000000000000000000003); sourceTree = "<group>"; };
+000000000000000000000003 = { isa = PBXGroup; children = (000000000000000000000005); name = Products; sourceTree = "<group>"; };
+000000000000000000000004 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (00000000000000000000012C,00000000000000000000012D,00000000000000000000012E,00000000000000000000012F,000000000000000000000130,000000000000000000000131,000000000000000000000132,000000000000000000000133,000000000000000000000134,000000000000000000000135); runOnlyForDeploymentPostprocessing = 0; };
+000000000000000000000006 = { isa = PBXNativeTarget; name = HaoStress; productName = HaoStress; productReference = 000000000000000000000005; productType = "com.apple.product-type.application"; buildConfigurationList = 000000000000000000000008; buildPhases = (000000000000000000000004,0000000000000000000003EA); buildRules = (); dependencies = (); };
+000000000000000000000001 = { isa = PBXProject; mainGroup = 000000000000000000000002; productRefGroup = 000000000000000000000003; buildConfigurationList = 000000000000000000000007; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; knownRegions = (en,Base); targets = (000000000000000000000006); projectDirPath = ""; projectRoot = ""; };
+000000000000000000000007 = { isa = XCConfigurationList; buildConfigurations = (000000000000000000000046,000000000000000000000047); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+000000000000000000000008 = { isa = XCConfigurationList; buildConfigurations = (000000000000000000000050,000000000000000000000051); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+000000000000000000000046 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 18.0; CLANG_ENABLE_MODULES = YES; }; };
+000000000000000000000047 = { isa = XCBuildConfiguration; name = Release; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 18.0; CLANG_ENABLE_MODULES = YES; }; };
+000000000000000000000050 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 18.0; CLANG_ENABLE_MODULES = YES; PRODUCT_BUNDLE_IDENTIFIER = org.hao.stress; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; SWIFT_OBJC_BRIDGING_HEADER = "Demo-Bridging-Header.h"; CLANG_CXX_LANGUAGE_STANDARD = "c++20"; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGNING_ALLOWED = NO; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; };
+000000000000000000000051 = { isa = XCBuildConfiguration; name = Release; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 18.0; CLANG_ENABLE_MODULES = YES; PRODUCT_BUNDLE_IDENTIFIER = org.hao.stress; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; SWIFT_OBJC_BRIDGING_HEADER = "Demo-Bridging-Header.h"; CLANG_CXX_LANGUAGE_STANDARD = "c++20"; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGNING_ALLOWED = NO; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; };
+}; rootObject = 000000000000000000000001; }

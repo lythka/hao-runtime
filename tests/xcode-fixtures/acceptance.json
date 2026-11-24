@@ -1,0 +1,26 @@
+{
+  "purpose": "Compact compiler and test-runner coverage fixture; no external packages or simulator required for build",
+  "ios_build": {
+    "project": "Demo/HaoStress.xcodeproj",
+    "target": "HaoStress",
+    "sdk": "iphoneos",
+    "architecture": "arm64",
+    "signing": false,
+    "swift_units": 9,
+    "objcxx_units": 1,
+    "expected": "BUILD SUCCEEDED and arm64 application executable"
+  },
+  "package_tests": {
+    "path": "BoundaryPackage",
+    "xctest_test_count": 3,
+    "swift_testing_test_count": 3,
+    "parameterized_cases": 3,
+    "expected": "zero failures"
+  },
+  "cxx": {
+    "source": "cxx.cpp",
+    "standard": "c++20",
+    "expected_stdout": "CXX PASS 500500 4000 exception"
+  },
+  "timing": "Measure laptop clean and incremental times after functional correctness. No timing claim yet."
+}
