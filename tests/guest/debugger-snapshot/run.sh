@@ -12,6 +12,11 @@ python3 "$fixture/session.py" "$out/arm64" > "$out/native"
 python3 "$fixture/session.py" "${HAO:-$root/build/hao}" "$out/arm64" > "$out/translated"
 diff -u "$out/native" "$out/translated"
 python3 "$fixture/session.py" --continuous "${HAO:-$root/build/hao}" "$out/arm64"
+if FIXTURE_FAIL_FINAL=1 python3 "$fixture/session.py" --continuous "${HAO:-$root/build/hao}" "$out/arm64" > "$out/nonzero" 2>&1; then
+    echo "failed target reported clean exit" >&2
+    exit 1
+fi
+grep -q 'target failed after final resume: 23' "$out/nonzero"
 FIXTURE_CORRUPT_PC=1 python3 "$fixture/session.py" --invalid-pc "${HAO:-$root/build/hao}" "$out/arm64"
 python3 "$fixture/session.py" --stale-ack "${HAO:-$root/build/hao}" "$out/arm64"
 python3 "$fixture/session.py" --negative "$out/x86_64"

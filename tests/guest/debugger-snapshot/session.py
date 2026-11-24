@@ -245,8 +245,9 @@ def continuous(target, first, offset, base, lldb):
         target.stdin.write(struct.pack("<Q", stopped.generation))
         target.stdin.flush()
         if stopped.generation == 2:
-            if target.wait(timeout=10) != 0:
-                raise ValueError("target failed after final resume")
+            status = target.wait(timeout=10)
+            if status != 0:
+                raise ValueError(f"target failed after final resume: {status}")
             return None
         next_stop = read_stop(target, stopped.generation+1, offset, base, stopped.tid)
         assert not stopped.available()
@@ -254,40 +255,56 @@ def continuous(target, first, offset, base, lldb):
         return next_stop
 
     server, client = socket.socketpair()
-    worker = threading.Thread(target=serve, args=(server, first, True, advance), daemon=True)
+    errors = []
+    def run_server():
+        try:
+            serve(server, first, True, advance)
+        except Exception as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run_server, daemon=True)
     worker.start()
-    if lldb:
-        # An expected SIGTRAP is a crash stop to LLDB's batch driver. Drive
-        # the synchronous SBProcess API inside a single command so batch mode
-        # does not discard the second register read after a successful stop.
-        inspect = ("script d=lldb.debugger; d.SetAsync(False); "
-                   "p=d.GetSelectedTarget().GetProcess(); "
-                   "show=lambda: print('STOP x9=0x%x pc=0x%x sp=0x%x' % tuple("
-                   "p.GetThreadAtIndex(0).GetFrameAtIndex(0).FindRegister(r).GetValueAsUnsigned() "
-                   "for r in ('x9','pc','sp'))); "
-                   "show(); print('resume1',p.Continue()); show(); print('resume2',p.Continue())")
-        args = [lldb, "-b", "-o", f"process connect -p gdb-remote fd://{client.fileno()}",
-                "-o", inspect]
-        with client:
-            proc = subprocess.run(args, pass_fds=(client.fileno(),), text=True, stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT, timeout=75)
-        print(proc.stdout, end="")
-        import re
-        stops = re.findall(r"^STOP x9=(0x[0-9a-fA-F]+) pc=(0x[0-9a-fA-F]+) sp=(0x[0-9a-fA-F]+)$", proc.stdout, re.M)
-        actual = [tuple(int(value,16) for value in stop) for stop in stops]
-        expected = [(0x730+s.generation, s.pc, struct.unpack_from("<Q",s.registers,248)[0]) for s in observed]
-        if proc.returncode or len(actual) != 2 or actual != expected:
-            raise ValueError("debugger did not read both stop generations")
-    else:
-        with client, client.makefile("rb") as stream:
-            for query, expected in [("p9",struct.pack("<Q",0x731).hex()),
-                                    ("vCont;c",f"T05thread:{first.tid:x};"),
-                                    ("p9",struct.pack("<Q",0x732).hex()),("c","W00")]:
-                client.sendall(frame(query))
-                assert exact(stream,1) == b"+"
-                assert exact(stream,len(frame(expected))) == frame(expected)
-    worker.join(timeout=5)
-    if worker.is_alive() or len(observed) != 2 or any(s.available() for s in observed):
+    try:
+        if lldb:
+            # An expected SIGTRAP is a crash stop to LLDB's batch driver. Drive
+            # the synchronous SBProcess API inside a single command so batch mode
+            # does not discard the second register read after a successful stop.
+            inspect = ("script d=lldb.debugger; d.SetAsync(False); "
+                       "p=d.GetSelectedTarget().GetProcess(); "
+                       "show=lambda: print('STOP x9=0x%x pc=0x%x sp=0x%x' % tuple("
+                       "p.GetThreadAtIndex(0).GetFrameAtIndex(0).FindRegister(r).GetValueAsUnsigned() "
+                       "for r in ('x9','pc','sp'))); "
+                       "show(); r=p.Continue(); assert r.Success() and p.GetState()==lldb.eStateStopped; "
+                       "show(); r=p.Continue(); assert r.Success() and p.GetState()==lldb.eStateExited "
+                       "and p.GetExitStatus()==0; print('CONTINUES_OK')")
+            args = [lldb, "-b", "-o", f"process connect -p gdb-remote fd://{client.fileno()}",
+                    "-o", inspect]
+            with client:
+                proc = subprocess.run(args, pass_fds=(client.fileno(),), text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, timeout=75)
+            print(proc.stdout, end="")
+            import re
+            stops = re.findall(r"^STOP x9=(0x[0-9a-fA-F]+) pc=(0x[0-9a-fA-F]+) sp=(0x[0-9a-fA-F]+)$", proc.stdout, re.M)
+            actual = [tuple(int(value,16) for value in stop) for stop in stops]
+            expected = [(0x730+s.generation, s.pc, struct.unpack_from("<Q",s.registers,248)[0]) for s in observed]
+            if proc.returncode or "CONTINUES_OK" not in proc.stdout.splitlines() or len(actual) != 2 or actual != expected:
+                raise ValueError("debugger did not read both stop generations")
+        else:
+            with client, client.makefile("rb") as stream:
+                for query, expected in [("p9",struct.pack("<Q",0x731).hex()),
+                                        ("vCont;c",f"T05thread:{first.tid:x};"),
+                                        ("p9",struct.pack("<Q",0x732).hex()),("c","W00")]:
+                    client.sendall(frame(query))
+                    assert exact(stream,1) == b"+"
+                    assert exact(stream,len(frame(expected))) == frame(expected)
+    finally:
+        client.close()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            raise ValueError("debugger service did not stop")
+        if errors:
+            raise errors[0]
+    if target.poll() != 0 or len(observed) != 2 or any(s.available() for s in observed):
         raise ValueError("target lifetime did not close cleanly")
     print("one connection observed both stopped generations and clean target exit")
 

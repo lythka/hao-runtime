@@ -114,5 +114,5 @@ int main(void) {
     current.architecture = CPU_TYPE_X86_64;
     if (!transfer(1, &current, sizeof current, 1)) return 4;
 #endif
-    return 0;
+    return getenv("FIXTURE_FAIL_FINAL") ? 23 : 0;
 }
